@@ -473,7 +473,7 @@ void create_titlebar(Container *root, Container *parent) {
             *datum<bool>(client, "drag_from_titlebar") = true;
         }
         drag::begin(cid);
-        root->consumed_event = true;
+        root->consumed_event = false;
         hypriso->bring_to_front(cid);
     };
     titlebar->when_drag = paint {

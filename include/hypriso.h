@@ -15,8 +15,9 @@
 #include "tracy/Tracy.hpp"
 #endif
 
-static int titlebar_h = 28;
-static std::string mylar_font = "Noto Sans";
+static int titlebar_h = 27;
+//static std::string mylar_font = "Noto Sans";
+static std::string mylar_font = "SF Pro Rounded";
 
 struct SurfacePassInfo {
     double pos_x;
@@ -218,6 +219,10 @@ struct HyprIso {
     
     std::function<void(int id)> on_layer_closed = nullptr;
     
+    std::function<void(int id)> on_popup_open = nullptr;
+    
+    std::function<void(int id)> on_popup_closed = nullptr;
+     
     std::function<void(int id)> on_activated = nullptr;
     
     std::function<void(std::string name, int monitor, int w, float a)> on_draw_decos = nullptr;
@@ -325,13 +330,21 @@ struct HyprIso {
 
     std::vector<int> get_workspaces(int monitor);
     int get_active_workspace(int monitor);
+    int get_active_workspace_id(int monitor);
     int get_workspace(int client);
+    
+    bool is_space_tiling(int space);
+    void set_space_tiling(int space, bool state);
 
     void add_float_rule();
     void overwrite_defaults();
 
     void simulateMouseMovement();
     bool has_popup_at(int cid, Bounds b);
+    
+    void do_default_drag(int cid);
+    void do_default_resize(int cid);
+    bool is_floating(int cid);
 
     bool clip = false;
     Bounds clipbox;

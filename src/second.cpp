@@ -341,6 +341,13 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
         zoom_factor = 1.0;
     }
 
+    if (alt_held && key == KEY_SPACE && state == 1) {
+        auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
+        auto tiling = hypriso->is_space_tiling(s);
+        hypriso->set_space_tiling(s, !tiling);
+        notify(fz("change space to {}", !tiling));
+    }
+
     return false;
 }
 

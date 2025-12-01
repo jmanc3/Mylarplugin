@@ -10,7 +10,9 @@
 #include "second.h"
 
 #include <bits/types/idtype_t.h>
+#include <cmath>
 #include <cstring>
+#include <src/desktop/Popup.hpp>
 #include <wlr-layer-shell-unstable-v1.hpp>
 #include <xkbcommon/xkbcommon.h>
 
@@ -83,6 +85,8 @@ HyprIso *hypriso = new HyprIso;
 
 static int unique_id = 0;
 
+static bool next_check = false;
+
 void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
 void* pRenderMonitor = nullptr;
@@ -143,6 +147,8 @@ struct HyprWorkspaces {
     int id;
     PHLWORKSPACEREF w;
     CFramebuffer *buffer;
+
+    bool is_tiling = false;
 };
 
 static std::vector<HyprWorkspaces *> hyprspaces;
@@ -1348,7 +1354,7 @@ void HyprIso::floatit(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //return;
+    return;
     for (auto hw: hyprwindows)
         if (hw->id == id)
             float_target(hw->w);
@@ -1785,6 +1791,8 @@ void hook_shadow_decorations() {
     
 }
 
+void hook_popup_creation_and_destruction();
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1801,6 +1809,7 @@ void HyprIso::create_hooks() {
     //interleave_floating_and_tiled_windows();
     hook_dock_change();
     hook_monitor_arrange();
+    hook_popup_creation_and_destruction();
 }
 
 bool HyprIso::alt_tabbable(int id) {
@@ -1996,9 +2005,15 @@ struct MylarBar : public IHyprWindowDecoration {
         //hypriso->damage_entire(m_window->m_monitorMovedFrom);
         //draw(m_window->m_monitor.lock(), 1.0);
     } 
-    bool onInputOnDeco(const eInputType, const Vector2D&, std::any = {}) { return false; }
+    bool onInputOnDeco(const eInputType, const Vector2D&, std::any = {}) { 
+        if (next_check) {
+            next_check = false;
+            return true;
+        }
+        return true; 
+    }
     eDecorationLayer getDecorationLayer() { return eDecorationLayer::DECORATION_LAYER_BOTTOM; }
-    uint64_t getDecorationFlags() { return eDecorationFlags::DECORATION_PART_OF_MAIN_WINDOW; }
+    uint64_t getDecorationFlags() { return DECORATION_ALLOWS_MOUSE_INPUT | DECORATION_PART_OF_MAIN_WINDOW; }
     std::string getDisplayName() { return "MylarBar"; }
 };
 
@@ -2228,6 +2243,39 @@ int HyprIso::get_active_workspace(int monitor) {
         }
     }
     return -1;
+}
+
+int HyprIso::get_active_workspace_id(int monitor) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hm : hyprmonitors) {
+        if (hm->id == monitor) {
+            for (auto s : hyprspaces) {
+                if (s->w == hm->m->m_activeWorkspace) {
+                    return s->id;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+bool HyprIso::is_space_tiling(int space) {
+    for (auto &hs : hyprspaces) {
+        if (hs->id == space) {
+            return hs->is_tiling;
+        }
+    }
+    return false;
+}
+
+void HyprIso::set_space_tiling(int space, bool state) {
+    for (auto &hs : hyprspaces) {
+        if (hs->id == space) {
+            hs->is_tiling = state;
+        }
+    }
 }
 
 void HyprIso::pin(int id, bool state) {
@@ -5273,3 +5321,63 @@ bool HyprIso::has_popup_at(int cid, Bounds b) {
     return false; 
 }
 
+struct HyprPopup {
+    int id;  
+    CPopup *p;
+};
+
+std::vector<HyprPopup *> hyprpopus;
+
+// src/desktop/Popup.cpp
+// UP<CPopup> CPopup::create(PHLWINDOW pOwner) {
+// UP<CPopup> CPopup::create(PHLLS pOwner) {
+// child of other popup
+// UP<CPopup> CPopup::create(SP<CXDGPopupResource> resource, WP<CPopup> pOwner) {
+// void CPopup::fullyDestroy() {
+
+void popup_created(CPopup *popup) {
+    auto hp = new HyprPopup;
+    hp->p = popup;
+    hp->id = unique_id++;
+    hyprpopus.push_back(hp);
+
+    if (hypriso->on_popup_open) {
+        hypriso->on_popup_open(hp->id);
+    }
+}
+
+void popup_destroyed(int id, CPopup *popup) {
+    for (int i = 0; i < hyprpopus.size(); i++) {
+        auto hp = hyprpopus[i];
+        if (hp->id == id) {
+            if (hypriso->on_popup_closed) {
+                hypriso->on_popup_closed(id);
+            }
+            delete hp;
+            hyprpopus.erase(hyprpopus.begin() + i);
+        }
+    }
+}
+
+void hook_popup_creation_and_destruction() {
+    
+}
+
+void HyprIso::do_default_drag(int cid) {
+    next_check = true;
+    g_pKeybindManager->changeMouseBindMode(MBIND_MOVE);
+}
+
+void HyprIso::do_default_resize(int cid) {
+    next_check = true;
+    g_pKeybindManager->changeMouseBindMode(MBIND_RESIZE);
+}
+
+bool HyprIso::is_floating(int cid) {
+    for (auto hw: hyprwindows)
+        if (hw->id == cid)
+            return hw->w->m_isFloating;
+    return false;
+}
+
+    
