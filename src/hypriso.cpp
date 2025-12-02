@@ -12,7 +12,7 @@
 #include <bits/types/idtype_t.h>
 #include <cmath>
 #include <cstring>
-#include <src/desktop/Popup.hpp>
+#include <hyprland/src/desktop/Popup.hpp>
 #include <wlr-layer-shell-unstable-v1.hpp>
 #include <xkbcommon/xkbcommon.h>
 

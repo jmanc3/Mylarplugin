@@ -15,9 +15,9 @@ static long show_delay = 40;
 void alt_tab::on_window_open(int id) {
     Container *c = get_cid_container(id);
 
-    later_immediate([](Timer *) {
-        hypriso->screenshot_all(); 
-    });
+    //later_immediate([](Timer *) {
+        //hypriso->screenshot_all();
+    //});
 
     assert(c && "alt_tab::on_window_open assumes Container for id has already been created");
 

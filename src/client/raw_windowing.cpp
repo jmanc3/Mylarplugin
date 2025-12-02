@@ -465,9 +465,9 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
 
 static void config_layer_shell(wl_window *win, uint32_t width, uint32_t height) {
     wl_window_resize_buffer(win, width, height);
-    if (win->rw->on_resize) {
-        win->rw->on_resize(win->rw, win->scaled_w, win->scaled_h);
-    }
+    if (win->rw)
+        if (win->rw->on_resize)
+            win->rw->on_resize(win->rw, win->scaled_w, win->scaled_h);
     if (win->on_render)
         win->on_render(win);    
 }
@@ -1005,7 +1005,7 @@ void wl_window_destroy(struct wl_window *win) {
     if (win->xkb_state) xkb_state_unref(win->xkb_state);
     if (win->keymap) xkb_keymap_unref(win->keymap);
 
-    free(win);
+    delete win;
 }
 
 void wl_context_destroy(struct wl_context *ctx) {
@@ -1025,7 +1025,7 @@ void wl_context_destroy(struct wl_context *ctx) {
 
     wl_registry_destroy(ctx->registry);
     wl_display_disconnect(ctx->display);
-    free(ctx);
+    delete ctx;
 }
 
 int wake_pipe[2];
@@ -1091,8 +1091,6 @@ void windowing::main_loop(RawApp *app) {
 
     ctx->polled_fds.push_back(wayland_pf);
     ctx->polled_fds.push_back(wake_pf);
-
-    int x = 0;
 
     while (ctx->running) {
         // Handle pre-poll Wayland events

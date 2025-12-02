@@ -22,6 +22,8 @@
 #ifdef TRACY_ENABLE
 #include "tracy/Tracy.hpp"
 #endif
+
+void create_titlebar(Container *root, Container *parent);
    
 static float titlebar_button_ratio() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_ratio", 1.4375f);
@@ -141,23 +143,23 @@ void titlebar_right_click(int cid) {
         pop.text = "Remove titlebar";
 
         pop.on_clicked = [cid]() {
-            auto id_class = hypriso->class_name(cid);
-            for (auto [class_n, info] : restore_infos) {
-                if (id_class == class_n) {
-                    if (hypriso->has_decorations(cid)) {
-                        info.remove_titlebar = true;
-                    } else {
-                        info.remove_titlebar = false;
-                    }
+            auto client = get_cid_container(cid);
+            auto info = (ClientInfo *) client->user_data;
+            if (hypriso->has_decorations(cid)) {
+                hypriso->remove_decorations(cid);
+                if (auto c = get_cid_container(cid)) {
+                    delete c->children[0];
+                    c->children.erase(c->children.begin());
                 }
+                hypriso->set_corner_rendering_mask_for_window(cid, 0);
+            } else {
+                hypriso->reserve_titlebar(cid, titlebar_h);
+                if (auto c = get_cid_container(cid)) {
+                    create_titlebar(actual_root, c);
+                    *datum<float>(c, "titlebar_alpha") = 1.0;
+                }
+                hypriso->set_corner_rendering_mask_for_window(cid, 3);
             }
-
-            later_immediate([cid](Timer*) {
-                hypriso->on_window_closed(cid);
-                hypriso->on_window_open(cid);                
-                update_restore_info_for(cid);
-            });
-            
         };
         root.push_back(pop);        
     }
@@ -544,12 +546,12 @@ void create_titlebar(Container *root, Container *parent) {
 }
 
 bool titlebar_disabled(int id) {
-    auto cname = hypriso->class_name(id);
-    for (auto [class_n, info] : restore_infos) {
-        if (cname == class_n) {
-            return info.remove_titlebar;
-        }
-    }
+    auto client = get_cid_container(id);
+    auto info = (ClientInfo*)client->user_data;
+    //notify(fz("is disasbled {} {}", hypriso->class_name(id), info->titlebar_disabled_by_user));
+    //if (info->titlebar_disabled_by_user) {
+        //return true;
+    //}
     return false;
 }
 
