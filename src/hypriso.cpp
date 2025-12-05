@@ -252,10 +252,10 @@ void HyprIso::overwrite_animation_speed(float speed) {
     g_pConfigManager->m_animationTree.setConfigForNode("zoomFactor", true, speed, "quick", "");
 }
 
-static void float_target(PHLWINDOW PWINDOW) {
+static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
     if (!PWINDOW)
         return;
-    if (PWINDOW->m_isFloating)
+    if (PWINDOW->m_isFloating == should_float)
         return;
 
     // remove drag status
@@ -265,7 +265,7 @@ static void float_target(PHLWINDOW PWINDOW) {
     if (PWINDOW->m_groupData.pNextWindow.lock() && PWINDOW->m_groupData.pNextWindow.lock() != PWINDOW) {
         const auto PCURRENT = PWINDOW->getGroupCurrent();
 
-        PCURRENT->m_isFloating = true;
+        PCURRENT->m_isFloating = should_float;
         g_pLayoutManager->getCurrentLayout()->changeWindowFloatingMode(PCURRENT);
 
         PHLWINDOW curr = PCURRENT->m_groupData.pNextWindow.lock();
@@ -274,7 +274,7 @@ static void float_target(PHLWINDOW PWINDOW) {
             curr               = curr->m_groupData.pNextWindow.lock();
         }
     } else {
-        PWINDOW->m_isFloating = true;
+        PWINDOW->m_isFloating = should_float;
 
         g_pLayoutManager->getCurrentLayout()->changeWindowFloatingMode(PWINDOW);
     }
@@ -1350,14 +1350,10 @@ RGBA HyprIso::get_shadow_color(int id) {
     return {0, 0, 0, 1};
 }
 
-void HyprIso::floatit(int id) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    return;
+void HyprIso::set_float_state(int id, bool should_float) {
     for (auto hw: hyprwindows)
-        if (hw->id == id)
-            float_target(hw->w);
+        if (hw->id == id)    
+            change_float_state(hw->w, should_float);
 }
 
 float HyprIso::get_varfloat(std::string target, float default_float) {
@@ -2253,6 +2249,22 @@ int HyprIso::get_active_workspace_id(int monitor) {
         if (hm->id == monitor) {
             for (auto s : hyprspaces) {
                 if (s->w == hm->m->m_activeWorkspace) {
+                    return s->id;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+int HyprIso::get_active_workspace_id_client(int client) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hw : hyprwindows) {
+        if (hw->id == client) {
+            for (auto s : hyprspaces) {
+                if (s->w == hw->w->m_workspace) {
                     return s->id;
                 }
             }

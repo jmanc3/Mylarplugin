@@ -54,6 +54,7 @@ std::vector<Container *> actual_monitors; // actually just root of all
 Container *actual_root = new Container;
 
 void draw_text(std::string text, int x, int y);
+void apply_restore_info(int id);
 
 static void any_container_closed(Container *c) {
     remove_data(c->uuid); 
@@ -345,7 +346,30 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
         auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
         auto tiling = hypriso->is_space_tiling(s);
         hypriso->set_space_tiling(s, !tiling);
-        notify(fz("change space to {}", !tiling));
+        std::vector<int> order = get_window_stacking_order();
+        for (auto o : order) {
+            if (hypriso->get_active_workspace_id_client(o) == s) {
+                if (hypriso->alt_tabbable(o)) {
+                    if (tiling) {
+                        if (!hypriso->is_floating(o)) {
+                            hypriso->set_float_state(o, true);
+                            //apply_restore_info(o);
+                            if (auto c = get_cid_container(o)) {
+                                auto p = *datum<Bounds>(c, "pre_mode_change_position");
+                                auto now = bounds_client(o);
+                                hypriso->move_resize(o, now.x, now.y, now.w, now.h, true);
+                                hypriso->move_resize(o, p.x, p.y, p.w, p.h, false);
+                            }
+                        }
+                    } else {
+                        hypriso->set_float_state(o, false);
+                        if (auto c = get_cid_container(o)) {
+                            *datum<Bounds>(c, "pre_mode_change_position") = bounds_client(o);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return false;
@@ -609,7 +633,7 @@ static void on_window_open(int id) {
 
     if (hypriso->has_decorations(id)) {
         later(50, [id](Timer *) {
-            hypriso->floatit(id);
+            hypriso->set_float_state(id, true);
             //apply_restore_info(id);
         });
     }
@@ -852,6 +876,27 @@ static void on_config_reload() {
     hypriso->overwrite_defaults();
 }
 
+Bounds fixed_box(float startx, float starty, float endx, float endy) {
+    auto x = startx;
+    auto y = starty;
+    auto xn = endx;
+    auto yn = endy;
+    if (x > xn) {
+        auto t = xn;
+        xn = x;
+        x = t;
+    }
+    if (y > yn) {
+        auto t = yn;
+        yn = y;
+        y = t;
+    }
+    auto w = xn - x;
+    auto h = yn - y;
+    auto b = Bounds(x, y, w, h);
+    return b; 
+}
+
 static void create_actual_root() {
     *datum<long>(actual_root, "drag_end_time") = 0;
     *datum<bool>(actual_root, "dragging") = false;
@@ -864,39 +909,29 @@ static void create_actual_root() {
     };
     actual_root->when_drag_start = paint {
         *datum<bool>(c, "dragging") = true;
+        for (auto m : actual_monitors)
+            hypriso->damage_entire(*datum<int>(m, "cid"));
     };
     actual_root->when_drag = [](Container *actual_root, Container *c) {
         actual_root->consumed_event = true;
+        auto b = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
+        static Bounds previousB = b;
+        b.grow(20);
+        hypriso->damage_box(b);
+        hypriso->damage_box(previousB);
+        previousB = b;
     };
     actual_root->when_drag_end = paint {
         *datum<bool>(c, "dragging") = false;
+        for (auto m : actual_monitors)
+            hypriso->damage_entire(*datum<int>(m, "cid"));
     };
     actual_root->when_paint = [](Container* actual_root, Container* c) {
         auto root = get_rendering_root();
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         auto dragging = *datum<bool>(c, "dragging");
         if (stage == (int)STAGE::RENDER_POST_WALLPAPER && dragging && c->state.mouse_button_pressed == BTN_LEFT) {
-            auto x = actual_root->mouse_initial_x;
-            auto y = actual_root->mouse_initial_y;
-            auto xn = actual_root->mouse_current_x;
-            auto yn = actual_root->mouse_current_y;
-            if (x > xn) {
-                auto t = xn;
-                xn = x;
-                x = t;
-            }
-            if (y > yn) {
-                auto t = yn;
-                yn = y;
-                y = t;
-            }
-            auto w = xn - x;
-            auto h = yn - y;
-            auto b = Bounds(x, y, w, h);
-
-            auto d = b;
-            d.grow(10);
-            hypriso->damage_box(d);
+            auto b = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
 
             auto mb = bounds_monitor(rid);
             b.x -= mb.x;

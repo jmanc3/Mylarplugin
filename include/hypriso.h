@@ -284,7 +284,7 @@ struct HyprIso {
     bool is_hidden(int id);
     bool resizable(int id);
     
-    void floatit(int id);
+    void set_float_state(int id, bool should_float);
 
     bool alt_tabbable(int id);
 
@@ -331,6 +331,7 @@ struct HyprIso {
     std::vector<int> get_workspaces(int monitor);
     int get_active_workspace(int monitor);
     int get_active_workspace_id(int monitor);
+    int get_active_workspace_id_client(int client);
     int get_workspace(int client);
     
     bool is_space_tiling(int space);
