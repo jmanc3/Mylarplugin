@@ -351,10 +351,15 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
             if (hypriso->get_active_workspace_id_client(o) == s) {
                 if (hypriso->alt_tabbable(o)) {
                     if (tiling) {
+                        // change to float if not already
                         if (!hypriso->is_floating(o)) {
                             hypriso->set_float_state(o, true);
+
                             //apply_restore_info(o);
                             if (auto c = get_cid_container(o)) {
+                                if (*datum<bool>(c, "snapped"))
+                                    hypriso->should_round(o, false);
+
                                 auto p = *datum<Bounds>(c, "pre_mode_change_position");
                                 auto now = bounds_client(o);
                                 hypriso->move_resize(o, now.x, now.y, now.w, now.h, true);
@@ -362,10 +367,12 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
                             }
                         }
                     } else {
-                        hypriso->set_float_state(o, false);
+                        // change to tiling if not already
                         if (auto c = get_cid_container(o)) {
                             *datum<Bounds>(c, "pre_mode_change_position") = bounds_client(o);
                         }
+                        hypriso->set_float_state(o, false);
+                        hypriso->should_round(o, true);
                     }
                 }
             }

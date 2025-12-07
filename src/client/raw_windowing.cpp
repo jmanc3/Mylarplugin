@@ -110,6 +110,7 @@ struct wl_window {
     wl_buffer *buffer = nullptr;
     bool busy = false;
     bool dropped_frame = false;
+    bool resize_next = false;
 
     struct wl_cursor_theme *cursor_theme = nullptr;
     struct wl_cursor *cursor = nullptr;
@@ -274,12 +275,16 @@ static void destroy_shm_buffer(struct wl_window *win) {
 }
 
 void on_window_render(wl_window *win) {
+    if (win->resize_next) {
+        wl_window_resize_buffer(win, win->logical_width, win->logical_height);
+        win->resize_next = false;
+    }
     log("on_window_render");
     if (win->busy) {
         win->dropped_frame  = true;
         return;
     }
-    
+
     if (win->rw) {
         if (win->rw->on_render) {
             win->rw->on_render(win->rw, win->scaled_w, win->scaled_h);
@@ -359,7 +364,7 @@ bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_hei
     
     if (win->rw) {
         win->on_render = on_window_render;
-        win->on_render(win);
+        //win->on_render(win);
     }
 
     if (win->viewport)
@@ -379,12 +384,17 @@ static void handle_fractional_scale_preferred_scale(
     win->current_fractional_scale = ((float) scale) / 120.0f;
     win->rw->dpi = win->current_fractional_scale;
 
-    //notify(fz("{}", win->current_fractional_scale));
-    if (win->layer_surface) {
-        config_layer_shell(win, win->logical_width, win->logical_height);
-    } else {
-        config_surface(win, win->logical_width, win->logical_height);
-    }
+    win->resize_next = true;
+
+    wl_surface_set_buffer_scale(win->surface, std::ceil(scale));
+
+    wp_viewport_set_destination(win->viewport,
+                                win->logical_width,
+                                win->logical_height);
+
+    wl_surface_commit(win->surface);
+
+    windowing::redraw(win->rw);
 }
 
 static const wp_fractional_scale_v1_listener fractional_scale_listener = {
