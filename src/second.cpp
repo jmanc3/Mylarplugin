@@ -990,6 +990,8 @@ void load_restore_infos() {
         if (first_line && !line.empty()) {
             if (line.starts_with("#version 1"))
                 file_version = 1;
+            if (line.starts_with("#version 2"))
+                file_version = 2;
             if (file_version != 0)
                 continue;
         }
