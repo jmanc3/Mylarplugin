@@ -324,6 +324,25 @@ static void fill_root(Container *root) {
     root->when_paint = paint_root;
     
     { 
+        auto toggle = root->child(40, FILL_SPACE);
+        toggle->when_clicked = paint {
+            system("hyprctl dispatch plugin:mylar:toggle_layout");
+        };
+        toggle->when_paint = paint {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            paint_button_bg(root, c);
+            draw_text(cr, c, fz("Toggle layout"), 9 * mylar->raw_window->dpi);
+        };
+        toggle->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            auto bounds = draw_text(cr, c, fz("Toggle layout"), 9 * mylar->raw_window->dpi, false);
+            c->wanted_bounds.w = bounds.w + 20;
+        }; 
+    }
+
+    { 
         auto night = root->child(40, FILL_SPACE);
         night->when_clicked = paint {
            if (nightlight_on)  {
@@ -347,8 +366,7 @@ static void fill_root(Container *root) {
             auto cr = mylar->raw_window->cr;
             auto bounds = draw_text(cr, c, fz("Nightlight: {}", nightlight_on ? "On" : "Off"), 9 * mylar->raw_window->dpi, false);
             c->wanted_bounds.w = bounds.w + 20;
-        };
- 
+        }; 
     }
     
     {

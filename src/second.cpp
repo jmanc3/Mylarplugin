@@ -282,6 +282,43 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
     return consumed;
 }
 
+void toggle_layout() {
+    auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
+    auto tiling = hypriso->is_space_tiling(s);
+    hypriso->set_space_tiling(s, !tiling);
+    std::vector<int> order = get_window_stacking_order();
+    for (auto o : order) {
+        if (hypriso->get_active_workspace_id_client(o) == s) {
+            if (hypriso->alt_tabbable(o)) {
+                if (tiling) {
+                    // change to float if not already
+                    if (!hypriso->is_floating(o)) {
+                        hypriso->set_float_state(o, true);
+
+                        //apply_restore_info(o);
+                        if (auto c = get_cid_container(o)) {
+                            if (*datum<bool>(c, "snapped"))
+                                hypriso->should_round(o, false);
+
+                            auto p = *datum<Bounds>(c, "pre_mode_change_position");
+                            auto now = bounds_client(o);
+                            hypriso->move_resize(o, now.x, now.y, now.w, now.h, true);
+                            hypriso->move_resize(o, p.x, p.y, p.w, p.h, false);
+                        }
+                    }
+                } else {
+                    // change to tiling if not already
+                    if (auto c = get_cid_container(o)) {
+                        *datum<Bounds>(c, "pre_mode_change_position") = bounds_client(o);
+                    }
+                    hypriso->set_float_state(o, false);
+                    hypriso->should_round(o, true);
+                }
+            }
+        }
+    } 
+}
+
 static bool on_key_press(int id, int key, int state, bool update_mods) {
     splash::input();
     bool consume = quick_shortcut_menu::on_key_press(id, key, state, update_mods);
@@ -345,40 +382,7 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
     }
 
     if (alt_held && key == KEY_SPACE && state == 1) {
-        auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
-        auto tiling = hypriso->is_space_tiling(s);
-        hypriso->set_space_tiling(s, !tiling);
-        std::vector<int> order = get_window_stacking_order();
-        for (auto o : order) {
-            if (hypriso->get_active_workspace_id_client(o) == s) {
-                if (hypriso->alt_tabbable(o)) {
-                    if (tiling) {
-                        // change to float if not already
-                        if (!hypriso->is_floating(o)) {
-                            hypriso->set_float_state(o, true);
-
-                            //apply_restore_info(o);
-                            if (auto c = get_cid_container(o)) {
-                                if (*datum<bool>(c, "snapped"))
-                                    hypriso->should_round(o, false);
-
-                                auto p = *datum<Bounds>(c, "pre_mode_change_position");
-                                auto now = bounds_client(o);
-                                hypriso->move_resize(o, now.x, now.y, now.w, now.h, true);
-                                hypriso->move_resize(o, p.x, p.y, p.w, p.h, false);
-                            }
-                        }
-                    } else {
-                        // change to tiling if not already
-                        if (auto c = get_cid_container(o)) {
-                            *datum<Bounds>(c, "pre_mode_change_position") = bounds_client(o);
-                        }
-                        hypriso->set_float_state(o, false);
-                        hypriso->should_round(o, true);
-                    }
-                }
-            }
-        }
+        toggle_layout();
     }
 
     return false;
@@ -1076,8 +1080,8 @@ void update_restore_info_for(int id) {
 }
 
 void add_hyprctl_dispatchers() {
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:test", [](std::string in) {
-        notify("yes!");
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:toggle_layout", [](std::string in) {
+        toggle_layout();
         return true;
     });
 }
