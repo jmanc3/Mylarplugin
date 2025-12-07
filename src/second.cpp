@@ -1075,12 +1075,20 @@ void update_restore_info_for(int id) {
     }
 }
 
+void add_hyprctl_dispatchers() {
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:test", [](std::string in) {
+        notify("yes!");
+        return true;
+    });
+}
+
 void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     on_any_container_close = any_container_closed;
     create_actual_root();
+    add_hyprctl_dispatchers();
     
     hypriso->create_config_variables();
         

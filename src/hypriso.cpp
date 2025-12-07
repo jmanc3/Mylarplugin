@@ -5398,4 +5398,11 @@ bool HyprIso::is_floating(int cid) {
 // it's valid to only care about layoutmsg mfact and not config change because we are basically treating it as a snap window resizer
 
 
+void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func) {
+    HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {
+        SDispatchResult result;
+        result.success = func(in);
+        return result;
+    });
+}
 

@@ -238,6 +238,8 @@ struct HyprIso {
     std::function<void()> on_config_reload = nullptr;
     void reload();
 
+    void add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func);
+
     //std::vector<ThinClient *> windows;
     //std::vector<ThinMonitor *> monitors;
 
