@@ -170,17 +170,27 @@ void titlebar_right_click(int cid) {
     }
     {
         PopOption pop;
-        pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        auto info = &restore_infos[hypriso->class_name(cid)];
+        if (info->remember_size)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
         pop.text = "Remember size";
         pop.on_clicked = [cid]() {
+            auto info = &restore_infos[hypriso->class_name(cid)];
+            info->remember_size = !info->remember_size;
+            update_restore_info_for(cid);
         };
-        root.push_back(pop);        
+        root.push_back(pop);
     }
     {
         PopOption pop;
-        pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        auto info = &restore_infos[hypriso->class_name(cid)];
+        if (info->remember_workspace)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
         pop.text = "Remember workspace";
         pop.on_clicked = [cid]() {
+            auto info = &restore_infos[hypriso->class_name(cid)];
+            info->remember_workspace = !info->remember_workspace;
+            update_restore_info_for(cid);
         };
         root.push_back(pop);        
     }

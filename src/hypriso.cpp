@@ -1797,7 +1797,7 @@ void HyprIso::create_hooks() {
     detect_csd_request_change();
     fix_window_corner_rendering();
     hook_shadow_decorations();
-    disable_default_alt_tab_behaviour();
+    //disable_default_alt_tab_behaviour();
     detect_x11_move_resize_requests();    
     overwrite_min();
     hook_render_functions();
@@ -5392,4 +5392,10 @@ bool HyprIso::is_floating(int cid) {
     return false;
 }
 
-    
+
+// hook notify mfact
+// SDispatchResult CKeybindManager::layoutmsg(std::string msg) {
+// it's valid to only care about layoutmsg mfact and not config change because we are basically treating it as a snap window resizer
+
+
+

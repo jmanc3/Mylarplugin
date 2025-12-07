@@ -302,8 +302,8 @@ struct WindowRestoreLocation {
     bool fake_fullscreen = false;
     bool remove_titlebar = false;
     
-    bool remember_size = true;
-    bool remember_workspace = true;
+    bool remember_size = false;
+    bool remember_workspace = false;
 
     Bounds actual_size_on_monitor(Bounds m) {
         Bounds b = {box.x * m.w, box.y * m.h, box.w * m.w, box.h * m.h};

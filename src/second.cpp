@@ -296,8 +296,10 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
     if (key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT) {
         shift_held = state;
     }
-    if (key == KEY_LEFTMETA || key == KEY_RIGHTMETA) {
-        META_PRESSED = state;
+    if (alt_held && shift_held) {
+        META_PRESSED = true;
+    } else {
+        META_PRESSED = false;
     }
     if (alt_held) {
         if (key == KEY_TAB) {
@@ -602,7 +604,8 @@ void apply_restore_info(int id) {
             if (fix)
                 b.y += (titlebar_h * s) * .5;
 
-            hypriso->move_resize(id, b.x, b.y, b.w, b.h);
+            if (info.remember_size)
+                hypriso->move_resize(id, b.x, b.y, b.w, b.h);
         }
     }
     fit_on_screen(id);
@@ -981,8 +984,8 @@ void load_restore_infos() {
         bool keep_above = false;
         bool fake_fullscreen = false;
         bool remove_titlebar = false;
-        bool remember_size = true;
-        bool remember_workspace = true;
+        bool remember_size = false;
+        bool remember_workspace = false;
 
         if (first_line && !line.empty()) {
             if (line.starts_with("#version 1"))
@@ -996,9 +999,16 @@ void load_restore_infos() {
             if (!(iss >> class_name >> info.x >> info.y >> info.w >> info.h))
                 continue; // bad line — skip
         } 
-        if (file_version == 1) { 
+        if (file_version == 1 || file_version == 2) { 
             if (!(iss >> class_name >> info.x >> info.y >> info.w >> info.h >> keep_above >> fake_fullscreen >> remove_titlebar >> remember_size >> remember_workspace))
                 continue; // bad line — skip
+            if (file_version == 1) {
+                keep_above = false;
+                fake_fullscreen = false;
+                remove_titlebar = false;
+                remember_size = false;
+                remember_workspace = false;
+            }
         }
 
         WindowRestoreLocation restore;
@@ -1030,7 +1040,7 @@ void save_restore_infos() {
     if (!out) {
         throw std::runtime_error("Failed to write file: " + filepath.string());
     }
-    out << "#version 1" << "\n";
+    out << "#version 2" << "\n";
     for (auto [class_name, info] : restore_infos) {
         // class_name std::string
         // info.box.x info.box.y info.box.w info.box.h
@@ -1055,9 +1065,9 @@ void update_restore_info_for(int id) {
             cb.w / cm.w,
             (cb.h + titlebar_h) / cm.h,
         };
-        //info.keep_above = hypriso->is_pinned(id);
-        //info.fake_fullscreen = hypriso->is_fake_fullscreen(id);
-        //info.remove_titlebar = !hypriso->has_decorations(id);
+        auto old = restore_infos[hypriso->class_name(id)];
+        info.remember_workspace = old.remember_workspace;
+        info.remember_size = old.remember_size;
         restore_infos[hypriso->class_name(id)] = info;
         save_restore_infos(); // I believe it's okay to call this here because it only happens on resize end, and drag end
     }
