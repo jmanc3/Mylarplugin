@@ -91,7 +91,7 @@ void titlebar_pre_layout(Container* root, Container* self, const Bounds& bounds)
     self->children[3]->wanted_bounds.w = std::round(titlebar_h * titlebar_button_ratio());
 }
 
-void titlebar_right_click(int cid) {
+void titlebar::titlebar_right_click(int cid, bool centered) {
     auto m = mouse();
     std::vector<PopOption> root;
     {
@@ -194,9 +194,12 @@ void titlebar_right_click(int cid) {
         };
         root.push_back(pop);        
     }
-     
-    //popup::open(root, m.x - (277 * .5), bounds_client(cid).y);
-    popup::open(root, m.x - 1, m.y + 1, cid);
+
+    if (centered) {
+        popup::open(root, m.x - (277 * .5), m.y, cid);
+    } else {
+        popup::open(root, m.x - 1, m.y + 1, cid);
+    }
 }
 
 TextureInfo *get_cached_texture(Container *root_with_scale, Container *container_texture_saved_on, std::string needle, std::string font, std::string text, RGBA color, int wanted_h) {
@@ -455,9 +458,7 @@ void create_titlebar(Container *root, Container *parent) {
         auto cid = *datum<int>(client, "cid");
         
         if (c->state.mouse_button_pressed == BTN_RIGHT) {
-            later_immediate([cid](Timer *) {
-                titlebar_right_click(cid);
-            });
+            titlebar::titlebar_right_click(cid);
             c->when_mouse_down(root, c);
             return;
         }

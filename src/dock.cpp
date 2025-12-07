@@ -322,7 +322,26 @@ static void set_volume(float amount) {
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
-    
+
+    { 
+        auto active_settings = root->child(40, FILL_SPACE);
+        active_settings->when_clicked = paint {
+            system("hyprctl dispatch plugin:mylar:right_click_active");
+        };
+        active_settings->when_paint = paint {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            paint_button_bg(root, c);
+            draw_text(cr, c, fz("Window settings"), 9 * mylar->raw_window->dpi);
+        };
+        active_settings->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            auto bounds = draw_text(cr, c, fz("Window settings"), 9 * mylar->raw_window->dpi, false);
+            c->wanted_bounds.w = bounds.w + 20;
+        }; 
+    }
+
     { 
         auto toggle = root->child(40, FILL_SPACE);
         toggle->when_clicked = paint {

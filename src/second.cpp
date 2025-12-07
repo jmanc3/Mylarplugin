@@ -1084,6 +1084,18 @@ void add_hyprctl_dispatchers() {
         toggle_layout();
         return true;
     });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:right_click_active", [](std::string in) {
+        for (auto m : actual_root->children) {
+            if (m->custom_type == (int) TYPE::CLIENT) {
+                auto cid = *datum<int>(m, "cid");
+                if (hypriso->has_focus(cid)) {
+                    titlebar::titlebar_right_click(cid, true);
+                    return true;
+                }
+            }
+        }
+        return true;
+    });
 }
 
 void second::begin() {
