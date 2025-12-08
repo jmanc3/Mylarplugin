@@ -1074,14 +1074,45 @@ void update_restore_info_for(int id) {
         auto old = restore_infos[hypriso->class_name(id)];
         info.remember_workspace = old.remember_workspace;
         info.remember_size = old.remember_size;
+        info.remove_titlebar = old.remove_titlebar;
         restore_infos[hypriso->class_name(id)] = info;
         save_restore_infos(); // I believe it's okay to call this here because it only happens on resize end, and drag end
     }
 }
 
+void do_snap(SnapPosition pos) {
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::CLIENT) {
+            auto cid = *datum<int>(c, "cid");
+            if (hypriso->has_focus(cid)) {
+                auto snapped = *datum<bool>(c, "snapped");
+                auto snap_type = *datum<int>(c, "snap_type");
+                drag::snap_window(get_monitor(cid), cid, (int) pos);
+                return;
+            }
+        }
+    }    
+} 
+
 void add_hyprctl_dispatchers() {
     hypriso->add_hyprctl_dispatcher("plugin:mylar:toggle_layout", [](std::string in) {
         toggle_layout();
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_left", [](std::string in) {
+        do_snap(SnapPosition::LEFT);
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_right", [](std::string in) {
+        do_snap(SnapPosition::RIGHT);
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_up", [](std::string in) {
+        do_snap(SnapPosition::MAX);
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_down", [](std::string in) {
+        do_snap(SnapPosition::NONE);
         return true;
     });
     hypriso->add_hyprctl_dispatcher("plugin:mylar:right_click_active", [](std::string in) {

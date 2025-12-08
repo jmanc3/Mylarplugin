@@ -194,6 +194,36 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
         };
         root.push_back(pop);        
     }
+    {
+        PopOption pop;
+        auto info = &restore_infos[hypriso->class_name(cid)];
+        if (info->remove_titlebar)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        pop.text = "Never titlebar";
+        pop.on_clicked = [cid]() {
+            auto info = &restore_infos[hypriso->class_name(cid)];
+            info->remove_titlebar = !info->remove_titlebar;
+            bool has_titlebar = hypriso->has_decorations(cid);
+            if (info->remove_titlebar && has_titlebar) {
+                hypriso->remove_decorations(cid);
+                if (auto c = get_cid_container(cid)) {
+                    delete c->children[0];
+                    c->children.erase(c->children.begin());
+                }
+                hypriso->set_corner_rendering_mask_for_window(cid, 0);
+            }
+            if (!info->remove_titlebar && !has_titlebar) {
+                hypriso->reserve_titlebar(cid, titlebar_h);
+                if (auto c = get_cid_container(cid)) {
+                    create_titlebar(actual_root, c);
+                    *datum<float>(c, "titlebar_alpha") = 1.0;
+                }
+                hypriso->set_corner_rendering_mask_for_window(cid, 3);
+            }
+            update_restore_info_for(cid);
+        };
+        root.push_back(pop);        
+    }
 
     if (centered) {
         popup::open(root, m.x - (277 * .5), m.y, cid);
@@ -557,13 +587,8 @@ void create_titlebar(Container *root, Container *parent) {
 }
 
 bool titlebar_disabled(int id) {
-    auto client = get_cid_container(id);
-    auto info = (ClientInfo*)client->user_data;
-    //notify(fz("is disasbled {} {}", hypriso->class_name(id), info->titlebar_disabled_by_user));
-    //if (info->titlebar_disabled_by_user) {
-        //return true;
-    //}
-    return false;
+    auto info = &restore_infos[hypriso->class_name(id)];
+    return info->remove_titlebar;
 }
 
 void titlebar::on_window_open(int id) {
