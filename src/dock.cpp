@@ -138,7 +138,7 @@ static void paint_root(Container *root, Container *c) {
     cairo_fill(cr);    
 }
 
-Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true) {
+Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
@@ -147,10 +147,10 @@ Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, boo
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, center_x(c, logical.width), center_y(c, logical.height));
+        cairo_move_to(cr, center_x(c, logical.width), center_y(c, ink.height));
         pango_cairo_show_layout(cr, layout);
     }
-    return Bounds(ink.width, ink.height, logical.width, logical.height);
+    return Bounds(ink.width, ink.height, logical.width, ink.height);
 }
 
 static void paint_button_bg(Container *root, Container *c) {
@@ -181,7 +181,7 @@ static std::string get_date() {
     auto now = std::chrono::system_clock::now();
     auto local = std::chrono::current_zone()->to_local(now);
 
-    std::string s = std::format("{:%Y-%m-%d}\n{:%I:%M %p}", local, local);
+    std::string s = std::format("{:%I:%M %p — %A}\n{:%B %m/%d/%Y}", local, local);
 
     return s;
 }
@@ -297,11 +297,13 @@ static void set_brightness(float amount) {
     latest = amount;
     if (queued)
         return;
-    //queued = true;
-    
-    //windowing::add_fb(dock_app, 31);
-    
-    auto process = std::make_shared<TinyProcessLib::Process>(fz("brightnessctl set {}", (int) std::round(amount)));
+    queued = true;
+    std::thread t([amount]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto process = std::make_shared<TinyProcessLib::Process>(fz("brightnessctl set {}", (int) std::round(amount)));
+        queued = false;
+    });
+    t.detach();
 }
 
 static void set_volume(float amount) {
@@ -332,12 +334,14 @@ static void fill_root(Container *root) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("Window settings"), 9 * mylar->raw_window->dpi);
+//Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
+            
+            draw_text(cr, c, fz("\uEB3C"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         };
         active_settings->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("Window settings"), 9 * mylar->raw_window->dpi, false);
+            auto bounds = draw_text(cr, c, fz("\uEB3C"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
             c->wanted_bounds.w = bounds.w + 20;
         }; 
     }
@@ -351,12 +355,12 @@ static void fill_root(Container *root) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("Toggle layout"), 9 * mylar->raw_window->dpi);
+            draw_text(cr, c, fz("\uECA5"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         };
         toggle->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("Toggle layout"), 9 * mylar->raw_window->dpi, false);
+            auto bounds = draw_text(cr, c, fz("\uECA5"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
             c->wanted_bounds.w = bounds.w + 20;
         }; 
     }
@@ -378,12 +382,12 @@ static void fill_root(Container *root) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("Nightlight: {}", nightlight_on ? "On" : "Off"), 9 * mylar->raw_window->dpi);
+            draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         };
         night->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("Nightlight: {}", nightlight_on ? "On" : "Off"), 9 * mylar->raw_window->dpi, false);
+            auto bounds = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
             c->wanted_bounds.w = bounds.w + 20;
         }; 
     }
