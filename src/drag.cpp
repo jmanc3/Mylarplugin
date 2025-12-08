@@ -265,18 +265,22 @@ void drag::end(int cid) {
 
                 auto c_snap_type = pos;
 
+                auto theight = titlebar_h;
+                if (!hypriso->has_decorations(cid))
+                    theight = 0;
+
                 if (c_snap_type == SnapPosition::LEFT) {
-                    hypriso->move_resize(cid, reserved.x, reserved.y + titlebar_h, reserved.w * middle_perc, reserved.h - titlebar_h, false);
+                    hypriso->move_resize(cid, reserved.x, reserved.y + theight, reserved.w * middle_perc, reserved.h - theight, false);
                 } else if (c_snap_type == SnapPosition::RIGHT) {
-                    hypriso->move_resize(cid, reserved.x + reserved.w * middle_perc, reserved.y + titlebar_h, reserved.w * (1 - middle_perc), reserved.h - titlebar_h, false);
+                    hypriso->move_resize(cid, reserved.x + reserved.w * middle_perc, reserved.y + theight, reserved.w * (1 - middle_perc), reserved.h - theight, false);
                 } else if (c_snap_type == SnapPosition::TOP_LEFT) {
-                    hypriso->move_resize(cid, lt.x, lt.y + titlebar_h, lt.w, lt.h - titlebar_h, false);
+                    hypriso->move_resize(cid, lt.x, lt.y + theight, lt.w, lt.h - theight, false);
                 } else if (c_snap_type == SnapPosition::BOTTOM_LEFT) {
-                    hypriso->move_resize(cid, lb.x, lb.y + titlebar_h, lb.w, lb.h - titlebar_h, false);
+                    hypriso->move_resize(cid, lb.x, lb.y + theight, lb.w, lb.h - theight, false);
                 } else if (c_snap_type == SnapPosition::TOP_RIGHT) {
-                    hypriso->move_resize(cid, rt.x, rt.y + titlebar_h, rt.w, rt.h - titlebar_h, false);
+                    hypriso->move_resize(cid, rt.x, rt.y + theight, rt.w, rt.h - theight, false);
                 } else if (c_snap_type == SnapPosition::BOTTOM_RIGHT) {
-                    hypriso->move_resize(cid, rb.x, rb.y + titlebar_h, rb.w, rb.h - titlebar_h, false);
+                    hypriso->move_resize(cid, rb.x, rb.y + theight, rb.w, rb.h - theight, false);
                 }
             }
 
