@@ -103,7 +103,10 @@ static bool on_mouse_move(int id, float x, float y) {
     }
 
     if (!consumed && !mouse_down) {
-        hotcorners::motion(id, x, y);
+        auto current = get_current_time_in_ms();
+        auto time_since = (current - zoom_nicely_ended_time);
+        if (zoom_factor == 1.0 && time_since > 500)
+            hotcorners::motion(id, x, y);
     }
 
     return consumed;
