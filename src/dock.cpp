@@ -138,6 +138,21 @@ static void paint_root(Container *root, Container *c) {
     cairo_fill(cr);    
 }
 
+Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
+    auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+    //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
+    pango_layout_set_text(layout, text.data(), text.size());
+    cairo_set_source_rgba(cr, 1, 1, 1, 1);
+    PangoRectangle ink;
+    PangoRectangle logical;
+    pango_layout_get_pixel_extents(layout, &ink, &logical);
+    if (draw) {
+        cairo_move_to(cr, x, y);
+        pango_cairo_show_layout(cr, layout);
+    }
+    return Bounds(ink.width, ink.height, logical.width, logical.height);
+}
+
 Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
@@ -147,10 +162,10 @@ Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, boo
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, center_x(c, logical.width), center_y(c, ink.height));
+        cairo_move_to(cr, center_x(c, logical.width), center_y(c, logical.height));
         pango_cairo_show_layout(cr, layout);
     }
-    return Bounds(ink.width, ink.height, logical.width, ink.height);
+    return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
 static void paint_button_bg(Container *root, Container *c) {
@@ -174,7 +189,12 @@ static void paint_battery(Container *root, Container *c) {
     auto cr = mylar->raw_window->cr;
     paint_button_bg(root, c);
     std::string charging_text = charging ? "+" : "-";
-    draw_text(cr, c, fz("Battery: {}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi);
+
+    auto ico = draw_text(cr, c, fz("\uEBA7"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+    draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uEBA7"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
+    
+    auto tex = draw_text(cr, c, fz("{}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi, false);
+    draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi, true); 
 }
 
 static std::string get_date() {
@@ -355,12 +375,12 @@ static void fill_root(Container *root) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("\uECA5"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+            draw_text(cr, c, fz("\uF0E2"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         };
         toggle->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("\uECA5"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+            auto bounds = draw_text(cr, c, fz("\uF0E2"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
             c->wanted_bounds.w = bounds.w + 20;
         }; 
     }
@@ -382,12 +402,12 @@ static void fill_root(Container *root) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+            draw_text(cr, c, fz("\uF126"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         };
         night->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+            auto bounds = draw_text(cr, c, fz("\uF126"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
             c->wanted_bounds.w = bounds.w + 20;
         }; 
     }
@@ -417,13 +437,19 @@ static void fill_root(Container *root) {
             auto volume_data = (VolumeData *) c->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("Volume: {}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi);
+            
+            auto ico = draw_text(cr, c, fz("\uE995"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uE995"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
+            
+            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, false);
+            draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, true);
         };
         volume->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("Volume: {}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = bounds.w + 20;
+            auto ico = draw_text(cr, c, fz("\uE995"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, false);
+            c->wanted_bounds.w = ico.w + tex.w + 30;
         };
         volume->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
@@ -443,8 +469,13 @@ static void fill_root(Container *root) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             std::string charging_text = charging ? "+" : "-";
-            auto bounds = draw_text(cr, c, fz("Battery: {}{}%", charging_text, battery_level), 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = bounds.w + 20;
+
+            auto ico = draw_text(cr, c, fz("\uEBA7"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            auto tex = draw_text(cr, c, fz("{}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi, false);
+            c->wanted_bounds.w = ico.w + tex.w + 30;
+ 
+            //auto bounds = draw_text(cr, c, fz("\uEBA7"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+            //c->wanted_bounds.w = bounds.w + 20;
         };
         battery->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
@@ -476,13 +507,21 @@ static void fill_root(Container *root) {
             auto brightness_data = (BrightnessData *) c->user_data;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
-            draw_text(cr, c, fz("Brightness: {}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi);
+
+            auto ico = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uE793"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
+        
+            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
+            draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, true); 
         };
         brightness->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, "Brightness: 100%", 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = bounds.w + 20;
+            auto brightness_data = (BrightnessData *) c->user_data;
+             
+            auto ico = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
+            c->wanted_bounds.w = ico.w + tex.w + 30;
         };
         brightness->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;

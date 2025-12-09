@@ -5406,3 +5406,5 @@ void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std
     });
 }
 
+
+

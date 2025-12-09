@@ -16,14 +16,6 @@ struct DraggingData {
 DraggingData *data = nullptr;
 
 void drag::begin(int cid) {
-    if (!hypriso->is_floating(cid)) {
-        auto b = bounds_client(cid);
-        hypriso->move_resize(cid, b.x, b.y - titlebar_h * 2, b.w, b.h);
-        later_immediate([cid](Timer *) {
-            hypriso->do_default_drag(cid);
-        });
-        return;
-    }
     //notify(fz("wants no decorations {}", hypriso->requested_client_side_decorations(cid)));
     data = new DraggingData;
     data->cid = cid;
