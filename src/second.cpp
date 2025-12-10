@@ -571,8 +571,26 @@ void paint_snap_preview(Container *actual_root, Container *c) {
     }
 }
 
-void fit_on_screen(int id)  {
-    
+void fit_on_screen(int cid)  {
+    int mon = get_monitor(cid);
+    auto reserved = bounds_reserved_monitor(mon);
+    auto bounds = bounds_client(cid);
+    bool needs = false;
+    float amount = .9;
+    if (bounds.w > reserved.w * amount) {
+        needs = true;
+        bounds.w = reserved.w * amount;
+    }
+    if (bounds.h > reserved.h * amount) {
+        needs = true;
+        bounds.h = reserved.h * amount;
+    }
+    if (!needs)
+        return;
+    hypriso->move_resize(cid, 
+        reserved.x + reserved.w * .5 - bounds.w * .5,
+        reserved.y + reserved.h * .5 - bounds.h * .5,
+        bounds.w, bounds.h);
 }
 
 void apply_restore_info(int id) {
