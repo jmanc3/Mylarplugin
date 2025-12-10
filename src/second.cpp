@@ -631,7 +631,19 @@ static void on_window_open(int id) {
             bool on_workspace = (hypriso->get_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor())); 
             return inside && on_workspace;
         };
-
+        c->when_mouse_down = paint {
+            if (META_PRESSED && c->state.mouse_button_pressed == BTN_RIGHT) {
+                root->consumed_event = true;
+            }
+        };
+        c->when_clicked = paint {
+            if (c->state.mouse_button_pressed == BTN_RIGHT && META_PRESSED) {
+                auto cid = *datum<int>(c, "cid");
+                titlebar::titlebar_right_click(cid);
+                root->consumed_event = true;
+            }
+        };
+        
         *datum<int>(c, "cid") = id; 
         *datum<bool>(c, "snapped") = false; 
 

@@ -132,7 +132,11 @@ static void paint_root(Container *root, Container *c) {
     cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
     cairo_paint(cr);
     cairo_restore(cr);
-
+    
+    cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, std::round(1 * mylar->raw_window->dpi));
+    cairo_set_source_rgba(cr, 1, 1, 1, .1);
+    cairo_fill(cr);
+    
     cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, root->real_bounds.h);
     cairo_set_source_rgba(cr, 0, 0, 0, .5);
     cairo_fill(cr);    
