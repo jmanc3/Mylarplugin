@@ -57,6 +57,7 @@
 #include <hyprland/src/xwayland/XWM.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
+#include <hyprland/src/desktop/Window.hpp>
 #undef private
 
 #include <hyprland/src/xwayland/XWayland.hpp>
@@ -1065,7 +1066,9 @@ void hook_onClientMessage(void* thisptr, xcb_client_message_event_t* e) {
                     }
                 }
             }
-        } else if (e->type == HYPRATOMS["WM_CHANGE_STATE"]) { // visibility change
+        } 
+/*
+        else if (e->type == HYPRATOMS["WM_CHANGE_STATE"]) { // visibility change
             int type = e->data.data32[0];
             if (auto w = winref_from_x11(e->window)) {
                 if (type == 3) { // iconify
@@ -1075,6 +1078,7 @@ void hook_onClientMessage(void* thisptr, xcb_client_message_event_t* e) {
                 }
             }
         }
+        */
 
         /*
 		if (get_atom_name(conn, e->type) == "WM_PROTOCOLS") {
@@ -1789,6 +1793,82 @@ void hook_shadow_decorations() {
 
 void hook_popup_creation_and_destruction();
 
+void onUpdateState(CWindow *ptr) {
+    std::optional<bool>      requestsFS = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreen : ptr->m_xwaylandSurface->m_state.requestsFullscreen;
+    std::optional<MONITORID> requestsID = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreenMonitor : MONITOR_INVALID;
+    std::optional<bool>      requestsMX = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMaximize : ptr->m_xwaylandSurface->m_state.requestsMaximize;
+    std::optional<bool>      requestsMin = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMinimize : ptr->m_xwaylandSurface->m_state.requestsMinimize;
+    
+
+    if (requestsFS.has_value() && !(ptr->m_suppressedEvents & SUPPRESS_FULLSCREEN)) {
+        if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(ptr->m_suppressedEvents & SUPPRESS_FULLSCREEN_OUTPUT)) {
+            if (ptr->m_isMapped) {
+                const auto monitor = g_pCompositor->getMonitorFromID(requestsID.value());
+                g_pCompositor->moveWindowToWorkspaceSafe(ptr->m_self.lock(), monitor->m_activeWorkspace);
+                Desktop::focusState()->rawMonitorFocus(monitor);
+            }
+
+            if (!ptr->m_isMapped)
+                ptr->m_wantsInitialFullscreenMonitor = requestsID.value();
+        }
+
+        bool fs = requestsFS.value();
+        if (ptr->m_isMapped)
+            g_pCompositor->changeWindowFullscreenModeClient(ptr->m_self.lock(), FSMODE_FULLSCREEN, requestsFS.value());
+
+        if (!ptr->m_isMapped)
+            ptr->m_wantsInitialFullscreen = fs;
+    }
+
+    if (requestsMX.has_value() && !(ptr->m_suppressedEvents & SUPPRESS_MAXIMIZE)) {
+        if (ptr->m_isMapped) {
+            //auto window    = ptr->m_self.lock();
+            //auto state     = sc<int8_t>(window->m_fullscreenState.client);
+            //bool maximized = (state & sc<uint8_t>(FSMODE_MAXIMIZED)) != 0;
+            //g_pCompositor->changeWindowFullscreenModeClient(window, FSMODE_MAXIMIZED, !maximized);
+        }
+    }
+
+    if (requestsMX.has_value() || requestsMin.has_value()) {
+        if (hypriso->on_requests_max_or_min) {
+            for (auto hw : hyprwindows) {
+                if (hw->w.get() == ptr) {
+                    int want = 0; // max
+                    if (requestsMin.has_value())
+                        want = 1;
+                    hypriso->on_requests_max_or_min(hw->id, want);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+inline CFunctionHook* g_pOnUpdateStateHook = nullptr;
+typedef void (*origUpdateState)(CWindow *);
+void hook_onUpdateState(void* thisptr) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+#ifdef FORK_WARN
+    assert(false && "[Function Body] Make sure our `onUpdateState` and Hyprland's are synced!");
+#endif
+    onUpdateState((CWindow *) thisptr);
+}
+
+void hook_maximize_minimize() {
+    {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "onUpdateState");
+        for (auto m : METHODS) {
+            if (m.signature.find("CWindow") != std::string::npos) {
+                g_pOnUpdateStateHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onUpdateState);
+                g_pOnUpdateStateHook->hook();
+                break;
+            }
+        }
+    }
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1803,6 +1883,7 @@ void HyprIso::create_hooks() {
     hook_render_functions();
     overwrite_defaults();
     //interleave_floating_and_tiled_windows();
+    hook_maximize_minimize();
     hook_dock_change();
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();

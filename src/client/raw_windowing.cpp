@@ -47,6 +47,7 @@ extern "C" {
 #include "fractional-scale-v1-client-protocol.h"
 #include "wp-viewporter-client-protocol.h"
 #include "cursor-shape-v1-client-protocol.h"
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 }
 
 #include <xkbcommon/xkbcommon.h>
@@ -83,6 +84,7 @@ struct wl_context {
     struct wp_viewporter *viewporter = nullptr;
     struct wp_cursor_shape_manager_v1 *shape_manager = nullptr;
     struct wp_cursor_shape_device_v1 *shape_device = nullptr;
+    struct zwlr_foreign_toplevel_manager_v1 *top_level_manager = nullptr;
 
     //struct wl_output *output;
     uint32_t shm_format;
@@ -946,6 +948,73 @@ static const struct xdg_wm_base_listener wm_base_listener = {
     .ping = xdg_wm_base_ping
 };
 
+
+//
+// ----- TOPLEVEL CALLBACKS -----
+//
+static void handle_toplevel_title(void* data, zwlr_foreign_toplevel_handle_v1*, const char* title) {
+    //notify(fz("{}", title));
+}
+
+static void handle_toplevel_app_id(void* data, zwlr_foreign_toplevel_handle_v1*, const char* app_id) {
+    //notify(fz("{}", app_id));
+}
+
+static void handle_toplevel_state(void* data, zwlr_foreign_toplevel_handle_v1*, wl_array* state) {
+
+}
+
+static void handle_toplevel_closed(void* data, zwlr_foreign_toplevel_handle_v1* handle) {
+    //zwlr_foreign_toplevel_handle_v1_destroy(handle);
+}
+
+static void output_enter(void *data,
+             struct zwlr_foreign_toplevel_handle_v1 *zwlr_foreign_toplevel_handle_v1,
+             struct wl_output *output) {
+
+}
+
+static void output_leave(void *data,
+             struct zwlr_foreign_toplevel_handle_v1 *zwlr_foreign_toplevel_handle_v1,
+             struct wl_output *output) {
+
+}
+
+static void done(void *data,
+         struct zwlr_foreign_toplevel_handle_v1 *zwlr_foreign_toplevel_handle_v1) {
+
+}
+
+static void parent(void *data,
+           struct zwlr_foreign_toplevel_handle_v1 *zwlr_foreign_toplevel_handle_v1,
+           struct zwlr_foreign_toplevel_handle_v1 *parent) {
+
+}
+
+static const zwlr_foreign_toplevel_handle_v1_listener toplevel_listener = {
+    .title = handle_toplevel_title,
+    .app_id = handle_toplevel_app_id,
+    .output_enter = output_enter,
+    .output_leave = output_leave,
+    .state = handle_toplevel_state,
+    .done = done,
+    .closed = handle_toplevel_closed,
+    .parent = parent
+};
+
+static void handle_manager_toplevel(void*, zwlr_foreign_toplevel_manager_v1*, zwlr_foreign_toplevel_handle_v1* toplevel_handle) {
+    zwlr_foreign_toplevel_handle_v1_add_listener(toplevel_handle, &toplevel_listener, nullptr);
+}
+
+static void handle_manager_finished(void*, zwlr_foreign_toplevel_manager_v1*) {
+    //std::cout << "Toplevel manager finished\n";
+}
+
+static const zwlr_foreign_toplevel_manager_v1_listener manager_listener = {
+    .toplevel = handle_manager_toplevel,
+    .finished = handle_manager_finished,
+};
+
 /* ---- registry ---- */
 static void registry_handle_global(void *data, struct wl_registry *registry,
                                    uint32_t id, const char *interface, uint32_t version) {
@@ -973,6 +1042,9 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         d->shape_manager = (wp_cursor_shape_manager_v1 *) wl_registry_bind(registry, id, &wp_cursor_shape_manager_v1_interface, 1);
         if (d->shape_manager && d->pointer)
             d->shape_device = wp_cursor_shape_manager_v1_get_pointer(d->shape_manager, d->pointer);
+    } else if (strcmp(interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
+        d->top_level_manager = (zwlr_foreign_toplevel_manager_v1*) wl_registry_bind(registry, id, &zwlr_foreign_toplevel_manager_v1_interface, 3);
+        zwlr_foreign_toplevel_manager_v1_add_listener(d->top_level_manager, &manager_listener, nullptr);
     }
 }
 

@@ -1,5 +1,9 @@
 #MORE_DEBUG_FLAGS := -DDEBUGTITLEBAR
+
 #MORE_DEBUG_FLAGS := -DDEBUGCONTAINERS
+#when we upgrade to a new version these need to be handled one by one
+#MORE_DEBUG_FLAGS := -DFORK_WARN
+
 
 PLUGIN_NAME = mylar-desktop
 MAKEFLAGS += -j16

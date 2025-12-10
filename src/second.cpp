@@ -27,6 +27,7 @@
 #include <iterator>
 #include <filesystem>
 #include <fstream>
+#include <sys/wait.h>
 #include <wayland-server-protocol.h>
 
 #ifdef TRACY_ENABLE
@@ -1144,6 +1145,33 @@ void add_hyprctl_dispatchers() {
     });
 }
 
+void on_requests_max_or_min(int cid, int wants) {
+    if (wants == 1) {
+        hypriso->set_hidden(cid, true);
+        bool just_saw_cid = false;
+        for (auto c : actual_root->children) {
+            if (c->custom_type == (int) TYPE::CLIENT) {
+                auto od = *datum<int>(c, "cid");
+                if (just_saw_cid) {
+                    hypriso->bring_to_front(od, true);
+                    break;
+                }
+                if (od == cid) 
+                    just_saw_cid = true;
+            }
+        }
+        return;
+    }
+    if (auto c = get_cid_container(cid)) {
+        auto snapped = *datum<bool>(c, "snapped");
+        if (snapped) {
+            drag::snap_window(get_monitor(cid) , cid, (int) SnapPosition::NONE);
+        } else {
+            drag::snap_window(get_monitor(cid) , cid, (int) SnapPosition::MAX);
+        }
+    }
+}
+
 void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1173,6 +1201,7 @@ void second::begin() {
     hypriso->on_drag_or_resize_cancel_requested = on_drag_or_resize_cancel_requested;
     hypriso->on_config_reload = on_config_reload;
     hypriso->on_activated = on_activated;
+    hypriso->on_requests_max_or_min = on_requests_max_or_min;
 
     load_restore_infos();
 
