@@ -4257,7 +4257,7 @@ void HyprIso::add_float_rule() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    g_pConfigManager->handleWindowrule("windowrulev2", "float, class:.*");
+    g_pConfigManager->handleWindowrule("windowrule", "fmatch:class:.*, float on");
 }
 
 void HyprIso::overwrite_defaults() {

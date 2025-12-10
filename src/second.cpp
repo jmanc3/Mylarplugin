@@ -634,7 +634,6 @@ void apply_restore_info(int id) {
                 hypriso->move_resize(id, b.x, b.y, b.w, b.h);
         }
     }
-    fit_on_screen(id);
 }
 
 static void on_window_open(int id) {    
@@ -672,8 +671,11 @@ static void on_window_open(int id) {
     
     hypriso->set_corner_rendering_mask_for_window(id, 3);
     
-    apply_restore_info(id); 
-   
+    apply_restore_info(id);
+    later_immediate([id](Timer *) {
+        fit_on_screen(id);
+    });
+
     titlebar::on_window_open(id);
     alt_tab::on_window_open(id);
     resizing::on_window_open(id);
