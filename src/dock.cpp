@@ -27,6 +27,7 @@ struct CachedFont {
 };
 
 static std::vector<CachedFont *> cached_fonts;
+static int active_cid = -1;
 
 class Window {
 public:
@@ -35,7 +36,6 @@ public:
     std::string command;
     std::string title;
     std::string stack_rule; // Should be regex later, or multiple 
-    bool active = false;
 };
 
 struct Windows {
@@ -384,13 +384,13 @@ static void fill_root(Container *root) {
                             }
                         }
                     }
-                    windows->to_be_added.clear();
+                    windows->to_be_removed.clear();
                 }
 
                 if (!windows->to_be_added.empty()) {
-                    for (auto w : windows->to_be_added) {
+                    for (auto w : windows->to_be_added)
                         windows->list.push_back(w);
-                    }
+                    windows->to_be_added.clear();
                 }
             }
 
@@ -403,22 +403,22 @@ static void fill_root(Container *root) {
                     if (ch->custom_type == w->cid)
                         found = true;
                 if (!found) {
-                   auto ch = c->child(::absolute, b.h * mylar->raw_window->dpi, FILL_SPACE);
-                   ch->skip_delete = true;
-                   ch->user_data = w;
-                   ch->when_paint = paint {
-                       auto w = (Window *) c->user_data;
-                       auto mylar = (MylarWindow*)root->user_data;
-                       auto cr = mylar->raw_window->cr;
-                       paint_button_bg(root, c);
-                       draw_text(cr, c, w->title, 10 * mylar->raw_window->dpi, true);
+                    auto ch = c->child(::absolute, b.h * mylar->raw_window->dpi, FILL_SPACE);
+                    ch->skip_delete = true;
+                    ch->user_data = w;
+                    ch->when_paint = paint {
+                        auto w = (Window*)c->user_data;
+                        auto mylar = (MylarWindow*)root->user_data;
+                        auto cr = mylar->raw_window->cr;
+                        paint_button_bg(root, c);
+                        draw_text(cr, c, w->title, 10 * mylar->raw_window->dpi, true);
 
-                       if (w->active) {
-                           auto bar_h = 3 * mylar->raw_window->dpi;
-                           cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
-                           cairo_set_source_rgba(cr, 1, 1, 1, 1);
-                           cairo_fill(cr);
-                       }
+                        if (w->cid == active_cid) {
+                            auto bar_h = 3 * mylar->raw_window->dpi;
+                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
+                            cairo_set_source_rgba(cr, 1, 1, 1, 1);
+                            cairo_fill(cr);
+                        }
                    };
                    ch->when_clicked = paint {
                        auto cid = c->custom_type;
@@ -707,6 +707,7 @@ void dock::add_window(int cid) {
     // Check if cid should even be displayed in dock
     if (!hypriso->alt_tabbable(cid))
         return;
+
     
     Window *window = new Window;
     window->cid = cid;
@@ -714,7 +715,8 @@ void dock::add_window(int cid) {
     window->stack_rule = hypriso->class_name(cid);
     window->icon = "vlc";
     window->command = "vlc";
-    window->active = hypriso->has_focus(cid);
+    if (hypriso->has_focus(cid))
+        active_cid = cid;
 
     // Synchronize 
     std::lock_guard<std::mutex> guard(windows->mut);
@@ -746,9 +748,7 @@ void dock::title_change(int cid, std::string title) {
 
 void dock::on_activated(int cid) {
     std::lock_guard<std::mutex> guard(windows->mut);
-    for (auto w : windows->list)
-        w->active = false;
-    for (auto w : windows->list)
-        if (w->cid == cid)
-            w->active = true;
+    active_cid = cid;
+    if (mylar_window)
+        windowing::redraw(mylar_window->raw_window);
 }
