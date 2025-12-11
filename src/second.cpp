@@ -680,6 +680,7 @@ static void on_window_open(int id) {
     alt_tab::on_window_open(id);
     resizing::on_window_open(id);
     second::layout_containers();
+    dock::add_window(id);
 
     if (hypriso->has_decorations(id)) {
         later(50, [id](Timer *) {
@@ -696,6 +697,7 @@ static void on_window_closed(int id) {
     titlebar::on_window_closed(id);
     resizing::on_window_closed(id);
     alt_tab::on_window_closed(id);
+    dock::remove_window(id);
 
     {
         auto m = actual_root; 
@@ -829,6 +831,7 @@ static void on_monitor_closed(int id) {
 static void on_activated(int id) {
     titlebar::on_activated(id);
     alt_tab::on_activated(id);
+    dock::on_activated(id);
 }
 
 static void on_draw_decos(std::string name, int monitor, int id, float a) {
@@ -1192,6 +1195,10 @@ void on_requests_max_or_min(int cid, int wants) {
     }
 }
 
+void on_title_change(int cid) {
+    dock::title_change(cid, hypriso->title_name(cid));
+}
+
 void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1211,6 +1218,7 @@ void second::begin() {
     hypriso->is_snapped = is_snapped;
     hypriso->on_window_open = on_window_open;
     hypriso->on_window_closed = on_window_closed;
+    hypriso->on_title_change = on_title_change;
     hypriso->on_layer_open = on_layer_open;
     hypriso->on_layer_closed = on_layer_closed;
     hypriso->on_layer_change = on_layer_change;

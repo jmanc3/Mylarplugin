@@ -208,6 +208,8 @@ struct HyprIso {
     std::function<void(int id)> on_window_open = nullptr;
     
     std::function<void(int id)> on_window_closed = nullptr;
+    
+    std::function<void(int id)> on_title_change = nullptr;
 
     std::function<void()> on_layer_change = nullptr;
 

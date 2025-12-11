@@ -28,6 +28,27 @@ struct CachedFont {
 
 static std::vector<CachedFont *> cached_fonts;
 
+class Window {
+public:
+    int cid; // unique id
+    std::string icon;
+    std::string command;
+    std::string title;
+    std::string stack_rule; // Should be regex later, or multiple 
+    bool active = false;
+};
+
+struct Windows {
+    std::mutex mut;
+
+    std::vector<Window *> list;
+
+    std::vector<Window *> to_be_added;
+    std::vector<int> to_be_removed;
+};
+
+static Windows *windows = new Windows;
+
 static float battery_level = 100;
 static bool charging = true;
 static float volume_level = 100;
@@ -348,6 +369,89 @@ static void set_volume(float amount) {
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
+    
+    {
+        auto icons = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+        icons->name = "icons";
+        icons->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            {
+                std::lock_guard<std::mutex> guard(windows->mut);
+                if (!windows->to_be_removed.empty()) {
+                    for (auto t : windows->to_be_removed) {
+                        for (int i = windows->list.size() - 1; i >= 0; i--) {
+                            if (windows->list[i]->cid == t) {
+                                windows->list.erase(windows->list.begin() + i);
+                            }
+                        }
+                    }
+                    windows->to_be_added.clear();
+                }
+
+                if (!windows->to_be_added.empty()) {
+                    for (auto w : windows->to_be_added) {
+                        windows->list.push_back(w);
+                    }
+                }
+            }
+
+            auto mylar = (MylarWindow*)root->user_data;
+
+            // merge list with containers
+            for (auto w : windows->list)  {
+                bool found = false;
+                for (auto ch : c->children)
+                    if (ch->custom_type == w->cid)
+                        found = true;
+                if (!found) {
+                   auto ch = c->child(::absolute, b.h * mylar->raw_window->dpi, FILL_SPACE);
+                   ch->skip_delete = true;
+                   ch->user_data = w;
+                   ch->when_paint = paint {
+                       auto w = (Window *) c->user_data;
+                       auto mylar = (MylarWindow*)root->user_data;
+                       auto cr = mylar->raw_window->cr;
+                       paint_button_bg(root, c);
+                       draw_text(cr, c, w->title, 10 * mylar->raw_window->dpi, true);
+
+                       if (w->active) {
+                           auto bar_h = 3 * mylar->raw_window->dpi;
+                           cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
+                           cairo_set_source_rgba(cr, 1, 1, 1, 1);
+                           cairo_fill(cr);
+                       }
+                   };
+                   ch->when_clicked = paint {
+                       auto cid = c->custom_type;
+                       main_thread([cid] {
+                           hypriso->bring_to_front(cid);
+                       });
+                   };
+                   ch->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+                       auto w = (Window *) c->user_data;
+                       auto mylar = (MylarWindow*)root->user_data;
+                       auto cr = mylar->raw_window->cr;
+ 
+                       auto bounds = draw_text(cr, c, w->title, 10 * mylar->raw_window->dpi, false);
+                       
+                       c->wanted_bounds.w = bounds.w + 20;
+                   };
+                   ch->custom_type = w->cid;
+                }
+            }
+
+            for (int i = c->children.size() - 1; i >= 0; i--) {
+                auto ch = c->children[i];
+                bool found = false;
+                for (auto w : windows->list)
+                    if (w->cid == ch->custom_type)
+                        found = true;
+                if (!found) {
+                    delete c->children[i];
+                    c->children.erase(c->children.begin() + i);
+                }
+            }
+        };
+    }
 
     { 
         auto active_settings = root->child(40, FILL_SPACE);
@@ -416,6 +520,61 @@ static void fill_root(Container *root) {
         }; 
     }
     
+    {
+        auto brightness = root->child(40, FILL_SPACE);
+        auto brightness_data = new BrightnessData;
+        brightness_data->value = get_brightness();
+
+        brightness->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+            //notify(fz("fine scrolled {} {}", ((double) scroll_y) * .001, came_from_touchpad));
+            auto mylar = (MylarWindow*)root->user_data;
+            auto brightness_data = (BrightnessData *) c->user_data;
+            brightness_data->value += ((double) scroll_y) * .001;
+            if (brightness_data->value > 100) {
+               brightness_data->value = 100;
+            }
+            if (brightness_data->value < 0) {
+               brightness_data->value = 0;
+            }
+            set_brightness(brightness_data->value);
+        };
+        
+        brightness->user_data = brightness_data;
+        brightness->when_paint = paint {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto brightness_data = (BrightnessData *) c->user_data;
+            auto cr = mylar->raw_window->cr;
+            paint_button_bg(root, c);
+
+            auto ico = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uE793"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
+        
+            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
+            draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, true); 
+        };
+        brightness->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            auto brightness_data = (BrightnessData *) c->user_data;
+             
+            auto ico = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
+            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
+            c->wanted_bounds.w = ico.w + tex.w + 30;
+        };
+        brightness->when_clicked = paint {
+            auto mylar = (MylarWindow*)root->user_data;
+            main_thread([]() {
+                auto order = get_window_stacking_order();
+                for (auto o : order) {
+                    if (hypriso->has_focus(o)) {
+                        hypriso->set_float_state(o, !hypriso->is_floating(o));
+                    }
+                }
+            });
+            //windowing::close_window(mylar->raw_window);
+        };
+    }
+
     {
         auto volume = root->child(40, FILL_SPACE);
         auto volume_data = new VolumeData;
@@ -488,60 +647,6 @@ static void fill_root(Container *root) {
     }
     
     {
-        auto brightness = root->child(40, FILL_SPACE);
-        auto brightness_data = new BrightnessData;
-        brightness_data->value = get_brightness();
-
-        brightness->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
-            //notify(fz("fine scrolled {} {}", ((double) scroll_y) * .001, came_from_touchpad));
-            auto mylar = (MylarWindow*)root->user_data;
-            auto brightness_data = (BrightnessData *) c->user_data;
-            brightness_data->value += ((double) scroll_y) * .001;
-            if (brightness_data->value > 100) {
-               brightness_data->value = 100;
-            }
-            if (brightness_data->value < 0) {
-               brightness_data->value = 0;
-            }
-            set_brightness(brightness_data->value);
-        };
-        brightness->user_data = brightness_data;
-        brightness->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto brightness_data = (BrightnessData *) c->user_data;
-            auto cr = mylar->raw_window->cr;
-            paint_button_bg(root, c);
-
-            auto ico = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uE793"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
-        
-            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
-            draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, true); 
-        };
-        brightness->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            auto brightness_data = (BrightnessData *) c->user_data;
-             
-            auto ico = draw_text(cr, c, fz("\uE793"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = ico.w + tex.w + 30;
-        };
-        brightness->when_clicked = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            main_thread([]() {
-                auto order = get_window_stacking_order();
-                for (auto o : order) {
-                    if (hypriso->has_focus(o)) {
-                        hypriso->set_float_state(o, !hypriso->is_floating(o));
-                    }
-                }
-            });
-            //windowing::close_window(mylar->raw_window);
-        };
-    }
-
-    {
         auto date = root->child(40, FILL_SPACE);
         date->when_paint = paint {
             auto mylar = (MylarWindow*)root->user_data;
@@ -571,7 +676,6 @@ void dock_start() {
     auto mylar = open_mylar_window(dock_app, WindowType::DOCK, settings);
     mylar_window = mylar;
     mylar->root->user_data = mylar;
-    mylar->root->alignment = ALIGN_RIGHT;
     fill_root(mylar->root);
 
     //notify("be");
@@ -590,5 +694,61 @@ void dock::stop() {
     finished = true;
     windowing::close_app(dock_app);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    delete windows;
+    windows = new Windows;
+    cleanup_cached_fonts();
 }
 
+// This happens on the main thread, not the dock thread
+void dock::add_window(int cid) {
+    if (!windows)
+        return;
+ 
+    // Check if cid should even be displayed in dock
+    if (!hypriso->alt_tabbable(cid))
+        return;
+    
+    Window *window = new Window;
+    window->cid = cid;
+    window->title = hypriso->title_name(cid);
+    window->stack_rule = hypriso->class_name(cid);
+    window->icon = "vlc";
+    window->command = "vlc";
+    window->active = hypriso->has_focus(cid);
+
+    // Synchronize 
+    std::lock_guard<std::mutex> guard(windows->mut);
+    windows->to_be_added.push_back(window);
+    if (mylar_window)
+        windowing::redraw(mylar_window->raw_window);
+}
+
+// This happens on the main thread, not the dock thread
+void dock::remove_window(int cid) {
+    if (!windows)
+        return;
+    std::lock_guard<std::mutex> guard(windows->mut);
+    windows->to_be_removed.push_back(cid);
+    if (mylar_window)
+        windowing::redraw(mylar_window->raw_window);
+}
+
+void dock::title_change(int cid, std::string title) {
+    std::lock_guard<std::mutex> guard(windows->mut);
+    for (auto &w : windows->list) {
+        if (w->cid == cid) {
+            w->title = title;
+        }
+    }
+    if (mylar_window)
+        windowing::redraw(mylar_window->raw_window);
+}    
+
+void dock::on_activated(int cid) {
+    std::lock_guard<std::mutex> guard(windows->mut);
+    for (auto w : windows->list)
+        w->active = false;
+    for (auto w : windows->list)
+        if (w->cid == cid)
+            w->active = true;
+}

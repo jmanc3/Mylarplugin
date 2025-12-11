@@ -1506,6 +1506,17 @@ void HyprIso::create_callbacks() {
             on_close_window(w);
         }
     });
+    static auto windowTitle = HyprlandAPI::registerCallbackDynamic(globals->api, "windowTitle", [](void* self, SCallbackInfo& info, std::any data) {
+        if (hypriso->on_title_change) {
+            auto w = std::any_cast<PHLWINDOW>(data); // todo getorcreate ref on our side
+            for (auto hw : hyprwindows) {
+                if (hw->w == w) {
+                    hypriso->on_title_change(hw->id);
+                    break;
+                }
+            }
+        }
+    });
 
     static auto openLayer  = HyprlandAPI::registerCallbackDynamic(globals->api, "openLayer", [](void* self, SCallbackInfo& info, std::any data) {
         try {
