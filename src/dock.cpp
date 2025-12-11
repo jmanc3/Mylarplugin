@@ -10,6 +10,8 @@
 #include <cairo.h>
 #include "process.hpp"
 #include <chrono>
+#include <pango/pango-layout.h>
+#include <pango/pango-types.h>
 #include <thread>
 #include <memory>
 #include <pango/pangocairo.h>
@@ -163,10 +165,19 @@ static void paint_root(Container *root, Container *c) {
     cairo_fill(cr);    
 }
 
-Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
+Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
+    if (wrap == -1) {
+       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+       pango_layout_set_width(layout, -1);
+       pango_layout_set_height(layout, -1);
+    } else {
+       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+       pango_layout_set_width(layout, wrap);
+       pango_layout_set_height(layout, h);
+    }
     cairo_set_source_rgba(cr, 1, 1, 1, 1);
     PangoRectangle ink;
     PangoRectangle logical;
@@ -178,10 +189,21 @@ Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, boo
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
+Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
+    if (wrap == -1) {
+       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+       pango_layout_set_width(layout, -1);
+       pango_layout_set_height(layout, -1);
+       pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
+    } else {
+       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+       pango_layout_set_width(layout, wrap);
+       pango_layout_set_height(layout, h);
+       pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
+    }
     cairo_set_source_rgba(cr, 1, 1, 1, 1);
     PangoRectangle ink;
     PangoRectangle logical;
@@ -411,10 +433,10 @@ static void fill_root(Container *root) {
                         auto mylar = (MylarWindow*)root->user_data;
                         auto cr = mylar->raw_window->cr;
                         paint_button_bg(root, c);
-                        draw_text(cr, c, w->title, 10 * mylar->raw_window->dpi, true);
+                        draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
 
                         if (w->cid == active_cid) {
-                            auto bar_h = 3 * mylar->raw_window->dpi;
+                            auto bar_h = std::round(2 * mylar->raw_window->dpi);
                             cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
                             cairo_set_source_rgba(cr, 1, 1, 1, 1);
                             cairo_fill(cr);
@@ -431,7 +453,7 @@ static void fill_root(Container *root) {
                        auto mylar = (MylarWindow*)root->user_data;
                        auto cr = mylar->raw_window->cr;
  
-                       auto bounds = draw_text(cr, c, w->title, 10 * mylar->raw_window->dpi, false);
+                       auto bounds = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
                        
                        c->wanted_bounds.w = bounds.w + 20;
                    };
@@ -747,7 +769,6 @@ void dock::title_change(int cid, std::string title) {
 }    
 
 void dock::on_activated(int cid) {
-    std::lock_guard<std::mutex> guard(windows->mut);
     active_cid = cid;
     if (mylar_window)
         windowing::redraw(mylar_window->raw_window);
