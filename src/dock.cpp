@@ -170,13 +170,15 @@ Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, boo
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
-       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
-       pango_layout_set_width(layout, -1);
-       pango_layout_set_height(layout, -1);
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+        pango_layout_set_width(layout, -1);
+        pango_layout_set_height(layout, -1);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
     } else {
-       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
-       pango_layout_set_width(layout, wrap);
-       pango_layout_set_height(layout, h);
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_width(layout, wrap);
+        pango_layout_set_height(layout, h);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
     cairo_set_source_rgba(cr, 1, 1, 1, 1);
     PangoRectangle ink;
@@ -194,15 +196,15 @@ Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, boo
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
-       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
-       pango_layout_set_width(layout, -1);
-       pango_layout_set_height(layout, -1);
-       pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+        pango_layout_set_width(layout, -1);
+        pango_layout_set_height(layout, -1);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
     } else {
-       pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
-       pango_layout_set_width(layout, wrap);
-       pango_layout_set_height(layout, h);
-       pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_width(layout, wrap);
+        pango_layout_set_height(layout, h);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
     cairo_set_source_rgba(cr, 1, 1, 1, 1);
     PangoRectangle ink;
