@@ -529,7 +529,15 @@ static void fill_root(Container *root) {
         };
         brightness->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
-            windowing::close_window(mylar->raw_window);
+            main_thread([]() {
+                auto order = get_window_stacking_order();
+                for (auto o : order) {
+                    if (hypriso->has_focus(o)) {
+                        hypriso->set_float_state(o, !hypriso->is_floating(o));
+                    }
+                }
+            });
+            //windowing::close_window(mylar->raw_window);
         };
     }
 

@@ -576,7 +576,7 @@ void fit_on_screen(int cid)  {
     auto reserved = bounds_reserved_monitor(mon);
     auto bounds = bounds_client(cid);
     bool needs = false;
-    float amount = .9;
+    float amount = .85;
     if (bounds.w > reserved.w * amount) {
         needs = true;
         bounds.w = reserved.w * amount;

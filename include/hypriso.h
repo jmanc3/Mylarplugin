@@ -425,4 +425,6 @@ Timer* later_immediate(const std::function<void(Timer*)>& fn);
 void request_refresh();
 void request_refresh_only();
 
+void main_thread(std::function<void()> func);
+
 #endif // hypriso_h_INCLUDED

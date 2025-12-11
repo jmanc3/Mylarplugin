@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <hyprland/src/desktop/Popup.hpp>
+#include <wayland-server-core.h>
 #include <wlr-layer-shell-unstable-v1.hpp>
 #include <xkbcommon/xkbcommon.h>
 
@@ -1453,10 +1454,35 @@ void on_layer_close(PHLLS l) {
     }
 }
 
+static int main_wake_pipe[2];
+static std::vector<std::function<void()>> funcs;
+
+void main_thread(std::function<void()> func) {
+    // wake up and execute func
+    write(main_wake_pipe[1], "x", 1);
+    funcs.push_back(func);
+}
+
+void setup_wake_main_thread() {
+    pipe2(main_wake_pipe, O_CLOEXEC | O_NONBLOCK);
+    int fd = main_wake_pipe[0];
+    uint32_t mask = WL_EVENT_READABLE;
+    wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, fd, mask, [](int fd, uint32_t mask, void *data){
+        char buf[64];
+        read(main_wake_pipe[0], buf, sizeof buf);
+        for (auto f : funcs)
+            f();
+        funcs.clear();
+        return 0;
+    }, nullptr);
+}
+
 void HyprIso::create_callbacks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif    
+    setup_wake_main_thread();
+
     for (auto m : g_pCompositor->m_monitors) {
         on_open_monitor(m);
     }
