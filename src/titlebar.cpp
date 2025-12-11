@@ -151,6 +151,8 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
                     delete c->children[0];
                     c->children.erase(c->children.begin());
                 }
+                auto b = bounds_client(cid);
+                hypriso->move_resize(cid, b.x, b.y - titlebar_h, b.w, b.h + titlebar_h);
                 hypriso->set_corner_rendering_mask_for_window(cid, 0);
             } else {
                 hypriso->reserve_titlebar(cid, titlebar_h);
@@ -158,6 +160,8 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
                     create_titlebar(actual_root, c);
                     *datum<float>(c, "titlebar_alpha") = 1.0;
                 }
+                auto b = bounds_client(cid);
+                hypriso->move_resize(cid, b.x, b.y + titlebar_h, b.w, b.h - titlebar_h);
                 hypriso->set_corner_rendering_mask_for_window(cid, 3);
             }
         };
@@ -210,6 +214,8 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
                     delete c->children[0];
                     c->children.erase(c->children.begin());
                 }
+                auto b = bounds_client(cid);
+                hypriso->move_resize(cid, b.x, b.y - titlebar_h, b.w, b.h + titlebar_h);
                 hypriso->set_corner_rendering_mask_for_window(cid, 0);
             }
             if (!info->remove_titlebar && !has_titlebar) {
@@ -218,6 +224,8 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
                     create_titlebar(actual_root, c);
                     *datum<float>(c, "titlebar_alpha") = 1.0;
                 }
+                auto b = bounds_client(cid);
+                hypriso->move_resize(cid, b.x, b.y + titlebar_h, b.w, b.h - titlebar_h);
                 hypriso->set_corner_rendering_mask_for_window(cid, 3);
             }
             update_restore_info_for(cid);

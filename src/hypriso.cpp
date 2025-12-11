@@ -1458,9 +1458,8 @@ static int main_wake_pipe[2];
 static std::vector<std::function<void()>> funcs;
 
 void main_thread(std::function<void()> func) {
-    // wake up and execute func
-    write(main_wake_pipe[1], "x", 1);
     funcs.push_back(func);
+    write(main_wake_pipe[1], "x", 1);
 }
 
 void setup_wake_main_thread() {
