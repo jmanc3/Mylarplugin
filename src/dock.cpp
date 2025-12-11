@@ -396,6 +396,7 @@ static void fill_root(Container *root) {
     
     {
         auto icons = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+        icons->distribute_overflow_to_children = true;
         icons->name = "icons";
         icons->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             {
@@ -447,7 +448,17 @@ static void fill_root(Container *root) {
                    ch->when_clicked = paint {
                        auto cid = c->custom_type;
                        main_thread([cid] {
-                           hypriso->bring_to_front(cid);
+                           bool is_hidden = hypriso->is_hidden(cid);
+                           if (is_hidden) {
+                               hypriso->set_hidden(cid, false);
+                               hypriso->bring_to_front(cid);
+                           } else {
+                               if (active_cid == cid) {
+                                   hypriso->set_hidden(cid, true);
+                               } else {
+                                   hypriso->bring_to_front(cid);
+                               }
+                           }
                        });
                    };
                    ch->pre_layout = [](Container *root, Container *c, const Bounds &b) {
