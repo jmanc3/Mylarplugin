@@ -58,6 +58,8 @@ struct RawWindow {
     std::function<void(RawWindow *, int w, int h)> on_render = nullptr;
 
     std::function<void(RawWindow *, int w, int h)> on_resize = nullptr;
+    
+    std::function<void(RawWindow *, float dpi)> on_scale_change = nullptr;
 };
 
 enum struct WindowType {

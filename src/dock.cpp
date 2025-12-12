@@ -33,7 +33,7 @@ static std::vector<CachedFont *> cached_fonts;
 static int active_cid = -1;
 
 float get_icon_size(float dpi) {
-    return 36 * dpi;
+    return 28 * dpi;
 }
 
 class Window {
@@ -46,6 +46,8 @@ public:
     
     cairo_surface_t* icon_surf = nullptr; 
     bool attempted_load = false;
+
+    bool scale_change = false;
 };
 
 struct Windows {
@@ -443,17 +445,17 @@ static void fill_root(Container *root) {
                         auto w = (Window*)c->user_data;
                         auto mylar = (MylarWindow*)root->user_data;
                         auto cr = mylar->raw_window->cr;
+                        
+                        if (active_cid == w->cid) {
+                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+                            cairo_set_source_rgba(cr, 1, 1, 1, .15);
+                            cairo_fill(cr);
+                        }
+                        
                         paint_button_bg(root, c);
+                        
                         int offx = 0;
                         if (icons_loaded) {
-                            if (!w->attempted_load) {
-                                w->attempted_load = true;
-                                auto size = get_icon_size(mylar->raw_window->dpi);
-                                auto full = one_shot_icon(size, {w->icon, c3ic_fix_wm_class(w->icon)});
-                                if (!full.empty()) {
-                                    load_icon_full_path(&w->icon_surf, full, size);
-                                }
-                            }
                             if (w->icon_surf) {
                                 auto h = cairo_image_surface_get_height(w->icon_surf);
                                 cairo_set_source_surface(cr, w->icon_surf, 
@@ -498,6 +500,18 @@ static void fill_root(Container *root) {
                        auto cr = mylar->raw_window->cr;
 
                        auto bounds = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+                       if (icons_loaded) {
+                           if (!w->attempted_load || w->scale_change) {
+                               w->scale_change = false;
+                               w->attempted_load = true;
+                               auto size = get_icon_size(mylar->raw_window->dpi);
+                               auto full = one_shot_icon(size, {w->icon, to_lower(w->icon), c3ic_fix_wm_class(w->icon), to_lower(w->icon)});
+                               if (!full.empty()) {
+                                   load_icon_full_path(&w->icon_surf, full, size);
+                               }
+                           }
+                       }
+
                        if (w->icon_surf) {
                            bounds.w += cairo_image_surface_get_width(w->icon_surf) + 10;
                        }
@@ -743,6 +757,11 @@ void dock_start() {
     settings.pos.h = 40;
     settings.name = "Dock";
     auto mylar = open_mylar_window(dock_app, WindowType::DOCK, settings);
+    mylar->raw_window->on_scale_change = [](RawWindow *rw, float dpi) {
+        for (auto w : windows->list) {
+            w->scale_change = true;
+        }
+    };
     mylar_window = mylar;
     mylar->root->user_data = mylar;
     fill_root(mylar->root);
