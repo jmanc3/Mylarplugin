@@ -75,6 +75,10 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
             int overflow_y = mb.y - p->real_bounds.y;
             p->real_bounds.y += overflow_y;
         }
+        if (mb.x > p->real_bounds.x) {
+            int overflow_x = mb.x - p->real_bounds.x;
+            p->real_bounds.x += overflow_x;
+        }
     }
     
     p->when_mouse_enters_container = paint {

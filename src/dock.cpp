@@ -7,6 +7,7 @@
 #include "process.hpp"
 #include "hypriso.h"
 #include "icons.h"
+#include "popup.h"
 
 #include <cairo.h>
 #include "process.hpp"
@@ -16,6 +17,10 @@
 #include <thread>
 #include <memory>
 #include <pango/pangocairo.h>
+
+#define BTN_LEFT		0x110
+#define BTN_RIGHT		0x111
+#define BTN_MIDDLE		0x112
 
 struct CachedFont {
     std::string name;
@@ -478,21 +483,66 @@ static void fill_root(Container *root) {
                         }
                    };
                    ch->when_clicked = paint {
+                       auto mylar = (MylarWindow*)root->user_data;
                        auto cid = c->custom_type;
-                       main_thread([cid] {
-                           // todo we need to focus next (already wrote this combine code)
-                           bool is_hidden = hypriso->is_hidden(cid);
-                           if (is_hidden) {
-                               hypriso->set_hidden(cid, false);
-                               hypriso->bring_to_front(cid);
-                           } else {
-                               if (active_cid == cid) {
-                                   hypriso->set_hidden(cid, true);
-                               } else {
+                       if (c->state.mouse_button_pressed == BTN_LEFT) {
+                           main_thread([cid] {
+                               // todo we need to focus next (already wrote this combine code)
+                               bool is_hidden = hypriso->is_hidden(cid);
+                               if (is_hidden) {
+                                   hypriso->set_hidden(cid, false);
                                    hypriso->bring_to_front(cid);
+                               } else {
+                                   if (active_cid == cid) {
+                                       hypriso->set_hidden(cid, true);
+                                   } else {
+                                       hypriso->bring_to_front(cid);
+                                   }
                                }
-                           }
-                       });
+                           });
+                       } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                           int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
+                           int cw = c->real_bounds.w / mylar->raw_window->dpi;
+                           main_thread([cid, startoff, cw] {
+                               auto m = mouse();
+                               std::vector<PopOption> root;
+                               {
+                                   PopOption pop;
+                                   pop.text = "Launch task";
+                                   pop.on_clicked = []() {  };
+                                   root.push_back(pop);
+                               }
+                               {
+                                   PopOption pop;
+                                   pop.text = "Pin/unpin";
+                                   pop.on_clicked = []() {  };
+                                   root.push_back(pop);
+                               }
+                               {
+                                   PopOption pop;
+                                   pop.text = "Edit pin";
+                                   pop.on_clicked = []() {  };
+                                   root.push_back(pop);
+                               }
+                               {
+                                   PopOption pop;
+                                   pop.text = "End task";
+                                   pop.on_clicked = []() { };
+                                   root.push_back(pop);
+                               }
+                               {
+                                   PopOption pop;
+                                   pop.text = "Close window";
+                                   pop.on_clicked = [cid]() { 
+                                       close_window(cid);
+                                   };
+                                   root.push_back(pop);
+                               }
+                               
+                               popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
+                               //popup::open(root, m.x - (277 * .5), m.y);
+                           });
+                       }
                    };
                    ch->pre_layout = [](Container *root, Container *c, const Bounds &b) {
                        auto w = (Window *) c->user_data;
