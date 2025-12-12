@@ -6,6 +6,7 @@
 #include "client/windowing.h"
 #include "process.hpp"
 #include "hypriso.h"
+#include "icons.h"
 
 #include <cairo.h>
 #include "process.hpp"
@@ -31,6 +32,10 @@ struct CachedFont {
 static std::vector<CachedFont *> cached_fonts;
 static int active_cid = -1;
 
+float get_icon_size(float dpi) {
+    return 36 * dpi;
+}
+
 class Window {
 public:
     int cid; // unique id
@@ -38,6 +43,9 @@ public:
     std::string command;
     std::string title;
     std::string stack_rule; // Should be regex later, or multiple 
+    
+    cairo_surface_t* icon_surf = nullptr; 
+    bool attempted_load = false;
 };
 
 struct Windows {
@@ -436,7 +444,29 @@ static void fill_root(Container *root) {
                         auto mylar = (MylarWindow*)root->user_data;
                         auto cr = mylar->raw_window->cr;
                         paint_button_bg(root, c);
-                        draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+                        int offx = 0;
+                        if (icons_loaded) {
+                            if (!w->attempted_load) {
+                                w->attempted_load = true;
+                                auto size = get_icon_size(mylar->raw_window->dpi);
+                                auto full = one_shot_icon(size, {w->icon, c3ic_fix_wm_class(w->icon)});
+                                if (!full.empty()) {
+                                    load_icon_full_path(&w->icon_surf, full, size);
+                                }
+                            }
+                            if (w->icon_surf) {
+                                auto h = cairo_image_surface_get_height(w->icon_surf);
+                                cairo_set_source_surface(cr, w->icon_surf, 
+                                    c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                                cairo_paint(cr);
+                                auto wi = cairo_image_surface_get_height(w->icon_surf);
+                                offx = wi + 10;
+                            }
+                        }
+                        auto b = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+                        draw_text(cr, 
+                            c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5,
+                            w->title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
 
                         if (w->cid == active_cid) {
                             auto bar_h = std::round(2 * mylar->raw_window->dpi);
@@ -448,6 +478,7 @@ static void fill_root(Container *root) {
                    ch->when_clicked = paint {
                        auto cid = c->custom_type;
                        main_thread([cid] {
+                           // todo we need to focus next (already wrote this combine code)
                            bool is_hidden = hypriso->is_hidden(cid);
                            if (is_hidden) {
                                hypriso->set_hidden(cid, false);
@@ -465,8 +496,11 @@ static void fill_root(Container *root) {
                        auto w = (Window *) c->user_data;
                        auto mylar = (MylarWindow*)root->user_data;
                        auto cr = mylar->raw_window->cr;
- 
+
                        auto bounds = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+                       if (w->icon_surf) {
+                           bounds.w += cairo_image_surface_get_width(w->icon_surf) + 10;
+                       }
                        
                        c->wanted_bounds.w = bounds.w + 20;
                    };
@@ -748,7 +782,13 @@ void dock::add_window(int cid) {
     window->cid = cid;
     window->title = hypriso->title_name(cid);
     window->stack_rule = hypriso->class_name(cid);
-    window->icon = "vlc";
+    window->icon = hypriso->class_name(cid);
+    //auto size = get_icon_size();
+    //auto fullpath = one_shot_icon(size, {window->icon});
+    //notify(window->icon);
+    //if (!fullpath.empty()) {
+        //load_icon_full_path(&window->icon_surf, fullpath, size);
+    //}
     window->command = "vlc";
     if (hypriso->has_focus(cid))
         active_cid = cid;

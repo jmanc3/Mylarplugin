@@ -429,4 +429,6 @@ void request_refresh_only();
 
 void main_thread(std::function<void()> func);
 
+void load_icon_full_path(cairo_surface_t** surface, std::string path, int target_size);
+
 #endif // hypriso_h_INCLUDED
