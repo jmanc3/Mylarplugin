@@ -1932,8 +1932,20 @@ bool HyprIso::alt_tabbable(int id) {
     for (auto h : hyprwindows) {
         if (h->id == id) {
             bool found = false;
+            bool canX11 = false;
+            if (h->w->m_isX11) {
+                for (const auto& a : h->w->m_xwaylandSurface->m_atoms) {
+                    if (a == HYPRATOMS["_NET_WM_WINDOW_TYPE_DIALOG"] || a == HYPRATOMS["_NET_WM_WINDOW_TYPE_NORMAL"]) {
+                        found = true;
+                        canX11 = true;
+                    }
+                }
+                //system(fz("xprop -id {} &", h->w->m_xwaylandSurface->m_xID).c_str());
+            } else {
+                canX11 = true;
+            }
             for (const auto &w : g_pCompositor->m_windows) {
-                if (w == h->w && w->m_isMapped) {
+                if (w == h->w && w->m_isMapped && canX11) {
                     found = true;
                 }
             }

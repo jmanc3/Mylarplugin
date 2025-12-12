@@ -310,7 +310,9 @@ struct Container {
     void (*on_closed)(Container* self) = nullptr;
 
     // Called when client needs to repaint itself
-    void (*when_paint)(Container* root, Container* self) = nullptr;
+    //void (*when_paint)(Container* root, Container* self) = nullptr;
+    std::function<void(Container* root, Container* c)> when_paint = nullptr;
+    
 
     // Called after all children painted
     void (*after_paint)(Container* root, Container* self) = nullptr;
@@ -366,7 +368,10 @@ struct Container {
     void (*before_layout)(Container* root, Container* self, const Bounds& bounds, double* target_w, double* target_h) = nullptr;
 
     // Gives you the opportunity to set wanted bounds before layout
-    void (*pre_layout)(Container* root, Container* self, const Bounds& bounds) = nullptr;
+    //void (*pre_layout)(Container* root, Container* self, const Bounds& bounds) = nullptr;
+    std::function<void(Container* root, Container* self, const Bounds& bounds)> pre_layout = nullptr;
+    //void (*pre_layout)(Container* root, Container* self, const Bounds& bounds) = nullptr;
+    
 
     // When layout is called on this container and generate_event is true on that
     // call

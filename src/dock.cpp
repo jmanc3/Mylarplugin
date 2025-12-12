@@ -12,6 +12,7 @@
 #include <cairo.h>
 #include "process.hpp"
 #include <chrono>
+#include <functional>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
 #include <thread>
@@ -21,6 +22,7 @@
 #define BTN_LEFT		0x110
 #define BTN_RIGHT		0x111
 #define BTN_MIDDLE		0x112
+#define ICON(str) [](){ return str; }
 
 struct CachedFont {
     std::string name;
@@ -406,6 +408,26 @@ static void set_volume(float amount) {
     t.detach();
 }
 
+Container *simple_dock_item(Container *root, std::function<std::string()> func) {
+    auto c = root->child(40, FILL_SPACE);
+    c->when_paint = [func](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        paint_button_bg(root, c);
+
+        draw_text(cr, c, func(), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+    };
+    c->pre_layout = [func](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto bounds = draw_text(cr, c, func(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+        c->wanted_bounds.w = bounds.w + 20;
+    }; 
+    
+    
+    return c;
+}
+
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
     
@@ -587,47 +609,21 @@ static void fill_root(Container *root) {
     }
 
     { 
-        auto active_settings = root->child(40, FILL_SPACE);
+        auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
         active_settings->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:right_click_active");
         };
-        active_settings->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            paint_button_bg(root, c);
-//Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font) {
-            
-            draw_text(cr, c, fz("\uE9E9"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
-        };
-        active_settings->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("\uE9E9"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
-            c->wanted_bounds.w = bounds.w + 20;
-        }; 
     }
 
     { 
-        auto toggle = root->child(40, FILL_SPACE);
+        auto toggle = simple_dock_item(root, ICON("\uF0E2"));
         toggle->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:toggle_layout");
         };
-        toggle->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            paint_button_bg(root, c);
-            draw_text(cr, c, fz("\uF0E2"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
-        };
-        toggle->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("\uF0E2"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
-            c->wanted_bounds.w = bounds.w + 20;
-        }; 
     }
 
     { 
-        auto night = root->child(40, FILL_SPACE);
+        auto night = simple_dock_item(root, ICON("\uE708"));
         night->when_clicked = paint {
            if (nightlight_on)  {
                system("killall hyprsunset");
@@ -639,19 +635,15 @@ static void fill_root(Container *root) {
            }
            nightlight_on = !nightlight_on;
         };
-        night->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            paint_button_bg(root, c);
-            draw_text(cr, c, fz("\uE708"), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
-        };
-        night->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            auto bounds = draw_text(cr, c, fz("\uE708"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
-            c->wanted_bounds.w = bounds.w + 20;
-        }; 
     }
+    
+    { 
+        auto bluetooth = simple_dock_item(root, ICON("\uE702"));
+    }
+    
+    { 
+        auto wifi = simple_dock_item(root, ICON("\uE701"));
+    }    
     
     {
         auto brightness = root->child(40, FILL_SPACE);
@@ -696,14 +688,6 @@ static void fill_root(Container *root) {
         };
         brightness->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
-            main_thread([]() {
-                auto order = get_window_stacking_order();
-                for (auto o : order) {
-                    if (hypriso->has_focus(o)) {
-                        hypriso->set_float_state(o, !hypriso->is_floating(o));
-                    }
-                }
-            });
             //windowing::close_window(mylar->raw_window);
         };
     }
@@ -749,7 +733,7 @@ static void fill_root(Container *root) {
         };
         volume->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
-            windowing::close_window(mylar->raw_window);
+            //windowing::close_window(mylar->raw_window);
         };
     }
 
@@ -775,7 +759,7 @@ static void fill_root(Container *root) {
         };
         battery->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
-            windowing::close_window(mylar->raw_window);
+            //windowing::close_window(mylar->raw_window);
         };
     }
     
@@ -795,7 +779,7 @@ static void fill_root(Container *root) {
         };
         date->when_clicked = paint {
             auto mylar = (MylarWindow*)root->user_data;
-            windowing::close_window(mylar->raw_window);
+            //windowing::close_window(mylar->raw_window);
         };
     }
 };
