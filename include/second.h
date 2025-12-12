@@ -304,6 +304,7 @@ struct WindowRestoreLocation {
     
     bool remember_size = false;
     bool remember_workspace = false;
+    int remembered_workspace = -1;
 
     Bounds actual_size_on_monitor(Bounds m) {
         Bounds b = {box.x * m.w, box.y * m.h, box.w * m.w, box.h * m.h};

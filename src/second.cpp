@@ -632,6 +632,9 @@ void apply_restore_info(int id) {
 
             if (info.remember_size)
                 hypriso->move_resize(id, b.x, b.y, b.w, b.h);
+
+            if (info.remember_workspace)
+                hypriso->move_to_workspace(id, info.remembered_workspace);
         }
     }
 }
@@ -1029,12 +1032,15 @@ void load_restore_infos() {
         bool remove_titlebar = false;
         bool remember_size = false;
         bool remember_workspace = false;
+        int remembered_workspace = -1;
 
         if (first_line && !line.empty()) {
             if (line.starts_with("#version 1"))
                 file_version = 1;
             if (line.starts_with("#version 2"))
                 file_version = 2;
+            if (line.starts_with("#version 3"))
+                file_version = 3;
             if (file_version != 0)
                 continue;
         }
@@ -1055,6 +1061,10 @@ void load_restore_infos() {
                 remember_workspace = false;
             }
         }
+        if (file_version == 3) {
+            if (!(iss >> class_name >> info.x >> info.y >> info.w >> info.h >> keep_above >> fake_fullscreen >> remove_titlebar >> remember_size >> remember_workspace >> remembered_workspace))
+                continue; // bad line — skip
+        }
 
         WindowRestoreLocation restore;
         restore.box = info;
@@ -1063,6 +1073,7 @@ void load_restore_infos() {
         restore.remove_titlebar = remove_titlebar;
         restore.remember_size = remember_size;
         restore.remember_workspace = remember_workspace;
+        restore.remembered_workspace = remembered_workspace;
         restore_infos[class_name] = restore;
     }
 }
@@ -1085,11 +1096,11 @@ void save_restore_infos() {
     if (!out) {
         throw std::runtime_error("Failed to write file: " + filepath.string());
     }
-    out << "#version 2" << "\n";
+    out << "#version 3" << "\n";
     for (auto [class_name, info] : restore_infos) {
         // class_name std::string
         // info.box.x info.box.y info.box.w info.box.h
-        out << class_name << " " << info.box.x << " " << info.box.y << " " << info.box.w << " " << info.box.h << " " << info.keep_above << " " << info.fake_fullscreen << " " << info.remove_titlebar << " " << info.remember_size << " " << info.remember_workspace << "\n";
+        out << class_name << " " << info.box.x << " " << info.box.y << " " << info.box.w << " " << info.box.h << " " << info.keep_above << " " << info.fake_fullscreen << " " << info.remove_titlebar << " " << info.remember_size << " " << info.remember_workspace << " " << info.remembered_workspace << "\n";
     }
     //out << contents;
     if (!out.good()) {
@@ -1114,6 +1125,7 @@ void update_restore_info_for(int id) {
         info.remember_workspace = old.remember_workspace;
         info.remember_size = old.remember_size;
         info.remove_titlebar = old.remove_titlebar;
+        info.remembered_workspace = hypriso->get_workspace(id);
         restore_infos[hypriso->class_name(id)] = info;
         save_restore_infos(); // I believe it's okay to call this here because it only happens on resize end, and drag end
     }
