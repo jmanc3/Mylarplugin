@@ -25,32 +25,6 @@
 #define BTN_MIDDLE		0x112
 #define ICON(str) [](){ return str; }
 
-struct Dock : UserData {
-    RawApp *app = nullptr;
-    MylarWindow *window = nullptr;
-};
-
-static std::vector<Dock *> docks;
-
-struct CachedFont {
-    std::string name;
-    int size;
-    int used_count;
-    bool italic = false;
-    PangoWeight weight;
-    PangoLayout *layout;
-    cairo_t *cr; // Creator
-    
-    ~CachedFont() { g_object_unref(layout); }
-};
-
-static std::vector<CachedFont *> cached_fonts;
-static int active_cid = -1;
-
-float get_icon_size(float dpi) {
-    return 28 * dpi;
-}
-
 class Window {
 public:
     int cid; // unique id
@@ -74,7 +48,33 @@ struct Windows {
     std::vector<int> to_be_removed;
 };
 
-//static Windows *windows = new Windows;
+struct Dock : UserData {
+    RawApp *app = nullptr;
+    MylarWindow *window = nullptr;
+    Windows *windows = nullptr;
+    bool first_fill = true;
+};
+
+static std::vector<Dock *> docks;
+
+struct CachedFont {
+    std::string name;
+    int size;
+    int used_count;
+    bool italic = false;
+    PangoWeight weight;
+    PangoLayout *layout;
+    cairo_t *cr; // Creator
+    
+    ~CachedFont() { g_object_unref(layout); }
+};
+
+static std::vector<CachedFont *> cached_fonts;
+static int active_cid = -1;
+
+float get_icon_size(float dpi) {
+    return 28 * dpi;
+}
 
 static float battery_level = 100;
 static bool charging = true;
@@ -82,9 +82,6 @@ static float volume_level = 100;
 static float brightness_level = 100;
 static bool finished = false;
 static bool nightlight_on = false;
-
-//static RawApp *dock_app = nullptr;
-//static MylarWindow *mylar_window = nullptr;
 
 struct BatteryData : UserData {
     float brightness_level = 100;
@@ -463,35 +460,52 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
 
-    /*{
+    {
         auto icons = root->child(::hbox, FILL_SPACE, FILL_SPACE);
         icons->distribute_overflow_to_children = true;
         icons->name = "icons";
         icons->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dock = (Dock *) root->user_data;
+            if (dock->first_fill) {
+                dock->first_fill = false;
+                main_thread([dock]() {
+                    for (auto w : get_window_stacking_order())
+                        dock::add_window(w);
+                });
+            }
+ 
             {
-                std::lock_guard<std::mutex> guard(windows->mut);
-                if (!windows->to_be_removed.empty()) {
-                    for (auto t : windows->to_be_removed) {
-                        for (int i = windows->list.size() - 1; i >= 0; i--) {
-                            if (windows->list[i]->cid == t) {
-                                windows->list.erase(windows->list.begin() + i);
+                std::lock_guard<std::mutex> guard(dock->windows->mut);
+                if (!dock->windows->to_be_removed.empty()) {
+                    for (auto t : dock->windows->to_be_removed) {
+                        for (int i = dock->windows->list.size() - 1; i >= 0; i--) {
+                            if (dock->windows->list[i]->cid == t) {
+                                dock->windows->list.erase(dock->windows->list.begin() + i);
                             }
                         }
                     }
-                    windows->to_be_removed.clear();
+                    dock->windows->to_be_removed.clear();
                 }
 
-                if (!windows->to_be_added.empty()) {
-                    for (auto w : windows->to_be_added)
-                        windows->list.push_back(w);
-                    windows->to_be_added.clear();
+                if (!dock->windows->to_be_added.empty()) {
+                    for (auto w : dock->windows->to_be_added) {
+                        bool added = false;
+                        for (auto already : dock->windows->list) {
+                            if (already->cid == w->cid) {
+                                added = true;
+                            }
+                        }
+                        if (!added)
+                            dock->windows->list.push_back(w);
+                    }
+                    dock->windows->to_be_added.clear();
                 }
             }
 
-            auto mylar = (MylarWindow*)root->user_data;
+            auto mylar = dock->window;
 
             // merge list with containers
-            for (auto w : windows->list)  {
+            for (auto w : dock->windows->list)  {
                 bool found = false;
                 for (auto ch : c->children)
                     if (ch->custom_type == w->cid)
@@ -502,7 +516,8 @@ static void fill_root(Container *root) {
                     ch->user_data = w;
                     ch->when_paint = paint {
                         auto w = (Window*)c->user_data;
-                        auto mylar = (MylarWindow*)root->user_data;
+                        auto dock = (Dock *) root->user_data;
+                        auto mylar = dock->window;
                         auto cr = mylar->raw_window->cr;
 
                         if (active_cid == w->cid) {
@@ -537,7 +552,8 @@ static void fill_root(Container *root) {
                         }
                    };
                    ch->when_clicked = paint {
-                       auto mylar = (MylarWindow*)root->user_data;
+                       auto dock = (Dock*)root->user_data;
+                       auto mylar = dock->window;
                        auto cid = c->custom_type;
                        if (c->state.mouse_button_pressed == BTN_LEFT) {
                            main_thread([cid] {
@@ -600,7 +616,8 @@ static void fill_root(Container *root) {
                    };
                    ch->pre_layout = [](Container *root, Container *c, const Bounds &b) {
                        auto w = (Window *) c->user_data;
-                       auto mylar = (MylarWindow*)root->user_data;
+                       auto dock = (Dock*)root->user_data;
+                       auto mylar = dock->window;
                        auto cr = mylar->raw_window->cr;
 
                        auto bounds = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
@@ -629,7 +646,7 @@ static void fill_root(Container *root) {
             for (int i = c->children.size() - 1; i >= 0; i--) {
                 auto ch = c->children[i];
                 bool found = false;
-                for (auto w : windows->list)
+                for (auto w : dock->windows->list)
                     if (w->cid == ch->custom_type)
                         found = true;
                 if (!found) {
@@ -638,7 +655,7 @@ static void fill_root(Container *root) {
                 }
             }
         };
-    }*/
+    }
 
     {
         auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
@@ -779,6 +796,7 @@ static void fill_root(Container *root) {
 
 void dock_start() {
     auto dock = new Dock;
+    dock->windows = new Windows;
     docks.push_back(dock);
     dock->app = windowing::open_app();
     RawWindowSettings settings;
@@ -786,8 +804,11 @@ void dock_start() {
     settings.pos.h = 40;
     settings.name = "Dock";
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
-    dock->window->raw_window->on_scale_change = [](RawWindow *rw, float dpi) {
-        notify("scale change");
+    dock->window->raw_window->on_scale_change = [dock](RawWindow *rw, float dpi) {
+        for (auto d : dock->windows->list) {
+            d->scale_change = true;
+        }
+        //notify("scale change");
     };
     dock->window->root->skip_delete = true;
     dock->window->root->user_data = dock;
@@ -822,61 +843,52 @@ void dock::stop() {
 
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
-    /*
-    if (!windows)
-        return;
+    for (auto d : docks) {
+        // Check if cid should even be displayed in dock
+        if (!hypriso->alt_tabbable(cid))
+            return;
 
-    // Check if cid should even be displayed in dock
-    if (!hypriso->alt_tabbable(cid))
-        return;
+        Window *window = new Window;
+        window->cid = cid;
+        window->title = hypriso->title_name(cid);
+        window->stack_rule = hypriso->class_name(cid);
+        window->icon = hypriso->class_name(cid);
+        //auto size = get_icon_size();
+        //auto fullpath = one_shot_icon(size, {window->icon});
+        //notify(window->icon);
+        //if (!fullpath.empty()) {
+            //load_icon_full_path(&window->icon_surf, fullpath, size);
+        //}
+        window->command = "vlc";
+        if (hypriso->has_focus(cid))
+            active_cid = cid;
 
-
-    Window *window = new Window;
-    window->cid = cid;
-    window->title = hypriso->title_name(cid);
-    window->stack_rule = hypriso->class_name(cid);
-    window->icon = hypriso->class_name(cid);
-    //auto size = get_icon_size();
-    //auto fullpath = one_shot_icon(size, {window->icon});
-    //notify(window->icon);
-    //if (!fullpath.empty()) {
-        //load_icon_full_path(&window->icon_surf, fullpath, size);
-    //}
-    window->command = "vlc";
-    if (hypriso->has_focus(cid))
-        active_cid = cid;
-
-    // Synchronize
-    std::lock_guard<std::mutex> guard(windows->mut);
-    windows->to_be_added.push_back(window);
-    if (mylar_window)
-        windowing::redraw(mylar_window->raw_window);
-    */
+        // Synchronize
+        std::lock_guard<std::mutex> guard(d->windows->mut);
+        d->windows->to_be_added.push_back(window);
+        windowing::redraw(d->window->raw_window);
+    }
 }
 
 // This happens on the main thread, not the dock thread
 void dock::remove_window(int cid) {
-    /*
-    if (!windows)
-        return;
-    std::lock_guard<std::mutex> guard(windows->mut);
-    windows->to_be_removed.push_back(cid);
-    if (mylar_window)
-        windowing::redraw(mylar_window->raw_window);
-    */
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> guard(d->windows->mut);
+        d->windows->to_be_removed.push_back(cid);
+        windowing::redraw(d->window->raw_window);
+    }
 }
 
 void dock::title_change(int cid, std::string title) {
-    /*
-    std::lock_guard<std::mutex> guard(windows->mut);
-    for (auto &w : windows->list) {
-        if (w->cid == cid) {
-            w->title = title;
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> guard(d->windows->mut);
+        for (auto &w : d->windows->list) {
+            if (w->cid == cid) {
+                w->title = title;
+            }
         }
+        windowing::redraw(d->window->raw_window);
     }
-    if (mylar_window)
-        windowing::redraw(mylar_window->raw_window);
-    */
 }
 
 void dock::on_activated(int cid) {

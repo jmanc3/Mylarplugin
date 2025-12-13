@@ -86,7 +86,7 @@ struct wl_context {
     struct wp_cursor_shape_device_v1 *shape_device = nullptr;
     struct zwlr_foreign_toplevel_manager_v1 *top_level_manager = nullptr;
 
-    //struct wl_output *output;
+    struct wl_output *output = nullptr;
     uint32_t shm_format;
 
     std::vector<wl_window *> windows;
@@ -525,6 +525,8 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
     wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
     win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface); 
+
+    // NULL -> output
 
     win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         ctx->layer_shell, win->surface, NULL, layer, title);
@@ -1040,6 +1042,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
         d->layer_shell = (zwlr_layer_shell_v1 *) wl_registry_bind(registry, id, &zwlr_layer_shell_v1_interface, 5);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
+        //notify(std::format("here {}", wl_output_interface.name));
         //d->output = (wl_output *) wl_registry_bind(registry, id, &wl_output_interface, 3);
     } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
         d->fractional_scale_manager = (wp_fractional_scale_manager_v1 *) wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
