@@ -340,6 +340,7 @@ static void watch_battery_level() {
         while (!finished) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
+        watching_battery = false;
         process->kill();
     });
     t.detach();
@@ -381,6 +382,7 @@ static void watch_volume_level() {
         while (!finished) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
+        watching_volume = false;
         process->kill();
     });
     t.detach();
@@ -801,6 +803,7 @@ void dock_start() {
 
 
 void dock::start() {
+    finished = false;
     //return;
     std::thread t(dock_start);
     t.detach();
@@ -812,6 +815,7 @@ void dock::stop() {
     for (auto d : docks) {
         windowing::close_app(d->app);
     }
+    docks.clear();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     cleanup_cached_fonts();
 }
