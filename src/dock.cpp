@@ -248,21 +248,6 @@ static void paint_button_bg(Container *root, Container *c) {
     }
 }
 
-static void paint_battery(Container *root, Container *c) {
-    auto mylar = (MylarWindow*)root->user_data;
-    auto battery_data = (BatteryData *) c->user_data;
-    
-    auto cr = mylar->raw_window->cr;
-    paint_button_bg(root, c);
-    std::string charging_text = charging ? "+" : "-";
-
-    auto ico = draw_text(cr, c, fz("\uEBA7"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-    draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uEBA7"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
-    
-    auto tex = draw_text(cr, c, fz("{}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi, false);
-    draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi, true); 
-}
-
 static std::string get_date() {
     auto now = std::chrono::system_clock::now();
     auto local = std::chrono::current_zone()->to_local(now);
@@ -431,7 +416,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
         auto cr = mylar->raw_window->cr;
         auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
         if (text)
-            bounds.w += draw_text(cr, c, text(), 9 * mylar->raw_window->dpi, false, "Segoe Fluent Icons").w + 10;
+            bounds.w += draw_text(cr, c, text(), 9 * mylar->raw_window->dpi, false).w + 10;
         c->wanted_bounds.w = bounds.w + 20;
     }; 
     
@@ -727,7 +712,6 @@ static void fill_root(Container *root) {
         volume_level = get_volume_level();
         watch_volume_level();
         volume->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
-            //notify(fz("fine scrolled {} {}", ((double) scroll_y) * .001, came_from_touchpad));
             auto mylar = (MylarWindow*)root->user_data;
             auto volume_data = (VolumeData *) c->user_data;
             volume_level += ((double) scroll_y) * .001;
@@ -744,29 +728,20 @@ static void fill_root(Container *root) {
     }
 
     {
-        auto battery = root->child(40, FILL_SPACE);
+        auto battery = simple_dock_item(root, []() {
+            static std::string regular[] = {"\uEBA0", "\uEBA1", "\uEBA2", "\uEBA3", "\uEBA4", "\uEBA5", "\uEBA6", "\uEBA7", "\uEBA8", "\uEBA9", "\uEBAA" };
+            static std::string charging[] = { "\uEBAB", "\uEBAC", "\uEBAD", "\uEBAE", "\uEBAF", "\uEBB0", "\uEBB1", "\uEBB2", "\uEBB3", "\uEBB4", "\uEBB5" };
+            int capacity_index = std::floor(((double) (battery_level)) / 10.0);
+            return regular[capacity_index];
+        }, []() {
+            std::string charging_text = charging ? "+" : "-";
+            return std::format("{}{}%", charging_text, (int) std::round(battery_level));
+        }) ;
         auto battery_data = new BatteryData;
         battery_level = get_battery_level();
         charging = battery_charging();
         watch_battery_level();
         battery->user_data = battery_data;
-        battery->when_paint = paint_battery;
-        battery->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            std::string charging_text = charging ? "+" : "-";
-
-            auto ico = draw_text(cr, c, fz("\uEBA7"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            auto tex = draw_text(cr, c, fz("{}{}%", charging_text, (int) std::round(battery_level)), 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = ico.w + tex.w + 30;
- 
-            //auto bounds = draw_text(cr, c, fz("\uEBA7"), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
-            //c->wanted_bounds.w = bounds.w + 20;
-        };
-        battery->when_clicked = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            //windowing::close_window(mylar->raw_window);
-        };
     }
     
     {
@@ -782,10 +757,6 @@ static void fill_root(Container *root) {
             auto cr = mylar->raw_window->cr;
             auto bounds = draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi, false);
             c->wanted_bounds.w = bounds.w + 20;
-        };
-        date->when_clicked = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            //windowing::close_window(mylar->raw_window);
         };
     }
 };
