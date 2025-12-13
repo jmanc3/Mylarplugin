@@ -71,6 +71,7 @@ static Windows *windows = new Windows;
 static float battery_level = 100;
 static bool charging = true;
 static float volume_level = 100;
+static float brightness_level = 100;
 static bool finished = false;
 static bool nightlight_on = false;
 static RawApp *dock_app = nullptr;
@@ -363,6 +364,7 @@ static void watch_volume_level() {
 }
 
 static void set_brightness(float amount) {
+    brightness_level = amount;
     static bool queued = false;
     static bool latest = amount;
     latest = amount;
@@ -642,7 +644,9 @@ static void fill_root(Container *root) {
     }    
     
     {
-        auto brightness = root->child(40, FILL_SPACE);
+        auto brightness = simple_dock_item(root, ICON("\uE706"), []() {
+           return fz("{}%", (int) std::round(brightness_level));
+        });
         auto brightness_data = new BrightnessData;
         brightness_data->value = get_brightness();
 
@@ -661,31 +665,6 @@ static void fill_root(Container *root) {
         };
         
         brightness->user_data = brightness_data;
-        brightness->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto brightness_data = (BrightnessData *) c->user_data;
-            auto cr = mylar->raw_window->cr;
-            paint_button_bg(root, c);
-
-            auto ico = draw_text(cr, c, fz("\uE706"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uE706"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
-        
-            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
-            draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, true); 
-        };
-        brightness->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            auto brightness_data = (BrightnessData *) c->user_data;
-             
-            auto ico = draw_text(cr, c, fz("\uE706"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(brightness_data->value)), 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = ico.w + tex.w + 30;
-        };
-        brightness->when_clicked = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            //windowing::close_window(mylar->raw_window);
-        };
     }
 
     {
