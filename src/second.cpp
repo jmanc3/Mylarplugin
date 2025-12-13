@@ -1146,6 +1146,14 @@ void do_snap(SnapPosition pos) {
 } 
 
 void add_hyprctl_dispatchers() {
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_start", [](std::string in) {
+        dock::start();
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_stop", [](std::string in) {
+        dock::stop();
+        return true;
+    });
     hypriso->add_hyprctl_dispatcher("plugin:mylar:toggle_layout", [](std::string in) {
         toggle_layout();
         return true;
@@ -1271,6 +1279,7 @@ void second::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    dock::stop();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::CLIENT) {
             if (*datum<bool>(c, "snapped")) {
@@ -1283,7 +1292,6 @@ void second::end() {
     }
     save_restore_infos();
     hypriso->end();    
-    dock::stop();
     settings::stop();
     //stop_dock();
 

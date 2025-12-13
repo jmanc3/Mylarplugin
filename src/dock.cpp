@@ -24,6 +24,13 @@
 #define BTN_MIDDLE		0x112
 #define ICON(str) [](){ return str; }
 
+struct Dock : UserData {
+    RawApp *app = nullptr;
+    MylarWindow *window = nullptr;
+};
+
+static std::vector<Dock *> docks;
+
 struct CachedFont {
     std::string name;
     int size;
@@ -66,7 +73,7 @@ struct Windows {
     std::vector<int> to_be_removed;
 };
 
-static Windows *windows = new Windows;
+//static Windows *windows = new Windows;
 
 static float battery_level = 100;
 static bool charging = true;
@@ -74,15 +81,16 @@ static float volume_level = 100;
 static float brightness_level = 100;
 static bool finished = false;
 static bool nightlight_on = false;
-static RawApp *dock_app = nullptr;
-static MylarWindow *mylar_window = nullptr;
+
+//static RawApp *dock_app = nullptr;
+//static MylarWindow *mylar_window = nullptr;
 
 struct BatteryData : UserData {
     float brightness_level = 100;
 };
 
 struct VolumeData : UserData {
-    
+
 };
 
 struct BrightnessData : UserData {
@@ -113,7 +121,7 @@ get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeig
             }
         }
     }
-    
+
     // Create a new CachedFont entry
     auto *font = new CachedFont;
     assert(font);
@@ -123,29 +131,29 @@ get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeig
     font->cr = cr;
     font->italic = italic; // Save the italic setting
     font->used_count = 0;
-    
+
     PangoLayout *layout = pango_cairo_create_layout(cr);
     PangoFontDescription *desc = pango_font_description_new();
-    
+
     pango_font_description_set_size(desc, pixel_height * PANGO_SCALE);
     pango_font_description_set_family_static(desc, name.c_str());
     pango_font_description_set_weight(desc, weight);
     // Set the style to italic or normal based on the parameter
     pango_font_description_set_style(desc, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
-    
+
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
     pango_layout_set_attributes(layout, nullptr);
-    
+
     assert(layout);
-    
+
     font->layout = layout;
     //printf("new: %p\n", font->layout);
-    
+
     cached_fonts.push_back(font);
-    
+
     assert(font->layout);
-    
+
     return font->layout;
 }
 
@@ -167,20 +175,21 @@ void remove_cached_fonts(cairo_t *cr) {
 }
 
 static void paint_root(Container *root, Container *c) {
-    auto mylar = (MylarWindow *) root->user_data;
+    auto dock = (Dock *) root->user_data;
+    auto mylar = dock->window;
     auto cr = mylar->raw_window->cr;
     cairo_save(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
     cairo_paint(cr);
     cairo_restore(cr);
-    
+
     cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, std::round(1 * mylar->raw_window->dpi));
     cairo_set_source_rgba(cr, 1, 1, 1, .1);
     cairo_fill(cr);
-    
+
     cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, root->real_bounds.h);
     cairo_set_source_rgba(cr, 0, 0, 0, .5);
-    cairo_fill(cr);    
+    cairo_fill(cr);
 }
 
 Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
@@ -236,7 +245,8 @@ Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, boo
 }
 
 static void paint_button_bg(Container *root, Container *c) {
-    auto mylar = (MylarWindow*)root->user_data;
+    auto dock = (Dock *) root->user_data;
+    auto mylar = dock->window;
     auto cr = mylar->raw_window->cr;
     if (c->state.mouse_pressing) {
         cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
@@ -267,7 +277,7 @@ static float get_brightness() {
             try {
                 max = std::atoi(text.c_str());
             } catch (...) {
-                
+
             }
         });
     }
@@ -277,7 +287,7 @@ static float get_brightness() {
             try {
                 current = std::atoi(text.c_str());
             } catch (...) {
-                
+
             }
         });
     }
@@ -306,7 +316,7 @@ static float get_battery_level() {
         try {
             value = std::atoi(text.c_str());
         } catch (...) {
-            
+
         }
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -317,7 +327,8 @@ static void watch_battery_level() {
     auto process = std::make_shared<TinyProcessLib::Process>("upower --monitor", "", [](const char *bytes, size_t n) {
         battery_level = get_battery_level();
         charging = battery_charging();
-        windowing::wake_up(mylar_window->raw_window);
+        for (auto d : docks)
+            windowing::redraw(d->window->raw_window);
     });
     std::thread t([process]() {
         while (!finished) {
@@ -337,7 +348,7 @@ static float get_volume_level() {
         try {
             value = std::atoi(text.c_str());
         } catch (...) {
-            
+
         }
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -351,7 +362,8 @@ static void watch_volume_level() {
         bool contains = text.find("change") != std::string::npos;
         if (current - last_time_volume_adjusted > 400 && contains) {
             volume_level = get_volume_level();
-            windowing::wake_up(mylar_window->raw_window);            
+            for (auto d : docks)
+                windowing::redraw(d->window->raw_window);
         }
     });
     std::thread t([process]() {
@@ -374,6 +386,10 @@ static void set_brightness(float amount) {
     std::thread t([amount]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         auto process = std::make_shared<TinyProcessLib::Process>(fz("brightnessctl set {}", (int) std::round(amount)));
+
+        for (auto d : docks)
+            windowing::redraw(d->window->raw_window);
+
         queued = false;
     });
     t.detach();
@@ -390,6 +406,9 @@ static void set_volume(float amount) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         auto process = std::make_shared<TinyProcessLib::Process>(fz("pactl set-sink-volume @DEFAULT_SINK@ {}%", (int) std::round(latest)));
 
+        for (auto d : docks)
+            windowing::redraw(d->window->raw_window);
+
         queued = false;
     });
     t.detach();
@@ -397,39 +416,41 @@ static void set_volume(float amount) {
 
 Container *simple_dock_item(Container *root, std::function<std::string()> ico, std::function<std::string()> text = nullptr) {
     auto c = root->child(40, FILL_SPACE);
+    static int tex_size = 8;
     c->when_paint = [ico, text](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
+        auto dock = (Dock *) root->user_data;
+        auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
         paint_button_bg(root, c);
 
         auto ico_bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
-        auto b = draw_text(cr, 
-            c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5, 
+        auto b = draw_text(cr,
+            c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5,
             ico(), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         if (text) {
-            auto tb = draw_text(cr, c, text(), 9 * mylar->raw_window->dpi, false);
-            draw_text(cr, 
-                c->real_bounds.x + 20 + b.w, c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
-                text(), 9 * mylar->raw_window->dpi, true);
+            auto tb = draw_text(cr, c, text(), tex_size * mylar->raw_window->dpi, false);
+            draw_text(cr,
+                c->real_bounds.x + 20 + b.w, c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5,
+                text(), tex_size * mylar->raw_window->dpi, true);
         }
     };
     c->pre_layout = [ico, text](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
+        auto dock = (Dock *) root->user_data;
+        auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
         auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
         if (text)
-            bounds.w += draw_text(cr, c, text(), 9 * mylar->raw_window->dpi, false).w + 10;
+            bounds.w += draw_text(cr, c, text(), tex_size * mylar->raw_window->dpi, false).w + 10;
         c->wanted_bounds.w = bounds.w + 20;
-    }; 
-    
-    
+    };
+
     return c;
 }
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
-    
-    {
+
+    /*{
         auto icons = root->child(::hbox, FILL_SPACE, FILL_SPACE);
         icons->distribute_overflow_to_children = true;
         icons->name = "icons";
@@ -470,20 +491,20 @@ static void fill_root(Container *root) {
                         auto w = (Window*)c->user_data;
                         auto mylar = (MylarWindow*)root->user_data;
                         auto cr = mylar->raw_window->cr;
-                        
+
                         if (active_cid == w->cid) {
                             cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
                             cairo_set_source_rgba(cr, 1, 1, 1, .15);
                             cairo_fill(cr);
                         }
-                        
+
                         paint_button_bg(root, c);
-                        
+
                         int offx = 0;
                         if (icons_loaded) {
                             if (w->icon_surf) {
                                 auto h = cairo_image_surface_get_height(w->icon_surf);
-                                cairo_set_source_surface(cr, w->icon_surf, 
+                                cairo_set_source_surface(cr, w->icon_surf,
                                     c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
                                 cairo_paint(cr);
                                 auto wi = cairo_image_surface_get_height(w->icon_surf);
@@ -491,7 +512,7 @@ static void fill_root(Container *root) {
                             }
                         }
                         auto b = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
-                        draw_text(cr, 
+                        draw_text(cr,
                             c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5,
                             w->title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
 
@@ -553,12 +574,12 @@ static void fill_root(Container *root) {
                                {
                                    PopOption pop;
                                    pop.text = "Close window";
-                                   pop.on_clicked = [cid]() { 
+                                   pop.on_clicked = [cid]() {
                                        close_window(cid);
                                    };
                                    root.push_back(pop);
                                }
-                               
+
                                popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
                                //popup::open(root, m.x - (277 * .5), m.y);
                            });
@@ -585,7 +606,7 @@ static void fill_root(Container *root) {
                        if (w->icon_surf) {
                            bounds.w += cairo_image_surface_get_width(w->icon_surf) + 10;
                        }
-                       
+
                        c->wanted_bounds.w = bounds.w + 20;
                    };
                    ch->custom_type = w->cid;
@@ -604,23 +625,23 @@ static void fill_root(Container *root) {
                 }
             }
         };
-    }
+    }*/
 
-    { 
+    {
         auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
         active_settings->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:right_click_active");
         };
     }
 
-    { 
+    {
         auto toggle = simple_dock_item(root, ICON("\uF0E2"));
         toggle->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:toggle_layout");
         };
     }
 
-    { 
+    {
         auto night = simple_dock_item(root, ICON("\uE708"));
         night->when_clicked = paint {
            if (nightlight_on)  {
@@ -634,15 +655,15 @@ static void fill_root(Container *root) {
            nightlight_on = !nightlight_on;
         };
     }
-    
-    { 
+
+    {
         auto bluetooth = simple_dock_item(root, ICON("\uE702"));
     }
-    
-    { 
+
+    {
         auto wifi = simple_dock_item(root, ICON("\uE701"));
-    }    
-    
+    }
+
     {
         auto brightness = simple_dock_item(root, ICON("\uE706"), []() {
            return fz("{}%", (int) std::round(brightness_level));
@@ -651,8 +672,8 @@ static void fill_root(Container *root) {
         brightness_data->value = get_brightness();
 
         brightness->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
-            //notify(fz("fine scrolled {} {}", ((double) scroll_y) * .001, came_from_touchpad));
-            auto mylar = (MylarWindow*)root->user_data;
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
             auto brightness_data = (BrightnessData *) c->user_data;
             brightness_data->value += ((double) scroll_y) * .001;
             if (brightness_data->value > 100) {
@@ -663,7 +684,7 @@ static void fill_root(Container *root) {
             }
             set_brightness(brightness_data->value);
         };
-        
+
         brightness->user_data = brightness_data;
     }
 
@@ -691,7 +712,8 @@ static void fill_root(Container *root) {
         volume_level = get_volume_level();
         watch_volume_level();
         volume->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
-            auto mylar = (MylarWindow*)root->user_data;
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
             auto volume_data = (VolumeData *) c->user_data;
             volume_level += ((double) scroll_y) * .001;
             if (volume_level > 100) {
@@ -722,17 +744,19 @@ static void fill_root(Container *root) {
         watch_battery_level();
         battery->user_data = battery_data;
     }
-    
+
     {
         auto date = root->child(40, FILL_SPACE);
         date->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
             draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi);
         };
         date->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
             auto cr = mylar->raw_window->cr;
             auto bounds = draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi, false);
             c->wanted_bounds.w = bounds.w + 20;
@@ -741,25 +765,29 @@ static void fill_root(Container *root) {
 };
 
 void dock_start() {
-    dock_app = windowing::open_app();
+    auto dock = new Dock;
+    docks.push_back(dock);
+    dock->app = windowing::open_app();
     RawWindowSettings settings;
     settings.pos.w = 0;
     settings.pos.h = 40;
     settings.name = "Dock";
-    auto mylar = open_mylar_window(dock_app, WindowType::DOCK, settings);
-    mylar->raw_window->on_scale_change = [](RawWindow *rw, float dpi) {
-        for (auto w : windows->list) {
-            w->scale_change = true;
-        }
+    dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
+    dock->window->raw_window->on_scale_change = [](RawWindow *rw, float dpi) {
+        notify("scale change");
     };
-    mylar_window = mylar;
-    mylar->root->user_data = mylar;
-    fill_root(mylar->root);
+    dock->window->root->skip_delete = true;
+    dock->window->root->user_data = dock;
+    fill_root(dock->window->root);
+    dock->window->root->alignment = ALIGN_RIGHT;
+    windowing::main_loop(dock->app);
 
-    //notify("be");
-    windowing::main_loop(dock_app);
-    //notify("asdf");
+    // Cleanup dock
+    delete dock->app;
+    delete dock->window;
+    delete dock;
 }
+
 
 void dock::start() {
     //return;
@@ -770,23 +798,24 @@ void dock::start() {
 void dock::stop() {
     //return;
     finished = true;
-    windowing::close_app(dock_app);
+    for (auto d : docks) {
+        windowing::close_app(d->app);
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    delete windows;
-    windows = new Windows;
     cleanup_cached_fonts();
 }
 
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
+    /*
     if (!windows)
         return;
- 
+
     // Check if cid should even be displayed in dock
     if (!hypriso->alt_tabbable(cid))
         return;
 
-    
+
     Window *window = new Window;
     window->cid = cid;
     window->title = hypriso->title_name(cid);
@@ -802,24 +831,28 @@ void dock::add_window(int cid) {
     if (hypriso->has_focus(cid))
         active_cid = cid;
 
-    // Synchronize 
+    // Synchronize
     std::lock_guard<std::mutex> guard(windows->mut);
     windows->to_be_added.push_back(window);
     if (mylar_window)
         windowing::redraw(mylar_window->raw_window);
+    */
 }
 
 // This happens on the main thread, not the dock thread
 void dock::remove_window(int cid) {
+    /*
     if (!windows)
         return;
     std::lock_guard<std::mutex> guard(windows->mut);
     windows->to_be_removed.push_back(cid);
     if (mylar_window)
         windowing::redraw(mylar_window->raw_window);
+    */
 }
 
 void dock::title_change(int cid, std::string title) {
+    /*
     std::lock_guard<std::mutex> guard(windows->mut);
     for (auto &w : windows->list) {
         if (w->cid == cid) {
@@ -828,10 +861,11 @@ void dock::title_change(int cid, std::string title) {
     }
     if (mylar_window)
         windowing::redraw(mylar_window->raw_window);
-}    
+    */
+}
 
 void dock::on_activated(int cid) {
     active_cid = cid;
-    if (mylar_window)
-        windowing::redraw(mylar_window->raw_window);
+    for (auto d : docks)
+        windowing::redraw(d->window->raw_window);
 }

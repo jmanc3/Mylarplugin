@@ -263,6 +263,11 @@ static void destroy_shm_buffer(struct wl_window *win) {
         win->cairo_surface = nullptr;
     }
 
+    if (win->cr) {
+        cairo_destroy(win->cr);
+        win->cr = nullptr;
+    }
+
     if (win->buffer) {
         wl_buffer_destroy(win->buffer);
         win->buffer = nullptr;
@@ -1088,6 +1093,7 @@ void wl_window_destroy(struct wl_window *win) {
 
     if (win->xkb_state) xkb_state_unref(win->xkb_state);
     if (win->keymap) xkb_keymap_unref(win->keymap);
+    cairo_destroy(win->cr);
 
     delete win;
 }
@@ -1226,69 +1232,7 @@ void windowing::main_loop(RawApp *app) {
         }
         ctx->running = any_keepers;
     }
-    /*
-    while (ctx->running) {
-        // Dispatch any already-queued events before blocking
-        wl_display_dispatch_pending(ctx->display);
 
-        // Try to flush before waiting
-        if (wl_display_flush(ctx->display) < 0 && errno == EAGAIN)
-            need_flush = true;
-
-        short events = POLLIN | POLLERR;
-        if (need_flush)
-            events |= POLLOUT;
-
-        struct pollfd pfds[2] = {
-            { .fd = fd, .events = events },
-            { .fd = ctx->wake_pipe[0], .events = POLLIN },
-        };
-
-        if (poll(pfds, 2, -1) < 0)
-            break;
-
-        if (pfds[1].revents & POLLIN) {
-            char buf[64];
-            read(ctx->wake_pipe[0], buf, sizeof buf);
-            continue;
-        }
-
-        if (pfds[0].revents & POLLIN) {
-            if (wl_display_prepare_read(ctx->display) == 0) {
-                wl_display_read_events(ctx->display);
-                wl_display_dispatch_pending(ctx->display);
-            } else {
-                wl_display_dispatch_pending(ctx->display);
-            }
-        }
-
-        if (pfds[0].revents & POLLOUT) {
-            if (wl_display_flush(ctx->display) == 0)
-                need_flush = false;
-        }
-
-        // Now handle your app-level window cleanup
-        for (int i = ctx->windows.size() - 1; i >= 0; i--) {
-            auto win = ctx->windows[i];
-            if (win->marked_for_closing) {
-                wl_window_destroy(win);
-                ctx->windows.erase(ctx->windows.begin() + i);
-            }
-        }
-
-        bool any_keepers_of_life = false;
-        for (auto w : ctx->windows) {
-            if (w->keeper_of_life) {
-                any_keepers_of_life = true;
-            }
-        }
-        ctx->running = any_keepers_of_life;  
-        //notify(fz("ctx->running {}", ctx->running));
-    }
-    */
-
-    //notify("app exiting");
-    
     // 4. Cleanup
     wl_context_destroy(ctx);
 }
