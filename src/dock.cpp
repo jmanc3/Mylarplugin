@@ -408,19 +408,30 @@ static void set_volume(float amount) {
     t.detach();
 }
 
-Container *simple_dock_item(Container *root, std::function<std::string()> func) {
+Container *simple_dock_item(Container *root, std::function<std::string()> ico, std::function<std::string()> text = nullptr) {
     auto c = root->child(40, FILL_SPACE);
-    c->when_paint = [func](Container *root, Container *c) {
+    c->when_paint = [ico, text](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         paint_button_bg(root, c);
 
-        draw_text(cr, c, func(), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+        auto ico_bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto b = draw_text(cr, 
+            c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5, 
+            ico(), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+        if (text) {
+            auto tb = draw_text(cr, c, text(), 9 * mylar->raw_window->dpi, false);
+            draw_text(cr, 
+                c->real_bounds.x + 20 + b.w, c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
+                text(), 9 * mylar->raw_window->dpi, true);
+        }
     };
-    c->pre_layout = [func](Container *root, Container *c, const Bounds &b) {
+    c->pre_layout = [ico, text](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
-        auto bounds = draw_text(cr, c, func(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+        if (text)
+            bounds.w += draw_text(cr, c, text(), 9 * mylar->raw_window->dpi, false, "Segoe Fluent Icons").w + 10;
         c->wanted_bounds.w = bounds.w + 20;
     }; 
     
@@ -693,7 +704,25 @@ static void fill_root(Container *root) {
     }
 
     {
-        auto volume = root->child(40, FILL_SPACE);
+        auto volume = simple_dock_item(root, []() {
+            std::string text = "";
+            auto val = volume_level;
+            bool mute_state = volume_level < 1;
+            if (mute_state) {
+                text = "\uE74F";
+            } else if (val == 0) {
+                text = "\uE992";
+            } else if (val < 33) {
+                text = "\uE993";
+            } else if (val < 66) {
+                text = "\uE994";
+            } else {
+                text = "\uE995";
+            }
+           return text;
+        }, []() {
+           return std::format("{}%", (int) volume_level);
+        }) ;
         auto volume_data = new VolumeData;
         volume_level = get_volume_level();
         watch_volume_level();
@@ -712,29 +741,6 @@ static void fill_root(Container *root) {
             set_volume(volume_level);
         };
         volume->user_data = volume_data;
-        volume->when_paint = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto volume_data = (VolumeData *) c->user_data;
-            auto cr = mylar->raw_window->cr;
-            paint_button_bg(root, c);
-            
-            auto ico = draw_text(cr, c, fz("\uE995"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            draw_text(cr, c->real_bounds.x + 10, center_y(c, ico.h), fz("\uE995"), 12 * mylar->raw_window->dpi, true, "Segoe MDL2 Assets");
-            
-            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, false);
-            draw_text(cr, c->real_bounds.x + 10 + ico.w + 10, center_y(c, tex.h), fz("{}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, true);
-        };
-        volume->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
-            auto ico = draw_text(cr, c, fz("\uE995"), 12 * mylar->raw_window->dpi, false, "Segoe MDL2 Assets");
-            auto tex = draw_text(cr, c, fz("{}%", (int) std::round(volume_level)), 9 * mylar->raw_window->dpi, false);
-            c->wanted_bounds.w = ico.w + tex.w + 30;
-        };
-        volume->when_clicked = paint {
-            auto mylar = (MylarWindow*)root->user_data;
-            //windowing::close_window(mylar->raw_window);
-        };
     }
 
     {
