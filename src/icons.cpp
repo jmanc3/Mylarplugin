@@ -505,6 +505,21 @@ void icon_cache_load() {
      load_data();
 }
 
+bool equals_case_insensitive(std::string_view a, std::string_view b) {
+    if (a.size() != b.size())
+        return false;
+
+    for (size_t i = 0; i < a.size(); ++i) {
+        unsigned char ca = static_cast<unsigned char>(a[i]);
+        unsigned char cb = static_cast<unsigned char>(b[i]);
+
+        if (std::tolower(ca) != std::tolower(cb))
+            return false;
+    }
+
+    return true;
+}
+
 void search_icons(std::vector<IconTarget>& targets) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -519,7 +534,24 @@ void search_icons(std::vector<IconTarget>& targets) {
             target_name = std::string_view(target.name.data() + start + 1, target.name.size() - start - 1);
         }
 
-        if (ranges.find(target_name) == ranges.end()) {
+        bool easy_has = ranges.find(target_name) != ranges.end();
+        Range range;
+        bool found = false;
+        std::string entry_name = std::string(target_name);
+
+        if (!easy_has) {
+            for (const auto &entry : ranges) {
+                if (equals_case_insensitive(entry.first, target_name)) {
+                    found = true;
+                    easy_has = true;
+                    range = entry.second;
+                    entry_name = entry.first;
+                    break;
+                }
+            }
+        }
+
+        if (!easy_has) {
             // Could be a path
             if (!target_name.empty() && target_name[0] == '/') {
                 Candidate candidate;
@@ -560,7 +592,8 @@ void search_icons(std::vector<IconTarget>& targets) {
 
             continue;
         }
-        Range                  range = ranges[target_name];
+        if (!found)
+            range = ranges[target_name];
 
         std::vector<Candidate> candidates;
         for (int j = 0; j < (range.length / 3); ++j) {
@@ -572,7 +605,7 @@ void search_icons(std::vector<IconTarget>& targets) {
 
             Candidate candidate;
             candidate.parent_path = data->parentPaths[getParentIndex(parentIndexAndExtension)];
-            candidate.filename    = target_name;
+            candidate.filename    = entry_name;
             candidate.theme       = data->themes[themeIndex];
             candidate.extension   = getExtension(parentIndexAndExtension);
             candidate.context     = IconContext::NotSet;
