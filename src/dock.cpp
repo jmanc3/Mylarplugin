@@ -15,6 +15,7 @@
 #include <functional>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
+#include <sys/wait.h>
 #include <thread>
 #include <memory>
 #include <pango/pangocairo.h>
@@ -323,7 +324,12 @@ static float get_battery_level() {
     return value;
 }
 
+static bool watching_battery = false;
+
 static void watch_battery_level() {
+    if (watching_battery)
+        return;
+    watching_battery = true;
     auto process = std::make_shared<TinyProcessLib::Process>("upower --monitor", "", [](const char *bytes, size_t n) {
         battery_level = get_battery_level();
         charging = battery_charging();
@@ -355,7 +361,12 @@ static float get_volume_level() {
     return value;
 }
 
+static bool watching_volume = false;
+
 static void watch_volume_level() {
+    if (watching_volume)
+        return;
+    watching_volume = true;
     auto process = std::make_shared<TinyProcessLib::Process>("pactl subscribe", "", [](const char *bytes, size_t n) {
         long current = get_current_time_in_ms();
         std::string text(bytes, n);
