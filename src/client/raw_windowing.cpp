@@ -63,6 +63,7 @@ struct wl_window;
 bool wl_window_resize_buffer(struct wl_window *win, int new_width, int new_height);
 
 struct output {
+    int id = -1;
     struct wl_output *output = nullptr;
     bool received_geom = false;
     int32_t physical_height = -1;
@@ -1072,15 +1073,7 @@ void out_mode(void *data,
 
 void out_done(void *data,
 	     struct wl_output *wl_output) {
-    	     /*
-    auto ctx = (wl_context *) data;
-    for (int i = ctx->outputs.size() - 1; i >= 0; i--) {
-        if (ctx->outputs[i]->output == wl_output) {
-            delete ctx->outputs[i];
-            ctx->outputs.erase(ctx->outputs.begin() + i) ;
-        }
-    }
-    */
+
 }
 
 void out_scale(void *data,
@@ -1092,14 +1085,13 @@ void out_scale(void *data,
 void out_name(void *data,
 	     struct wl_output *wl_output,
 	     const char *name) {
-     //notify(name);
-    	     
+     notify(name);
 }
 
 void out_description(void *data,
 		    struct wl_output *wl_output,
 		    const char *description) {
-     //notify(description);
+     notify(description);
 }
 
 static const wl_output_listener output_listener = {
@@ -1132,6 +1124,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
         auto output_raw = (wl_output *) wl_registry_bind(registry, id, &wl_output_interface, 4);
         auto mon = new output;
+        mon->id = id;
         mon->output = output_raw;
         d->outputs.push_back(mon);
         wl_output_add_listener(output_raw, &output_listener, d);
@@ -1150,7 +1143,13 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
 }
 
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t id) {
-    (void)data; (void)registry; (void)id;
+    wl_context *d = (wl_context *)data;
+    for (int i = d->outputs.size() - 1; i >= 0; i--) {
+        if (d->outputs[i]->id == id) {
+            delete d->outputs[i];
+            d->outputs.erase(d->outputs.begin() + i) ;
+        }
+    }
 }
 
 static const struct wl_registry_listener registry_listener = {
