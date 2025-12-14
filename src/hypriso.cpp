@@ -5536,4 +5536,11 @@ void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std
 }
 
 
-
+std::string HyprIso::monitor_name(int id) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id == id) {
+            return hm->m->m_name;
+        }
+    }
+    return "";
+}

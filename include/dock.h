@@ -3,8 +3,8 @@
 #include <string>
 
 namespace dock {
-    void start();
-    void stop();
+    void start(std::string monitor_name = "");
+    void stop(std::string monitor_name = "");
 
     void add_window(int cid);
     void remove_window(int cid);

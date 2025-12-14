@@ -64,6 +64,7 @@ bool wl_window_resize_buffer(struct wl_window *win, int new_width, int new_heigh
 
 struct output {
     int id = -1;
+    std::string name = "--notsetyet--";
     struct wl_output *output = nullptr;
     bool received_geom = false;
     int32_t physical_height = -1;
@@ -424,13 +425,15 @@ bool still_need_work(wl_context *ctx) {
         if (!o->received_geom) {
             any_false = true;
         }
+        if (o->name == "--notsetyet--")
+            any_false = true;
     }
     return any_false;
 }
 
 struct wl_window *wl_window_create(struct wl_context *ctx,
                                    int width, int height,
-                                   const char *title)
+                                   const char *title, std::string monitor_name)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -528,7 +531,7 @@ static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
 };
 
 struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int height,
-                                         zwlr_layer_shell_v1_layer layer, const char *title, bool exclusive_zone = true)
+                                         zwlr_layer_shell_v1_layer layer, const char *title, std::string monitor_name, bool exclusive_zone)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -544,10 +547,19 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
     win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface); 
 
-    // NULL -> output
-
-    win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-        ctx->layer_shell, win->surface, NULL, layer, title);
+    bool found = false;
+    for (auto o : ctx->outputs) {
+        if (o->name == monitor_name) {
+            found = true;
+            win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+                ctx->layer_shell, win->surface, o->output, layer, title);        
+             break;
+        }
+    }
+    if (!found) {
+        win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+            ctx->layer_shell, win->surface, NULL, layer, title);        
+    }
 
     zwlr_layer_surface_v1_set_anchor(win->layer_surface,
         ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
@@ -1085,13 +1097,19 @@ void out_scale(void *data,
 void out_name(void *data,
 	     struct wl_output *wl_output,
 	     const char *name) {
-     notify(name);
+    auto ctx = (wl_context *) data;
+    for (int i = ctx->outputs.size() - 1; i >= 0; i--) {
+        if (ctx->outputs[i]->output == wl_output) {
+            auto mon = ctx->outputs[i];
+            mon->name = name;
+        }
+    }
 }
 
 void out_description(void *data,
 		    struct wl_output *wl_output,
 		    const char *description) {
-     notify(description);
+     //notify(description);
 }
 
 static const wl_output_listener output_listener = {
@@ -1361,7 +1379,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     rw->id = unique_id++;
 
     if (type == WindowType::NORMAL) {
-        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str());
+        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str(), settings.monitor_name);
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;
@@ -1370,7 +1388,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         windows.push_back(window);
     }
     if (type == WindowType::DOCK) {
-        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str());
+        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.monitor_name, true);
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;
@@ -1472,6 +1490,6 @@ void RawApp::print_monitors() {
     
     //notify(fz("{}", ctx->outputs.size())); 
     for (auto o : ctx->outputs) {
-        //notify(fz("{} {}", o->physical_width, o->physical_height)); 
+        //notify(fz("{} {} {}", o->name, o->physical_width, o->physical_height)); 
     }
 }

@@ -12,6 +12,7 @@
 #include <cairo.h>
 #include "process.hpp"
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
@@ -53,6 +54,7 @@ struct Dock : UserData {
     MylarWindow *window = nullptr;
     Windows *windows = nullptr;
     bool first_fill = true;
+    RawWindowSettings creation_settings;
 };
 
 static std::vector<Dock *> docks;
@@ -794,16 +796,24 @@ static void fill_root(Container *root) {
     }
 };
 
-void dock_start() {
+void dock_start(std::string monitor_name) {
+    if (!monitor_name.empty()) {
+        for (auto d : docks) {
+            if (d->creation_settings.monitor_name == monitor_name) {
+                return; // already created that dock
+            }
+        }
+    }
     auto dock = new Dock;
     dock->windows = new Windows;
-    docks.push_back(dock);
     dock->app = windowing::open_app();
     dock->app->print_monitors();
     RawWindowSettings settings;
     settings.pos.w = 0;
     settings.pos.h = 40;
     settings.name = "Dock";
+    settings.monitor_name = monitor_name;
+    dock->creation_settings = settings;
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
     dock->window->raw_window->on_scale_change = [dock](RawWindow *rw, float dpi) {
         for (auto d : dock->windows->list) {
@@ -815,7 +825,15 @@ void dock_start() {
     dock->window->root->user_data = dock;
     fill_root(dock->window->root);
     dock->window->root->alignment = ALIGN_RIGHT;
+    docks.push_back(dock);
     windowing::main_loop(dock->app);
+    if (docks.size() == 1)
+        finished = true; 
+    for (int i = docks.size() - 1; i >= 0; i--) {
+        if (docks[i] == dock) {
+            docks.erase(docks.begin() + i);
+        }
+    }
 
     // Cleanup dock
     delete dock->app;
@@ -824,22 +842,29 @@ void dock_start() {
 }
 
 
-void dock::start() {
+void dock::start(std::string monitor_name) {
     finished = false;
     //return;
-    std::thread t(dock_start);
+    std::thread t(dock_start, monitor_name);
     t.detach();
 }
 
-void dock::stop() {
-    //return;
-    finished = true;
-    for (auto d : docks) {
-        windowing::close_app(d->app);
-    }
-    docks.clear();
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    cleanup_cached_fonts();
+void dock::stop(std::string monitor_name) {
+    if (monitor_name.empty()) {
+        finished = true;
+        for (auto d : docks) {
+            windowing::close_app(d->app);
+        }
+        docks.clear();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        cleanup_cached_fonts();   
+    } else {
+        for (auto d : docks) {
+            if (d->creation_settings.monitor_name == monitor_name) {
+                windowing::close_app(d->app);
+            }
+        }
+    } 
 }
 
 // This happens on the main thread, not the dock thread

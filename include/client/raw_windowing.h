@@ -28,6 +28,7 @@ struct PositioningInfo {
 
 struct RawWindowSettings {
     std::string name;
+    std::string monitor_name;
     PositioningInfo pos;
 };
 

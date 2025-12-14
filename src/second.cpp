@@ -819,6 +819,7 @@ static void on_monitor_open(int id) {
     auto cid = datum<int>(c, "cid");
     *cid = id;
     second::layout_containers();
+    dock::start(hypriso->monitor_name(id));
 }
 
 static void on_monitor_closed(int id) {
@@ -829,6 +830,7 @@ static void on_monitor_closed(int id) {
         }
     }
     second::layout_containers();
+    dock::stop(hypriso->monitor_name(id));
 }
 
 static void on_activated(int id) {
@@ -1268,7 +1270,7 @@ void second::begin() {
         icon_cache_load();
     }
 
-    dock::start();
+    //dock::start();
     /*std::thread t([] {
         start_dock();
     });
