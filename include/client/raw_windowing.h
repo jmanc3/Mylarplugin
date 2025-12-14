@@ -13,6 +13,8 @@ struct PolledFunction {
 
 struct RawApp {
     int id = -1;
+
+    void print_monitors();
 };
 
 struct PositioningInfo {

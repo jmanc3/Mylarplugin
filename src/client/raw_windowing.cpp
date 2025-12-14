@@ -62,6 +62,13 @@ struct wl_window;
 
 bool wl_window_resize_buffer(struct wl_window *win, int new_width, int new_height);
 
+struct output {
+    struct wl_output *output = nullptr;
+    bool received_geom = false;
+    int32_t physical_height = -1;
+    int32_t physical_width  = -1;
+};
+
 struct wl_context {
     int wake_pipe[2];
     int id;
@@ -86,7 +93,7 @@ struct wl_context {
     struct wp_cursor_shape_device_v1 *shape_device = nullptr;
     struct zwlr_foreign_toplevel_manager_v1 *top_level_manager = nullptr;
 
-    struct wl_output *output = nullptr;
+    std::vector<output *> outputs;
     uint32_t shm_format;
 
     std::vector<wl_window *> windows;
@@ -409,6 +416,16 @@ static void handle_fractional_scale_preferred_scale(
 static const wp_fractional_scale_v1_listener fractional_scale_listener = {
     .preferred_scale = handle_fractional_scale_preferred_scale
 };
+
+bool still_need_work(wl_context *ctx) {
+    bool any_false = false;
+    for (auto o : ctx->outputs) {
+        if (!o->received_geom) {
+            any_false = true;
+        }
+    }
+    return any_false;
+}
 
 struct wl_window *wl_window_create(struct wl_context *ctx,
                                    int width, int height,
@@ -1024,6 +1041,77 @@ static const zwlr_foreign_toplevel_manager_v1_listener manager_listener = {
     .finished = handle_manager_finished,
 };
 
+void out_geometry(void *data,
+    struct wl_output *wl_output,
+    int32_t x,
+    int32_t y,
+    int32_t physical_width,
+    int32_t physical_height,
+    int32_t subpixel,
+    const char *make,
+    const char *model,
+    int32_t transform) {
+}
+
+void out_mode(void *data,
+    struct wl_output *wl_output,
+    uint32_t flags,
+    int32_t width,
+    int32_t height,
+    int32_t refresh) {
+    auto ctx = (wl_context *) data;
+    for (int i = ctx->outputs.size() - 1; i >= 0; i--) {
+        if (ctx->outputs[i]->output == wl_output) {
+            auto mon = ctx->outputs[i];
+            mon->received_geom = true;
+            mon->physical_width = width;
+            mon->physical_height = height;
+        }
+    }
+}
+
+void out_done(void *data,
+	     struct wl_output *wl_output) {
+    	     /*
+    auto ctx = (wl_context *) data;
+    for (int i = ctx->outputs.size() - 1; i >= 0; i--) {
+        if (ctx->outputs[i]->output == wl_output) {
+            delete ctx->outputs[i];
+            ctx->outputs.erase(ctx->outputs.begin() + i) ;
+        }
+    }
+    */
+}
+
+void out_scale(void *data,
+	      struct wl_output *wl_output,
+	      int32_t factor) {
+    	      
+}
+
+void out_name(void *data,
+	     struct wl_output *wl_output,
+	     const char *name) {
+     //notify(name);
+    	     
+}
+
+void out_description(void *data,
+		    struct wl_output *wl_output,
+		    const char *description) {
+     //notify(description);
+}
+
+static const wl_output_listener output_listener = {
+    .geometry = out_geometry,
+    .mode = out_mode,
+    .done = out_done,
+    .scale = out_scale,
+    .name = out_name,
+    .description = out_description,
+};
+
+
 /* ---- registry ---- */
 static void registry_handle_global(void *data, struct wl_registry *registry,
                                    uint32_t id, const char *interface, uint32_t version) {
@@ -1042,8 +1130,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
         d->layer_shell = (zwlr_layer_shell_v1 *) wl_registry_bind(registry, id, &zwlr_layer_shell_v1_interface, 5);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
-        //notify(std::format("here {}", wl_output_interface.name));
-        //d->output = (wl_output *) wl_registry_bind(registry, id, &wl_output_interface, 3);
+        auto output_raw = (wl_output *) wl_registry_bind(registry, id, &wl_output_interface, 4);
+        auto mon = new output;
+        mon->output = output_raw;
+        d->outputs.push_back(mon);
+        wl_output_add_listener(output_raw, &output_listener, d);
     } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
         d->fractional_scale_manager = (wp_fractional_scale_manager_v1 *) wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
     } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
@@ -1252,6 +1343,9 @@ RawApp *windowing::open_app() {
 
     apps.push_back(ctx);
     
+    while (still_need_work(ctx))
+        wl_display_dispatch(ctx->display); 
+
     return ra;
 }
 
@@ -1371,3 +1465,14 @@ void windowing::close_app(RawApp *app) {
 }
 
 
+void RawApp::print_monitors() {
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == id)
+            ctx = c;
+    
+    //notify(fz("{}", ctx->outputs.size())); 
+    for (auto o : ctx->outputs) {
+        //notify(fz("{} {}", o->physical_width, o->physical_height)); 
+    }
+}

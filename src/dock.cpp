@@ -799,6 +799,7 @@ void dock_start() {
     dock->windows = new Windows;
     docks.push_back(dock);
     dock->app = windowing::open_app();
+    dock->app->print_monitors();
     RawWindowSettings settings;
     settings.pos.w = 0;
     settings.pos.h = 40;
