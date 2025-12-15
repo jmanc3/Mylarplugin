@@ -433,7 +433,7 @@ bool still_need_work(wl_context *ctx) {
 
 struct wl_window *wl_window_create(struct wl_context *ctx,
                                    int width, int height,
-                                   const char *title, std::string monitor_name)
+                                   const char *title)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -531,7 +531,9 @@ static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
 };
 
 struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int height,
-                                         zwlr_layer_shell_v1_layer layer, const char *title, std::string monitor_name, bool exclusive_zone)
+                                         zwlr_layer_shell_v1_layer layer, const char *title, 
+                                         int alignment,
+                                         std::string monitor_name, bool exclusive_zone)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -561,16 +563,39 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
             ctx->layer_shell, win->surface, NULL, layer, title);        
     }
 
-    zwlr_layer_surface_v1_set_anchor(win->layer_surface,
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+    if (alignment == 1) {
+        zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);       
+    } else if (alignment == 2) {
+        zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);       
+    } else if (alignment == 3 || alignment == 0) {
+        zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);       
+    } else if (alignment == 4) {
+        zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);       
+    }
+
     zwlr_layer_surface_v1_set_size(win->layer_surface, width, height);
     zwlr_layer_surface_v1_set_keyboard_interactivity(win->layer_surface,
         ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 
-    if (exclusive_zone)
-        zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, height);
+    if (exclusive_zone) {
+        if (alignment == 1 || alignment == 3 || alignment == 0) {
+            zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, height);
+        } else {
+            zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, width);
+        }
+    }
 
     zwlr_layer_surface_v1_add_listener(win->layer_surface, &layer_shell_listener, win);
 
@@ -1379,7 +1404,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     rw->id = unique_id++;
 
     if (type == WindowType::NORMAL) {
-        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str(), settings.monitor_name);
+        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str());
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;
@@ -1388,7 +1413,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         windows.push_back(window);
     }
     if (type == WindowType::DOCK) {
-        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.monitor_name, true);
+        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.alignment, settings.monitor_name, true);
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;

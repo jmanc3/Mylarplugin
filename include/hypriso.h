@@ -180,8 +180,10 @@ struct HyprIso {
     bool resizing = false;
     int resizing_id = false;
 
-    float get_varfloat(std::string target, float default_float = 1.0);
+    float get_varfloat(std::string target, float default_float = 1.0);    
     RGBA get_varcolor(std::string target, RGBA default_color = {1.0, 0.0, 1.0, 1.0});
+    
+    int get_varint(std::string target, int default_int = 0);
 
     Bounds getTexBox(int id);
 

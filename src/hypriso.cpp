@@ -1361,6 +1361,20 @@ void HyprIso::set_float_state(int id, bool should_float) {
             change_float_state(hw->w, should_float);
 }
 
+int HyprIso::get_varint(std::string target, int default_float) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //return default_float;
+    
+    auto confval = HyprlandAPI::getConfigValue(globals->api, target);
+    if (!confval)
+        return default_float;
+
+    auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
+    return **VAR; 
+}
+
 float HyprIso::get_varfloat(std::string target, float default_float) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1415,6 +1429,8 @@ void HyprIso::create_config_variables() {
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_icon_h", Hyprlang::FLOAT{13});
 
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:resize_edge_size", Hyprlang::FLOAT{10});
+    
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_alignment", Hyprlang::INT{1});
 }
 
 static void on_open_layer(PHLLS l) {

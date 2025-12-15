@@ -55,6 +55,7 @@ struct Dock : UserData {
     Windows *windows = nullptr;
     bool first_fill = true;
     RawWindowSettings creation_settings;
+    //bool vertical = false;
 };
 
 static std::vector<Dock *> docks;
@@ -427,7 +428,15 @@ static void set_volume(float amount) {
 }
 
 Container *simple_dock_item(Container *root, std::function<std::string()> ico, std::function<std::string()> text = nullptr) {
+    auto dock = (Dock *) root->user_data;
     auto c = root->child(40, FILL_SPACE);
+    /*if (dock->vertical) {
+        c->type = ::vbox;
+        c->wanted_bounds = Bounds(0, 0, FILL_SPACE, 40);
+    } else {
+        c->type = ::hbox;
+        c->wanted_bounds = Bounds(0, 0, 40, FILL_SPACE);
+    }*/
     static int tex_size = 8;
     c->when_paint = [ico, text](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -453,6 +462,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
         auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
         if (text)
             bounds.w += draw_text(cr, c, text(), tex_size * mylar->raw_window->dpi, false).w + 10;
+        
         c->wanted_bounds.w = bounds.w + 20;
     };
 
@@ -461,9 +471,24 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
+    auto dock = (Dock *) root->user_data;
+    /*
+    if (dock->creation_settings.alignment == 1 || dock->creation_settings.alignment == 3 || dock->creation_settings.alignment == 0) {
+        dock->vertical = false;
+    } else {
+        dock->vertical = true;
+    }
+    if (dock->vertical) {
+        root->type = ::vbox;
+    } else {
+        root->type = ::hbox;
+    }
+    */
 
     {
-        auto icons = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+        auto icons = root->child(FILL_SPACE, FILL_SPACE);
+        icons->type = ::hbox;
+
         icons->distribute_overflow_to_children = true;
         icons->name = "icons";
         icons->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -796,6 +821,8 @@ static void fill_root(Container *root) {
     }
 };
 
+static int current_alignment = 3;
+
 void dock_start(std::string monitor_name) {
     if (!monitor_name.empty()) {
         for (auto d : docks) {
@@ -812,6 +839,7 @@ void dock_start(std::string monitor_name) {
     settings.pos.w = 0;
     settings.pos.h = 40;
     settings.name = "Dock";
+    settings.alignment = current_alignment;
     settings.monitor_name = monitor_name;
     dock->creation_settings = settings;
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
@@ -841,8 +869,13 @@ void dock_start(std::string monitor_name) {
     delete dock;
 }
 
+static float get_dock_alignment() {
+    return hypriso->get_varint("plugin:mylardesktop:dock_alignment", 3);
+}
 
 void dock::start(std::string monitor_name) {
+    current_alignment = get_dock_alignment();
+
     finished = false;
     //return;
     std::thread t(dock_start, monitor_name);

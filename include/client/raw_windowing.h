@@ -30,6 +30,7 @@ struct RawWindowSettings {
     std::string name;
     std::string monitor_name;
     PositioningInfo pos;
+    int alignment = 0; // 0 none, 1 top, clockwise + 1
 };
 
 struct RawWindow {
