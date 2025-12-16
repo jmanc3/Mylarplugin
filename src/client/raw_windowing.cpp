@@ -538,7 +538,7 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
     win->logical_width = width;
-    win->logical_height= height;
+    win->logical_height = height;
     win->scaled_w = win->logical_width * win->current_fractional_scale; 
     win->scaled_h = win->logical_height * win->current_fractional_scale; 
     win->title = title;

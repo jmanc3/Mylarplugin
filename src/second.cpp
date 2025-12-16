@@ -932,6 +932,7 @@ static void on_config_reload() {
     hypriso->set_zoom_factor(zoom_factor);
     hypriso->add_float_rule();
     hypriso->overwrite_defaults();
+    dock::redraw();
 }
 
 Bounds fixed_box(float startx, float starty, float endx, float endy) {

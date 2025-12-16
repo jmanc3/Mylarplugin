@@ -1366,12 +1366,16 @@ int HyprIso::get_varint(std::string target, int default_float) {
     ZoneScoped;
 #endif
     //return default_float;
+    notify(fz("ask {}", target));
     
     auto confval = HyprlandAPI::getConfigValue(globals->api, target);
-    if (!confval)
+    if (!confval) {
+        notify("default");
         return default_float;
+    }
 
     auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
+    notify(fz("ret {}", **VAR));
     return **VAR; 
 }
 
@@ -1430,7 +1434,9 @@ void HyprIso::create_config_variables() {
 
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:resize_edge_size", Hyprlang::FLOAT{10});
     
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_alignment", Hyprlang::INT{1});
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock", Hyprlang::INT{3});
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_color", Hyprlang::INT{*configStringToInt("rgba(00000088)")});
+    
 }
 
 static void on_open_layer(PHLLS l) {
@@ -1940,6 +1946,254 @@ void HyprIso::create_hooks() {
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
 }
+/*
+
+void client_get_type_and_transientness(ObClient *self)
+{
+    guint num, i;
+    guint32 *val;
+    Window t;
+
+    self->type = -1;
+    self->transient = FALSE;
+
+    if (OBT_PROP_GETA32(self->window, NET_WM_WINDOW_TYPE, ATOM, &val, &num)) {
+        for (i = 0; i < num; ++i) {
+            if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_DESKTOP))
+                self->type = OB_CLIENT_TYPE_DESKTOP;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_DOCK))
+                self->type = OB_CLIENT_TYPE_DOCK;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_TOOLBAR))
+                self->type = OB_CLIENT_TYPE_TOOLBAR;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_MENU))
+                self->type = OB_CLIENT_TYPE_MENU;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_UTILITY))
+                self->type = OB_CLIENT_TYPE_UTILITY;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_SPLASH))
+                self->type = OB_CLIENT_TYPE_SPLASH;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_DIALOG))
+                self->type = OB_CLIENT_TYPE_DIALOG;
+            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_NORMAL))
+                self->type = OB_CLIENT_TYPE_NORMAL;
+            else if (val[i] == OBT_PROP_ATOM(KDE_NET_WM_WINDOW_TYPE_OVERRIDE))
+            {
+                self->mwmhints.flags &= (OB_MWM_FLAG_FUNCTIONS |
+                                         OB_MWM_FLAG_DECORATIONS);
+                self->mwmhints.decorations = 0;
+                self->mwmhints.functions = 0;
+            }
+            if (self->type != (ObClientType) -1)
+                break; 
+        }
+        g_free(val);
+    }
+
+    if (XGetTransientForHint(obt_display, self->window, &t))
+        self->transient = TRUE;
+
+    if (self->type == (ObClientType) -1) {
+        if (self->transient)
+            self->type = OB_CLIENT_TYPE_DIALOG;
+        else
+            self->type = OB_CLIENT_TYPE_NORMAL;
+    }
+
+    if (self->type == OB_CLIENT_TYPE_DIALOG ||
+        self->type == OB_CLIENT_TYPE_TOOLBAR ||
+        self->type == OB_CLIENT_TYPE_MENU ||
+        self->type == OB_CLIENT_TYPE_UTILITY)
+    {
+        self->transient = TRUE;
+    }
+}
+
+
+static void client_setup_default_decor_and_functions(ObClient *self)
+{
+    self->decorations =
+        (OB_FRAME_DECOR_TITLEBAR |
+         OB_FRAME_DECOR_HANDLE |
+         OB_FRAME_DECOR_GRIPS |
+         OB_FRAME_DECOR_BORDER |
+         OB_FRAME_DECOR_ICON |
+         OB_FRAME_DECOR_ALLDESKTOPS |
+         OB_FRAME_DECOR_ICONIFY |
+         OB_FRAME_DECOR_MAXIMIZE |
+         OB_FRAME_DECOR_SHADE |
+         OB_FRAME_DECOR_CLOSE);
+    self->functions =
+        (OB_CLIENT_FUNC_RESIZE |
+         OB_CLIENT_FUNC_MOVE |
+         OB_CLIENT_FUNC_ICONIFY |
+         OB_CLIENT_FUNC_MAXIMIZE |
+         OB_CLIENT_FUNC_SHADE |
+         OB_CLIENT_FUNC_CLOSE |
+         OB_CLIENT_FUNC_BELOW |
+         OB_CLIENT_FUNC_ABOVE |
+         OB_CLIENT_FUNC_UNDECORATE);
+
+    if (!(self->min_size.width < self->max_size.width ||
+          self->min_size.height < self->max_size.height))
+        self->functions &= ~OB_CLIENT_FUNC_RESIZE;
+
+    switch (self->type) {
+    case OB_CLIENT_TYPE_NORMAL:
+        self->functions |= OB_CLIENT_FUNC_FULLSCREEN;
+        break;
+
+    case OB_CLIENT_TYPE_DIALOG:
+        self->functions |= OB_CLIENT_FUNC_FULLSCREEN;
+        break;
+
+    case OB_CLIENT_TYPE_UTILITY:
+        break;
+
+    case OB_CLIENT_TYPE_MENU:
+    case OB_CLIENT_TYPE_TOOLBAR:
+        self->decorations &= ~(OB_FRAME_DECOR_ICONIFY |
+                               OB_FRAME_DECOR_MAXIMIZE);
+        self->functions &= ~(OB_CLIENT_FUNC_ICONIFY |
+                             OB_CLIENT_FUNC_MAXIMIZE);
+        break;
+
+    case OB_CLIENT_TYPE_SPLASH:
+        self->decorations = 0;
+        self->functions = OB_CLIENT_FUNC_MOVE;
+        break;
+
+    case OB_CLIENT_TYPE_DESKTOP:
+        self->decorations = 0;
+        self->functions = 0;
+        break;
+
+    case OB_CLIENT_TYPE_DOCK:
+        self->decorations = 0;
+        self->functions = OB_CLIENT_FUNC_BELOW;
+        break;
+    }
+
+    if (self->decorations == 0)
+        self->functions &= ~OB_CLIENT_FUNC_UNDECORATE;
+
+    if (self->mwmhints.flags & OB_MWM_FLAG_DECORATIONS) {
+        if (! (self->mwmhints.decorations & OB_MWM_DECOR_ALL)) {
+            if (! ((self->mwmhints.decorations & OB_MWM_DECOR_HANDLE) ||
+                   (self->mwmhints.decorations & OB_MWM_DECOR_TITLE)))
+            {
+                if (self->mwmhints.decorations & OB_MWM_DECOR_BORDER)
+                    self->decorations = OB_FRAME_DECOR_BORDER;
+                else
+                    self->decorations = 0;
+            }
+        }
+    }
+
+    if (self->mwmhints.flags & OB_MWM_FLAG_FUNCTIONS) {
+        if (! (self->mwmhints.functions & OB_MWM_FUNC_ALL)) {
+            if (! (self->mwmhints.functions & OB_MWM_FUNC_RESIZE))
+                self->functions &= ~OB_CLIENT_FUNC_RESIZE;
+            if (! (self->mwmhints.functions & OB_MWM_FUNC_MOVE))
+                self->functions &= ~OB_CLIENT_FUNC_MOVE;
+        }
+    }
+
+    if (!(self->functions & OB_CLIENT_FUNC_SHADE))
+        self->decorations &= ~OB_FRAME_DECOR_SHADE;
+    if (!(self->functions & OB_CLIENT_FUNC_ICONIFY))
+        self->decorations &= ~OB_FRAME_DECOR_ICONIFY;
+    if (!(self->functions & OB_CLIENT_FUNC_RESIZE))
+        self->decorations &= ~(OB_FRAME_DECOR_GRIPS | OB_FRAME_DECOR_HANDLE);
+
+    if (!((self->functions & OB_CLIENT_FUNC_MAXIMIZE) &&
+          (self->functions & OB_CLIENT_FUNC_MOVE) &&
+          (self->functions & OB_CLIENT_FUNC_RESIZE))) {
+        self->functions &= ~OB_CLIENT_FUNC_MAXIMIZE;
+        self->decorations &= ~OB_FRAME_DECOR_MAXIMIZE;
+    }
+}
+
+static void client_setup_decor_undecorated(ObClient *self)
+{
+    if (self->undecorated)
+        self->decorations &= (config_theme_keepborder ?
+                              OB_FRAME_DECOR_BORDER : 0);
+}
+
+void client_setup_decor_and_functions(ObClient *self, gboolean reconfig)
+{
+    client_setup_default_decor_and_functions(self);
+
+    client_setup_decor_undecorated(self);
+
+    if (self->max_horz && self->max_vert) {
+        self->decorations &= ~(OB_FRAME_DECOR_HANDLE | OB_FRAME_DECOR_GRIPS);
+    }
+
+    if (!(self->decorations & OB_FRAME_DECOR_TITLEBAR))
+        self->functions &= ~OB_CLIENT_FUNC_SHADE;
+
+    if (self->fullscreen) {
+        self->functions &= (OB_CLIENT_FUNC_CLOSE |
+                            OB_CLIENT_FUNC_FULLSCREEN |
+                            OB_CLIENT_FUNC_ICONIFY);
+        self->decorations = 0;
+    }
+
+    client_change_allowed_actions(self);
+
+    if (reconfig)
+        client_reconfigure(self, FALSE);
+}
+
+static void client_change_allowed_actions(ObClient *self)
+{
+    gulong actions[12];
+    gint num = 0;
+
+    if (self->type != OB_CLIENT_TYPE_DESKTOP)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_CHANGE_DESKTOP);
+
+    if (self->functions & OB_CLIENT_FUNC_SHADE)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_SHADE);
+    if (self->functions & OB_CLIENT_FUNC_CLOSE)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_CLOSE);
+    if (self->functions & OB_CLIENT_FUNC_MOVE)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MOVE);
+    if (self->functions & OB_CLIENT_FUNC_ICONIFY)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MINIMIZE);
+    if (self->functions & OB_CLIENT_FUNC_RESIZE)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_RESIZE);
+    if (self->functions & OB_CLIENT_FUNC_FULLSCREEN)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_FULLSCREEN);
+    if (self->functions & OB_CLIENT_FUNC_MAXIMIZE) {
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MAXIMIZE_HORZ);
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MAXIMIZE_VERT);
+    }
+    if (self->functions & OB_CLIENT_FUNC_ABOVE)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_ABOVE);
+    if (self->functions & OB_CLIENT_FUNC_BELOW)
+        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_BELOW);
+    if (self->functions & OB_CLIENT_FUNC_UNDECORATE)
+        actions[num++] = OBT_PROP_ATOM(OB_WM_ACTION_UNDECORATE);
+
+    OBT_PROP_SETA32(self->window, NET_WM_ALLOWED_ACTIONS, ATOM, actions, num);
+
+    if (!(self->functions & OB_CLIENT_FUNC_SHADE) && self->shaded) {
+        if (self->frame) client_shade(self, FALSE);
+        else self->shaded = FALSE;
+    }
+    if (!(self->functions & OB_CLIENT_FUNC_FULLSCREEN) && self->fullscreen) {
+        if (self->frame) client_fullscreen(self, FALSE);
+        else self->fullscreen = FALSE;
+    }
+    if (!(self->functions & OB_CLIENT_FUNC_MAXIMIZE) && (self->max_horz ||
+                                                         self->max_vert)) {
+        if (self->frame) client_maximize(self, FALSE, 0);
+        else self->max_vert = self->max_horz = FALSE;
+    }
+}
+*/
+
 
 bool HyprIso::alt_tabbable(int id) {
 #ifdef TRACY_ENABLE

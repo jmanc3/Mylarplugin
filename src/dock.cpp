@@ -175,6 +175,11 @@ void remove_cached_fonts(cairo_t *cr) {
     }
 }
 
+RGBA color_dock_color() {
+    static RGBA default_color("00000088");
+    return hypriso->get_varcolor("plugin:mylardesktop:dock_color", default_color);
+}
+
 static void paint_root(Container *root, Container *c) {
     auto dock = (Dock *) root->user_data;
     auto mylar = dock->window;
@@ -184,12 +189,13 @@ static void paint_root(Container *root, Container *c) {
     cairo_paint(cr);
     cairo_restore(cr);
 
-    cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, std::round(1 * mylar->raw_window->dpi));
-    cairo_set_source_rgba(cr, 1, 1, 1, .1);
-    cairo_fill(cr);
+    //cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, std::round(1 * mylar->raw_window->dpi));
+    //cairo_set_source_rgba(cr, 1, 1, 1, .1);
+    //cairo_fill(cr);
 
     cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, root->real_bounds.h);
-    cairo_set_source_rgba(cr, 0, 0, 0, .5);
+    auto color = color_dock_color();
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
     cairo_fill(cr);
 }
 
@@ -292,7 +298,7 @@ static float get_brightness() {
             }
         });
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     return (current / max) * 100;
 }
 
@@ -484,6 +490,12 @@ static void fill_root(Container *root) {
         root->type = ::hbox;
     }
     */
+    {
+        auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
+        super->when_clicked = paint {
+            system("wofi --show run &");
+        };
+    }
 
     {
         auto icons = root->child(FILL_SPACE, FILL_SPACE);
@@ -726,7 +738,10 @@ static void fill_root(Container *root) {
            return fz("{}%", (int) std::round(brightness_level));
         });
         auto brightness_data = new BrightnessData;
-        brightness_data->value = get_brightness();
+        std::thread t([&brightness_data]() {
+            brightness_level = get_brightness();
+        });
+        t.detach();
 
         brightness->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
@@ -766,7 +781,10 @@ static void fill_root(Container *root) {
            return std::format("{}%", (int) volume_level);
         }) ;
         auto volume_data = new VolumeData;
-        volume_level = get_volume_level();
+        std::thread t([]() {
+            volume_level = get_volume_level();
+        });
+        t.detach();
         watch_volume_level();
         volume->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
@@ -796,7 +814,10 @@ static void fill_root(Container *root) {
             return std::format("{}{}%", charging_text, (int) std::round(battery_level));
         }) ;
         auto battery_data = new BatteryData;
-        battery_level = get_battery_level();
+        std::thread t([]() {
+            battery_level = get_battery_level();
+        });
+        t.detach();
         charging = battery_charging();
         watch_battery_level();
         battery->user_data = battery_data;
@@ -839,6 +860,7 @@ void dock_start(std::string monitor_name) {
     settings.pos.w = 0;
     settings.pos.h = 40;
     settings.name = "Dock";
+    notify(fz("{}", current_alignment));
     settings.alignment = current_alignment;
     settings.monitor_name = monitor_name;
     dock->creation_settings = settings;
@@ -869,8 +891,8 @@ void dock_start(std::string monitor_name) {
     delete dock;
 }
 
-static float get_dock_alignment() {
-    return hypriso->get_varint("plugin:mylardesktop:dock_alignment", 3);
+static int get_dock_alignment() {
+    return hypriso->get_varint("plugin:mylardesktop:dock", 3);
 }
 
 void dock::start(std::string monitor_name) {
@@ -952,6 +974,11 @@ void dock::title_change(int cid, std::string title) {
 
 void dock::on_activated(int cid) {
     active_cid = cid;
+    for (auto d : docks)
+        windowing::redraw(d->window->raw_window);
+}
+
+void dock::redraw() {
     for (auto d : docks)
         windowing::redraw(d->window->raw_window);
 }
