@@ -31,34 +31,50 @@ static bool merge_windows = false;
 class Window {
 public:
     int cid; // unique id
+    bool attempted_load = false;
+    bool scale_change = false;
+    
     std::string icon;
     std::string command;
     std::string title;
     std::string stack_rule; // Should be regex later, or multiple 
-    
-    cairo_surface_t* icon_surf = nullptr; 
-    bool attempted_load = false;
 
-    bool scale_change = false;
+    cairo_surface_t* icon_surf = nullptr; 
+    
+    ~Window() {
+        if (icon_surf)
+            cairo_surface_destroy(icon_surf);
+    }
+    
+    Window() {}
+
+    Window(const Window& w) {
+        cid = w.cid;
+        attempted_load = w.attempted_load;
+        scale_change = w.scale_change;
+        icon = w.icon;
+        command = w.command;
+        title = w.title;
+        stack_rule = w.stack_rule;
+        icon_surf = nullptr;
+    };
 };
 
-struct Pin {
-    std::vector<Window *> windows;
+struct Pin : UserData {
+    std::vector<Window> windows;
 
     std::string icon;
     std::string command;
     std::string stacking_rule;
-};
 
-struct StackingRule : UserData {
-    std::string stacking_rule;
+    bool pinned = false;
 };
 
 struct Windows {
     std::mutex mut;
     
-    std::vector<Pin *> pins;
-    //std::vector<Window *> list;
+    //std::vector<Pin *> pins;
+    std::vector<Window *> list;
 
     std::vector<Window *> to_be_added;
     std::vector<int> to_be_removed;
@@ -510,6 +526,303 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     return c;
 }
 
+static void create_pinned_icon(Container *icons, Window *window) {
+    auto ch = icons->child(::absolute, FILL_SPACE, FILL_SPACE);
+    auto pin = new Pin;
+    pin->stacking_rule = window->stack_rule;
+    pin->command = window->command;
+    pin->icon = window->icon;
+    pin->windows.push_back(*window);
+    ch->user_data = pin;
+    ch->when_paint = paint {        
+        auto dock = (Dock*)root->user_data;
+        if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->cr)
+            return;
+
+        Pin* pin = (Pin*)c->user_data;
+        auto mylar = dock->window;
+        auto cr = mylar->raw_window->cr;
+        
+        bool is_active = false;
+        for (auto window : pin->windows)
+            if (window.cid == active_cid)
+                is_active = true;
+
+        if (c->state.mouse_pressing) {
+            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            auto col = color_dock_sel_press_color();
+            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+            cairo_fill(cr);
+        } else if (c->state.mouse_hovering) {
+            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            auto col = color_dock_sel_hover_color();
+            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+            cairo_fill(cr);
+        } else if (is_active) {
+            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            auto col = color_dock_sel_active_color();
+            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+            cairo_fill(cr);
+        }
+
+        int offx = 0;
+        if (icons_loaded) {
+            for (auto &w : pin->windows) {
+                if (w.icon_surf) {
+                    auto h = cairo_image_surface_get_height(w.icon_surf);
+                    cairo_set_source_surface(cr, w.icon_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                    cairo_paint(cr);
+                    auto wi = cairo_image_surface_get_height(w.icon_surf);
+                    offx = wi + 10;
+                }
+            }
+        }
+
+        std::string title = pin->stacking_rule;
+        if (!pin->windows.empty())
+            title = pin->windows[0].title;
+        auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+        draw_text(cr, c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+
+        if (is_active) {
+            auto bar_h = std::round(2 * mylar->raw_window->dpi);
+            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
+            auto col = color_dock_sel_accent_color();
+            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+            cairo_fill(cr);
+        }
+    };
+    ch->when_clicked = paint {
+        Pin* pin = (Pin*)c->user_data;
+        auto dock = (Dock*)root->user_data;
+        auto mylar = dock->window;
+        auto cr = mylar->raw_window->cr;
+
+        if (pin->windows.empty()) {
+            notify("launch command");
+            return;
+        }
+
+        int cid = pin->windows[0].cid;
+        
+        if (c->state.mouse_button_pressed == BTN_LEFT) {
+            main_thread([cid] {
+                // todo we need to focus next (already wrote this combine code)
+                bool is_hidden = hypriso->is_hidden(cid);
+                if (is_hidden) {
+                    hypriso->set_hidden(cid, false);
+                    hypriso->bring_to_front(cid);
+                } else {
+                    if (active_cid == cid) {
+                        hypriso->set_hidden(cid, true);
+                    } else {
+                        hypriso->bring_to_front(cid);
+                    }
+                }
+            });
+        } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
+            int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
+            int cw = c->real_bounds.w / mylar->raw_window->dpi;
+            main_thread([cid, startoff, cw] {
+                auto m = mouse();
+                std::vector<PopOption> root;
+                {
+                    PopOption pop;
+                    pop.text = "Launch task";
+                    pop.on_clicked = []() {};
+                    root.push_back(pop);
+                }
+                {
+                    PopOption pop;
+                    pop.text = "Pin/unpin";
+                    pop.on_clicked = []() {};
+                    root.push_back(pop);
+                }
+                {
+                    PopOption pop;
+                    pop.text = "Edit pin";
+                    pop.on_clicked = []() {};
+                    root.push_back(pop);
+                }
+                {
+                    PopOption pop;
+                    pop.text = "End task";
+                    pop.on_clicked = []() {};
+                    root.push_back(pop);
+                }
+                {
+                    PopOption pop;
+                    pop.text = "Close window";
+                    pop.on_clicked = [cid]() { close_window(cid); };
+                    root.push_back(pop);
+                }
+
+                popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
+                //popup::open(root, m.x - (277 * .5), m.y);
+            });
+        }
+    };
+    ch->pre_layout = [](Container* root, Container* c, const Bounds& b) {
+        Pin* pin = (Pin*)c->user_data;
+        auto dock = (Dock*)root->user_data;
+        auto mylar = dock->window;
+        auto cr = mylar->raw_window->cr;
+
+        std::string title = pin->stacking_rule;
+        if (!pin->windows.empty())
+            title = pin->windows[0].title;
+        auto bounds = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+        if (icons_loaded) {
+            for (auto &w : pin->windows) {
+                if (!w.attempted_load || w.scale_change) {
+                    w.scale_change = false;
+                    w.attempted_load = true;
+                    auto size = get_icon_size(mylar->raw_window->dpi);
+                    auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
+                    if (!full.empty()) {
+                        load_icon_full_path(&w.icon_surf, full, size);
+                    }
+                }
+            }
+        }
+
+        for (auto &w : pin->windows) {
+            if (w.icon_surf) {
+                bounds.w += cairo_image_surface_get_width(w.icon_surf) + 10;
+                break;
+            }
+        }
+
+        c->wanted_bounds.w = bounds.w + 20;
+    };
+}
+
+static void merge_list_into_icons(Dock *dock, Container *icons) {
+    // merging: dock->collection->list -> icons->children
+
+    // also title needs to be updated or scale change
+    for (auto pin_container : icons->children) {
+        auto pin = (Pin *) pin_container->user_data;
+        for (auto &win : pin->windows) {
+            for (auto l : dock->collection->list) {
+                if (l->cid == win.cid) {
+                    win.title = l->title;
+                    win.scale_change = l->scale_change;
+                }
+            }
+        }
+    }
+ 
+    // remove windows that no longer exist, and remove pin itself if it would be left empty (unless it's pinned, and last one if !merge_windows)
+    for (int pin_index = icons->children.size() - 1; pin_index >= 0; pin_index--) {
+        auto pin_container = icons->children[pin_index];
+        auto pin = (Pin *) pin_container->user_data;
+        
+        // remove those windows in pin that no longer exist
+        for (int window_index = pin->windows.size() -1; window_index >= 0; window_index--) {
+            auto window = pin->windows[window_index];
+            bool window_still_exists = false;
+            for (auto existing_window : dock->collection->list) {
+                if (existing_window->cid == window.cid) {
+                    window_still_exists = true;
+                }
+            }
+
+            if (!window_still_exists) {
+                pin->windows.erase(pin->windows.begin() + window_index);
+            }
+        }
+
+        // If pin is empty remove it if not pinned
+        if (pin->windows.empty()) {
+
+            if (!pin->pinned) {
+                delete pin_container;
+                icons->children.erase(icons->children.begin() + pin_index);
+            } else if (!merge_windows) {
+                // in the case where we are not merging windows, and the stacking rule is pinned, we need to remove it, unless it's the last
+                int count = 0;
+                for (auto pc : icons->children) {
+                    auto pcdata = (Pin *) pc->user_data;
+                    if (pcdata->stacking_rule == pin->stacking_rule) {
+                        count++;
+                    }
+                }
+                if (count > 1) {
+                    delete pin_container;
+                    icons->children.erase(icons->children.begin() + pin_index);
+                }
+            }
+        }
+    }
+
+    // merging: dock->collection->list -> icons->children
+    //
+
+    // based on list, add to groups already existing (and merge true), or create the pin container
+    for (auto window : dock->collection->list) {
+        bool window_needs_to_be_added = true;
+        for (auto pin_container : icons->children) {
+            auto pin = (Pin *) pin_container->user_data;
+            for (auto pin_window : pin->windows) {
+                if (pin_window.cid == window->cid) {
+                    window_needs_to_be_added = false; // already added
+                }
+            }
+        }
+
+        if (window_needs_to_be_added) {
+            if (merge_windows) {
+                // finds it's group and add it
+                bool was_able_to_group = false;
+                for (auto pin_container : icons->children) {
+                    auto pin = (Pin *) pin_container->user_data;
+                    if (pin->stacking_rule == window->stack_rule) {
+                        was_able_to_group = true;
+                        pin->windows.push_back(*window);
+                        break;
+                    }
+                }
+                if (was_able_to_group)
+                    return;
+            }
+
+            create_pinned_icon(icons, window);
+        }
+    }
+}
+
+static void merge_to_be_into_list(Dock *dock, Container *c) {
+    std::lock_guard<std::mutex> guard(dock->collection->mut);
+    if (!dock->collection->to_be_removed.empty()) {
+        for (auto t : dock->collection->to_be_removed) {
+            for (int i = dock->collection->list.size() - 1; i >= 0; i--) {
+                auto win = dock->collection->list[i];
+                if (win->cid == t) {
+                    dock->collection->list.erase(dock->collection->list.begin() + i);
+                }
+            }
+        }
+
+        dock->collection->to_be_removed.clear();
+    }
+
+    if (!dock->collection->to_be_added.empty()) {
+        for (auto w : dock->collection->to_be_added) {
+            bool added = false;
+            for (auto window : dock->collection->list) {
+                if (window->cid == w->cid) {
+                    added = true;
+                }
+            }
+            if (!added) {
+                dock->collection->list.push_back(w);
+            }
+        }
+        dock->collection->to_be_added.clear();
+    }
+}
+
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
     auto dock = (Dock *) root->user_data;
@@ -547,267 +860,10 @@ static void fill_root(Container *root) {
                         dock::add_window(w);
                 });
             }
- 
-            {
-                std::lock_guard<std::mutex> guard(dock->collection->mut);
-                if (!dock->collection->to_be_removed.empty()) {
-                    for (auto t : dock->collection->to_be_removed) {
-                        for (int i = dock->collection->pins.size() - 1; i >= 0; i--) {
-                            auto pin = dock->collection->pins[i];
 
-                            for (int windex = pin->windows.size() - 1; windex >= 0; windex--) {
-                                auto win = pin->windows[windex];
-                                if (win->cid == t) {
-                                    pin->windows.erase(pin->windows.begin() + windex);
-                                }
-                            }
-                            if (pin->windows.empty()) {
-                                dock->collection->pins.erase(dock->collection->pins.begin() + i);
-                            }
-                        }
-                    }
-                    
-                    dock->collection->to_be_removed.clear();
-                }
-
-                if (!dock->collection->to_be_added.empty()) {
-                    for (auto w : dock->collection->to_be_added) {
-                        bool added = false;
-                        for (auto pins : dock->collection->pins) {
-                            for (auto window : pins->windows) {
-                                if (window->cid == w->cid) {
-                                    added = true;
-                                }
-                            }
-                        }
-                        if (!added) {
-                            // create a new pin if stacking rule not already met
-                            bool create_new_group = true;
-                            
-                            if (merge_windows)
-                                for (auto pins : dock->collection->pins) {
-                                    if (pins->stacking_rule == w->stack_rule) {
-                                        create_new_group = false;
-                                        pins->windows.push_back(w);
-                                        break;
-                                    }
-                                }
-
-                            if (create_new_group) {
-                                auto pin = new Pin;
-                                pin->windows.push_back(w);
-                                pin->icon = w->icon;
-                                pin->command = w->command;
-                                pin->stacking_rule = w->stack_rule;
-                                dock->collection->pins.push_back(pin);
-                            }
-                        }
-                    }
-                    dock->collection->to_be_added.clear();
-                }
-            }
-
-            auto mylar = dock->window;
-
-            // merge pins with containers, therefore we can't use custom type
-            for (auto pin : dock->collection->pins)  {
-                bool found = false;
-                for (auto ch : c->children)
-                    if (((StackingRule *) ch->user_data)->stacking_rule == pin->stacking_rule)
-                        found = true;
-                if (!found) {
-                    auto ch = c->child(::absolute, b.h * mylar->raw_window->dpi, FILL_SPACE);
-                    ch->skip_delete = true;
-                    auto sr = new StackingRule;
-                    sr->stacking_rule = pin->stacking_rule;
-                    ch->user_data = sr;
-                    ch->when_paint = paint {
-                        auto sr = (StackingRule*) c->user_data;
-                        Pin *pin = nullptr;
-                        auto dock = (Dock *) root->user_data;
-                        for (auto p : dock->collection->pins)
-                            if (p->stacking_rule == sr->stacking_rule) 
-                                pin = p;
-                        if (!pin)
-                            return;
-                        if (pin->windows.empty())
-                            return;
-                        auto w = pin->windows[0];
-                        auto mylar = dock->window;
-                        auto cr = mylar->raw_window->cr;
-
-                        bool is_active = false;
-                        for (auto p : pin->windows)
-                            if (p->cid == active_cid)
-                                is_active = true;
-
-                        if (c->state.mouse_pressing) {
-                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-                            auto col = color_dock_sel_press_color();
-                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-                            cairo_fill(cr);
-                        } else if (c->state.mouse_hovering) {
-                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-                            auto col = color_dock_sel_hover_color();
-                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-                            cairo_fill(cr);
-                        } else if (is_active) {
-                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-                            auto col = color_dock_sel_active_color();
-                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-                            cairo_fill(cr);
-                        }
-
-                        int offx = 0;
-                        if (icons_loaded) {
-                            if (w->icon_surf) {
-                                auto h = cairo_image_surface_get_height(w->icon_surf);
-                                cairo_set_source_surface(cr, w->icon_surf,
-                                    c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
-                                cairo_paint(cr);
-                                auto wi = cairo_image_surface_get_height(w->icon_surf);
-                                offx = wi + 10;
-                            }
-                        }
-                        auto b = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
-                        draw_text(cr,
-                            c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5,
-                            w->title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
-
-                        if (is_active) {
-                            auto bar_h = std::round(2 * mylar->raw_window->dpi);
-                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
-                            auto col = color_dock_sel_accent_color();
-                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-                            cairo_fill(cr);
-                        }
-                   };
-                   ch->when_clicked = paint {
-                        auto sr = (StackingRule*) c->user_data;
-                        Pin *pin = nullptr;
-                        auto dock = (Dock *) root->user_data;
-                        for (auto p : dock->collection->pins)
-                            if (p->stacking_rule == sr->stacking_rule) 
-                                pin = p;
-                        if (!pin)
-                            return;
-                        if (pin->windows.empty())
-                            return;
-                       auto w = pin->windows[0];
-                       auto cid = w->cid;
-                       auto mylar = dock->window;
-                       if (c->state.mouse_button_pressed == BTN_LEFT) {
-                           main_thread([cid] {
-                               // todo we need to focus next (already wrote this combine code)
-                               bool is_hidden = hypriso->is_hidden(cid);
-                               if (is_hidden) {
-                                   hypriso->set_hidden(cid, false);
-                                   hypriso->bring_to_front(cid);
-                               } else {
-                                   if (active_cid == cid) {
-                                       hypriso->set_hidden(cid, true);
-                                   } else {
-                                       hypriso->bring_to_front(cid);
-                                   }
-                               }
-                           });
-                       } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
-                           int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
-                           int cw = c->real_bounds.w / mylar->raw_window->dpi;
-                           main_thread([cid, startoff, cw] {
-                               auto m = mouse();
-                               std::vector<PopOption> root;
-                               {
-                                   PopOption pop;
-                                   pop.text = "Launch task";
-                                   pop.on_clicked = []() {  };
-                                   root.push_back(pop);
-                               }
-                               {
-                                   PopOption pop;
-                                   pop.text = "Pin/unpin";
-                                   pop.on_clicked = []() {  };
-                                   root.push_back(pop);
-                               }
-                               {
-                                   PopOption pop;
-                                   pop.text = "Edit pin";
-                                   pop.on_clicked = []() {  };
-                                   root.push_back(pop);
-                               }
-                               {
-                                   PopOption pop;
-                                   pop.text = "End task";
-                                   pop.on_clicked = []() { };
-                                   root.push_back(pop);
-                               }
-                               {
-                                   PopOption pop;
-                                   pop.text = "Close window";
-                                   pop.on_clicked = [cid]() {
-                                       close_window(cid);
-                                   };
-                                   root.push_back(pop);
-                               }
-
-                               popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
-                               //popup::open(root, m.x - (277 * .5), m.y);
-                           });
-                       }
-                   };
-                   ch->pre_layout = [](Container* root, Container* c, const Bounds& b) {
-                       auto sr = (StackingRule*)c->user_data;
-                       Pin* pin = nullptr;
-                       auto dock = (Dock*)root->user_data;
-                       for (auto p : dock->collection->pins)
-                           if (p->stacking_rule == sr->stacking_rule)
-                               pin = p;
-                       if (!pin)
-                           return;
-                       if (pin->windows.empty())
-                           return;
-                       auto w = pin->windows[0];
-                       //auto w = (Window *) c->user_data;
-                       auto mylar = dock->window;
-                       auto cr = mylar->raw_window->cr;
-
-                       auto bounds = draw_text(cr, c, w->title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
-                       if (icons_loaded) {
-                           if (!w->attempted_load || w->scale_change) {
-                               w->scale_change = false;
-                               w->attempted_load = true;
-                               auto size = get_icon_size(mylar->raw_window->dpi);
-                               auto full = one_shot_icon(size, {w->icon, to_lower(w->icon), c3ic_fix_wm_class(w->icon), to_lower(w->icon)});
-                               if (!full.empty()) {
-                                   load_icon_full_path(&w->icon_surf, full, size);
-                               }
-                           }
-                       }
-
-                       //if (bounds.w < 300)
-                       //bounds.w = 300;
-
-                       if (w->icon_surf) {
-                           bounds.w += cairo_image_surface_get_width(w->icon_surf) + 10;
-                       }
-
-                       c->wanted_bounds.w = bounds.w + 20;
-                   };
-                }
-            }
-
-            for (int i = c->children.size() - 1; i >= 0; i--) {
-                auto ch = c->children[i];
-                bool found = false;
-                for (auto pin : dock->collection->pins)
-                    if (((StackingRule *) ch->user_data)->stacking_rule == pin->stacking_rule)
-                        found = true;
-                    
-                if (!found) {
-                    delete c->children[i];
-                    c->children.erase(c->children.begin() + i);
-                }
-            }
+            merge_to_be_into_list(dock, c);
+            
+            merge_list_into_icons(dock, c);
         };
     }
 
@@ -981,10 +1037,8 @@ void dock_start(std::string monitor_name) {
     dock->creation_settings = settings;
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
     dock->window->raw_window->on_scale_change = [dock](RawWindow *rw, float dpi) {
-        for (auto pin : dock->collection->pins) {
-            for (auto window : pin->windows) {
-                window->scale_change = true;
-            }
+        for (auto window : dock->collection->list) {
+            window->scale_change = true;
         }
         //notify("scale change");
     };
@@ -1080,11 +1134,9 @@ void dock::remove_window(int cid) {
 void dock::title_change(int cid, std::string title) {
     for (auto d : docks) {
         std::lock_guard<std::mutex> guard(d->collection->mut);
-        for (auto pin : d->collection->pins) {
-            for (auto window : pin->windows) {
-                if (window->cid == cid) {
-                    window->title = title;
-                }
+        for (auto window : d->collection->list) {
+            if (window->cid == cid) {
+                window->title = title;
             }
         }
         windowing::redraw(d->window->raw_window);
