@@ -15,6 +15,7 @@
 #include <hyprland/src/desktop/Popup.hpp>
 #include <wayland-server-core.h>
 #include <wlr-layer-shell-unstable-v1.hpp>
+#include <xcb/xproto.h>
 #include <xkbcommon/xkbcommon.h>
 
 #ifdef TRACY_ENABLE
@@ -101,6 +102,102 @@ typedef void (*tRenderWorkspace)(void *, PHLMONITOR, PHLWORKSPACE, const Time::s
 typedef void (*tRenderWorkspaceWindows)(void *, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp &);
 typedef void (*tRenderWorkspaceWindowsFullscreen)(void *, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp &);
 
+typedef enum
+{
+    OB_CLIENT_TYPE_DESKTOP, /*!< A desktop (bottom-most window) */
+    OB_CLIENT_TYPE_DOCK,    /*!< A dock bar/panel window */
+    OB_CLIENT_TYPE_TOOLBAR, /*!< A toolbar window, pulled off an app */
+    OB_CLIENT_TYPE_MENU,    /*!< An unpinned menu from an app */
+    OB_CLIENT_TYPE_UTILITY, /*!< A small utility window such as a palette */
+    OB_CLIENT_TYPE_SPLASH,  /*!< A splash screen window */
+    OB_CLIENT_TYPE_DIALOG,  /*!< A dialog window */
+    OB_CLIENT_TYPE_NORMAL   /*!< A normal application window */
+} ObClientType;
+
+typedef struct _ObMwmHints ObMwmHints;
+
+/*! The MWM Hints as retrieved from the window property
+  This structure only contains 3 elements, even though the Motif 2.0
+  structure contains 5. We only use the first 3, so that is all gets
+  defined.
+*/
+struct _ObMwmHints
+{
+    /*! A bitmask of ObMwmFlags values */
+    guint flags;
+    /*! A bitmask of ObMwmFunctions values */
+    guint functions;
+    /*! A bitmask of ObMwmDecorations values */
+    guint decorations;
+};
+
+/*! The number of elements in the ObMwmHints struct */
+#define OB_MWM_ELEMENTS 3
+
+/*! Possible flags for MWM Hints (defined by Motif 2.0) */
+typedef enum
+{
+    OB_MWM_FLAG_FUNCTIONS   = 1 << 0, /*!< The MMW Hints define funcs */
+    OB_MWM_FLAG_DECORATIONS = 1 << 1  /*!< The MWM Hints define decor */
+} ObMwmFlags;
+
+/*! Possible functions for MWM Hints (defined by Motif 2.0) */
+typedef enum
+{
+    OB_MWM_FUNC_ALL      = 1 << 0, /*!< All functions */
+    OB_MWM_FUNC_RESIZE   = 1 << 1, /*!< Allow resizing */
+    OB_MWM_FUNC_MOVE     = 1 << 2, /*!< Allow moving */
+    OB_MWM_FUNC_ICONIFY  = 1 << 3, /*!< Allow to be iconfied */
+    OB_MWM_FUNC_MAXIMIZE = 1 << 4  /*!< Allow to be maximized */
+#if 0
+    OM_MWM_FUNC_CLOSE    = 1 << 5  /*!< Allow to be closed */
+#endif
+} ObMwmFunctions;
+
+/*! Possible decorations for MWM Hints (defined by Motif 2.0) */
+typedef enum
+{
+    OB_MWM_DECOR_ALL      = 1 << 0, /*!< All decorations */
+    OB_MWM_DECOR_BORDER   = 1 << 1, /*!< Show a border */
+    OB_MWM_DECOR_HANDLE   = 1 << 2, /*!< Show a handle (bottom) */
+    OB_MWM_DECOR_TITLE    = 1 << 3, /*!< Show a titlebar */
+#if 0
+    OB_MWM_DECOR_MENU     = 1 << 4, /*!< Show a menu */
+#endif
+    OB_MWM_DECOR_ICONIFY  = 1 << 5, /*!< Show an iconify button */
+    OB_MWM_DECOR_MAXIMIZE = 1 << 6  /*!< Show a maximize button */
+} ObMwmDecorations;
+
+typedef enum {
+    OB_FRAME_DECOR_TITLEBAR    = 1 << 0, /*!< Display a titlebar */
+    OB_FRAME_DECOR_HANDLE      = 1 << 1, /*!< Display a handle (bottom) */
+    OB_FRAME_DECOR_GRIPS       = 1 << 2, /*!< Display grips in the handle */
+    OB_FRAME_DECOR_BORDER      = 1 << 3, /*!< Display a border */
+    OB_FRAME_DECOR_ICON        = 1 << 4, /*!< Display the window's icon */
+    OB_FRAME_DECOR_ICONIFY     = 1 << 5, /*!< Display an iconify button */
+    OB_FRAME_DECOR_MAXIMIZE    = 1 << 6, /*!< Display a maximize button */
+    /*! Display a button to toggle the window's placement on
+      all desktops */
+    OB_FRAME_DECOR_ALLDESKTOPS = 1 << 7,
+    OB_FRAME_DECOR_SHADE       = 1 << 8, /*!< Display a shade button */
+    OB_FRAME_DECOR_CLOSE       = 1 << 9  /*!< Display a close button */
+} ObFrameDecorations;
+
+/*! The things the user can do to the client window */
+typedef enum
+{
+    OB_CLIENT_FUNC_RESIZE     = 1 << 0, /*!< Allow user resizing */
+    OB_CLIENT_FUNC_MOVE       = 1 << 1, /*!< Allow user moving */
+    OB_CLIENT_FUNC_ICONIFY    = 1 << 2, /*!< Allow to be iconified */
+    OB_CLIENT_FUNC_MAXIMIZE   = 1 << 3, /*!< Allow to be maximized */
+    OB_CLIENT_FUNC_SHADE      = 1 << 4, /*!< Allow to be shaded */
+    OB_CLIENT_FUNC_FULLSCREEN = 1 << 5, /*!< Allow to be made fullscreen */
+    OB_CLIENT_FUNC_CLOSE      = 1 << 6, /*!< Allow to be closed */
+    OB_CLIENT_FUNC_ABOVE      = 1 << 7, /*!< Allow to be put in lower layer */
+    OB_CLIENT_FUNC_BELOW      = 1 << 8, /*!< Allow to be put in higher layer */
+    OB_CLIENT_FUNC_UNDECORATE = 1 << 9  /*!< Allow to be undecorated */
+} ObFunctions;
+
 struct HyprWindow {
     int id;  
     PHLWINDOW w;
@@ -112,6 +209,8 @@ struct HyprWindow {
 
     bool is_hidden = false; // used in show/hide desktop
     bool was_hidden = false; // used in show/hide desktop
+
+    bool was_hidden_last_frame = false;
     
     CFramebuffer *fb = nullptr;
     Bounds w_bounds_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
@@ -123,6 +222,13 @@ struct HyprWindow {
 
     int cornermask = 0; // when rendering the surface, what corners should be rounded
     bool no_rounding = false;
+
+    ObClientType type = (ObClientType) -1;
+    bool transient = false;
+    ObMwmHints mwmhints;
+    guint decorations;
+    gboolean undecorated;
+    guint functions;
 };
 
 static std::vector<HyprWindow *> hyprwindows;
@@ -1192,6 +1298,14 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
     Hyprlang::CConfigCustomValueType* initial_active_border;
     
     for (auto hw : hyprwindows) {
+        if (hw->w == pWindow) {
+            bool hidden = hw->w->m_hidden;
+            if (hidden != hw->was_hidden_last_frame) {
+                //notify("fade to/from dock");
+                
+                hw->was_hidden_last_frame = hidden;
+            }
+        }
         if (hw->w == pWindow && hw->no_rounding) {
             {
                 Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:rounding");
@@ -1436,7 +1550,10 @@ void HyprIso::create_config_variables() {
     
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock", Hyprlang::INT{3});
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_color", Hyprlang::INT{*configStringToInt("rgba(00000088)")});
-    
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_active_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_press_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_hover_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_accent_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
 }
 
 static void on_open_layer(PHLLS l) {
@@ -1946,49 +2063,63 @@ void HyprIso::create_hooks() {
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
 }
-/*
 
-void client_get_type_and_transientness(ObClient *self)
-{
-    guint num, i;
-    guint32 *val;
-    Window t;
+bool xcb_get_transient_for(xcb_connection_t* conn, xcb_window_t window, xcb_window_t* out) {
+    xcb_get_property_cookie_t cookie = xcb_get_property(conn, 0, window, XCB_ATOM_WM_TRANSIENT_FOR, XCB_ATOM_WINDOW, 0, 1);
+    xcb_get_property_reply_t* reply = xcb_get_property_reply(conn, cookie, NULL);
 
-    self->type = -1;
-    self->transient = FALSE;
+    if (!reply)
+        return false;
 
-    if (OBT_PROP_GETA32(self->window, NET_WM_WINDOW_TYPE, ATOM, &val, &num)) {
-        for (i = 0; i < num; ++i) {
-            if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_DESKTOP))
-                self->type = OB_CLIENT_TYPE_DESKTOP;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_DOCK))
-                self->type = OB_CLIENT_TYPE_DOCK;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_TOOLBAR))
-                self->type = OB_CLIENT_TYPE_TOOLBAR;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_MENU))
-                self->type = OB_CLIENT_TYPE_MENU;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_UTILITY))
-                self->type = OB_CLIENT_TYPE_UTILITY;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_SPLASH))
-                self->type = OB_CLIENT_TYPE_SPLASH;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_DIALOG))
-                self->type = OB_CLIENT_TYPE_DIALOG;
-            else if (val[i] == OBT_PROP_ATOM(NET_WM_WINDOW_TYPE_NORMAL))
-                self->type = OB_CLIENT_TYPE_NORMAL;
-            else if (val[i] == OBT_PROP_ATOM(KDE_NET_WM_WINDOW_TYPE_OVERRIDE))
-            {
-                self->mwmhints.flags &= (OB_MWM_FLAG_FUNCTIONS |
-                                         OB_MWM_FLAG_DECORATIONS);
-                self->mwmhints.decorations = 0;
-                self->mwmhints.functions = 0;
-            }
-            if (self->type != (ObClientType) -1)
-                break; 
-        }
-        g_free(val);
+    bool ok = false;
+    if (xcb_get_property_value_length(reply) == sizeof(xcb_window_t)) {
+        if (out)
+            *out = *(xcb_window_t*)xcb_get_property_value(reply);
+        ok = true;
     }
 
-    if (XGetTransientForHint(obt_display, self->window, &t))
+    free(reply);
+    return ok;
+}
+
+void client_get_type_and_transientness(HyprWindow* self) {
+    guint num, i;
+    guint32 *val;
+
+    self->type = (ObClientType) -1;
+    self->transient = false;
+    
+    for (const auto& a : self->w->m_xwaylandSurface->m_atoms) {
+        if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DESKTOP"])
+            self->type = OB_CLIENT_TYPE_DESKTOP;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DOCK"])
+            self->type = OB_CLIENT_TYPE_DOCK;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_TOOLBAR"])
+            self->type = OB_CLIENT_TYPE_TOOLBAR;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_MENU"])
+            self->type = OB_CLIENT_TYPE_MENU;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_UTILITY"])
+            self->type = OB_CLIENT_TYPE_UTILITY;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_SPLASH"])
+            self->type = OB_CLIENT_TYPE_SPLASH;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DIALOG"])
+            self->type = OB_CLIENT_TYPE_DIALOG;
+        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_NORMAL"])
+            self->type = OB_CLIENT_TYPE_NORMAL;
+        else if (a == HYPRATOMS["KDE_NET_WM_WINDOW_TYPE_OVERRIDE"])
+        {
+            self->mwmhints.flags &= (OB_MWM_FLAG_FUNCTIONS |
+                                     OB_MWM_FLAG_DECORATIONS);
+            self->mwmhints.decorations = 0;
+            self->mwmhints.functions = 0;
+        }
+        if (self->type != (ObClientType) -1)
+            break; 
+    }
+
+    xcb_window_t t;
+    auto connection = g_pXWayland->m_wm->getConnection();
+    if (xcb_get_transient_for(connection, self->w->m_xwaylandSurface->m_xID, &t))
         self->transient = TRUE;
 
     if (self->type == (ObClientType) -1) {
@@ -2007,9 +2138,7 @@ void client_get_type_and_transientness(ObClient *self)
     }
 }
 
-
-static void client_setup_default_decor_and_functions(ObClient *self)
-{
+static void client_setup_default_decor_and_functions(HyprWindow* self) {
     self->decorations =
         (OB_FRAME_DECOR_TITLEBAR |
          OB_FRAME_DECOR_HANDLE |
@@ -2032,9 +2161,9 @@ static void client_setup_default_decor_and_functions(ObClient *self)
          OB_CLIENT_FUNC_ABOVE |
          OB_CLIENT_FUNC_UNDECORATE);
 
-    if (!(self->min_size.width < self->max_size.width ||
-          self->min_size.height < self->max_size.height))
-        self->functions &= ~OB_CLIENT_FUNC_RESIZE;
+    //if (!(self->min_size.width < self->max_size.width ||
+          //self->min_size.height < self->max_size.height))
+        //self->functions &= ~OB_CLIENT_FUNC_RESIZE;
 
     switch (self->type) {
     case OB_CLIENT_TYPE_NORMAL:
@@ -2112,89 +2241,6 @@ static void client_setup_default_decor_and_functions(ObClient *self)
     }
 }
 
-static void client_setup_decor_undecorated(ObClient *self)
-{
-    if (self->undecorated)
-        self->decorations &= (config_theme_keepborder ?
-                              OB_FRAME_DECOR_BORDER : 0);
-}
-
-void client_setup_decor_and_functions(ObClient *self, gboolean reconfig)
-{
-    client_setup_default_decor_and_functions(self);
-
-    client_setup_decor_undecorated(self);
-
-    if (self->max_horz && self->max_vert) {
-        self->decorations &= ~(OB_FRAME_DECOR_HANDLE | OB_FRAME_DECOR_GRIPS);
-    }
-
-    if (!(self->decorations & OB_FRAME_DECOR_TITLEBAR))
-        self->functions &= ~OB_CLIENT_FUNC_SHADE;
-
-    if (self->fullscreen) {
-        self->functions &= (OB_CLIENT_FUNC_CLOSE |
-                            OB_CLIENT_FUNC_FULLSCREEN |
-                            OB_CLIENT_FUNC_ICONIFY);
-        self->decorations = 0;
-    }
-
-    client_change_allowed_actions(self);
-
-    if (reconfig)
-        client_reconfigure(self, FALSE);
-}
-
-static void client_change_allowed_actions(ObClient *self)
-{
-    gulong actions[12];
-    gint num = 0;
-
-    if (self->type != OB_CLIENT_TYPE_DESKTOP)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_CHANGE_DESKTOP);
-
-    if (self->functions & OB_CLIENT_FUNC_SHADE)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_SHADE);
-    if (self->functions & OB_CLIENT_FUNC_CLOSE)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_CLOSE);
-    if (self->functions & OB_CLIENT_FUNC_MOVE)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MOVE);
-    if (self->functions & OB_CLIENT_FUNC_ICONIFY)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MINIMIZE);
-    if (self->functions & OB_CLIENT_FUNC_RESIZE)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_RESIZE);
-    if (self->functions & OB_CLIENT_FUNC_FULLSCREEN)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_FULLSCREEN);
-    if (self->functions & OB_CLIENT_FUNC_MAXIMIZE) {
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MAXIMIZE_HORZ);
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_MAXIMIZE_VERT);
-    }
-    if (self->functions & OB_CLIENT_FUNC_ABOVE)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_ABOVE);
-    if (self->functions & OB_CLIENT_FUNC_BELOW)
-        actions[num++] = OBT_PROP_ATOM(NET_WM_ACTION_BELOW);
-    if (self->functions & OB_CLIENT_FUNC_UNDECORATE)
-        actions[num++] = OBT_PROP_ATOM(OB_WM_ACTION_UNDECORATE);
-
-    OBT_PROP_SETA32(self->window, NET_WM_ALLOWED_ACTIONS, ATOM, actions, num);
-
-    if (!(self->functions & OB_CLIENT_FUNC_SHADE) && self->shaded) {
-        if (self->frame) client_shade(self, FALSE);
-        else self->shaded = FALSE;
-    }
-    if (!(self->functions & OB_CLIENT_FUNC_FULLSCREEN) && self->fullscreen) {
-        if (self->frame) client_fullscreen(self, FALSE);
-        else self->fullscreen = FALSE;
-    }
-    if (!(self->functions & OB_CLIENT_FUNC_MAXIMIZE) && (self->max_horz ||
-                                                         self->max_vert)) {
-        if (self->frame) client_maximize(self, FALSE, 0);
-        else self->max_vert = self->max_horz = FALSE;
-    }
-}
-*/
-
-
 bool HyprIso::alt_tabbable(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2203,14 +2249,12 @@ bool HyprIso::alt_tabbable(int id) {
         if (h->id == id) {
             bool found = false;
             bool canX11 = false;
+            
             if (h->w->m_isX11) {
-                for (const auto& a : h->w->m_xwaylandSurface->m_atoms) {
-                    if (a == HYPRATOMS["_NET_WM_WINDOW_TYPE_DIALOG"] || a == HYPRATOMS["_NET_WM_WINDOW_TYPE_NORMAL"]) {
-                        found = true;
-                        canX11 = true;
-                    }
+                client_get_type_and_transientness(h);
+                if (h->type == OB_CLIENT_TYPE_NORMAL) {
+                    canX11 = true;
                 }
-                //system(fz("xprop -id {} &", h->w->m_xwaylandSurface->m_xID).c_str());
             } else {
                 canX11 = true;
             }

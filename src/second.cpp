@@ -57,6 +57,11 @@ Container *actual_root = new Container;
 void draw_text(std::string text, int x, int y);
 void apply_restore_info(int id);
 
+static RGBA color_dock_color() {
+    static RGBA default_color("00000088");
+    return hypriso->get_varcolor("plugin:mylardesktop:dock_color", default_color);
+}
+
 static void any_container_closed(Container *c) {
     remove_data(c->uuid); 
 }
@@ -874,6 +879,14 @@ static bool is_snapped(int id) {
 static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_BEGIN) {
         second::layout_containers();
+        for (auto c : actual_root->children) {
+            if (c->custom_type == (int) TYPE::CLIENT) {
+                auto cid = *datum<int>(c, "cid");
+//                if (hypriso->is_mapped(cid) && !hypriso->is_hidden(cid))
+//                    hypriso->screenshot_deco(cid);
+            }
+        }
+ 
     }
 
     int current_monitor = current_rendering_monitor();
@@ -997,9 +1010,10 @@ static void create_actual_root() {
             b.y -= mb.y;
             b.scale(s);
             b.round();
+            auto col = color_dock_color();
             render_drop_shadow(rid, 1.0, {0, 0, 0, .18}, std::round(3.0 * s), 2.0, b);
-            rect(b, {.98, .98, .98, .50f}, 0, std::round(3.0 * s), 2.0f, true, 0.1);
-            border(b, {.98, .98, .98, .8f}, 1.0f, 0, std::round(3.0 * s), 2.0f, false, 1.0);
+            rect(b, RGBA(col.r, col.g, col.b, .50f), 0, std::round(3.0 * s), 2.0f, true, 0.1);
+            border(b, RGBA(col.r, col.g, col.b, .8f), 1.0f, 0, std::round(3.0 * s), 2.0f, false, 1.0);
         }
     };
 }

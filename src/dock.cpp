@@ -26,6 +26,8 @@
 #define BTN_MIDDLE		0x112
 #define ICON(str) [](){ return str; }
 
+static bool merge_windows = false;
+
 class Window {
 public:
     int cid; // unique id
@@ -40,10 +42,23 @@ public:
     bool scale_change = false;
 };
 
+struct Pin {
+    std::vector<Window *> windows;
+
+    std::string icon;
+    std::string command;
+    std::string stacking_rule;
+};
+
+struct StackingRule : UserData {
+    std::string stacking_rule;
+};
+
 struct Windows {
     std::mutex mut;
-
-    std::vector<Window *> list;
+    
+    std::vector<Pin *> pins;
+    //std::vector<Window *> list;
 
     std::vector<Window *> to_be_added;
     std::vector<int> to_be_removed;
@@ -52,7 +67,7 @@ struct Windows {
 struct Dock : UserData {
     RawApp *app = nullptr;
     MylarWindow *window = nullptr;
-    Windows *windows = nullptr;
+    Windows *collection = nullptr;
     bool first_fill = true;
     RawWindowSettings creation_settings;
     //bool vertical = false;
@@ -175,9 +190,29 @@ void remove_cached_fonts(cairo_t *cr) {
     }
 }
 
-RGBA color_dock_color() {
+static RGBA color_dock_color() {
     static RGBA default_color("00000088");
     return hypriso->get_varcolor("plugin:mylardesktop:dock_color", default_color);
+}
+
+static RGBA color_dock_sel_active_color() {
+    static RGBA default_color("ffffff44");
+    return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_active_color", default_color);
+}
+
+static RGBA color_dock_sel_hover_color() {
+    static RGBA default_color("ffffff44");
+    return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_hover_color", default_color);
+}
+
+static RGBA color_dock_sel_press_color() {
+    static RGBA default_color("ffffff44");
+    return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_press_color", default_color);
+}
+
+static RGBA color_dock_sel_accent_color() {
+    static RGBA default_color("ffffff44");
+    return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_accent_color", default_color);
 }
 
 static void paint_root(Container *root, Container *c) {
@@ -514,58 +549,114 @@ static void fill_root(Container *root) {
             }
  
             {
-                std::lock_guard<std::mutex> guard(dock->windows->mut);
-                if (!dock->windows->to_be_removed.empty()) {
-                    for (auto t : dock->windows->to_be_removed) {
-                        for (int i = dock->windows->list.size() - 1; i >= 0; i--) {
-                            if (dock->windows->list[i]->cid == t) {
-                                dock->windows->list.erase(dock->windows->list.begin() + i);
+                std::lock_guard<std::mutex> guard(dock->collection->mut);
+                if (!dock->collection->to_be_removed.empty()) {
+                    for (auto t : dock->collection->to_be_removed) {
+                        for (int i = dock->collection->pins.size() - 1; i >= 0; i--) {
+                            auto pin = dock->collection->pins[i];
+
+                            for (int windex = pin->windows.size() - 1; windex >= 0; windex--) {
+                                auto win = pin->windows[windex];
+                                if (win->cid == t) {
+                                    pin->windows.erase(pin->windows.begin() + windex);
+                                }
+                            }
+                            if (pin->windows.empty()) {
+                                dock->collection->pins.erase(dock->collection->pins.begin() + i);
                             }
                         }
                     }
-                    dock->windows->to_be_removed.clear();
+                    
+                    dock->collection->to_be_removed.clear();
                 }
 
-                if (!dock->windows->to_be_added.empty()) {
-                    for (auto w : dock->windows->to_be_added) {
+                if (!dock->collection->to_be_added.empty()) {
+                    for (auto w : dock->collection->to_be_added) {
                         bool added = false;
-                        for (auto already : dock->windows->list) {
-                            if (already->cid == w->cid) {
-                                added = true;
+                        for (auto pins : dock->collection->pins) {
+                            for (auto window : pins->windows) {
+                                if (window->cid == w->cid) {
+                                    added = true;
+                                }
                             }
                         }
-                        if (!added)
-                            dock->windows->list.push_back(w);
+                        if (!added) {
+                            // create a new pin if stacking rule not already met
+                            bool create_new_group = true;
+                            
+                            if (merge_windows)
+                                for (auto pins : dock->collection->pins) {
+                                    if (pins->stacking_rule == w->stack_rule) {
+                                        create_new_group = false;
+                                        pins->windows.push_back(w);
+                                        break;
+                                    }
+                                }
+
+                            if (create_new_group) {
+                                auto pin = new Pin;
+                                pin->windows.push_back(w);
+                                pin->icon = w->icon;
+                                pin->command = w->command;
+                                pin->stacking_rule = w->stack_rule;
+                                dock->collection->pins.push_back(pin);
+                            }
+                        }
                     }
-                    dock->windows->to_be_added.clear();
+                    dock->collection->to_be_added.clear();
                 }
             }
 
             auto mylar = dock->window;
 
-            // merge list with containers
-            for (auto w : dock->windows->list)  {
+            // merge pins with containers, therefore we can't use custom type
+            for (auto pin : dock->collection->pins)  {
                 bool found = false;
                 for (auto ch : c->children)
-                    if (ch->custom_type == w->cid)
+                    if (((StackingRule *) ch->user_data)->stacking_rule == pin->stacking_rule)
                         found = true;
                 if (!found) {
                     auto ch = c->child(::absolute, b.h * mylar->raw_window->dpi, FILL_SPACE);
                     ch->skip_delete = true;
-                    ch->user_data = w;
+                    auto sr = new StackingRule;
+                    sr->stacking_rule = pin->stacking_rule;
+                    ch->user_data = sr;
                     ch->when_paint = paint {
-                        auto w = (Window*)c->user_data;
+                        auto sr = (StackingRule*) c->user_data;
+                        Pin *pin = nullptr;
                         auto dock = (Dock *) root->user_data;
+                        for (auto p : dock->collection->pins)
+                            if (p->stacking_rule == sr->stacking_rule) 
+                                pin = p;
+                        if (!pin)
+                            return;
+                        if (pin->windows.empty())
+                            return;
+                        auto w = pin->windows[0];
                         auto mylar = dock->window;
                         auto cr = mylar->raw_window->cr;
 
-                        if (active_cid == w->cid) {
+                        bool is_active = false;
+                        for (auto p : pin->windows)
+                            if (p->cid == active_cid)
+                                is_active = true;
+
+                        if (c->state.mouse_pressing) {
                             cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-                            cairo_set_source_rgba(cr, 1, 1, 1, .15);
+                            auto col = color_dock_sel_press_color();
+                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+                            cairo_fill(cr);
+                        } else if (c->state.mouse_hovering) {
+                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+                            auto col = color_dock_sel_hover_color();
+                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+                            cairo_fill(cr);
+                        } else if (is_active) {
+                            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+                            auto col = color_dock_sel_active_color();
+                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
                             cairo_fill(cr);
                         }
-
-                        paint_button_bg(root, c);
 
                         int offx = 0;
                         if (icons_loaded) {
@@ -583,17 +674,28 @@ static void fill_root(Container *root) {
                             c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5,
                             w->title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
 
-                        if (w->cid == active_cid) {
+                        if (is_active) {
                             auto bar_h = std::round(2 * mylar->raw_window->dpi);
                             cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
-                            cairo_set_source_rgba(cr, 1, 1, 1, 1);
+                            auto col = color_dock_sel_accent_color();
+                            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
                             cairo_fill(cr);
                         }
                    };
                    ch->when_clicked = paint {
-                       auto dock = (Dock*)root->user_data;
+                        auto sr = (StackingRule*) c->user_data;
+                        Pin *pin = nullptr;
+                        auto dock = (Dock *) root->user_data;
+                        for (auto p : dock->collection->pins)
+                            if (p->stacking_rule == sr->stacking_rule) 
+                                pin = p;
+                        if (!pin)
+                            return;
+                        if (pin->windows.empty())
+                            return;
+                       auto w = pin->windows[0];
+                       auto cid = w->cid;
                        auto mylar = dock->window;
-                       auto cid = c->custom_type;
                        if (c->state.mouse_button_pressed == BTN_LEFT) {
                            main_thread([cid] {
                                // todo we need to focus next (already wrote this combine code)
@@ -653,9 +755,19 @@ static void fill_root(Container *root) {
                            });
                        }
                    };
-                   ch->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-                       auto w = (Window *) c->user_data;
+                   ch->pre_layout = [](Container* root, Container* c, const Bounds& b) {
+                       auto sr = (StackingRule*)c->user_data;
+                       Pin* pin = nullptr;
                        auto dock = (Dock*)root->user_data;
+                       for (auto p : dock->collection->pins)
+                           if (p->stacking_rule == sr->stacking_rule)
+                               pin = p;
+                       if (!pin)
+                           return;
+                       if (pin->windows.empty())
+                           return;
+                       auto w = pin->windows[0];
+                       //auto w = (Window *) c->user_data;
                        auto mylar = dock->window;
                        auto cr = mylar->raw_window->cr;
 
@@ -672,22 +784,25 @@ static void fill_root(Container *root) {
                            }
                        }
 
+                       //if (bounds.w < 300)
+                       //bounds.w = 300;
+
                        if (w->icon_surf) {
                            bounds.w += cairo_image_surface_get_width(w->icon_surf) + 10;
                        }
 
                        c->wanted_bounds.w = bounds.w + 20;
                    };
-                   ch->custom_type = w->cid;
                 }
             }
 
             for (int i = c->children.size() - 1; i >= 0; i--) {
                 auto ch = c->children[i];
                 bool found = false;
-                for (auto w : dock->windows->list)
-                    if (w->cid == ch->custom_type)
+                for (auto pin : dock->collection->pins)
+                    if (((StackingRule *) ch->user_data)->stacking_rule == pin->stacking_rule)
                         found = true;
+                    
                 if (!found) {
                     delete c->children[i];
                     c->children.erase(c->children.begin() + i);
@@ -853,7 +968,7 @@ void dock_start(std::string monitor_name) {
         }
     }
     auto dock = new Dock;
-    dock->windows = new Windows;
+    dock->collection = new Windows;
     dock->app = windowing::open_app();
     dock->app->print_monitors();
     RawWindowSettings settings;
@@ -866,8 +981,10 @@ void dock_start(std::string monitor_name) {
     dock->creation_settings = settings;
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
     dock->window->raw_window->on_scale_change = [dock](RawWindow *rw, float dpi) {
-        for (auto d : dock->windows->list) {
-            d->scale_change = true;
+        for (auto pin : dock->collection->pins) {
+            for (auto window : pin->windows) {
+                window->scale_change = true;
+            }
         }
         //notify("scale change");
     };
@@ -945,8 +1062,8 @@ void dock::add_window(int cid) {
             active_cid = cid;
 
         // Synchronize
-        std::lock_guard<std::mutex> guard(d->windows->mut);
-        d->windows->to_be_added.push_back(window);
+        std::lock_guard<std::mutex> guard(d->collection->mut);
+        d->collection->to_be_added.push_back(window);
         windowing::redraw(d->window->raw_window);
     }
 }
@@ -954,18 +1071,20 @@ void dock::add_window(int cid) {
 // This happens on the main thread, not the dock thread
 void dock::remove_window(int cid) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> guard(d->windows->mut);
-        d->windows->to_be_removed.push_back(cid);
+        std::lock_guard<std::mutex> guard(d->collection->mut);
+        d->collection->to_be_removed.push_back(cid);
         windowing::redraw(d->window->raw_window);
     }
 }
 
 void dock::title_change(int cid, std::string title) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> guard(d->windows->mut);
-        for (auto &w : d->windows->list) {
-            if (w->cid == cid) {
-                w->title = title;
+        std::lock_guard<std::mutex> guard(d->collection->mut);
+        for (auto pin : d->collection->pins) {
+            for (auto window : pin->windows) {
+                if (window->cid == cid) {
+                    window->title = title;
+                }
             }
         }
         windowing::redraw(d->window->raw_window);
