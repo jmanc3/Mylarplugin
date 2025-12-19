@@ -678,10 +678,10 @@ static void create_pinned_icon(Container *icons, Window *window) {
                     w.scale_change = false;
                     w.attempted_load = true;
                     auto size = get_icon_size(mylar->raw_window->dpi);
-                    //auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
-                    //if (!full.empty()) {
-                        //load_icon_full_path(&w.icon_surf, full, size);
-                    //}
+                    auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
+                    if (!full.empty()) {
+                        load_icon_full_path(&w.icon_surf, full, size);
+                    }
                 }
             }
         }
@@ -708,6 +708,7 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
                 if (l->cid == win.cid) {
                     win.title = l->title;
                     win.scale_change = l->scale_change;
+                    l->scale_change = false;
                 }
             }
         }
