@@ -678,10 +678,10 @@ static void create_pinned_icon(Container *icons, Window *window) {
                     w.scale_change = false;
                     w.attempted_load = true;
                     auto size = get_icon_size(mylar->raw_window->dpi);
-                    auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
-                    if (!full.empty()) {
-                        load_icon_full_path(&w.icon_surf, full, size);
-                    }
+                    //auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
+                    //if (!full.empty()) {
+                        //load_icon_full_path(&w.icon_surf, full, size);
+                    //}
                 }
             }
         }
@@ -823,21 +823,236 @@ static void merge_to_be_into_list(Dock *dock, Container *c) {
     }
 }
 
+/*
+
+static int
+calc_largest(Container *icons) {
+    int largest = 0;
+    for (auto c: icons->children)
+        if (c->real_bounds.w > largest)
+            largest = c->real_bounds.w;
+    return largest;
+}
+
+static int
+size_icons(AppClient *client, cairo_t *cr, Container *icons) {
+    int total_width = 0;
+    for (auto c: icons->children) {
+        auto w = get_label_width(client, c);
+        c->real_bounds.w = w;
+        c->real_bounds.h = client->bounds->h;
+        c->real_bounds.y = 0;
+    }
+    
+    for (auto c: icons->children) {
+        total_width += c->real_bounds.w;
+    }
+    
+    // For pixel spacing between pinned icons
+    int count = icons->children.size();
+    if (count != 0)
+        count--;
+    total_width += count * pixel_spacing;
+    
+    if (total_width > icons->real_bounds.w) {
+        auto overflow = total_width - icons->real_bounds.w;
+        
+        for (int i = 0; i < overflow; i++) {
+            int largest = calc_largest(icons);
+            
+            for (auto c: icons->children) {
+                if ((int) c->real_bounds.w == largest) {
+                    c->real_bounds.w -= 1;
+                    break;
+                }
+            }
+        }
+        total_width = icons->real_bounds.w;
+    }
+    
+    return total_width;
+}
+
+static void
+swap_icon(Container *icons, Container *dragging, Container *other, bool before) {
+    // TODO: it's not a swap it's an insert after, or before
+    for (int i = 0; i < icons->children.size(); i++) {
+        if (icons->children[i] == dragging) {
+            icons->children.erase(icons->children.begin() + i);
+            break;
+        }
+    }
+    for (int i = 0; i < icons->children.size(); i++) {
+        if (icons->children[i] == other) {
+            if (before) {
+                icons->children.insert(icons->children.begin() + i, dragging);
+            } else {
+                icons->children.insert(icons->children.begin() + i + 1, dragging);
+            }
+            break;
+        }
+    }
+}
+
+int
+would_be_x(Container *icons, Container *target, int pos_x) {
+    for (int i = 0; i < icons->children.size(); i++) {
+        if (icons->children[i] == target) {
+            return pos_x;
+        }
+        pos_x += icons->children[i]->real_bounds.w;
+    }
+    return pos_x;
+}
+
+static void
+position_icons(AppClient *client, cairo_t *cr, Container *icons) {
+    auto total_width = size_icons(client, cr, icons);
+    
+    auto align = winbar_settings->icons_alignment;
+    int off = icons->real_bounds.x;
+    if (align == container_alignment::ALIGN_RIGHT) {
+        off += icons->real_bounds.w - total_width;
+    } else if (align == container_alignment::ALIGN_GLOBAL_CENTER_HORIZONTALLY) {
+        auto mid_point = client->bounds->w / 2;
+        auto left_x = mid_point - (total_width / 2);
+        auto right_x = left_x + total_width;
+        auto min = icons->real_bounds.x;
+        auto max = icons->real_bounds.x + icons->real_bounds.w;
+        if (right_x > max) {
+            left_x -= right_x - max;
+            right_x = left_x + total_width;
+        }
+        if (left_x < min) {
+            left_x += min - left_x;
+            right_x = left_x + total_width;
+        }
+        off = left_x;
+    } else if (align == container_alignment::ALIGN_CENTER_HORIZONTALLY) {
+        off += (icons->real_bounds.w - total_width) / 2;
+    }
+    
+    // Set the 'x' for the pinned_icons, or more specifically the "natural_position_x"
+    for (auto c: icons->children) {
+        auto *data = (LaunchableButton *) c->user_data;
+        if (data->natural_position_x == INT_MAX) {
+            data->old_natural_position_x = off;
+        } else {
+            data->old_natural_position_x = data->natural_position_x;
+        }
+        data->natural_position_x = off;
+        off += c->real_bounds.w + pixel_spacing;
+    }
+    
+    Container *dragging = nullptr;
+    int drag_index = 0;
+    
+    // Position dragged icon based on current mouse position, and prevent it from leaving icons container
+    for (auto c: icons->children) {
+        auto *data = (LaunchableButton *) c->user_data;
+        if (c->state.mouse_dragging) {
+            dragging = c;
+            auto x = client->mouse_current_x + data->initial_mouse_click_before_drag_offset_x;
+            c->real_bounds.x = x;
+            if (c->real_bounds.x < icons->real_bounds.x) {
+                c->real_bounds.x = icons->real_bounds.x;
+            }
+            if (c->real_bounds.x + c->real_bounds.w > icons->real_bounds.x + icons->real_bounds.w) {
+                c->real_bounds.x = icons->real_bounds.x + icons->real_bounds.w - c->real_bounds.w;
+            }
+            break;
+        }
+        drag_index++;
+    }
+    
+    // Calculate 'slot' the icon is closest to and swap into it
+    if (dragging) {
+        int distance = 100000;
+        int index = 0;
+        int w_b = 0;
+        auto natural_x = ((LaunchableButton *) icons->children[0]->user_data)->natural_position_x;
+        icons->children.erase(icons->children.begin() + drag_index);
+        for (int i = 0; i < icons->children.size() + 1; i++) {
+            icons->children.insert(icons->children.begin() + i, dragging);
+            auto would_be = would_be_x(icons, dragging, natural_x);
+            auto dist = std::abs(dragging->real_bounds.x - would_be);
+            if (dist < distance) {
+                distance = dist;
+                index = i;
+                w_b = would_be;
+            }
+            icons->children.erase(icons->children.begin() + i);
+        }
+        icons->children.insert(icons->children.begin() + index, dragging);
+        auto *data = (LaunchableButton *) dragging->user_data;
+        data->old_natural_position_x = dragging->real_bounds.x;
+        data->natural_position_x = dragging->real_bounds.x;
+    }
+    
+    // Queue spring animations
+    for (auto c: icons->children) {
+        if (c->state.mouse_dragging) continue;
+        auto *data = (LaunchableButton *) c->user_data;
+        if (app->current - data->creation_time < 1000 || !winbar_settings->animate_icon_positions) {
+            c->real_bounds.x = data->natural_position_x;
+            continue;
+        }
+        bool should_anim = std::abs(c->real_bounds.x - data->natural_position_x) >= 1;
+        bool invalid = false;
+        if (data->natural_position_x != data->old_natural_position_x)
+            invalid = true;
+        
+        if (data->animating && !invalid) {
+            data->spring.update((float) client->delta / 1000.0f);
+            c->real_bounds.x = data->spring.position;
+            float abs_vel = std::abs(data->spring.velocity);
+            if (abs_vel < .05) {
+                data->animating = false;
+                c->real_bounds.x = data->natural_position_x;
+            }
+        } else if (should_anim) {
+            auto dist = std::abs(c->real_bounds.x - data->natural_position_x);
+            data->spring = SpringAnimation(c->real_bounds.x, data->natural_position_x);
+            data->old_natural_position_x = data->natural_position_x;
+            data->animating = true;
+        }
+    }
+    
+    // Start animating, if not already
+    bool running = ((TaskbarData *) client->user_data)->spring_animating;
+    for (auto c: icons->children) {
+        auto *data = (LaunchableButton *) c->user_data;
+        if (data->animating && !running) {
+            running = true;
+            client_register_animation(app, client);
+            ((TaskbarData *) client->user_data)->spring_animating = true;
+            return;
+        }
+    }
+    if (running) {
+        ((TaskbarData *) client->user_data)->spring_animating = false;
+        client_unregister_animation(app, client);
+        running = false;
+    }
+}
+*/
+
+static void layout_icons(Container *root, Container *icons, Dock *dock) {
+    icons->should_layout_children = true;
+    defer(icons->should_layout_children = false);
+    ::layout(root, icons, icons->real_bounds);
+    
+    for (auto c : icons->children) {
+       if (c->state.mouse_dragging) {
+           auto diff = root->mouse_initial_x - root->mouse_current_x;
+           c->real_bounds.x -= diff;
+       }
+    }
+}
+
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
     auto dock = (Dock *) root->user_data;
-    /*
-    if (dock->creation_settings.alignment == 1 || dock->creation_settings.alignment == 3 || dock->creation_settings.alignment == 0) {
-        dock->vertical = false;
-    } else {
-        dock->vertical = true;
-    }
-    if (dock->vertical) {
-        root->type = ::vbox;
-    } else {
-        root->type = ::hbox;
-    }
-    */
     {
         auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
         super->when_clicked = paint {
@@ -848,9 +1063,11 @@ static void fill_root(Container *root) {
     {
         auto icons = root->child(FILL_SPACE, FILL_SPACE);
         icons->type = ::hbox;
+        icons->should_layout_children = false;
 
-        icons->distribute_overflow_to_children = true;
+        //icons->distribute_overflow_to_children = true;
         icons->name = "icons";
+        // todo it's not prelayout because that gets called by parent, we just staright up want to layout
         icons->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
             if (dock->first_fill) {
@@ -864,6 +1081,11 @@ static void fill_root(Container *root) {
             merge_to_be_into_list(dock, c);
             
             merge_list_into_icons(dock, c);
+        };
+
+        icons->when_paint = paint {
+            auto dock = (Dock *) root->user_data;
+            layout_icons(root, c, dock);
         };
     }
 
@@ -1067,6 +1289,8 @@ static int get_dock_alignment() {
 }
 
 void dock::start(std::string monitor_name) {
+    if (monitor_name == "FALLBACK")
+        return;
     current_alignment = get_dock_alignment();
 
     finished = false;

@@ -57,9 +57,14 @@ Container *actual_root = new Container;
 void draw_text(std::string text, int x, int y);
 void apply_restore_info(int id);
 
-static RGBA color_dock_color() {
+static RGBA color_sel_color() {
     static RGBA default_color("00000088");
-    return hypriso->get_varcolor("plugin:mylardesktop:dock_color", default_color);
+    return hypriso->get_varcolor("plugin:mylardesktop:sel_color", default_color);
+}
+
+static RGBA color_sel_border_color() {
+    static RGBA default_color("00000088");
+    return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
 }
 
 static void any_container_closed(Container *c) {
@@ -1010,10 +1015,12 @@ static void create_actual_root() {
             b.y -= mb.y;
             b.scale(s);
             b.round();
-            auto col = color_dock_color();
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .18}, std::round(3.0 * s), 2.0, b);
-            rect(b, RGBA(col.r, col.g, col.b, .50f), 0, std::round(3.0 * s), 2.0f, true, 0.1);
-            border(b, RGBA(col.r, col.g, col.b, .8f), 1.0f, 0, std::round(3.0 * s), 2.0f, false, 1.0);
+            auto col = color_sel_color();
+            float rounding = 9.0f;
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .18}, std::round(rounding * s), 2.0, b);
+            rect(b, RGBA(col.r, col.g, col.b, .50f), 0, std::round(rounding * s), 2.0f, true, 0.1);
+            col = color_sel_border_color();
+            border(b, RGBA(col.r, col.g, col.b, .8f), std::round(1.0f * s), 0, std::round(rounding * s), 2.0f, false, 1.0);
         }
     };
 }
@@ -1240,12 +1247,12 @@ void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    hypriso->create_config_variables();
+
     on_any_container_close = any_container_closed;
     create_actual_root();
     add_hyprctl_dispatchers();
-    
-    hypriso->create_config_variables();
-        
+            
     hypriso->on_mouse_press = on_mouse_press;
     hypriso->on_mouse_move = on_mouse_move;
     hypriso->on_key_press = on_key_press;

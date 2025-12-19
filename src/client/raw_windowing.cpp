@@ -56,6 +56,10 @@ extern "C" {
 #include "../include/events.h"
 #include "../include/hypriso.h"
 
+#ifdef TRACY_ENABLE
+#include "tracy/Tracy.hpp"
+#endif
+
 static int unique_id = 0;
 
 struct wl_window;
@@ -291,6 +295,10 @@ static void destroy_shm_buffer(struct wl_window *win) {
 }
 
 void on_window_render(wl_window *win) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+ 
     if (win->resize_next) {
         wl_window_resize_buffer(win, win->logical_width, win->logical_height);
         win->resize_next = false;
@@ -317,6 +325,10 @@ void on_window_render(wl_window *win) {
 }
 
 bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_height) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+ 
     log("wl_window_resize_buffer");
     destroy_shm_buffer(win);
 
@@ -794,21 +806,24 @@ static void pointer_handle_axis_stop(void *data,
 }
 
 static void pointer_handle_axis_discrete(void *data,
-		      struct wl_pointer *wl_pointer,
-		      uint32_t axis,
-		      int32_t discrete) {
+    struct wl_pointer *wl_pointer,
+    uint32_t axis,
+    int32_t discrete) {
+	int k = 0;
 }
 
 static void pointer_handle_axis_value120(void *data,
-		      struct wl_pointer *wl_pointer,
-		      uint32_t axis,
-		      int32_t value120) {
+    struct wl_pointer *wl_pointer,
+    uint32_t axis,
+    int32_t value120) {
+	int k = 0;
 }
 
 static void pointer_handle_axis_relative_direction(void *data,
 				struct wl_pointer *wl_pointer,
 				uint32_t axis,
 				uint32_t direction) {
+	int k = 0;
 }
 
 static const struct wl_pointer_listener pointer_listener = {

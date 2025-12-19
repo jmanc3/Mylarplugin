@@ -316,11 +316,11 @@ void snap_preview::draw(Container* actual_root, Container* c) {
             b.scale(s);
             b.round();
             if (preview->previous_snap_type != SnapPosition::NONE || (preview->previous_snap_type == SnapPosition::NONE && preview->scalar < .8)) {
-                render_drop_shadow(rid, 1.0, {0, 0, 0, .02f * fade_amount}, preview->rounding * fade_amount, 2.0f, b);
+                render_drop_shadow(rid, 1.0, {0, 0, 0, .05f * fade_amount}, preview->rounding * fade_amount, 2.0f, b);
             }
             rect(b, {.98, .98, .98, .20f}, 0, std::round(preview->rounding * s * fade_amount), 2.0f, true, 1.0);
-            b.shrink(1);
-            border(b, {0.6, 0.6, 0.6, 0.2f}, 1.0f, 0, std::round(preview->rounding * s * fade_amount), 2.0f, false, 1.0);
+            b.shrink(std::round(1.0f * s));
+            border(b, {1.0, 1.0, 1.0, 0.1f}, std::round(1.0f * s), 0, std::round(preview->rounding * s * fade_amount), 2.0f, false, 1.0);
         }
     }
 }
