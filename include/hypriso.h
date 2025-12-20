@@ -343,7 +343,9 @@ struct HyprIso {
     int get_active_workspace_id(int monitor);
     int get_active_workspace_id_client(int client);
     int get_workspace(int client);
-    
+
+    bool started_rendering(int monitor);
+
     bool is_space_tiling(int space);
     void set_space_tiling(int space, bool state);
 

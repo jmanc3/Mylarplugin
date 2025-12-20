@@ -27,6 +27,8 @@
 #define ICON(str) [](){ return str; }
 
 static bool merge_windows = false;
+static int pixel_spacing = 1;
+static float max_width = 230;
 
 class Window {
 public:
@@ -68,6 +70,9 @@ struct Pin : UserData {
     std::string stacking_rule;
 
     bool pinned = false;
+    int natural_position_x = INT_MAX;
+    int old_natural_position_x = INT_MAX;
+    int initial_mouse_click_before_drag_offset_x = 0;
 };
 
 struct Windows {
@@ -534,6 +539,7 @@ static void create_pinned_icon(Container *icons, Window *window) {
     pin->icon = window->icon;
     pin->windows.push_back(*window);
     ch->user_data = pin;
+    ch->when_drag_end_is_click = false;
     ch->when_paint = paint {        
         auto dock = (Dock*)root->user_data;
         if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->cr)
@@ -574,6 +580,7 @@ static void create_pinned_icon(Container *icons, Window *window) {
                     cairo_paint(cr);
                     auto wi = cairo_image_surface_get_height(w.icon_surf);
                     offx = wi + 10;
+                    break;
                 }
             }
         }
@@ -581,8 +588,9 @@ static void create_pinned_icon(Container *icons, Window *window) {
         std::string title = pin->stacking_rule;
         if (!pin->windows.empty())
             title = pin->windows[0].title;
-        auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
-        draw_text(cr, c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
+        auto text_w = (c->real_bounds.w - offx - 20) * PANGO_SCALE;
+        auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+        draw_text(cr, c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
 
         if (is_active) {
             auto bar_h = std::round(2 * mylar->raw_window->dpi);
@@ -671,7 +679,6 @@ static void create_pinned_icon(Container *icons, Window *window) {
         std::string title = pin->stacking_rule;
         if (!pin->windows.empty())
             title = pin->windows[0].title;
-        auto bounds = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, 300 * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE);
         if (icons_loaded) {
             for (auto &w : pin->windows) {
                 if (!w.attempted_load || w.scale_change) {
@@ -685,15 +692,10 @@ static void create_pinned_icon(Container *icons, Window *window) {
                 }
             }
         }
-
-        for (auto &w : pin->windows) {
-            if (w.icon_surf) {
-                bounds.w += cairo_image_surface_get_width(w.icon_surf) + 10;
-                break;
-            }
-        }
-
-        c->wanted_bounds.w = bounds.w + 20;
+    };
+    ch->when_drag_start = paint {
+        auto data = (Pin *) c->user_data;
+        data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
     };
 }
 
@@ -895,6 +897,12 @@ swap_icon(Container *icons, Container *dragging, Container *other, bool before) 
     }
 }
 
+static void
+position_icons(AppClient *client, cairo_t *cr, Container *icons) {
+    auto total_width = size_icons(client, cr, icons);
+}
+*/
+
 int
 would_be_x(Container *icons, Container *target, int pos_x) {
     for (int i = 0; i < icons->children.size(); i++) {
@@ -906,16 +914,67 @@ would_be_x(Container *icons, Container *target, int pos_x) {
     return pos_x;
 }
 
-static void
-position_icons(AppClient *client, cairo_t *cr, Container *icons) {
-    auto total_width = size_icons(client, cr, icons);
+
+
+static int
+calc_largest(Container *icons) {
+    int largest = 0;
+    for (auto c: icons->children)
+        if (c->real_bounds.w > largest)
+            largest = c->real_bounds.w;
+    return largest;
+}
+
+static int
+size_icons(Dock *dock, Container *icons) {
+    int total_width = 0;
+    for (auto c: icons->children) {
+        //auto w = get_label_width(client, c);
+        c->real_bounds.w = max_width * dock->window->raw_window->dpi;
+        c->real_bounds.h = icons->real_bounds.h;
+        c->real_bounds.y = 0;
+    }
     
-    auto align = winbar_settings->icons_alignment;
+    for (auto c: icons->children) {
+        total_width += c->real_bounds.w;
+    }
+    
+    // For pixel spacing between pinned icons
+    int count = icons->children.size();
+    if (count != 0)
+        count--;
+    total_width += count * pixel_spacing;
+    
+    if (total_width > icons->real_bounds.w) {
+        auto overflow = total_width - icons->real_bounds.w;
+        
+        for (int i = 0; i < overflow; i++) {
+            int largest = calc_largest(icons);
+            
+            for (auto c: icons->children) {
+                if ((int) c->real_bounds.w == largest) {
+                    c->real_bounds.w -= 1;
+                    break;
+                }
+            }
+        }
+        total_width = icons->real_bounds.w;
+    }
+    
+    return total_width;
+}
+
+
+static void layout_icons(Container *root, Container *icons, Dock *dock) {
+    float total_width = size_icons(dock, icons);
+    
+    auto align = container_alignment::ALIGN_LEFT; // todo: pull from setting
+    
     int off = icons->real_bounds.x;
     if (align == container_alignment::ALIGN_RIGHT) {
         off += icons->real_bounds.w - total_width;
     } else if (align == container_alignment::ALIGN_GLOBAL_CENTER_HORIZONTALLY) {
-        auto mid_point = client->bounds->w / 2;
+        auto mid_point = root->real_bounds.w / 2;
         auto left_x = mid_point - (total_width / 2);
         auto right_x = left_x + total_width;
         auto min = icons->real_bounds.x;
@@ -932,10 +991,9 @@ position_icons(AppClient *client, cairo_t *cr, Container *icons) {
     } else if (align == container_alignment::ALIGN_CENTER_HORIZONTALLY) {
         off += (icons->real_bounds.w - total_width) / 2;
     }
-    
-    // Set the 'x' for the pinned_icons, or more specifically the "natural_position_x"
-    for (auto c: icons->children) {
-        auto *data = (LaunchableButton *) c->user_data;
+
+    for (auto c : icons->children) {
+        auto data = (Pin *) c->user_data;
         if (data->natural_position_x == INT_MAX) {
             data->old_natural_position_x = off;
         } else {
@@ -944,16 +1002,17 @@ position_icons(AppClient *client, cairo_t *cr, Container *icons) {
         data->natural_position_x = off;
         off += c->real_bounds.w + pixel_spacing;
     }
-    
     Container *dragging = nullptr;
     int drag_index = 0;
     
     // Position dragged icon based on current mouse position, and prevent it from leaving icons container
     for (auto c: icons->children) {
-        auto *data = (LaunchableButton *) c->user_data;
+        auto data = (Pin *) c->user_data;
         if (c->state.mouse_dragging) {
             dragging = c;
-            auto x = client->mouse_current_x + data->initial_mouse_click_before_drag_offset_x;
+            //auto diff = root->mouse_initial_x - root->mouse_current_x;
+            //c->real_bounds.x -= diff;
+            auto x = root->mouse_current_x + data->initial_mouse_click_before_drag_offset_x;
             c->real_bounds.x = x;
             if (c->real_bounds.x < icons->real_bounds.x) {
                 c->real_bounds.x = icons->real_bounds.x;
@@ -965,13 +1024,12 @@ position_icons(AppClient *client, cairo_t *cr, Container *icons) {
         }
         drag_index++;
     }
-    
-    // Calculate 'slot' the icon is closest to and swap into it
+
     if (dragging) {
         int distance = 100000;
         int index = 0;
         int w_b = 0;
-        auto natural_x = ((LaunchableButton *) icons->children[0]->user_data)->natural_position_x;
+        auto natural_x = ((Pin *) icons->children[0]->user_data)->natural_position_x;
         icons->children.erase(icons->children.begin() + drag_index);
         for (int i = 0; i < icons->children.size() + 1; i++) {
             icons->children.insert(icons->children.begin() + i, dragging);
@@ -985,41 +1043,27 @@ position_icons(AppClient *client, cairo_t *cr, Container *icons) {
             icons->children.erase(icons->children.begin() + i);
         }
         icons->children.insert(icons->children.begin() + index, dragging);
-        auto *data = (LaunchableButton *) dragging->user_data;
+        auto *data = (Pin *) dragging->user_data;
         data->old_natural_position_x = dragging->real_bounds.x;
         data->natural_position_x = dragging->real_bounds.x;
     }
     
-    // Queue spring animations
     for (auto c: icons->children) {
         if (c->state.mouse_dragging) continue;
-        auto *data = (LaunchableButton *) c->user_data;
-        if (app->current - data->creation_time < 1000 || !winbar_settings->animate_icon_positions) {
-            c->real_bounds.x = data->natural_position_x;
-            continue;
-        }
-        bool should_anim = std::abs(c->real_bounds.x - data->natural_position_x) >= 1;
-        bool invalid = false;
-        if (data->natural_position_x != data->old_natural_position_x)
-            invalid = true;
-        
-        if (data->animating && !invalid) {
-            data->spring.update((float) client->delta / 1000.0f);
-            c->real_bounds.x = data->spring.position;
-            float abs_vel = std::abs(data->spring.velocity);
-            if (abs_vel < .05) {
-                data->animating = false;
-                c->real_bounds.x = data->natural_position_x;
-            }
-        } else if (should_anim) {
-            auto dist = std::abs(c->real_bounds.x - data->natural_position_x);
-            data->spring = SpringAnimation(c->real_bounds.x, data->natural_position_x);
-            data->old_natural_position_x = data->natural_position_x;
-            data->animating = true;
+        auto *data = (Pin *) c->user_data;
+        c->real_bounds.x = data->natural_position_x;
+        continue;
+    }
+    
+    for (auto c: icons->children) {
+        if (c->pre_layout) {
+            c->pre_layout(root, c, c->real_bounds);
         }
     }
     
+    
     // Start animating, if not already
+    /*
     bool running = ((TaskbarData *) client->user_data)->spring_animating;
     for (auto c: icons->children) {
         auto *data = (LaunchableButton *) c->user_data;
@@ -1034,11 +1078,18 @@ position_icons(AppClient *client, cairo_t *cr, Container *icons) {
         ((TaskbarData *) client->user_data)->spring_animating = false;
         client_unregister_animation(app, client);
         running = false;
-    }
-}
-*/
+    }    
+    */
+    
+    /*
+    // Calculate 'slot' the icon is closest to and swap into it
 
-static void layout_icons(Container *root, Container *icons, Dock *dock) {
+    
+    // Queue spring animations
+
+    */
+    
+    /*
     icons->should_layout_children = true;
     defer(icons->should_layout_children = false);
     ::layout(root, icons, icons->real_bounds);
@@ -1049,6 +1100,8 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
            c->real_bounds.x -= diff;
        }
     }
+    */
+    
 }
 
 static void fill_root(Container *root) {
@@ -1254,7 +1307,6 @@ void dock_start(std::string monitor_name) {
     settings.pos.w = 0;
     settings.pos.h = 40;
     settings.name = "Dock";
-    notify(fz("{}", current_alignment));
     settings.alignment = current_alignment;
     settings.monitor_name = monitor_name;
     dock->creation_settings = settings;
