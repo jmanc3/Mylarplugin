@@ -21,6 +21,8 @@
 #include <memory>
 #include <fstream>
 #include <pango/pangocairo.h>
+#include <sys/stat.h>
+#include <filesystem>
 
 #define BTN_LEFT		0x110
 #define BTN_RIGHT		0x111
@@ -34,10 +36,8 @@ static float max_width = 230;
 class Window {
 public:
     int cid; // unique id
-    bool attempted_load = false;
-    bool scale_change = false;
-    
-    std::string icon;
+   
+    std::string window_icon;
     std::string command;
     std::string title;
     std::string stack_rule; // Should be regex later, or multiple 
@@ -53,9 +53,7 @@ public:
 
     Window(const Window& w) {
         cid = w.cid;
-        attempted_load = w.attempted_load;
-        scale_change = w.scale_change;
-        icon = w.icon;
+        window_icon = w.window_icon;
         command = w.command;
         title = w.title;
         stack_rule = w.stack_rule;
@@ -71,6 +69,8 @@ struct Pin : UserData {
     std::string stacking_rule;
     
     cairo_surface_t* icon_surf = nullptr; 
+    bool attempted_load = false;
+    bool scale_change = false;    
     
     ~Pin() {
         if (icon_surf)
@@ -673,19 +673,22 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
     });
 }
 
-static void create_pinned_icon(Container *icons, Window *window) {
+static void create_pinned_icon(Container *icons, std::string stack_rule, std::string command, std::string icon, Window *window = nullptr) {
     auto ch = icons->child(::absolute, FILL_SPACE, FILL_SPACE);
     auto pin = new Pin;
     for (auto icon : icons->children) {
         auto icon_data = (Pin *) icon->user_data;
-        if (icon != ch && icon_data->pinned && window->stack_rule == icon_data->stacking_rule) {
+        if (icon != ch && icon_data->pinned && stack_rule == icon_data->stacking_rule) {
             pin->pinned = true;
         }
     }
-    pin->stacking_rule = window->stack_rule;
-    pin->command = window->command;
-    pin->icon = window->icon;
-    pin->windows.push_back(*window);
+    pin->stacking_rule = stack_rule;
+    pin->command = command;
+    pin->icon = icon;
+    if (window)
+        pin->windows.push_back(*window);
+    else
+        pin->pinned = true;
     ch->user_data = pin;
     ch->when_drag_end_is_click = false;
     ch->minimum_x_distance_to_move_before_drag_begins = 3;
@@ -765,7 +768,9 @@ static void create_pinned_icon(Container *icons, Window *window) {
             return;
         }
 
-        int cid = pin->windows[0].cid;
+        int cid = -1;
+        if (!pin->windows.empty())
+            cid = pin->windows[0].cid;
         
         if (c->state.mouse_button_pressed == BTN_LEFT) {
             main_thread([cid] {
@@ -802,15 +807,14 @@ static void create_pinned_icon(Container *icons, Window *window) {
         if (!pin->windows.empty())
             title = pin->windows[0].title;
         if (icons_loaded) {
-            for (auto &w : pin->windows) {
-                if (!w.attempted_load || w.scale_change) {
-                    w.scale_change = false;
-                    w.attempted_load = true;
-                    auto size = get_icon_size(mylar->raw_window->dpi);
-                    auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
-                    if (!full.empty()) {                        
-                        load_icon_full_path(&pin->icon_surf, full, size);
-                    }
+            if (!pin->attempted_load || pin->scale_change) {
+                pin->scale_change = false;
+                pin->attempted_load = true;
+                auto size = get_icon_size(mylar->raw_window->dpi);
+                auto icon = pin->icon;
+                auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon)});
+                if (!full.empty()) {                        
+                    load_icon_full_path(&pin->icon_surf, full, size);
                 }
             }
         }
@@ -837,8 +841,6 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
             for (auto l : dock->collection->list) {
                 if (l->cid == win.cid) {
                     win.title = l->title;
-                    win.scale_change = l->scale_change;
-                    l->scale_change = false;
                 }
             }
         }
@@ -919,8 +921,9 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
                 }
             }
             
-            if (needs_to_create_its_own_pin)
-                create_pinned_icon(icons, window);
+            if (needs_to_create_its_own_pin) {
+                create_pinned_icon(icons, window->stack_rule, window->command, window->window_icon, window);
+            }
         }
     }
 }
@@ -1421,6 +1424,79 @@ static void fill_root(Container *root) {
 
 static int current_alignment = 3;
 
+static inline std::string trim(const std::string& s) {
+    const char* ws = " \t\r\n";
+    const auto b = s.find_first_not_of(ws);
+    if (b == std::string::npos) return {};
+    const auto e = s.find_last_not_of(ws);
+    return s.substr(b, e - b + 1);
+}
+
+static void load_saved_pins_from_file(Container *icons) {
+    const char *home = getenv("HOME");
+    std::string itemsPath(home);
+    itemsPath += "/.config/";
+    
+    if (mkdir(itemsPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == -1) {
+        if (errno != EEXIST) {
+            printf("Couldn't mkdir %s\n", itemsPath.c_str());
+            return;
+        }
+    }
+    
+    itemsPath += "/mylar/";
+    
+    if (mkdir(itemsPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == -1) {
+        if (errno != EEXIST) {
+            printf("Couldn't mkdir %s\n", itemsPath.c_str());
+            return;
+        }
+    }
+    
+    itemsPath += "pinned_items.ini";
+    
+    if (!std::filesystem::exists(itemsPath)) {
+        //write_default_pinned_icons_file_if_none_exists(itemsPath);
+    }
+
+    std::ifstream in(itemsPath);
+    std::string line;
+    std::string class_name;
+    std::string icon_name;
+    std::string command;
+    while (std::getline(in, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        if (line.front() == '[') {
+            if (!class_name.empty())
+                create_pinned_icon(icons, class_name, command, icon_name);
+            class_name = "";
+            icon_name = "";
+            command = "";
+            continue;
+        }
+
+        // key=value
+        const auto eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        const std::string key = trim(line.substr(0, eq));
+        const std::string value = trim(line.substr(eq + 1));
+
+        if (key == "class_name")
+            class_name = value;
+        else if (key == "icon_name")
+            icon_name = value;
+        else if (key == "command")
+            command = value;
+    }
+    if (!class_name.empty())
+        create_pinned_icon(icons, class_name, command, icon_name);
+}
+
 void dock_start(std::string monitor_name) {
     if (!monitor_name.empty()) {
         for (auto d : docks) {
@@ -1442,14 +1518,19 @@ void dock_start(std::string monitor_name) {
     dock->creation_settings = settings;
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
     dock->window->raw_window->on_scale_change = [dock](RawWindow *rw, float dpi) {
-        for (auto window : dock->collection->list) {
-            window->scale_change = true;
+        if (auto icons = container_by_name("icons", dock->window->root)) {
+            for (auto p : icons->children) {
+                auto pin = (Pin *) p->user_data;
+                pin->scale_change = true;
+            }
         }
         //notify("scale change");
     };
     dock->window->root->skip_delete = true;
     dock->window->root->user_data = dock;
     fill_root(dock->window->root);
+    if (auto icons = container_by_name("icons", dock->window->root))
+        load_saved_pins_from_file(icons); 
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
     windowing::main_loop(dock->app);
@@ -1538,7 +1619,7 @@ void dock::add_window(int cid) {
         window->cid = cid;
         window->title = hypriso->title_name(cid);
         window->stack_rule = hypriso->class_name(cid);
-        window->icon = hypriso->class_name(cid);
+        window->window_icon = hypriso->class_name(cid);
         window->command = get_launch_command(cid);
         
         if (hypriso->has_focus(cid))
