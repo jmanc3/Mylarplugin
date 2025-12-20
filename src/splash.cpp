@@ -16,15 +16,18 @@ void splash::input() {
     showing = false;
 }
 
-double easeInOutSine(double x) {
-    return -(std::cos(M_PI * x) - 1) / 2;
+double
+easeIn(double t) {
+    double t2 = t * t;
+    return t * t2 * t2;
 }
 
 void splash::render(int id, int stage) {
     int current_monitor = current_rendering_monitor();
-    auto prog = hypriso->zoom_progress(current_monitor);
+    float prog = hypriso->zoom_progress(current_monitor);
     if (prog == 1.0f)
         return;
+    prog = easeIn(prog);
     static long start_time = get_current_time_in_ms();
     static bool started_rending = false;
 

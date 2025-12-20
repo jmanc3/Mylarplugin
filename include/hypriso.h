@@ -355,6 +355,8 @@ struct HyprIso {
 
     void simulateMouseMovement();
     bool has_popup_at(int cid, Bounds b);
+
+    void login_animation();
     
     void do_default_drag(int cid);
     void do_default_resize(int cid);

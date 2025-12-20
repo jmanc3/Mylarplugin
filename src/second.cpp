@@ -31,7 +31,6 @@
 #include <wayland-server-protocol.h>
 
 #ifdef TRACY_ENABLE
-//#include "../tracy/public/client/TracyProfiler.hpp"
 #include "tracy/Tracy.hpp"
 #endif
 
@@ -1198,6 +1197,11 @@ void add_hyprctl_dispatchers() {
         do_snap(SnapPosition::NONE);
         return true;
     });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:init", [](std::string in) {
+        hypriso->login_animation();
+        return true;
+    });
+
     hypriso->add_hyprctl_dispatcher("plugin:mylar:right_click_active", [](std::string in) {
         for (auto m : actual_root->children) {
             if (m->custom_type == (int) TYPE::CLIENT) {

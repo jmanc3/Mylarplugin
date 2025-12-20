@@ -702,7 +702,10 @@ static void create_pinned_icon(Container *icons, Window *window) {
                                     auto pin = (Pin *) p->user_data;
                                     if (p->uuid == uuid) {
                                         for (auto client : pin->windows) {
-                                            close_window(client.cid);
+                                            auto pid = hypriso->get_pid(client.cid);
+                                            if (pid != -1) {
+                                                kill(pid, SIGKILL);
+                                            }
                                         }
                                     }
                                 }

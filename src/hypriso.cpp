@@ -5888,3 +5888,13 @@ int HyprIso::get_pid(int client) {
     return -1;
 }
 
+void HyprIso::login_animation() {
+    for (auto mon : hyprmonitors) {
+       if (mon->m) {
+          auto m = mon->m;
+          m->m_zoomAnimProgress->setValueAndWarp(0.F);
+          m->m_zoomAnimFrameCounter = 0;
+          *m->m_zoomAnimProgress = 1.F;
+       }
+    }
+}
