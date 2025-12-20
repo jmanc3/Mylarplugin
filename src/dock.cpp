@@ -540,6 +540,8 @@ static void create_pinned_icon(Container *icons, Window *window) {
     pin->windows.push_back(*window);
     ch->user_data = pin;
     ch->when_drag_end_is_click = false;
+    ch->minimum_x_distance_to_move_before_drag_begins = 3;
+    ch->minimum_y_distance_to_move_before_drag_begins = 10;
     ch->when_paint = paint {        
         auto dock = (Dock*)root->user_data;
         if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->cr)
@@ -579,7 +581,7 @@ static void create_pinned_icon(Container *icons, Window *window) {
                     cairo_set_source_surface(cr, w.icon_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
                     cairo_paint(cr);
                     auto wi = cairo_image_surface_get_height(w.icon_surf);
-                    offx = wi + 10;
+                    offx = wi;
                     break;
                 }
             }
@@ -588,9 +590,15 @@ static void create_pinned_icon(Container *icons, Window *window) {
         std::string title = pin->stacking_rule;
         if (!pin->windows.empty())
             title = pin->windows[0].title;
-        auto text_w = (c->real_bounds.w - offx - 20) * PANGO_SCALE;
-        auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
-        draw_text(cr, c->real_bounds.x + 10 + offx, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+       if (offx == 0) { // No Icon
+           auto text_w = (c->real_bounds.w - 20) * PANGO_SCALE;
+           auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+           draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE); 
+        } else {
+            auto text_w = (c->real_bounds.w - offx - 30) * PANGO_SCALE;
+            auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+            draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+        }
 
         if (is_active) {
             auto bar_h = std::round(2 * mylar->raw_window->dpi);
@@ -696,6 +704,12 @@ static void create_pinned_icon(Container *icons, Window *window) {
     ch->when_drag_start = paint {
         auto data = (Pin *) c->user_data;
         data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
+        c->z_index = 1;
+    };
+    ch->when_drag_end = paint {
+        auto data = (Pin *) c->user_data;
+        data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
+        c->z_index = 0;
     };
 }
 
