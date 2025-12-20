@@ -12,7 +12,9 @@
 #include <bits/types/idtype_t.h>
 #include <cmath>
 #include <cstring>
+#include <drm_fourcc.h>
 #include <hyprland/src/desktop/Popup.hpp>
+#include <unordered_map>
 #include <wayland-server-core.h>
 #include <wlr-layer-shell-unstable-v1.hpp>
 #include <xcb/xproto.h>
@@ -1281,7 +1283,6 @@ static void configHandleGradientDestroy(void** data) {
         delete sc<CGradientValueData*>(*data);
 }
 
-
 inline CFunctionHook* g_pRenderWindowHook = nullptr;
 typedef void (*origRenderWindowFunc)(void*, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
 void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
@@ -1328,7 +1329,7 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
 
         }
     }
-
+    
     (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)(thisptr, pWindow, pMonitor, time, decorate, mode, ignorePosition, standalone);
     if (rounding_amount) {
         *rounding_amount = initial_value;
@@ -4454,17 +4455,22 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
 }
 
 
-void HyprIso::set_zoom_factor(float amount) {
+void HyprIso::set_zoom_factor(float amount, bool instant) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_factor");
     auto zoom_amount = (Hyprlang::FLOAT*)val->dataPtr();
     *zoom_amount = amount;
-    
+
     for (auto const& m : g_pCompositor->m_monitors) {
-        *(m->m_cursorZoom) = amount;
-        g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m->m_id);
+        if (m->m_cursorZoom) {
+            if (instant)
+                m->m_cursorZoom->setValueAndWarp(amount);
+            else 
+                *(m->m_cursorZoom) = amount;
+            g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m->m_id);
+        }
     }    
 }
 

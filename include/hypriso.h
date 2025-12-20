@@ -319,7 +319,7 @@ struct HyprIso {
 
     void send_false_position(int x, int y);
 
-    void set_zoom_factor(float amount);
+    void set_zoom_factor(float amount, bool instant = false);
     int parent(int id);
 
     void logout();

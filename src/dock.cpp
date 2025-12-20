@@ -540,9 +540,148 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     return c;
 }
 
+static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin) {
+    main_thread([cid, startoff, cw, uuid, pin] {
+        auto m = mouse();
+        std::vector<PopOption> root;
+        auto stacking_rule = pin->stacking_rule;
+        {
+            PopOption pop;
+            pop.text = "Launch task";
+            pop.on_clicked = [uuid]() {
+                for (auto d : docks) {
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        for (auto p : icons->children) {
+                            auto pin = (Pin*)p->user_data;
+                            if (p->uuid == uuid) {
+                                launch_command(pin->command);
+                            }
+                        }
+                    }
+                }
+            };
+            root.push_back(pop);
+        }
+        {
+            PopOption pop;
+#ifdef PROBLEMS
+            assert(false && "Pin could've been destroyed");
+                    #endif
+            if (pin->pinned) {
+                pop.text = "Unpin";
+            } else {
+                pop.text = "Pin";
+            }
+            auto text = pop.text;
+            pop.on_clicked = [text, stacking_rule]() {
+                for (auto d : docks) {
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        for (auto p : icons->children) {
+                            auto pin = (Pin*)p->user_data;
+                            if (pin->stacking_rule == stacking_rule) {
+                                pin->pinned = text == "Pin";
+                            }
+                        }
+                    }
+                }
+            };
+            root.push_back(pop);
+        }
+        {
+            PopOption pop;
+            pop.text = "Edit pin";
+            pop.on_clicked = [stacking_rule]() {
+
+            };
+            root.push_back(pop);
+        }
+        if (!pin->windows.empty()) {
+            {
+                PopOption pop;
+                if (pin->windows.size() == 1) {
+                    pop.text = "End task";
+                } else {
+                    pop.text = "End tasks";
+                }
+                auto text = pop.text;
+                pop.on_clicked = [text, stacking_rule, uuid]() {
+                    for (auto d : docks) {
+                        if (auto icons = container_by_name("icons", d->window->root)) {
+                            for (auto p : icons->children) {
+                                auto pin = (Pin*)p->user_data;
+                                if (text == "End task") {
+                                    if (p->uuid == uuid) {
+                                        for (auto client : pin->windows) {
+                                            auto pid = hypriso->get_pid(client.cid);
+                                            if (pid != -1) {
+                                                kill(pid, SIGKILL);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    if (pin->stacking_rule == stacking_rule) {
+                                        for (auto client : pin->windows) {
+                                            auto pid = hypriso->get_pid(client.cid);
+                                            if (pid != -1) {
+                                                kill(pid, SIGKILL);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                root.push_back(pop);
+            }
+            {
+                PopOption pop;
+                if (pin->windows.size() == 1) {
+                    pop.text = "Close window";
+                } else {
+                    pop.text = "Close windows";
+                }
+                auto text = pop.text;
+                pop.on_clicked = [text, stacking_rule, uuid]() {
+                    for (auto d : docks) {
+                        if (auto icons = container_by_name("icons", d->window->root)) {
+                            for (auto p : icons->children) {
+                                auto pin = (Pin*)p->user_data;
+                                if (text == "Close window") {
+                                    if (p->uuid == uuid) {
+                                        for (auto client : pin->windows) {
+                                            close_window(client.cid);
+                                        }
+                                    }
+                                } else {
+                                    if (pin->stacking_rule == stacking_rule) {
+                                        for (auto client : pin->windows) {
+                                            close_window(client.cid);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                root.push_back(pop);
+            }
+        }
+
+        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
+        //popup::open(root, m.x - (277 * .5), m.y);
+    });
+}
+
 static void create_pinned_icon(Container *icons, Window *window) {
     auto ch = icons->child(::absolute, FILL_SPACE, FILL_SPACE);
     auto pin = new Pin;
+    for (auto icon : icons->children) {
+        auto icon_data = (Pin *) icon->user_data;
+        if (icon != ch && icon_data->pinned && window->stack_rule == icon_data->stacking_rule) {
+            pin->pinned = true;
+        }
+    }
     pin->stacking_rule = window->stack_rule;
     pin->command = window->command;
     pin->icon = window->icon;
@@ -643,100 +782,14 @@ static void create_pinned_icon(Container *icons, Window *window) {
                     }
                 }
             });
+        } else if (c->state.mouse_button_pressed == BTN_MIDDLE) {
+            launch_command(pin->command);
         } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
             int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
             int cw = c->real_bounds.w / mylar->raw_window->dpi;
             auto uuid = c->uuid;
-            main_thread([cid, startoff, cw, uuid] {
-                auto m = mouse();
-                std::vector<PopOption> root;
-                {
-                    PopOption pop;
-                    pop.text = "Launch task";
-                    pop.on_clicked = [uuid]() {
-                        for (auto d : docks) {
-                            if (auto icons = container_by_name("icons", d->window->root)) {
-                                for (auto p : icons->children) {
-                                    auto pin = (Pin *) p->user_data;
-                                    if (p->uuid == uuid) {
-                                        launch_command(pin->command);
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    root.push_back(pop);
-                }
-                {
-                    PopOption pop;
-                    pop.text = "Pin/unpin";
-                    pop.on_clicked = [uuid]() {
-                        for (auto d : docks) {
-                            if (auto icons = container_by_name("icons", d->window->root)) {
-                                for (auto p : icons->children) {
-                                    auto pin = (Pin *) p->user_data;
-                                    if (p->uuid == uuid) {
-                                        pin->pinned = !pin->pinned;
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    root.push_back(pop);
-                }
-                {
-                    PopOption pop;
-                    pop.text = "Edit pin";
-                    pop.on_clicked = [uuid]() {
-
-                    };
-                    root.push_back(pop);
-                }
-                {
-                    PopOption pop;
-                    pop.text = "End task";
-                    pop.on_clicked = [uuid]() {
-                        for (auto d : docks) {
-                            if (auto icons = container_by_name("icons", d->window->root)) {
-                                for (auto p : icons->children) {
-                                    auto pin = (Pin *) p->user_data;
-                                    if (p->uuid == uuid) {
-                                        for (auto client : pin->windows) {
-                                            auto pid = hypriso->get_pid(client.cid);
-                                            if (pid != -1) {
-                                                kill(pid, SIGKILL);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    root.push_back(pop);
-                }
-                {
-                    PopOption pop;
-                    pop.text = "Close window";
-                    pop.on_clicked = [uuid]() { 
-                        for (auto d : docks) {
-                            if (auto icons = container_by_name("icons", d->window->root)) {
-                                for (auto p : icons->children) {
-                                    auto pin = (Pin *) p->user_data;
-                                    if (p->uuid == uuid) {
-                                        for (auto client : pin->windows) {
-                                            close_window(client.cid);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    };
-                    root.push_back(pop);
-                }
-
-                popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
-                //popup::open(root, m.x - (277 * .5), m.y);
-            });
+            
+            pinned_right_click(cid, startoff, cw, uuid, pin);
         }
     };
     ch->pre_layout = [](Container* root, Container* c, const Bounds& b) {
@@ -849,22 +902,25 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
         }
 
         if (window_needs_to_be_added) {
-            if (merge_windows) {
-                // finds it's group and add it
-                bool was_able_to_group = false;
-                for (auto pin_container : icons->children) {
-                    auto pin = (Pin *) pin_container->user_data;
-                    if (pin->stacking_rule == window->stack_rule) {
-                        was_able_to_group = true;
+            bool needs_to_create_its_own_pin = true;
+            for (auto pin_container : icons->children) {
+                auto pin = (Pin *) pin_container->user_data;
+                if (pin->stacking_rule == window->stack_rule) {
+                    if (merge_windows) {
+                        needs_to_create_its_own_pin = false;
+                        pin->windows.push_back(*window);
+                        break;
+                    } else if (pin->windows.empty() && pin->pinned) {
+                        // If we are not merging windows, we still need to group up with pinned no windows item
+                        needs_to_create_its_own_pin = false;
                         pin->windows.push_back(*window);
                         break;
                     }
                 }
-                if (was_able_to_group)
-                    return;
             }
-
-            create_pinned_icon(icons, window);
+            
+            if (needs_to_create_its_own_pin)
+                create_pinned_icon(icons, window);
         }
     }
 }
