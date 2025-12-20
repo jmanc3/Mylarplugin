@@ -19,6 +19,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <memory>
+#include <fstream>
 #include <pango/pangocairo.h>
 
 #define BTN_LEFT		0x110
@@ -41,11 +42,11 @@ public:
     std::string title;
     std::string stack_rule; // Should be regex later, or multiple 
 
-    cairo_surface_t* icon_surf = nullptr; 
+    //cairo_surface_t* icon_surf = nullptr; 
     
     ~Window() {
-        if (icon_surf)
-            cairo_surface_destroy(icon_surf);
+        //if (icon_surf)
+            //cairo_surface_destroy(icon_surf);
     }
     
     Window() {}
@@ -58,7 +59,7 @@ public:
         command = w.command;
         title = w.title;
         stack_rule = w.stack_rule;
-        icon_surf = nullptr;
+        //icon_surf = nullptr;
     };
 };
 
@@ -68,6 +69,14 @@ struct Pin : UserData {
     std::string icon;
     std::string command;
     std::string stacking_rule;
+    
+    cairo_surface_t* icon_surf = nullptr; 
+    
+    ~Pin() {
+        if (icon_surf)
+            cairo_surface_destroy(icon_surf);
+    }
+ 
 
     bool pinned = false;
     int natural_position_x = INT_MAX;
@@ -575,15 +584,13 @@ static void create_pinned_icon(Container *icons, Window *window) {
 
         int offx = 0;
         if (icons_loaded) {
-            for (auto &w : pin->windows) {
-                if (w.icon_surf) {
-                    auto h = cairo_image_surface_get_height(w.icon_surf);
-                    cairo_set_source_surface(cr, w.icon_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
-                    cairo_paint(cr);
-                    auto wi = cairo_image_surface_get_height(w.icon_surf);
-                    offx = wi;
-                    break;
-                }
+            auto ico_surf = pin->icon_surf;
+            if (ico_surf) {
+                auto h = cairo_image_surface_get_height(ico_surf);
+                cairo_set_source_surface(cr, ico_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                cairo_paint(cr);
+                auto wi = cairo_image_surface_get_height(ico_surf);
+                offx = wi;
             }
         }
 
@@ -614,8 +621,8 @@ static void create_pinned_icon(Container *icons, Window *window) {
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
 
-        if (pin->windows.empty()) {
-            notify("launch command");
+        if (pin->windows.empty() && c->state.mouse_button_pressed == BTN_LEFT) {
+            launch_command(pin->command);
             return;
         }
 
@@ -639,37 +646,88 @@ static void create_pinned_icon(Container *icons, Window *window) {
         } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
             int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
             int cw = c->real_bounds.w / mylar->raw_window->dpi;
-            main_thread([cid, startoff, cw] {
+            auto uuid = c->uuid;
+            main_thread([cid, startoff, cw, uuid] {
                 auto m = mouse();
                 std::vector<PopOption> root;
                 {
                     PopOption pop;
                     pop.text = "Launch task";
-                    pop.on_clicked = []() {};
+                    pop.on_clicked = [uuid]() {
+                        for (auto d : docks) {
+                            if (auto icons = container_by_name("icons", d->window->root)) {
+                                for (auto p : icons->children) {
+                                    auto pin = (Pin *) p->user_data;
+                                    if (p->uuid == uuid) {
+                                        launch_command(pin->command);
+                                    }
+                                }
+                            }
+                        }
+                    };
                     root.push_back(pop);
                 }
                 {
                     PopOption pop;
                     pop.text = "Pin/unpin";
-                    pop.on_clicked = []() {};
+                    pop.on_clicked = [uuid]() {
+                        for (auto d : docks) {
+                            if (auto icons = container_by_name("icons", d->window->root)) {
+                                for (auto p : icons->children) {
+                                    auto pin = (Pin *) p->user_data;
+                                    if (p->uuid == uuid) {
+                                        pin->pinned = !pin->pinned;
+                                    }
+                                }
+                            }
+                        }
+                    };
                     root.push_back(pop);
                 }
                 {
                     PopOption pop;
                     pop.text = "Edit pin";
-                    pop.on_clicked = []() {};
+                    pop.on_clicked = [uuid]() {
+
+                    };
                     root.push_back(pop);
                 }
                 {
                     PopOption pop;
                     pop.text = "End task";
-                    pop.on_clicked = []() {};
+                    pop.on_clicked = [uuid]() {
+                        for (auto d : docks) {
+                            if (auto icons = container_by_name("icons", d->window->root)) {
+                                for (auto p : icons->children) {
+                                    auto pin = (Pin *) p->user_data;
+                                    if (p->uuid == uuid) {
+                                        for (auto client : pin->windows) {
+                                            close_window(client.cid);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    };
                     root.push_back(pop);
                 }
                 {
                     PopOption pop;
                     pop.text = "Close window";
-                    pop.on_clicked = [cid]() { close_window(cid); };
+                    pop.on_clicked = [uuid]() { 
+                        for (auto d : docks) {
+                            if (auto icons = container_by_name("icons", d->window->root)) {
+                                for (auto p : icons->children) {
+                                    auto pin = (Pin *) p->user_data;
+                                    if (p->uuid == uuid) {
+                                        for (auto client : pin->windows) {
+                                            close_window(client.cid);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    };
                     root.push_back(pop);
                 }
 
@@ -694,8 +752,8 @@ static void create_pinned_icon(Container *icons, Window *window) {
                     w.attempted_load = true;
                     auto size = get_icon_size(mylar->raw_window->dpi);
                     auto full = one_shot_icon(size, {w.icon, to_lower(w.icon), c3ic_fix_wm_class(w.icon), to_lower(w.icon)});
-                    if (!full.empty()) {
-                        load_icon_full_path(&w.icon_surf, full, size);
+                    if (!full.empty()) {                        
+                        load_icon_full_path(&pin->icon_surf, full, size);
                     }
                 }
             }
@@ -752,7 +810,6 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
 
         // If pin is empty remove it if not pinned
         if (pin->windows.empty()) {
-
             if (!pin->pinned) {
                 delete pin_container;
                 icons->children.erase(icons->children.begin() + pin_index);
@@ -1385,6 +1442,33 @@ void dock::stop(std::string monitor_name) {
 }
 
 // This happens on the main thread, not the dock thread
+std::string get_launch_command(int cid) {
+    std::string command_launched_by_line;
+
+    int pid = hypriso->get_pid(cid);
+    if (pid != -1) {
+        std::ifstream cmdline("/proc/" + std::to_string(pid) + "/cmdline");
+        std::getline((cmdline), command_launched_by_line);
+        
+        size_t index = 0;
+        while (true) {
+            /* Locate the substring to replace. */
+            index = command_launched_by_line.find('\000', index);
+            if (index == std::string::npos)
+                break;
+            
+            /* Make the replacement. */
+            command_launched_by_line.replace(index, 1, " ");
+            
+            /* Advance index forward so the next iteration doesn't pick it up as well. */
+            index += 1;
+        }
+    }
+    
+    return command_launched_by_line;
+}
+
+// This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
     for (auto d : docks) {
         // Check if cid should even be displayed in dock
@@ -1396,13 +1480,8 @@ void dock::add_window(int cid) {
         window->title = hypriso->title_name(cid);
         window->stack_rule = hypriso->class_name(cid);
         window->icon = hypriso->class_name(cid);
-        //auto size = get_icon_size();
-        //auto fullpath = one_shot_icon(size, {window->icon});
-        //notify(window->icon);
-        //if (!fullpath.empty()) {
-            //load_icon_full_path(&window->icon_surf, fullpath, size);
-        //}
-        window->command = "vlc";
+        window->command = get_launch_command(cid);
+        
         if (hypriso->has_focus(cid))
             active_cid = cid;
 

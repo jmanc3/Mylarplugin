@@ -182,7 +182,7 @@ struct HyprIso {
 
     float get_varfloat(std::string target, float default_float = 1.0);    
     RGBA get_varcolor(std::string target, RGBA default_color = {1.0, 0.0, 1.0, 1.0});
-    
+
     int get_varint(std::string target, int default_int = 0);
 
     Bounds getTexBox(int id);
@@ -255,6 +255,7 @@ struct HyprIso {
     float get_rounding(int id);
     RGBA get_shadow_color(int id);
 
+    int get_pid(int client);
 
     std::string class_name(int id);
     std::string title_name(int id);
@@ -344,7 +345,7 @@ struct HyprIso {
     int get_active_workspace_id_client(int client);
     int get_workspace(int client);
 
-    bool started_rendering(int monitor);
+    float zoom_progress(int monitor);
 
     bool is_space_tiling(int space);
     void set_space_tiling(int space, bool state);

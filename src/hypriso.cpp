@@ -5867,18 +5867,24 @@ std::string HyprIso::monitor_name(int id) {
     return "";
 }
 
-bool HyprIso::started_rendering(int monitor) {
+float HyprIso::zoom_progress(int monitor) {
     for (auto hm : hyprmonitors) {
         if (hm->id == monitor) {
             if (hm->m) {
-                printf("%f %s\n", hm->m->m_newMonitorAnimTimer.getMillis(), hm->m->m_name.c_str());
-                if (hm->m->m_zoomAnimFrameCounter >= 5) {
-                    return true;
-                }
+                return hm->m->m_zoomAnimProgress->value();
             }
         }
     }
-    return false;
+    return 1.0f;
 }
 
+int HyprIso::get_pid(int client) {
+    for (auto h : hyprwindows) {
+        if (h->id == client) {
+            return h->w->getPID();
+        }
+    }
+     
+    return -1;
+}
 
