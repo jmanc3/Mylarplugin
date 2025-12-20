@@ -547,7 +547,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
         auto stacking_rule = pin->stacking_rule;
         {
             PopOption pop;
-            pop.text = "Launch task";
+            pop.text = "Launch task (" + pin->command + ")";
             pop.on_clicked = [uuid]() {
                 for (auto d : docks) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
@@ -566,20 +566,22 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             PopOption pop;
 #ifdef PROBLEMS
             assert(false && "Pin could've been destroyed");
-                    #endif
+#endif
+            std::string pin_text;
             if (pin->pinned) {
-                pop.text = "Unpin";
+                pop.text = "Unpin (" + pin->stacking_rule + ")";
             } else {
-                pop.text = "Pin";
+                pop.text = "Pin (" + pin->stacking_rule + ")";
+                pin_text = pop.text;
             }
             auto text = pop.text;
-            pop.on_clicked = [text, stacking_rule]() {
+            pop.on_clicked = [text, stacking_rule, pin_text]() {
                 for (auto d : docks) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         for (auto p : icons->children) {
                             auto pin = (Pin*)p->user_data;
                             if (pin->stacking_rule == stacking_rule) {
-                                pin->pinned = text == "Pin";
+                                pin->pinned = text == pin_text;
                             }
                         }
                     }
@@ -723,30 +725,38 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
             cairo_fill(cr);
         }
+        auto none = pin->windows.empty();
 
         int offx = 0;
         if (icons_loaded) {
             auto ico_surf = pin->icon_surf;
             if (ico_surf) {
                 auto h = cairo_image_surface_get_height(ico_surf);
-                cairo_set_source_surface(cr, ico_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                auto w = cairo_image_surface_get_width(ico_surf);
+                if (none) {
+                    cairo_set_source_surface(cr, ico_surf, c->real_bounds.x + c->real_bounds.w * .5 - w * .5, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                } else {
+                    cairo_set_source_surface(cr, ico_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                }
                 cairo_paint(cr);
                 auto wi = cairo_image_surface_get_height(ico_surf);
                 offx = wi;
             }
         }
 
-        std::string title = pin->stacking_rule;
-        if (!pin->windows.empty())
-            title = pin->windows[0].title;
-       if (offx == 0) { // No Icon
-           auto text_w = (c->real_bounds.w - 20) * PANGO_SCALE;
-           auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
-           draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE); 
-        } else {
-            auto text_w = (c->real_bounds.w - offx - 30) * PANGO_SCALE;
-            auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
-            draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+        if (!none) {
+            std::string title = pin->stacking_rule;
+            if (!pin->windows.empty())
+                title = pin->windows[0].title;
+           if (offx == 0) { // No Icon
+               auto text_w = (c->real_bounds.w - 20) * PANGO_SCALE;
+               auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+               draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE); 
+            } else {
+                auto text_w = (c->real_bounds.w - offx - 30) * PANGO_SCALE;
+                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+            }
         }
 
         if (is_active) {
@@ -1063,7 +1073,12 @@ size_icons(Dock *dock, Container *icons) {
     int total_width = 0;
     for (auto c: icons->children) {
         //auto w = get_label_width(client, c);
-        c->real_bounds.w = max_width * dock->window->raw_window->dpi;
+        auto pin = (Pin *) c->user_data;
+        if (pin->windows.empty()) {
+            c->real_bounds.w = 50 * dock->window->raw_window->dpi;
+        } else {
+            c->real_bounds.w = max_width * dock->window->raw_window->dpi;
+        }
         c->real_bounds.h = icons->real_bounds.h;
         c->real_bounds.y = 0;
     }
