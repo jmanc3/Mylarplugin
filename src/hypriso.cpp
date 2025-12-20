@@ -34,6 +34,10 @@
 #include <librsvg/rsvg.h>
 #include <any>
 
+#define private public
+#include <hyprland/src/render/OpenGL.hpp>
+#undef private
+
 #include <hyprland/src/helpers/Color.hpp>
 #include <kde-server-decoration.hpp>
 //#include <hyprland/protocols/kde-server-decoration.hpp>
@@ -238,6 +242,7 @@ static std::vector<HyprWindow *> hyprwindows;
 struct HyprMonitor {
     int id;  
     PHLMONITOR m;
+    long creation_time = get_current_time_in_ms();
 
     CFramebuffer *wallfb = nullptr;
     Bounds wall_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
@@ -2048,6 +2053,112 @@ void hook_maximize_minimize() {
     }
 }
 
+bool rendered_login_screen(CBox &monbox, PHLMONITORREF mon) {
+    for (auto h : hyprmonitors) {
+        if (h->m == mon) {
+            auto current = get_current_time_in_ms();
+            long delta = current - h->creation_time;
+            float scalar = delta / 2000.0f;
+            if (scalar < 1.0) {
+                monbox.scaleFromCenter(.2); 
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+void CHyprOpenGLImpl_end(CHyprOpenGLImpl *ptr) {
+    static auto PZOOMDISABLEAA = CConfigValue<Hyprlang::INT>("cursor:zoom_disable_aa");
+
+    TRACY_GPU_ZONE("RenderEnd");
+
+    // end the render, copy the data to the main framebuffer
+    if (ptr->m_offloadedFramebuffer) {
+        ptr->m_renderData.damage = ptr->m_renderData.finalDamage;
+        ptr->pushMonitorTransformEnabled(true);
+
+        CBox monbox = {0, 0, ptr->m_renderData.pMonitor->m_transformedSize.x, ptr->m_renderData.pMonitor->m_transformedSize.y};
+
+        if (!rendered_login_screen(monbox, ptr->m_renderData.pMonitor)) {
+            if (g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && ptr->m_renderData.mouseZoomFactor == 1.0f)
+                ptr->m_renderData.pMonitor->m_zoomController.m_resetCameraState = true;
+            ptr->m_renderData.pMonitor->m_zoomController.applyZoomTransform(monbox, ptr->m_renderData);            
+        }
+
+        ptr->m_applyFinalShader = !ptr->m_renderData.blockScreenShader;
+        if (ptr->m_renderData.mouseZoomUseMouse && *PZOOMDISABLEAA)
+            ptr->m_renderData.useNearestNeighbor = true;
+
+        // copy the damaged areas into the mirror buffer
+        // we can't use the offloadFB for mirroring, as it contains artifacts from blurring
+        if (!ptr->m_renderData.pMonitor->m_mirrors.empty() && !ptr->m_fakeFrame)
+            ptr->saveBufferForMirror(monbox);
+
+        ptr->m_renderData.outFB->bind();
+        ptr->blend(false);
+
+        if (ptr->m_finalScreenShader.program < 1 && !g_pHyprRenderer->m_crashingInProgress)
+            ptr->renderTexturePrimitive(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox);
+        else
+            ptr->renderTexture(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox, {});
+
+        ptr->blend(true);
+
+        ptr->m_renderData.useNearestNeighbor = false;
+        ptr->m_applyFinalShader              = false;
+        ptr->popMonitorTransformEnabled();
+    }
+
+    // reset our data
+    ptr->m_renderData.pMonitor.reset();
+    ptr->m_renderData.mouseZoomFactor   = 1.f;
+    ptr->m_renderData.mouseZoomUseMouse = true;
+    ptr->m_renderData.blockScreenShader = false;
+    ptr->m_renderData.currentFB         = nullptr;
+    ptr->m_renderData.mainFB            = nullptr;
+    ptr->m_renderData.outFB             = nullptr;
+    ptr->popMonitorTransformEnabled();
+
+    // if we dropped to offMain, release it now.
+    // if there is a plugin constantly using it, this might be a bit slow,
+    // but I haven't seen a single plugin yet use these, so it's better to drop a bit of vram.
+    if (ptr->m_renderData.pCurrentMonData->offMainFB.isAllocated())
+        ptr->m_renderData.pCurrentMonData->offMainFB.release();
+
+    // check for gl errors
+    const GLenum ERR = glGetError();
+
+    if (ERR == GL_CONTEXT_LOST) /* We don't have infra to recover from this */
+        RASSERT(false, "glGetError at Opengl::end() returned GL_CONTEXT_LOST. Cannot continue until proper GPU reset handling is implemented.");
+}
+
+inline CFunctionHook* g_pOnMonitorEndHook = nullptr;
+typedef void (*origMonitorEnd)(CWindow *);
+void hook_onMonitorEnd(void* thisptr) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+#ifdef FORK_WARN
+    assert(false && "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
+#endif
+    CHyprOpenGLImpl_end((CHyprOpenGLImpl *) thisptr);
+}
+
+void hook_monitor_render() {
+    if (false) {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "end");
+        for (auto m : METHODS) {
+            if (m.signature.find("CHyprOpenGLImpl") != std::string::npos) {
+                g_pOnMonitorEndHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onMonitorEnd);
+                g_pOnMonitorEndHook->hook();
+                break;
+            }
+        }
+    }
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2066,6 +2177,7 @@ void HyprIso::create_hooks() {
     hook_dock_change();
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
+    hook_monitor_render();
 }
 
 bool xcb_get_transient_for(xcb_connection_t* conn, xcb_window_t window, xcb_window_t* out) {

@@ -687,9 +687,27 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
     pin->stacking_rule = stack_rule;
     pin->command = command;
     pin->icon = icon;
-    if (window)
+    if (window) {
         pin->windows.push_back(*window);
-    else
+        // ch should be moved to right behind the last matching stacking rule
+        for (int i = 0; i < icons->children.size(); i++) {
+            if (ch == icons->children[i]) {
+                icons->children.erase(icons->children.begin() + i);
+            }
+        }
+        bool readded = false;
+        for (int i = icons->children.size() - 1; i >= 0; i--) {
+            auto ch_pin = (Pin*)icons->children[i]->user_data;
+            if (ch_pin->stacking_rule == stack_rule) {
+                readded = true;
+                icons->children.insert(icons->children.begin() + i + 1, ch);
+                break;
+            }
+        }
+        if (!readded) {
+            icons->children.push_back(ch);
+        }
+    } else
         pin->pinned = true;
     ch->user_data = pin;
     ch->when_drag_end_is_click = false;
@@ -1670,6 +1688,21 @@ void dock::title_change(int cid, std::string title) {
 
 void dock::on_activated(int cid) {
     active_cid = cid;
+    for (auto d : docks) {
+        if (auto icons = container_by_name("icons", d->window->root)) {
+            for (auto p : icons->children) {
+                auto pin = (Pin *) p->user_data;
+                for (int i = 0; i < pin->windows.size(); i++) {
+                    if (pin->windows[i].cid == cid) {
+                        auto copy = pin->windows[i];
+                        pin->windows.erase(pin->windows.begin() + i);
+                        pin->windows.insert(pin->windows.begin(), copy);
+                        break;
+                    }
+                }
+            }
+        }
+    }
     for (auto d : docks)
         windowing::redraw(d->window->raw_window);
 }
