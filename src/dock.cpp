@@ -893,6 +893,10 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
                 pin->windows.erase(pin->windows.begin() + window_index);
             }
         }
+    }
+    for (int pin_index = icons->children.size() - 1; pin_index >= 0; pin_index--) {
+        auto pin_container = icons->children[pin_index];
+        auto pin = (Pin *) pin_container->user_data;
 
         // If pin is empty remove it if not pinned
         if (pin->windows.empty()) {
@@ -901,6 +905,18 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
                 icons->children.erase(icons->children.begin() + pin_index);
             } else if (!merge_windows) {
                 // in the case where we are not merging windows, and the stacking rule is pinned, we need to remove it, unless it's the last
+                int count = 0;
+                for (auto pc : icons->children) {
+                    auto pcdata = (Pin *) pc->user_data;
+                    if (pcdata->stacking_rule == pin->stacking_rule) {
+                        count++;
+                    }
+                }
+                if (count > 1) {
+                    delete pin_container;
+                    icons->children.erase(icons->children.begin() + pin_index);
+                }
+            } else {
                 int count = 0;
                 for (auto pc : icons->children) {
                     auto pcdata = (Pin *) pc->user_data;
@@ -1711,3 +1727,16 @@ void dock::redraw() {
     for (auto d : docks)
         windowing::redraw(d->window->raw_window);
 }
+
+void dock::toggle_dock_merge() {
+    merge_windows = !merge_windows;
+    auto order = get_window_stacking_order();
+    for (auto cid : order) {
+        remove_window(cid);
+    }
+    for (auto cid : order) {
+        add_window(cid);
+    }
+    dock::redraw();
+}
+

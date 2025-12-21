@@ -12,4 +12,6 @@ namespace dock {
     void remove_window(int cid);
     void title_change(int cid, std::string title);
     void on_activated(int cid);
+
+    void toggle_dock_merge();
 };

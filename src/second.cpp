@@ -1201,6 +1201,10 @@ void add_hyprctl_dispatchers() {
         hypriso->login_animation();
         return true;
     });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:toggle_dock_merge", [](std::string in) {
+        dock::toggle_dock_merge();
+        return true;
+    });
 
     hypriso->add_hyprctl_dispatcher("plugin:mylar:right_click_active", [](std::string in) {
         for (auto m : actual_root->children) {
