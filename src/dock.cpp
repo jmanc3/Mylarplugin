@@ -1229,14 +1229,36 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         data->old_natural_position_x = dragging->real_bounds.x;
         data->natural_position_x = dragging->real_bounds.x;
     }
-    
+
+    // Queue spring animations
     for (auto c: icons->children) {
         if (c->state.mouse_dragging) continue;
         auto *data = (Pin *) c->user_data;
-        c->real_bounds.x = data->natural_position_x;
-        continue;
+        if (app->current - data->creation_time < 1000 || !winbar_settings->animate_icon_positions) {
+            c->real_bounds.x = data->natural_position_x;
+            continue;
+        }
+        bool should_anim = std::abs(c->real_bounds.x - data->natural_position_x) >= 1;
+        bool invalid = false;
+        if (data->natural_position_x != data->old_natural_position_x)
+            invalid = true;
+        
+        if (data->animating && !invalid) {
+            data->spring.update((float) client->delta / 1000.0f);
+            c->real_bounds.x = data->spring.position;
+            float abs_vel = std::abs(data->spring.velocity);
+            if (abs_vel < .05) {
+                data->animating = false;
+                c->real_bounds.x = data->natural_position_x;
+            }
+        } else if (should_anim) {
+            auto dist = std::abs(c->real_bounds.x - data->natural_position_x);
+            data->spring = SpringAnimation(c->real_bounds.x, data->natural_position_x);
+            data->old_natural_position_x = data->natural_position_x;
+            data->animating = true;
+        }
     }
-    
+
     for (auto c: icons->children) {
         if (c->pre_layout) {
             c->pre_layout(root, c, c->real_bounds);
@@ -1245,7 +1267,6 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     
     
     // Start animating, if not already
-    /*
     bool running = ((TaskbarData *) client->user_data)->spring_animating;
     for (auto c: icons->children) {
         auto *data = (LaunchableButton *) c->user_data;
@@ -1261,16 +1282,8 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         client_unregister_animation(app, client);
         running = false;
     }    
-    */
     
-    /*
-    // Calculate 'slot' the icon is closest to and swap into it
 
-    
-    // Queue spring animations
-
-    */
-    
     /*
     icons->should_layout_children = true;
     defer(icons->should_layout_children = false);

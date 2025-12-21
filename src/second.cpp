@@ -16,7 +16,6 @@
 #include "drag.h"
 #include "resizing.h"
 #include "dock.h"
-#include "splash.h"
 #include "snap_preview.h"
 #include "popup.h"
 #include "quick_shortcut_menu.h"
@@ -152,7 +151,6 @@ static void create_root_popup() {
 
 static bool on_mouse_press(int id, int button, int state, float x, float y) {
     mouse_down = state;
-    splash::input();
     second::layout_containers();
     
     auto mou = mouse();
@@ -333,7 +331,6 @@ void toggle_layout() {
 }
 
 static bool on_key_press(int id, int key, int state, bool update_mods) {
-    splash::input();
     bool consume = quick_shortcut_menu::on_key_press(id, key, state, update_mods);
     if (consume)
         return consume;
@@ -923,8 +920,6 @@ static void on_render(int id, int stage) {
         rect(box, {1, 0, 1, 1});
         */
     }
-
-    splash::render(id, stage);
 }
 
 static void on_drag_start_requested(int id) {
