@@ -13,10 +13,12 @@
 #include <cmath>
 #include <cstring>
 #include <drm_fourcc.h>
+#include <glib-object.h>
 #include <hyprland/src/desktop/Popup.hpp>
 #include <unordered_map>
 #include <wayland-server-core.h>
 #include <wlr-layer-shell-unstable-v1.hpp>
+#include <xcb/render.h>
 #include <xcb/xproto.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -2053,14 +2055,53 @@ void hook_maximize_minimize() {
     }
 }
 
-bool rendered_login_screen(CBox &monbox, PHLMONITORREF mon) {
+// {"anchors":[{"x":0,"y":1},{"x":0.525,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.45237856557239087,"y":0.8590353902180988},{"x":0.7485689587985109,"y":0.05514647589789487}]}
+static std::vector<float> fadein = { 0, 0.0050000000000000044, 0.01100000000000001, 0.017000000000000015, 0.02300000000000002, 0.030000000000000027, 0.03700000000000003, 0.04500000000000004, 0.052000000000000046, 0.061000000000000054, 0.06999999999999995, 0.07899999999999996, 0.08899999999999997, 0.09899999999999998, 0.10999999999999999, 0.122, 0.135, 0.14800000000000002, 0.16300000000000003, 0.17800000000000005, 0.19399999999999995, 0.21199999999999997, 0.23099999999999998, 0.252, 0.275, 0.30000000000000004, 0.32699999999999996, 0.359, 0.394, 0.43600000000000005, 0.487, 0.554, 0.613, 0.638, 0.661, 0.6839999999999999, 0.7070000000000001, 0.728, 0.748, 0.768, 0.786, 0.804, 0.821, 0.838, 0.853, 0.868, 0.882, 0.895, 0.907, 0.919, 0.9299999999999999, 0.94, 0.949, 0.958, 0.966, 0.973, 0.98, 0.986, 0.991, 0.996 };
+
+static float pull(std::vector<float>& fls, float scalar) {
+    if (fls.empty())
+        return 0.0f; // or throw an exception
+
+    // Clamp scalar between 0 and 1
+    scalar = std::clamp(scalar, 0.0f, 1.0f);
+
+    float fIndex = scalar * (fls.size() - 1); // exact position
+    int   i0     = static_cast<int>(std::floor(fIndex));
+    int   i1     = static_cast<int>(std::ceil(fIndex));
+
+    if (i0 == i1 || i1 >= fls.size()) {
+        return fls[i0];
+    }
+
+    float t = fIndex - i0; // fraction between the two indices
+    return fls[i0] * (1.0f - t) + fls[i1] * t;
+}
+
+// {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.29521329248987305,"y":-0.027766935560437862}]}
+static std::vector<float> zoomin = { 0, 0.05600000000000005, 0.10899999999999999, 0.15800000000000003, 0.20499999999999996, 0.249, 0.29000000000000004, 0.32899999999999996, 0.366, 0.402, 0.43500000000000005, 0.46699999999999997, 0.497, 0.526, 0.554, 0.5800000000000001, 0.605, 0.628, 0.651, 0.673, 0.6930000000000001, 0.7130000000000001, 0.732, 0.749, 0.766, 0.782, 0.798, 0.812, 0.8260000000000001, 0.84, 0.852, 0.864, 0.875, 0.886, 0.896, 0.906, 0.915, 0.923, 0.931, 0.938, 0.945, 0.952, 0.958, 0.963, 0.969, 0.973, 0.978, 0.982, 0.985, 0.988, 0.991, 0.993, 0.995, 0.997, 0.998, 1, 1, 1.001, 1.001, 1.001 };
+
+
+bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
     for (auto h : hyprmonitors) {
         if (h->m == mon) {
             auto current = get_current_time_in_ms();
             long delta = current - h->creation_time;
-            float scalar = delta / 2000.0f;
+            float scalar = delta / 900.0f;
             if (scalar < 1.0) {
-                monbox.scaleFromCenter(.2); 
+                CBox box = {0, 0, h->m->m_transformedSize.x, h->m->m_transformedSize.x};
+                CHyprColor color = {1, 1, 1, .04f * (1.0f - pull(fadein, scalar))};
+                CHyprOpenGLImpl::SRectRenderData rectdata;
+                auto region = new CRegion(box);
+                rectdata.damage = region;
+                rectdata.blur = false;
+                rectdata.blurA = 1.0;
+                rectdata.round = 0;
+                rectdata.roundingPower = 2.0f;
+                rectdata.xray = false;
+                color = {0, 0, 0, 1.0f * (1.0f - pull(fadein, scalar))};
+                g_pHyprOpenGL->renderRect(box, color, rectdata);
+                monbox.scaleFromCenter(1.0 + (.2 * (1.0 - pull(zoomin, scalar)))); 
+                hypriso->damage_entire(h->id);
                 return true;
             }
         }
@@ -2069,7 +2110,7 @@ bool rendered_login_screen(CBox &monbox, PHLMONITORREF mon) {
     return false;
 }
 
-void CHyprOpenGLImpl_end(CHyprOpenGLImpl *ptr) {
+void monitor_finish(CHyprOpenGLImpl *ptr) {
     static auto PZOOMDISABLEAA = CConfigValue<Hyprlang::INT>("cursor:zoom_disable_aa");
 
     TRACY_GPU_ZONE("RenderEnd");
@@ -2081,15 +2122,21 @@ void CHyprOpenGLImpl_end(CHyprOpenGLImpl *ptr) {
 
         CBox monbox = {0, 0, ptr->m_renderData.pMonitor->m_transformedSize.x, ptr->m_renderData.pMonitor->m_transformedSize.y};
 
-        if (!rendered_login_screen(monbox, ptr->m_renderData.pMonitor)) {
+        bool rendering_splash = false;
+        if (!rendered_splash_screen(monbox, ptr->m_renderData.pMonitor)) {
             if (g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && ptr->m_renderData.mouseZoomFactor == 1.0f)
                 ptr->m_renderData.pMonitor->m_zoomController.m_resetCameraState = true;
             ptr->m_renderData.pMonitor->m_zoomController.applyZoomTransform(monbox, ptr->m_renderData);            
+        } else {
+            rendering_splash = true;
         }
 
         ptr->m_applyFinalShader = !ptr->m_renderData.blockScreenShader;
         if (ptr->m_renderData.mouseZoomUseMouse && *PZOOMDISABLEAA)
             ptr->m_renderData.useNearestNeighbor = true;
+        
+        if (rendering_splash)
+            ptr->m_renderData.useNearestNeighbor = false;
 
         // copy the damaged areas into the mirror buffer
         // we can't use the offloadFB for mirroring, as it contains artifacts from blurring
@@ -2135,7 +2182,7 @@ void CHyprOpenGLImpl_end(CHyprOpenGLImpl *ptr) {
 }
 
 inline CFunctionHook* g_pOnMonitorEndHook = nullptr;
-typedef void (*origMonitorEnd)(CWindow *);
+typedef void (*origMonitorEnd)(CHyprOpenGLImpl *);
 void hook_onMonitorEnd(void* thisptr) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2143,14 +2190,14 @@ void hook_onMonitorEnd(void* thisptr) {
 #ifdef FORK_WARN
     assert(false && "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
 #endif
-    CHyprOpenGLImpl_end((CHyprOpenGLImpl *) thisptr);
+    monitor_finish((CHyprOpenGLImpl *) thisptr);
 }
 
 void hook_monitor_render() {
-    if (false) {
+    if (true) {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "end");
         for (auto m : METHODS) {
-            if (m.signature.find("CHyprOpenGLImpl") != std::string::npos) {
+            if (m.demangled.find("CHyprOpenGLImpl::end") != std::string::npos) {
                 g_pOnMonitorEndHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onMonitorEnd);
                 g_pOnMonitorEndHook->hook();
                 break;
