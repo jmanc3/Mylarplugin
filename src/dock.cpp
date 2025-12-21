@@ -79,7 +79,7 @@ struct SpringAnimation {
     float dt = 0.016f; // Assuming 60 updates per second
     
     // Constructor to initialize the parameters
-    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 26.0f, float stiff = 403.0f, float m = 1.0f)
+    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 29.5f, float stiff = 350.0f, float m = 1.0f)
             : position(pos), velocity(0.0f), target(tar), damping(damp), stiffness(stiff), mass(m) {}
     
     // Method to update the animation state
@@ -335,7 +335,7 @@ Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, boo
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, x, y);
+        cairo_move_to(cr, std::round(x), std::round(y));
         pango_cairo_show_layout(cr, layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);
@@ -924,6 +924,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         auto data = (Pin *) c->user_data;
         data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
         c->z_index = 0;
+        data->wants_reposition_animation = true;
     };
 }
 
@@ -1329,7 +1330,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         }
 
         if (data->animating && !data->wants_reposition_animation) {
-            data->spring.update(((float) delta) / 1000.0f);
+            data->spring.update((((float) delta) / 1000.0f) * 1.5);
             c->real_bounds.x = data->spring.position;
             float abs_vel = std::abs(data->spring.velocity);
             if ((current - data->animation_start_time) > 1500.0f) {
