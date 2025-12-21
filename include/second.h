@@ -333,6 +333,14 @@ void add_to_snap_group(int id, int other, const std::vector<int> &grouped);
 bool groupable(SnapPosition position, const std::vector<int> ids);
 bool groupable_types(SnapPosition a, SnapPosition b);
 
+static void set_argb(cairo_t *cr, RGBA color) {
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
+}
+
+static void set_rect(cairo_t *cr, Bounds bounds) {
+    cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
+}
+
 struct SnapLimits {
     float left_middle = .5f;
     float right_middle = .5f;

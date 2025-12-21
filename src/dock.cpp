@@ -122,6 +122,7 @@ struct Pin : UserData {
     
     bool animating = false;
     SpringAnimation spring;
+    double actual_w = 0;
     
     ~Pin() {
         if (icon_surf)
@@ -726,6 +727,17 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
     });
 }
 
+static void draw_clip_begin(cairo_t *cr, const Bounds &b) {
+    cairo_save(cr);
+    set_rect(cr, b);
+    cairo_clip(cr);
+}
+
+void draw_clip_end(cairo_t *cr) {
+    cairo_reset_clip(cr);
+    cairo_restore(cr);
+}
+
 static void create_pinned_icon(Container *icons, std::string stack_rule, std::string command, std::string icon, Window *window = nullptr) {
     auto ch = icons->child(::absolute, FILL_SPACE, FILL_SPACE);
     auto pin = new Pin;
@@ -818,13 +830,17 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             if (!pin->windows.empty())
                 title = pin->windows[0].title;
            if (offx == 0) { // No Icon
-               auto text_w = (c->real_bounds.w - 20) * PANGO_SCALE;
+               auto text_w = (pin->actual_w - 20) * PANGO_SCALE;
                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+               draw_clip_begin(cr, c->real_bounds);
                draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE); 
+               draw_clip_end(cr);
             } else {
-                auto text_w = (c->real_bounds.w - offx - 30) * PANGO_SCALE;
+                auto text_w = (pin->actual_w - offx - 30) * PANGO_SCALE;
                 auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                draw_clip_begin(cr, c->real_bounds);
                 draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                draw_clip_end(cr);
             }
         }
 
@@ -1372,6 +1388,29 @@ static void fill_root(Container *root) {
         icons->when_paint = paint {
             auto dock = (Dock *) root->user_data;
             layout_icons(root, c, dock);
+
+            for (int i = 0; i < c->children.size() - 1; i++) {
+                auto *active = c->children[i];
+                auto *active_data = (Pin *) active->user_data;
+                active_data->actual_w = active->real_bounds.w;
+                auto *next = c->children[i + 1];
+                auto *next_data = (Pin *) next->user_data;
+                next_data->actual_w = next->real_bounds.w;
+                if ((active->real_bounds.w + active->real_bounds.x) > next->real_bounds.x) {
+                    if (!active->state.mouse_dragging && !next->state.mouse_dragging) {
+                        if (!active_data->windows.empty()) {
+                            active->real_bounds.w = (next->real_bounds.x - active->real_bounds.x);
+                        }
+                    }
+                }
+            }
+        };
+        icons->after_paint = paint {
+            for (int i = 0; i < c->children.size(); i++) {
+                auto *active = c->children[i];
+                auto *active_data = (Pin *) active->user_data;
+                active->real_bounds.w = active_data->actual_w;
+            }
         };
     }
 
