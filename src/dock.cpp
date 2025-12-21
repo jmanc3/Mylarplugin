@@ -32,6 +32,7 @@
 static bool merge_windows = false;
 static int pixel_spacing = 1;
 static float max_width = 230;
+static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
 class Window {
 public:
@@ -829,16 +830,18 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             std::string title = pin->stacking_rule;
             if (!pin->windows.empty())
                 title = pin->windows[0].title;
-           if (offx == 0) { // No Icon
-               auto text_w = (pin->actual_w - 20) * PANGO_SCALE;
-               auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
-               draw_clip_begin(cr, c->real_bounds);
-               draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE); 
-               draw_clip_end(cr);
+            auto bc = c->real_bounds;
+            if (offx == 0) { // No Icon
+                auto text_w = (pin->actual_w - 20) * PANGO_SCALE;
+                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                draw_clip_begin(cr, bc);
+                draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w,
+                          c->real_bounds.h * PANGO_SCALE);
+                draw_clip_end(cr);
             } else {
                 auto text_w = (pin->actual_w - offx - 30) * PANGO_SCALE;
                 auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
-                draw_clip_begin(cr, c->real_bounds);
+                draw_clip_begin(cr, bc);
                 draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
                 draw_clip_end(cr);
             }
@@ -1217,7 +1220,7 @@ size_icons(Dock *dock, Container *icons) {
 static void layout_icons(Container *root, Container *icons, Dock *dock) {
     float total_width = size_icons(dock, icons);
     
-    auto align = container_alignment::ALIGN_LEFT; // todo: pull from setting
+    auto align = icon_alignment; // todo: pull from setting
     
     int off = icons->real_bounds.x;
     if (align == container_alignment::ALIGN_RIGHT) {
@@ -1410,6 +1413,25 @@ static void fill_root(Container *root) {
                 auto *active = c->children[i];
                 auto *active_data = (Pin *) active->user_data;
                 active->real_bounds.w = active_data->actual_w;
+            }
+        };
+    }
+    {
+        auto align = simple_dock_item(root, []() {
+            if (icon_alignment == container_alignment::ALIGN_RIGHT) {
+                return "\uE8E2";
+            } else if (icon_alignment == container_alignment::ALIGN_CENTER || icon_alignment == container_alignment::ALIGN_GLOBAL_CENTER_HORIZONTALLY) {
+                return "\uE8E3";
+            }
+            return "\uE8E4";
+        });
+        align->when_clicked = paint {
+            if (icon_alignment == ALIGN_LEFT) {
+                icon_alignment = ALIGN_GLOBAL_CENTER_HORIZONTALLY;
+            } else if (icon_alignment == ALIGN_CENTER_HORIZONTALLY) {
+                icon_alignment = ALIGN_RIGHT;
+            } else {
+                icon_alignment = ALIGN_LEFT;
             }
         };
     }
