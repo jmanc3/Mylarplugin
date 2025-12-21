@@ -1393,6 +1393,8 @@ static void fill_root(Container *root) {
             layout_icons(root, c, dock);
 
             for (int i = 0; i < c->children.size() - 1; i++) {
+                if (c->children.empty())
+                    break;
                 auto *active = c->children[i];
                 auto *active_data = (Pin *) active->user_data;
                 active_data->actual_w = active->real_bounds.w;
@@ -1410,6 +1412,8 @@ static void fill_root(Container *root) {
         };
         icons->after_paint = paint {
             for (int i = 0; i < c->children.size(); i++) {
+                if (c->children.empty())
+                    break;
                 auto *active = c->children[i];
                 auto *active_data = (Pin *) active->user_data;
                 active->real_bounds.w = active_data->actual_w;
@@ -1428,7 +1432,7 @@ static void fill_root(Container *root) {
         align->when_clicked = paint {
             if (icon_alignment == ALIGN_LEFT) {
                 icon_alignment = ALIGN_GLOBAL_CENTER_HORIZONTALLY;
-            } else if (icon_alignment == ALIGN_CENTER_HORIZONTALLY) {
+            } else if (icon_alignment == ALIGN_GLOBAL_CENTER_HORIZONTALLY) {
                 icon_alignment = ALIGN_RIGHT;
             } else {
                 icon_alignment = ALIGN_LEFT;

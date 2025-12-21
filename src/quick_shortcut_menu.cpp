@@ -15,6 +15,7 @@
 #include <vector>
 #include <unordered_map>
 #include <fstream>
+#include <ctype.h>
 
 struct KeyPress {
     uint32_t key = 0;
@@ -64,6 +65,85 @@ keys=press 18 release 18
 command=xdg-open ~/.config/mylar/quick_shortcuts.txt
 )end";
 
+#include <unordered_map>
+
+struct KeyStroke {
+    uint32_t keycode;
+    bool shift;
+};
+
+static const std::unordered_map<char, KeyStroke> ascii_to_key = {
+    // letters
+    {'a', {KEY_A, false}}, {'A', {KEY_A, true}},
+    {'b', {KEY_B, false}}, {'B', {KEY_B, true}},
+    {'c', {KEY_C, false}}, {'C', {KEY_C, true}},
+    {'d', {KEY_D, false}}, {'D', {KEY_D, true}},
+    {'e', {KEY_E, false}}, {'E', {KEY_E, true}},
+    {'f', {KEY_F, false}}, {'F', {KEY_F, true}},
+    {'g', {KEY_G, false}}, {'G', {KEY_G, true}},
+    {'h', {KEY_H, false}}, {'H', {KEY_H, true}},
+    {'i', {KEY_I, false}}, {'I', {KEY_I, true}},
+    {'j', {KEY_J, false}}, {'J', {KEY_J, true}},
+    {'k', {KEY_K, false}}, {'K', {KEY_K, true}},
+    {'l', {KEY_L, false}}, {'L', {KEY_L, true}},
+    {'m', {KEY_M, false}}, {'M', {KEY_M, true}},
+    {'n', {KEY_N, false}}, {'N', {KEY_N, true}},
+    {'o', {KEY_O, false}}, {'O', {KEY_O, true}},
+    {'p', {KEY_P, false}}, {'P', {KEY_P, true}},
+    {'q', {KEY_Q, false}}, {'Q', {KEY_Q, true}},
+    {'r', {KEY_R, false}}, {'R', {KEY_R, true}},
+    {'s', {KEY_S, false}}, {'S', {KEY_S, true}},
+    {'t', {KEY_T, false}}, {'T', {KEY_T, true}},
+    {'u', {KEY_U, false}}, {'U', {KEY_U, true}},
+    {'v', {KEY_V, false}}, {'V', {KEY_V, true}},
+    {'w', {KEY_W, false}}, {'W', {KEY_W, true}},
+    {'x', {KEY_X, false}}, {'X', {KEY_X, true}},
+    {'y', {KEY_Y, false}}, {'Y', {KEY_Y, true}},
+    {'z', {KEY_Z, false}}, {'Z', {KEY_Z, true}},
+
+    // numbers
+    {'1', {KEY_1, false}}, {'!', {KEY_1, true}},
+    {'2', {KEY_2, false}}, {'@', {KEY_2, true}},
+    {'3', {KEY_3, false}}, {'#', {KEY_3, true}},
+    {'4', {KEY_4, false}}, {'$', {KEY_4, true}},
+    {'5', {KEY_5, false}}, {'%', {KEY_5, true}},
+    {'6', {KEY_6, false}}, {'^', {KEY_6, true}},
+    {'7', {KEY_7, false}}, {'&', {KEY_7, true}},
+    {'8', {KEY_8, false}}, {'*', {KEY_8, true}},
+    {'9', {KEY_9, false}}, {'(', {KEY_9, true}},
+    {'0', {KEY_0, false}}, {')', {KEY_0, true}},
+
+    // whitespace & punctuation
+    {' ', {KEY_SPACE, false}},
+    {'\n', {KEY_ENTER, false}},
+    {'\t', {KEY_TAB, false}},
+    {'-', {KEY_MINUS, false}}, {'_', {KEY_MINUS, true}},
+    {'=', {KEY_EQUAL, false}}, {'+', {KEY_EQUAL, true}},
+    {'[', {KEY_LEFTBRACE, false}}, {'{', {KEY_LEFTBRACE, true}},
+    {']', {KEY_RIGHTBRACE, false}}, {'}', {KEY_RIGHTBRACE, true}},
+    {'\\', {KEY_BACKSLASH, false}}, {'|', {KEY_BACKSLASH, true}},
+    {';', {KEY_SEMICOLON, false}}, {':', {KEY_SEMICOLON, true}},
+    {'\'', {KEY_APOSTROPHE, false}}, {'"', {KEY_APOSTROPHE, true}},
+    {',', {KEY_COMMA, false}}, {'<', {KEY_COMMA, true}},
+    {'.', {KEY_DOT, false}}, {'>', {KEY_DOT, true}},
+    {'/', {KEY_SLASH, false}}, {'?', {KEY_SLASH, true}},
+    {'`', {KEY_GRAVE, false}}, {'~', {KEY_GRAVE, true}},
+};
+
+std::vector<KeyStroke> string_to_keys(const std::string& s) {
+    std::vector<KeyStroke> result;
+
+    for (char c : s) {
+        auto it = ascii_to_key.find(c);
+        if (it != ascii_to_key.end()) {
+            result.push_back(it->second);
+        }
+        // else: unsupported character
+    }
+
+    return result;
+}
+
 void parse_sequences() {
     sequences.clear();
     const char* home = std::getenv("HOME");
@@ -101,6 +181,16 @@ void parse_sequences() {
                     } else if (token == "release") {
                         down = false;
                     } else {
+                        if (token.size() == 1) {
+                            if (isalpha(token[0])) {
+                                auto keys = string_to_keys(token);
+                                auto stroke = keys[0];
+                                if (stroke.shift && down)
+                                    s.keys.push_back({KEY_LEFTSHIFT, down});
+                                s.keys.push_back({stroke.keycode, down});
+                                continue;
+                            }
+                        }
                         try {
                             uint32_t num = std::atoi(token.c_str());
                             s.keys.push_back({num, down});
