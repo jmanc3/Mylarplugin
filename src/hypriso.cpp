@@ -21,6 +21,7 @@
 #include <xcb/render.h>
 #include <xcb/xproto.h>
 #include <xkbcommon/xkbcommon.h>
+#include <filesystem>
 
 #ifdef TRACY_ENABLE
 #include "tracy/Tracy.hpp"
@@ -97,6 +98,7 @@ HyprIso *hypriso = new HyprIso;
 static int unique_id = 0;
 
 static bool next_check = false;
+static std::string previously_seen_instance_signature = "";
 
 void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
@@ -1488,16 +1490,13 @@ int HyprIso::get_varint(std::string target, int default_float) {
     ZoneScoped;
 #endif
     //return default_float;
-    notify(fz("ask {}", target));
-    
+
     auto confval = HyprlandAPI::getConfigValue(globals->api, target);
     if (!confval) {
-        notify("default");
         return default_float;
     }
 
     auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
-    notify(fz("ret {}", **VAR));
     return **VAR; 
 }
 
@@ -2081,12 +2080,15 @@ static float pull(std::vector<float>& fls, float scalar) {
 static std::vector<float> zoomin = { 0, 0.05600000000000005, 0.10899999999999999, 0.15800000000000003, 0.20499999999999996, 0.249, 0.29000000000000004, 0.32899999999999996, 0.366, 0.402, 0.43500000000000005, 0.46699999999999997, 0.497, 0.526, 0.554, 0.5800000000000001, 0.605, 0.628, 0.651, 0.673, 0.6930000000000001, 0.7130000000000001, 0.732, 0.749, 0.766, 0.782, 0.798, 0.812, 0.8260000000000001, 0.84, 0.852, 0.864, 0.875, 0.886, 0.896, 0.906, 0.915, 0.923, 0.931, 0.938, 0.945, 0.952, 0.958, 0.963, 0.969, 0.973, 0.978, 0.982, 0.985, 0.988, 0.991, 0.993, 0.995, 0.997, 0.998, 1, 1, 1.001, 1.001, 1.001 };
 
 
+
 bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
+    if (previously_seen_instance_signature == g_pCompositor->m_instanceSignature)
+        return false;
     for (auto h : hyprmonitors) {
         if (h->m == mon) {
             auto current = get_current_time_in_ms();
             long delta = current - h->creation_time;
-            float scalar = delta / 900.0f;
+            float scalar = (delta - 3000.0f) / 800.0f;
             if (scalar < 1.0) {
                 CBox box = {0, 0, h->m->m_transformedSize.x, h->m->m_transformedSize.x};
                 CHyprColor color = {1, 1, 1, .04f * (1.0f - pull(fadein, scalar))};
@@ -2100,7 +2102,7 @@ bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
                 rectdata.xray = false;
                 color = {0, 0, 0, 1.0f * (1.0f - pull(fadein, scalar))};
                 g_pHyprOpenGL->renderRect(box, color, rectdata);
-                monbox.scaleFromCenter(1.0 + (.2 * (1.0 - pull(zoomin, scalar)))); 
+                monbox.scaleFromCenter(1.0 + (0.15 * (1.0 - pull(zoomin, scalar)))); 
                 hypriso->damage_entire(h->id);
                 return true;
             }
@@ -2206,10 +2208,40 @@ void hook_monitor_render() {
     }
 }
 
+std::string get_previous_instance_signature() {
+    std::string previous = "";
+    // Resolve $HOME
+    const char* home = std::getenv("HOME");
+    if (!home)
+        return previous;
+
+    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/last_seen_instance_signature.txt";
+    std::filesystem::create_directories(filepath.parent_path());
+
+    {
+        std::ifstream file(filepath);
+        if (file) {
+            std::string line;
+            std::getline(file, line);
+            previous = line;
+        }
+    }
+
+    {
+        std::ofstream out(filepath, std::ios::trunc);
+        if (!out)
+            return previous;
+        out << g_pCompositor->m_instanceSignature << "\n";
+    }
+
+    return previous; 
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    previously_seen_instance_signature = get_previous_instance_signature();
     //return;
     detect_csd_request_change();
     fix_window_corner_rendering();
