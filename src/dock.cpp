@@ -79,7 +79,7 @@ struct SpringAnimation {
     float dt = 0.016f; // Assuming 60 updates per second
     
     // Constructor to initialize the parameters
-    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 20.0f, float stiff = 210.0f, float m = 1.0f)
+    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 26.0f, float stiff = 403.0f, float m = 1.0f)
             : position(pos), velocity(0.0f), target(tar), damping(damp), stiffness(stiff), mass(m) {}
     
     // Method to update the animation state
@@ -122,7 +122,6 @@ struct Pin : UserData {
     SpringAnimation spring;
     double actual_w = 0;
     long animation_start_time = 0;
-    bool possibly_done = false;
 
     ~Pin() {
         if (icon_surf)
@@ -132,7 +131,7 @@ struct Pin : UserData {
 
     bool pinned = false;
     int natural_position_x = INT_MAX;
-    bool wants_reposition_animation = false;
+    bool wants_reposition_animation = true;
     int initial_mouse_click_before_drag_offset_x = 0;
 };
 
@@ -1242,6 +1241,8 @@ void calc_natural_positions(Container *icons, float total_width, Container *root
 
     for (auto c : icons->children) {
         auto data = (Pin *) c->user_data;
+        if (data->natural_position_x != off)
+            data->wants_reposition_animation = true;
         data->natural_position_x = off;
         off += c->real_bounds.w + pixel_spacing;
     }
