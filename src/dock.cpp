@@ -16,6 +16,7 @@
 #include <functional>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
+#include <random>
 #include <sys/wait.h>
 #include <thread>
 #include <memory>
@@ -78,7 +79,7 @@ struct SpringAnimation {
     float dt = 0.016f; // Assuming 60 updates per second
     
     // Constructor to initialize the parameters
-    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 28.0f, float stiff = 236.0f, float m = 1.0f)
+    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 20.0f, float stiff = 210.0f, float m = 1.0f)
             : position(pos), velocity(0.0f), target(tar), damping(damp), stiffness(stiff), mass(m) {}
     
     // Method to update the animation state
@@ -89,10 +90,6 @@ struct SpringAnimation {
 };
 
 void SpringAnimation::update(float deltaTime) {
-    if (deltaTime < .00001)
-        deltaTime = dt;
-    if (deltaTime > dt)
-        deltaTime = dt;
     // Calculate the force based on Hooke's Law: F = -kx
     float force = -stiffness * (position - target);
     // Calculate the damping force: Fd = -bv
@@ -124,7 +121,9 @@ struct Pin : UserData {
     bool animating = false;
     SpringAnimation spring;
     double actual_w = 0;
-    
+    long animation_start_time = 0;
+    bool possibly_done = false;
+
     ~Pin() {
         if (icon_surf)
             cairo_surface_destroy(icon_surf);
@@ -133,7 +132,7 @@ struct Pin : UserData {
 
     bool pinned = false;
     int natural_position_x = INT_MAX;
-    int old_natural_position_x = INT_MAX;
+    bool wants_reposition_animation = false;
     int initial_mouse_click_before_drag_offset_x = 0;
 };
 
@@ -1216,10 +1215,7 @@ size_icons(Dock *dock, Container *icons) {
     return total_width;
 }
 
-
-static void layout_icons(Container *root, Container *icons, Dock *dock) {
-    float total_width = size_icons(dock, icons);
-    
+void calc_natural_positions(Container *icons, float total_width, Container *root) {
     auto align = icon_alignment; // todo: pull from setting
     
     int off = icons->real_bounds.x;
@@ -1246,14 +1242,16 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
 
     for (auto c : icons->children) {
         auto data = (Pin *) c->user_data;
-        if (data->natural_position_x == INT_MAX) {
-            data->old_natural_position_x = off;
-        } else {
-            data->old_natural_position_x = data->natural_position_x;
-        }
         data->natural_position_x = off;
         off += c->real_bounds.w + pixel_spacing;
     }
+}
+
+static void layout_icons(Container *root, Container *icons, Dock *dock) {
+    float total_width = size_icons(dock, icons);
+
+    calc_natural_positions(icons, total_width, root);
+    
     Container *dragging = nullptr;
     int drag_index = 0;
     
@@ -1277,11 +1275,17 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         drag_index++;
     }
 
-    if (dragging) {
+    if (dragging) { 
+        // swap icons on taskbar
         int distance = 100000;
         int index = 0;
         int w_b = 0;
         auto natural_x = ((Pin *) icons->children[0]->user_data)->natural_position_x;
+        static std::vector<Container *> before;
+        before.clear();
+        for (auto ch : icons->children)
+            before.push_back(ch);
+
         icons->children.erase(icons->children.begin() + drag_index);
         for (int i = 0; i < icons->children.size() + 1; i++) {
             icons->children.insert(icons->children.begin() + i, dragging);
@@ -1295,9 +1299,18 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             icons->children.erase(icons->children.begin() + i);
         }
         icons->children.insert(icons->children.begin() + index, dragging);
-        auto *data = (Pin *) dragging->user_data;
-        data->old_natural_position_x = dragging->real_bounds.x;
-        data->natural_position_x = dragging->real_bounds.x;
+
+        bool any_change = false;
+        for (int i = 0; i < before.size(); i++) {
+            if (before[i] != icons->children[i]) {
+                auto ch_pin_data = (Pin*)before[i]->user_data;
+                ch_pin_data->wants_reposition_animation = true;
+                any_change = true;
+            }
+        }
+
+        if (any_change)
+            calc_natural_positions(icons, total_width, root);
     }
 
     auto current = get_current_time_in_ms();
@@ -1313,24 +1326,21 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             c->real_bounds.x = data->natural_position_x;
             continue;
         }
-        bool should_anim = std::abs(c->real_bounds.x - data->natural_position_x) >= 1;
-        bool invalid = false;
-        if (data->natural_position_x != data->old_natural_position_x)
-            invalid = true;
-        
-        if (data->animating && !invalid) {
+
+        if (data->animating && !data->wants_reposition_animation) {
             data->spring.update(((float) delta) / 1000.0f);
             c->real_bounds.x = data->spring.position;
             float abs_vel = std::abs(data->spring.velocity);
-            if (abs_vel < .05) {
+            if ((current - data->animation_start_time) > 1500.0f) {
                 data->animating = false;
-                c->real_bounds.x = data->natural_position_x;
+                c->real_bounds.x = data->natural_position_x;           
             }
-        } else if (should_anim) {
+        } else if (data->wants_reposition_animation) {
+            data->wants_reposition_animation = false;
             auto dist = std::abs(c->real_bounds.x - data->natural_position_x);
             data->spring = SpringAnimation(c->real_bounds.x, data->natural_position_x);
-            data->old_natural_position_x = data->natural_position_x;
             data->animating = true;
+            data->animation_start_time = current;
         }
     }
 
@@ -1362,6 +1372,20 @@ static void fill_root(Container *root) {
         auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
         super->when_clicked = paint {
             system("wofi --show run &");
+        };
+        super->after_paint = paint {
+            return;
+            auto dock = (Dock *) root->user_data;
+            auto cr = dock->window->raw_window->cr;
+            set_rect(cr, c->real_bounds);
+            static int off = 0;
+            off++;
+            if (off % 2 == 0) {
+                set_argb(cr, {1, 1, 0, 1});
+            } else {
+                set_argb(cr, {1, 0, 0, 1});
+            }
+            cairo_fill(cr);
         };
     }
 
