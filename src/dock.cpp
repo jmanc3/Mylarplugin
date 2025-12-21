@@ -61,6 +61,52 @@ public:
     };
 };
 
+struct SpringAnimation {
+    // Parameters for the spring motion
+    float position;
+    float velocity = 0.0;
+    float target;
+    float damping;
+    float stiffness;
+    float mass;
+    
+    // Create a spring animation with initial position 0, target position 100
+    // SpringAnimation spring(0.0f, 100.0f, 0.1f, 10.0f, 1.0f); // Adjusted for bounce
+    
+    // Simulate the spring animation
+    float dt = 0.016f; // Assuming 60 updates per second
+    
+    // Constructor to initialize the parameters
+    SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 28.0f, float stiff = 236.0f, float m = 1.0f)
+            : position(pos), velocity(0.0f), target(tar), damping(damp), stiffness(stiff), mass(m) {}
+    
+    // Method to update the animation state
+    void update(float deltaTime);
+    
+    // Method to set a new target position
+    void setTarget(float newTarget);
+};
+
+void SpringAnimation::update(float deltaTime) {
+    if (deltaTime < .00001)
+        deltaTime = dt;
+    if (deltaTime > dt)
+        deltaTime = dt;
+    // Calculate the force based on Hooke's Law: F = -kx
+    float force = -stiffness * (position - target);
+    // Calculate the damping force: Fd = -bv
+    float dampingForce = -damping * velocity;
+    // Sum the forces
+    float acceleration = (force + dampingForce) / mass;
+    // Integrate to get the velocity and position
+    velocity += acceleration * deltaTime;
+    position += velocity * deltaTime;
+}
+
+void SpringAnimation::setTarget(float newTarget) {
+    target = newTarget;
+}
+
 struct Pin : UserData {
     std::vector<Window> windows;
 
@@ -71,6 +117,11 @@ struct Pin : UserData {
     cairo_surface_t* icon_surf = nullptr; 
     bool attempted_load = false;
     bool scale_change = false;    
+
+    long creation_time = get_current_time_in_ms();
+    
+    bool animating = false;
+    SpringAnimation spring;
     
     ~Pin() {
         if (icon_surf)
@@ -1230,11 +1281,16 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         data->natural_position_x = dragging->real_bounds.x;
     }
 
+    auto current = get_current_time_in_ms();
+    static long previous = current;
+    auto delta = current - previous;
+    previous = current;
+
     // Queue spring animations
     for (auto c: icons->children) {
         if (c->state.mouse_dragging) continue;
         auto *data = (Pin *) c->user_data;
-        if (app->current - data->creation_time < 1000 || !winbar_settings->animate_icon_positions) {
+        if (current - data->creation_time < 1000) {
             c->real_bounds.x = data->natural_position_x;
             continue;
         }
@@ -1244,7 +1300,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             invalid = true;
         
         if (data->animating && !invalid) {
-            data->spring.update((float) client->delta / 1000.0f);
+            data->spring.update(((float) delta) / 1000.0f);
             c->real_bounds.x = data->spring.position;
             float abs_vel = std::abs(data->spring.velocity);
             if (abs_vel < .05) {
@@ -1264,39 +1320,20 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             c->pre_layout(root, c, c->real_bounds);
         }
     }
-    
-    
+
     // Start animating, if not already
-    bool running = ((TaskbarData *) client->user_data)->spring_animating;
+    bool needs_refresh = false;
     for (auto c: icons->children) {
-        auto *data = (LaunchableButton *) c->user_data;
-        if (data->animating && !running) {
-            running = true;
-            client_register_animation(app, client);
-            ((TaskbarData *) client->user_data)->spring_animating = true;
-            return;
+        auto *data = (Pin *) c->user_data;
+        if (data->animating) {
+            needs_refresh = true;
+            break;
         }
     }
-    if (running) {
-        ((TaskbarData *) client->user_data)->spring_animating = false;
-        client_unregister_animation(app, client);
-        running = false;
-    }    
-    
 
-    /*
-    icons->should_layout_children = true;
-    defer(icons->should_layout_children = false);
-    ::layout(root, icons, icons->real_bounds);
-    
-    for (auto c : icons->children) {
-       if (c->state.mouse_dragging) {
-           auto diff = root->mouse_initial_x - root->mouse_current_x;
-           c->real_bounds.x -= diff;
-       }
+    if (needs_refresh) {
+        windowing::redraw(dock->window->raw_window);
     }
-    */
-    
 }
 
 static void fill_root(Container *root) {
