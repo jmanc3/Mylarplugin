@@ -2088,7 +2088,7 @@ bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
         if (h->m == mon) {
             auto current = get_current_time_in_ms();
             long delta = current - h->creation_time;
-            float scalar = (delta - 3000.0f) / 800.0f;
+            float scalar = (delta - 3000.0f) / 375.0f;
             if (scalar < 1.0) {
                 CBox box = {0, 0, h->m->m_transformedSize.x, h->m->m_transformedSize.x};
                 CHyprColor color = {1, 1, 1, .04f * (1.0f - pull(fadein, scalar))};
@@ -6088,10 +6088,9 @@ int HyprIso::get_pid(int client) {
 void HyprIso::login_animation() {
     for (auto mon : hyprmonitors) {
        if (mon->m) {
-          auto m = mon->m;
-          m->m_zoomAnimProgress->setValueAndWarp(0.F);
-          m->m_zoomAnimFrameCounter = 0;
-          *m->m_zoomAnimProgress = 1.F;
+           mon->creation_time = get_current_time_in_ms();
+           get_previous_instance_signature();
+           previously_seen_instance_signature = "";
        }
     }
 }
