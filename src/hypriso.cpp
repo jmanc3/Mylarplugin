@@ -247,6 +247,7 @@ struct HyprMonitor {
     int id;  
     PHLMONITOR m;
     long creation_time = get_current_time_in_ms();
+    bool first = true;
 
     CFramebuffer *wallfb = nullptr;
     Bounds wall_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
@@ -2088,7 +2089,15 @@ bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
         if (h->m == mon) {
             auto current = get_current_time_in_ms();
             long delta = current - h->creation_time;
-            float scalar = (delta - 3000.0f) / 375.0f;
+            if (h->first && delta > 2000) {
+                h->first = false;
+                const char* home = std::getenv("HOME");
+                if (home) {
+                    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/chime.wav";
+                    system(fz("mpv --ao=alsa \"{}\" &", filepath.string()).c_str());
+                }
+            }
+            float scalar = (delta - 3000.0f) / 1000.0f;
             if (scalar < 1.0) {
                 CBox box = {0, 0, h->m->m_transformedSize.x, h->m->m_transformedSize.x};
                 CHyprColor color = {1, 1, 1, .04f * (1.0f - pull(fadein, scalar))};
@@ -6089,6 +6098,7 @@ void HyprIso::login_animation() {
     for (auto mon : hyprmonitors) {
        if (mon->m) {
            mon->creation_time = get_current_time_in_ms();
+           mon->first = true;
            get_previous_instance_signature();
            previously_seen_instance_signature = "";
        }

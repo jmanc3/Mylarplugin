@@ -82,6 +82,7 @@ namespace windowing {
     void main_loop(RawApp *app);
 
     void wake_up(RawWindow *window);
+    void set_size(RawWindow *window, int width, int height);
     void redraw(RawWindow *window);
 
     void close_window(RawWindow *window);   

@@ -82,6 +82,10 @@ struct wl_context {
 
     std::vector<PolledFunction> polled_fds;
     
+    std::vector<std::function<void()>> functions_to_call;
+    std::mutex functions_mut;
+    bool have_functions_to_execute = false;
+  
     bool running = true;
     struct wl_display *display = nullptr;
     struct wl_registry *registry = nullptr;
@@ -190,7 +194,7 @@ static void handle_toplevel_configure(
     struct xdg_toplevel *toplevel,
     int32_t width,
     int32_t height,
-    struct wl_array *states) 
+    struct wl_array *states)
 {
     auto win = (wl_window *) data;
 
@@ -199,14 +203,14 @@ static void handle_toplevel_configure(
     if (height > 0) win->pending_height = height;
     //wl_window_resize_buffer(win, width, height);
     //wl_window_draw(win);
-   
+
     // Usually you’d handle resize here
     printf("size reconfigured\n");
 }
 
 static void config_surface(wl_window *win, uint32_t w, uint32_t h) {
     wl_window_resize_buffer(win, win->pending_width, win->pending_height);
-    if (win->rw->on_resize) {
+    if (win->rw && win->rw->on_resize) {
         win->rw->on_resize(win->rw, win->scaled_w, win->scaled_h);
     }
     if (win->on_render)
@@ -218,6 +222,8 @@ static void handle_surface_configure(void *data,
 			  uint32_t serial) {
     struct wl_window *win = (struct wl_window *)data;
 
+    xdg_surface_ack_configure(xdg_surface, serial);
+
     if (win->pending_width > 0 && win->pending_height > 0 &&
         (win->pending_width != win->logical_width || win->pending_height != win->logical_height)) {
         if (win->configured) {
@@ -225,7 +231,6 @@ static void handle_surface_configure(void *data,
         }
     }
 
-    xdg_surface_ack_configure(xdg_surface, serial);
     win->configured = true;
     log("surface commit");
     wl_surface_commit(win->surface);
@@ -504,8 +509,8 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     wl_surface_commit(win->surface);
 
     if (!win->configured)
-        wl_display_dispatch(ctx->display); 
-    
+        wl_display_dispatch(ctx->display);
+
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create shm buffer
     wl_surface_attach(win->surface, win->buffer, 0, 0);
     log("surface commit");
@@ -521,7 +526,7 @@ static void config_layer_shell(wl_window *win, uint32_t width, uint32_t height) 
         if (win->rw->on_resize)
             win->rw->on_resize(win->rw, win->scaled_w, win->scaled_h);
     if (win->on_render)
-        win->on_render(win);    
+        win->on_render(win);
 }
 
 static void configure_layer_shell(void *data,
@@ -529,12 +534,12 @@ static void configure_layer_shell(void *data,
                         		  uint32_t serial,
                         		  uint32_t width,
                             	  uint32_t height) {
+    zwlr_layer_surface_v1_ack_configure(surf, serial);
     struct wl_window *win = (struct wl_window *)data;
     if (win->configured) {
         config_layer_shell(win, width, height);
     }
     win->configured = true;
-    zwlr_layer_surface_v1_ack_configure(surf, serial);
 }
 
 static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
@@ -543,7 +548,7 @@ static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
 };
 
 struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int height,
-                                         zwlr_layer_shell_v1_layer layer, const char *title, 
+                                         zwlr_layer_shell_v1_layer layer, const char *title,
                                          int alignment,
                                          std::string monitor_name, bool exclusive_zone)
 {
@@ -551,50 +556,50 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     win->ctx = ctx;
     win->logical_width = width;
     win->logical_height = height;
-    win->scaled_w = win->logical_width * win->current_fractional_scale; 
-    win->scaled_h = win->logical_height * win->current_fractional_scale; 
+    win->scaled_w = win->logical_width * win->current_fractional_scale;
+    win->scaled_h = win->logical_height * win->current_fractional_scale;
     win->title = title;
 
     win->surface = wl_compositor_create_surface(ctx->compositor);
-    
+
     win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
     wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
-    win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface); 
+    win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface);
 
     bool found = false;
     for (auto o : ctx->outputs) {
         if (o->name == monitor_name) {
             found = true;
             win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-                ctx->layer_shell, win->surface, o->output, layer, title);        
+                ctx->layer_shell, win->surface, o->output, layer, title);
              break;
         }
     }
     if (!found) {
         win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-            ctx->layer_shell, win->surface, NULL, layer, title);        
+            ctx->layer_shell, win->surface, NULL, layer, title);
     }
 
     if (alignment == 1) {
         zwlr_layer_surface_v1_set_anchor(win->layer_surface,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
             ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);       
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
     } else if (alignment == 2) {
         zwlr_layer_surface_v1_set_anchor(win->layer_surface,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
             ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);       
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
     } else if (alignment == 3 || alignment == 0) {
         zwlr_layer_surface_v1_set_anchor(win->layer_surface,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
             ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);       
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
     } else if (alignment == 4) {
         zwlr_layer_surface_v1_set_anchor(win->layer_surface,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
             ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);       
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM);
     }
 
     zwlr_layer_surface_v1_set_size(win->layer_surface, width, height);
@@ -614,7 +619,7 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     log("surface commit");
     wl_surface_commit(win->surface);
     if (!win->configured)
-        wl_display_dispatch(ctx->display); 
+        wl_display_dispatch(ctx->display);
 
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create shm buffer
     wl_surface_attach(win->surface, win->buffer, 0, 0);
@@ -1364,6 +1369,15 @@ void windowing::main_loop(RawApp *app) {
                 p.func(p);  // call the polled handler
         }
 
+        // should technically be atomic<bool> but should be fine?
+        if (ctx->have_functions_to_execute) { 
+            std::lock_guard<std::mutex> lock(ctx->functions_mut);
+            for (auto &func : ctx->functions_to_call) {
+                func();
+            }
+            ctx->functions_to_call.clear();
+        }
+
         // ---- Application-level window cleanup ----
 
         for (int i = ctx->windows.size() - 1; i >= 0; i--) {
@@ -1473,20 +1487,32 @@ void windowing::redraw(RawWindow *window) {
     write(ctx->wake_pipe[1], "x", 1);
     
     /*
-    wl_event_loop* loop = wl_display_get_event_loop(ctx->display);
 
-    wl_event_source* timer = wl_event_loop_add_timer(
-        loop,
-        [](void* data) -> int {
-            auto win = (wl_window*)data;
-            //win->on_render(win);
-            return 0; // next timeout in ms
-        },
-        win);
-
-    wl_event_source_timer_update(timer, 1);
     */
 }
+
+void windowing::set_size(RawWindow *window, int width, int height) {
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == window->creator->id)
+            ctx = c;
+    if (!ctx)
+        return;
+    wl_window *win = nullptr;
+    for (auto w : windows)
+        if (w->id == window->id)
+            win = w;
+    if (!win)
+        return;
+    
+    std::lock_guard<std::mutex> lock(ctx->functions_mut);
+    ctx->functions_to_call.push_back([win, width, height]() {
+        zwlr_layer_surface_v1_set_size(win->layer_surface, width, height);
+        wl_surface_commit(win->surface);
+    });
+    ctx->have_functions_to_execute = true;
+    write(ctx->wake_pipe[1], "x", 1);
+};
 
 void windowing::close_window(RawWindow *window) {
     wl_context *ctx = nullptr;

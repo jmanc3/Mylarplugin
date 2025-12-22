@@ -1369,6 +1369,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
+     
     auto dock = (Dock *) root->user_data;
     {
         auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
@@ -1492,6 +1493,22 @@ static void fill_root(Container *root) {
                t.detach();
            }
            nightlight_on = !nightlight_on;
+        };
+    }
+    
+    {
+        auto change = simple_dock_item(root, ICON("\uE705"));
+         
+        change->when_clicked = paint {
+            auto dock = (Dock *) root->user_data;
+            static bool first = true;
+            if (first) {
+                first = false;
+                windowing::set_size(dock->window->raw_window, 0, 100);
+            } else {
+                first = true;
+                windowing::set_size(dock->window->raw_window, 0, 40);
+            }
         };
     }
 
