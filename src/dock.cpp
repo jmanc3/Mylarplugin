@@ -622,6 +622,26 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
         }
         {
             PopOption pop;
+            pop.text = "Edit pin";
+            pop.on_clicked = [stacking_rule]() {
+                // go through the dock and find the first pin to match the stacking rule and copy over the data then, when edit done
+                // call docK::edit_pin(original_stacking_rule, new_stacking_rule, new_command, new_icon);
+                for (auto d : docks) {
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        for (auto p : icons->children) {
+                            auto pin = (Pin*)p->user_data;
+                            if (pin->stacking_rule == stacking_rule) {
+                                edit_pin::open(pin->stacking_rule, pin->icon, pin->command);
+                                break;
+                            }
+                        }
+                    }
+                }
+            };
+            root.push_back(pop);
+        }
+        {
+            PopOption pop;
 #ifdef PROBLEMS
             assert(false && "Pin could've been destroyed");
 #endif
@@ -648,26 +668,6 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         write_saved_pins_to_file(icons);
                         break;
-                    }
-                }
-            };
-            root.push_back(pop);
-        }
-        {
-            PopOption pop;
-            pop.text = "Edit pin";
-            pop.on_clicked = [stacking_rule]() {
-                // go through the dock and find the first pin to match the stacking rule and copy over the data then, when edit done
-                // call docK::edit_pin(original_stacking_rule, new_stacking_rule, new_command, new_icon);
-                for (auto d : docks) {
-                    if (auto icons = container_by_name("icons", d->window->root)) {
-                        for (auto p : icons->children) {
-                            auto pin = (Pin*)p->user_data;
-                            if (pin->stacking_rule == stacking_rule) {
-                                edit_pin::open(pin->stacking_rule, pin->icon, pin->command);
-                                break;
-                            }
-                        }
                     }
                 }
             };
