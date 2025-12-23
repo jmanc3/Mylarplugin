@@ -31,6 +31,7 @@
 #define ICON(str) [](){ return str; }
 
 static bool merge_windows = false;
+static bool labels = false;
 static int pixel_spacing = 1;
 static float max_width = 230;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
@@ -804,8 +805,16 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             auto col = color_dock_sel_active_color();
             cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
             cairo_fill(cr);
+        } else if (!pin->windows.empty()) {
+            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            auto col = color_dock_sel_active_color();
+            col.a *= .7;
+            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
+            cairo_fill(cr);
         }
         auto none = pin->windows.empty();
+        if (!labels)
+            none = true;
 
         int offx = 0;
         if (icons_loaded) {
@@ -845,10 +854,12 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             }
         }
 
-        if (is_active) {
+        if (is_active || !pin->windows.empty()) {
             auto bar_h = std::round(2 * mylar->raw_window->dpi);
             cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
             auto col = color_dock_sel_accent_color();
+            if (!pin->windows.empty() && !is_active)
+                col.a *= .4;
             cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
             cairo_fill(cr);
         }
@@ -1177,7 +1188,7 @@ size_icons(Dock *dock, Container *icons) {
     for (auto c: icons->children) {
         //auto w = get_label_width(client, c);
         auto pin = (Pin *) c->user_data;
-        if (pin->windows.empty()) {
+        if (pin->windows.empty() || !labels) {
             c->real_bounds.w = 50 * dock->window->raw_window->dpi;
         } else {
             c->real_bounds.w = max_width * dock->window->raw_window->dpi;
@@ -1369,8 +1380,17 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
-     
-    auto dock = (Dock *) root->user_data;
+    root->type = ::hbox;
+    root->receive_events_even_if_obstructed = true;
+    root->when_mouse_enters_container = paint {
+        auto dock = (Dock *) root->user_data;
+        //windowing::set_size(dock->window->raw_window, 0, 100);
+    };
+    root->when_mouse_leaves_container = paint {
+        auto dock = (Dock *) root->user_data;
+        //windowing::set_size(dock->window->raw_window, 0, 40);
+    };
+
     {
         auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
         super->when_clicked = paint {
