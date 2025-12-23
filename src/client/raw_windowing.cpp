@@ -232,6 +232,7 @@ static void handle_surface_configure(void *data,
     }
 
     win->configured = true;
+    wl_surface_attach(win->surface, win->buffer, 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 }
@@ -538,6 +539,8 @@ static void configure_layer_shell(void *data,
     struct wl_window *win = (struct wl_window *)data;
     if (win->configured) {
         config_layer_shell(win, width, height);
+        wl_surface_attach(win->surface, win->buffer, 0, 0);
+        wl_surface_commit(win->surface);
     }
     win->configured = true;
 }
