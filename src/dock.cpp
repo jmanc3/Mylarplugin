@@ -8,7 +8,9 @@
 #include "hypriso.h"
 #include "icons.h"
 #include "popup.h"
+#include "edit_pin.h"
 
+#include <algorithm>
 #include <cairo.h>
 #include "process.hpp"
 #include <chrono>
@@ -24,6 +26,7 @@
 #include <pango/pangocairo.h>
 #include <sys/stat.h>
 #include <filesystem>
+#include <unordered_map>
 
 #define BTN_LEFT		0x110
 #define BTN_RIGHT		0x111
@@ -35,6 +38,8 @@ static bool labels = false;
 static int pixel_spacing = 1;
 static float max_width = 230;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
+
+static void write_saved_pins_to_file(Container *icons);
 
 class Window {
 public:
@@ -133,6 +138,7 @@ struct Pin : UserData {
     bool pinned = false;
     int natural_position_x = INT_MAX;
     bool wants_reposition_animation = true;
+    float init_repo_vel = 0;
     int initial_mouse_click_before_drag_offset_x = 0;
 };
 
@@ -195,7 +201,7 @@ struct BrightnessData : UserData {
     float value = 50;
 };
 
-PangoLayout *
+static PangoLayout *
 get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeight weight, bool italic) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -255,7 +261,7 @@ get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeig
     return font->layout;
 }
 
-void cleanup_cached_fonts() {
+static void cleanup_cached_fonts() {
     for (auto font: cached_fonts) {
         delete font;
     }
@@ -263,7 +269,7 @@ void cleanup_cached_fonts() {
     cached_fonts.shrink_to_fit();
 }
 
-void remove_cached_fonts(cairo_t *cr) {
+static void remove_cached_fonts(cairo_t *cr) {
     for (int i = cached_fonts.size() - 1; i >= 0; --i) {
         if (cached_fonts[i]->cr == cr) {
             delete cached_fonts[i];
@@ -638,6 +644,12 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                         }
                     }
                 }
+                for (auto d : docks) {
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        write_saved_pins_to_file(icons);
+                        break;
+                    }
+                }
             };
             root.push_back(pop);
         }
@@ -645,7 +657,19 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             PopOption pop;
             pop.text = "Edit pin";
             pop.on_clicked = [stacking_rule]() {
-
+                // go through the dock and find the first pin to match the stacking rule and copy over the data then, when edit done
+                // call docK::edit_pin(original_stacking_rule, new_stacking_rule, new_command, new_icon);
+                for (auto d : docks) {
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        for (auto p : icons->children) {
+                            auto pin = (Pin*)p->user_data;
+                            if (pin->stacking_rule == stacking_rule) {
+                                edit_pin::open(pin->stacking_rule, pin->icon, pin->command);
+                                break;
+                            }
+                        }
+                    }
+                }
             };
             root.push_back(pop);
         }
@@ -936,6 +960,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
         c->z_index = 0;
         data->wants_reposition_animation = true;
+        data->init_repo_vel = 6500;
     };
 }
 
@@ -1253,10 +1278,34 @@ void calc_natural_positions(Container *icons, float total_width, Container *root
 
     for (auto c : icons->children) {
         auto data = (Pin *) c->user_data;
-        if (data->natural_position_x != off)
+        if (data->natural_position_x != off) 
             data->wants_reposition_animation = true;
         data->natural_position_x = off;
         off += c->real_bounds.w + pixel_spacing;
+    }
+}
+
+static void debounce(std::string id, long time_ms, std::function<void()> func) {
+    struct DebounceData {
+        bool started = false;
+        long start_time = get_current_time_in_ms();
+        std::function<void()> func = nullptr; 
+    };
+    static std::unordered_map<std::string, DebounceData> datas;
+    if (datas.find(id) == datas.end())
+        datas[id] = DebounceData();
+    auto data = &datas[id];
+    
+    if (!data->started) {
+        data->started = true;
+        data->start_time = get_current_time_in_ms();
+        data->func = func;
+    } else {
+        if ((get_current_time_in_ms() - data->start_time) > time_ms) {
+            data->started = false;
+            data->func();
+            data->func = nullptr;
+        }
     }
 }
 
@@ -1322,8 +1371,17 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             }
         }
 
-        if (any_change)
+        if (any_change) {
             calc_natural_positions(icons, total_width, root);
+            debounce("icon reorder", 400, []() {
+                for (auto d : docks) {
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        write_saved_pins_to_file(icons);
+                        break;
+                    }
+                }
+            });
+        }
     }
 
     auto current = get_current_time_in_ms();
@@ -1352,8 +1410,15 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             data->wants_reposition_animation = false;
             auto dist = std::abs(c->real_bounds.x - data->natural_position_x);
             data->spring = SpringAnimation(c->real_bounds.x, data->natural_position_x);
+            if (data->init_repo_vel != 0.0) {
+                auto scalar = data->init_repo_vel / 10000.0f;
+                data->spring.stiffness *= .3 + 0.7 * (1.0 - scalar);
+                data->spring.damping *= 0.7 + 0.3 * (1.0 - scalar);
+            }
+            //data->spring.velocity = data->init_repo_vel;
             data->animating = true;
             data->animation_start_time = current;
+            data->init_repo_vel = 0;
         }
     }
 
@@ -1483,6 +1548,15 @@ static void fill_root(Container *root) {
                 icon_alignment = ALIGN_RIGHT;
             } else {
                 icon_alignment = ALIGN_LEFT;
+            }
+            for (auto d : docks) {
+                if (auto icons = container_by_name("icons", d->window->root)) {
+                    for (auto p : icons->children) {
+                        auto data = (Pin *) p->user_data;
+                        data->wants_reposition_animation = true;
+                        data->init_repo_vel = 10000;
+                    }
+                }
             }
         };
     }
@@ -1724,6 +1798,47 @@ static void load_saved_pins_from_file(Container *icons) {
         create_pinned_icon(icons, class_name, command, icon_name);
 }
 
+static void write_saved_pins_to_file(Container *icons) {
+    const char* home = std::getenv("HOME");
+    if (!home)
+        return;
+    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/pinned_items.ini";
+    std::filesystem::create_directories(filepath.parent_path());
+    std::ofstream out(filepath, std::ios::trunc);
+    if (!out)
+        return;
+    
+    std::map<std::string, bool> seen_before;
+    int i = 0;
+    for (auto icon: icons->children) {
+        auto *data = static_cast<Pin *>(icon->user_data);
+        
+        if (!data)
+            continue;
+        if (!data->pinned)
+            continue;
+        if (seen_before.find(data->stacking_rule) != seen_before.end())
+            continue;
+        seen_before[data->stacking_rule] = true;
+        
+        out << "[PinnedIcon" << i++ << "]" << std::endl;
+        
+        out << "#The class_name is a property that windows set on themselves so that they "
+                     "can be stacked with windows of the same kind as them. If when you click this "
+                     "pinned icon button, it launches a window that creates an icon button that "
+                     "doesn't stack with this one then the this wm_class is wrong and you're going "
+                     "to have to fix it by running xprop in your console and clicking the window "
+                     "that opened to find the real WM_CLASS that should be set."
+                  << std::endl;
+        out << "class_name=" << data->stacking_rule << std::endl;
+        out << "icon_name=" << data->icon << std::endl;
+        out << "command=" << data->command << std::endl << std::endl;
+        out << std::endl;
+    }
+    
+    out.close();
+}
+
 void dock_start(std::string monitor_name) {
     if (!monitor_name.empty()) {
         for (auto d : docks) {
@@ -1762,7 +1877,11 @@ void dock_start(std::string monitor_name) {
     docks.push_back(dock);
     windowing::main_loop(dock->app);
     if (docks.size() == 1)
-        finished = true; 
+        finished = true;
+    if (finished) {
+        if (auto icons = container_by_name("icons", dock->window->root))
+            write_saved_pins_to_file(icons);
+    }
     for (int i = docks.size() - 1; i >= 0; i--) {
         if (docks[i] == dock) {
             docks.erase(docks.begin() + i);
@@ -1916,5 +2035,9 @@ void dock::toggle_dock_merge() {
         add_window(cid);
     }
     dock::redraw();
+}
+
+void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_command, std::string new_icon) {
+    
 }
 

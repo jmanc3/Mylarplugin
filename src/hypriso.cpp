@@ -2094,7 +2094,7 @@ bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
                 const char* home = std::getenv("HOME");
                 if (home) {
                     std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/chime.wav";
-                    system(fz("mpv --ao=alsa \"{}\" &", filepath.string()).c_str());
+                    system(fz("mpv \"{}\" &", filepath.string()).c_str());
                 }
             }
             float scalar = (delta - 3000.0f) / 1000.0f;
