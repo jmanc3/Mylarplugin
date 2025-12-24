@@ -59,7 +59,13 @@ bool on_scrolled(RawWindow *rw, int source, int axis, int direction, double delt
     return false;
 }
 
-bool on_key_press(RawWindow *rw, int key, int state, bool update_mods) {
+bool on_key_press(RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+    //on_key_press(rw, key, pressed, sym, mods, is_text, text);
+    auto m = mylar(rw);
+    if (!m) return false;
+    ::layout(m->root, m->root, m->root->real_bounds);
+    key_press(m->root, key, pressed, sym, mods, is_text, text);
+
     log("on_key_press");
     return false;
 }

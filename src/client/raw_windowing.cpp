@@ -10,6 +10,7 @@
 #include <wayland-client-protocol.h>
 #include <wayland-cursor.h>
 #include <wayland-server-core.h>
+#include <xkbcommon/xkbcommon-names.h>
 #define _POSIX_C_SOURCE 200809L
 #include <poll.h>    // for POLLIN, POLLOUT, POLLERR, etc.
 #include <errno.h>   // for EAGAIN, EINTR, and other errno constants
@@ -22,6 +23,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <ctype.h>
 
 #include <wayland-client.h>
 #include <vector>
@@ -104,6 +106,11 @@ struct wl_context {
     struct zwlr_foreign_toplevel_manager_v1 *top_level_manager = nullptr;
     struct xkb_keymap *keymap = nullptr;
     struct xkb_state *xkb_state = nullptr;
+    xkb_mod_index_t mod_shift;
+    xkb_mod_index_t mod_caps;
+    xkb_mod_index_t mod_alt;
+    xkb_mod_index_t mod_ctrl;
+    xkb_mod_index_t mod_super;
 
     std::vector<output *> outputs;
     uint32_t shm_format;
@@ -874,6 +881,11 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
         if (ctx->xkb_state) xkb_state_unref(ctx->xkb_state);
         ctx->keymap = keymap;
         ctx->xkb_state = xkb_state_new(ctx->keymap);
+        ctx->mod_shift = xkb_keymap_mod_get_index(ctx->keymap, XKB_MOD_NAME_SHIFT);
+        ctx->mod_caps = xkb_keymap_mod_get_index(ctx->keymap, XKB_MOD_NAME_CAPS);
+        ctx->mod_ctrl  = xkb_keymap_mod_get_index(ctx->keymap, XKB_MOD_NAME_CTRL);
+        ctx->mod_alt   = xkb_keymap_mod_get_index(ctx->keymap, XKB_MOD_NAME_ALT);
+        ctx->mod_super = xkb_keymap_mod_get_index(ctx->keymap, XKB_MOD_NAME_LOGO);
     }
 
     munmap(map_shm, size);
@@ -931,42 +943,64 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
     if (!win)
         return;
                                     
-    //display *d = (display *) data;
-    const char *st = (state == WL_KEYBOARD_KEY_STATE_PRESSED) ? "pressed" : "released";
-    printf("keyboard: key %u %s for %s", key, st, win->title.data());
-
     if (ctx->xkb_state) {
-        // Wayland keycodes are +8 from evdev
         xkb_keysym_t sym = xkb_state_key_get_one_sym(ctx->xkb_state, key + 8);
-        char buf[64];
-        int n = xkb_keysym_get_name(sym, buf, sizeof(buf));
-        if (n > 0) {
-            printf(" -> %s", buf);
-            notify(fz("{}", buf));
-        } else {
-            // try printable UTF-8
-            char utf8[64];
-            int len = xkb_keysym_to_utf8(sym, utf8, sizeof(utf8));
-            if (len > 0) {
-                printf(" -> '%s'", utf8);
+
+        xkb_mod_mask_t mods = xkb_state_serialize_mods(ctx->xkb_state, (xkb_state_component) (XKB_STATE_MODS_DEPRESSED | XKB_STATE_MODS_LATCHED));
+
+        uint32_t modmask = MOD_NONE;
+        if (ctx->mod_shift != XKB_MOD_INVALID && (mods & (1u << ctx->mod_shift)))
+            modmask |= MOD_SHIFT;
+        if (ctx->mod_ctrl != XKB_MOD_INVALID && (mods & (1u << ctx->mod_ctrl)))
+            modmask |= MOD_CTRL;
+        if (ctx->mod_alt != XKB_MOD_INVALID && (mods & (1u << ctx->mod_alt)))
+            modmask |= MOD_ALT;
+        if (ctx->mod_super != XKB_MOD_INVALID && (mods & (1u << ctx->mod_super)))
+            modmask |= MOD_SUPER;
+        if (ctx->mod_caps != XKB_MOD_INVALID && (mods & (1u << ctx->mod_caps)))
+            modmask |= MOD_CAPS;
+
+        char utf8[64];
+        int len = xkb_state_key_get_utf8(ctx->xkb_state, key + 8, utf8, sizeof(utf8));
+        if (win->rw) {
+            bool is_text = len > 0;
+            if (is_text) {
+                if (iscntrl(utf8[0])) {
+                    is_text = false;
+                }
+                if (modmask & MOD_CTRL || modmask & MOD_ALT || modmask & MOD_SUPER) {
+                    is_text = false;
+                }
             }
-            notify(fz("{}", utf8));
+            win->rw->on_key_press(win->rw, key, state == WL_KEYBOARD_KEY_STATE_PRESSED, sym, mods, is_text, std::string(utf8, len));
         }
     }
-    printf("\n");
 
     if (win->on_render)
         win->on_render(win);
 }
 
 static void keyboard_handle_modifiers(void *data, struct wl_keyboard *wl_keyboard,
-                                      uint32_t serial, uint32_t mods_depressed,
-                                      uint32_t mods_latched, uint32_t mods_locked,
-                                      uint32_t group) {
-    (void)data; (void)wl_keyboard; (void)serial;
-    (void)mods_depressed; (void)mods_latched; (void)mods_locked; (void)group;
-    // Not printing modifiers in this minimal example
-    // 
+                                      uint32_t serial,
+                                      uint32_t mods_depressed,
+                                      uint32_t mods_latched,
+                                      uint32_t mods_locked,
+                                      uint32_t group)
+{
+    wl_context *ctx = (wl_context *)data;
+
+    if (!ctx->xkb_state)
+        return;
+
+    xkb_state_update_mask(
+        ctx->xkb_state,
+        mods_depressed,
+        mods_latched,
+        mods_locked,
+        0,        // depressed layout switches (rarely used)
+        0,        // latched layout switches
+        group
+    );
 }
 
 static void keyboard_handle_repeat_info(void *data,

@@ -580,3 +580,28 @@ void paint_outline(Container* root, Container* c) {
 void paint_root(Container* c) {
     paint_outline(c, c);
 }
+
+static void
+send_key_actual(Container *root, Container* container, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+    if (container->type == ::newscroll) {
+        auto *s = (ScrollContainer *) container;
+        for (auto c: s->content->children) {
+            send_key_actual(root, c, key, pressed, sym, mods, is_text, text);
+        }
+        if (s->content->when_key_event) {
+            s->content->when_key_event(root, container, key, pressed, sym, mods, is_text, text);
+        }
+    } else {
+        for (auto c: container->children) {
+            send_key_actual(root, c, key, pressed, sym, mods, is_text, text);
+        }
+        if (container->when_key_event) {
+            container->when_key_event(root, container, key, pressed, sym, mods, is_text, text);
+        }
+    }
+}
+
+void key_press(Container* container, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+    send_key_actual(container, container, key, pressed, sym, mods, is_text, text);
+}
+

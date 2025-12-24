@@ -7,10 +7,12 @@
 
 #include <cairo.h>
 #include <cmath>
+#include <pango/pango-font.h>
 #include <thread>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
 #include <pango/pangocairo.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 struct PinData : UserData {
     RawApp *app = nullptr;
@@ -124,15 +126,17 @@ static void remove_cached_fonts(cairo_t *cr) {
     }
 }
 
-static void setup_label(Container *root, Container *label, std::function<std::string(Container *root, Container *c)> func) {
-    label->pre_layout = [func](Container* root, Container* c, const Bounds &b) {
+static void setup_label(Container *root, Container *label, bool bold, std::function<std::string (Container *root, Container *c)> func) {
+    label->pre_layout = [bold, func](Container* root, Container* c, const Bounds &b) {
         auto data = (PinData *) root->user_data;
         auto text = func(root, c);
         auto cr = data->window->raw_window->cr;
 
-        int size = 15 * data->window->raw_window->dpi;
-        
+        int size = 13 * data->window->raw_window->dpi;
+
         auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+        if (bold)
+            layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_BOLD, false);
         pango_layout_set_text(layout, text.data(), text.size());
         cairo_set_source_rgba(cr, 0, 0, 0, 1);
         PangoRectangle ink;
@@ -142,7 +146,26 @@ static void setup_label(Container *root, Container *label, std::function<std::st
         c->wanted_bounds.w = logical.width;
         c->wanted_bounds.h = logical.height;
     };
-    label->when_paint = [func](Container* root, Container* c) {
+    label->when_key_event = [func](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (!c->active)
+            return;
+        auto label_text = func(root, c);
+        if (!pressed)
+            return;
+        if (is_text) {
+            label_text.append(text);
+            return;
+        }
+        if (sym == XKB_KEY_Return) {
+            label_text.append("\n");
+        } else if (sym == XKB_KEY_Tab) {
+            label_text.append("\t");
+        } else if (sym == XKB_KEY_BackSpace) {
+            if (!label_text.empty())
+                label_text.pop_back();
+        }
+    };
+    label->when_paint = [bold, func](Container* root, Container* c) {
         auto data = (PinData *) root->user_data;
         auto text = func(root, c);
         auto cr = data->window->raw_window->cr;
@@ -153,9 +176,11 @@ static void setup_label(Container *root, Container *label, std::function<std::st
             cairo_stroke(cr);
         }
 
-        int size = 15 * data->window->raw_window->dpi;
+        int size = 13 * data->window->raw_window->dpi;
         
         auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+        if (bold)
+            layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_BOLD, false);
         pango_layout_set_text(layout, text.data(), text.size());
         cairo_set_source_rgba(cr, 0, 0, 0, 1);
         PangoRectangle ink;
@@ -174,15 +199,27 @@ static void fill_root(Container *root) {
     root->type = ::vbox;
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
+        setup_label(root, label, true, [](Container* root, Container* c) { return "Icon"; });
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
+        setup_label(root, label, false, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
+        setup_label(root, label, true, [](Container* root, Container* c) { return "Command"; });
+    } 
+    {
+        auto label = root->child(FILL_SPACE, FILL_SPACE);
+        setup_label(root, label, false, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
+    }
+    {
+        auto label = root->child(FILL_SPACE, FILL_SPACE);
+        setup_label(root, label, true, [](Container* root, Container* c) { return "Stack rule"; });
+    }
+    {
+        auto label = root->child(FILL_SPACE, FILL_SPACE);
+        setup_label(root, label, false, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
     }
 }
 

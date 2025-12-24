@@ -4,6 +4,16 @@
 #include <functional>
 #include <string>
 #include <cairo.h>
+#include <xkbcommon/xkbcommon.h>
+
+enum Modifier : uint32_t {
+    MOD_NONE  = 0,
+    MOD_SHIFT = 1u << 0,
+    MOD_CTRL  = 1u << 1,
+    MOD_ALT   = 1u << 2,
+    MOD_SUPER = 1u << 3,
+    MOD_CAPS  = 1u << 4,
+};
 
 struct PolledFunction {
     int fd = 0;
@@ -51,7 +61,7 @@ struct RawWindow {
 
     std::function<bool(RawWindow *, int source, int axis, int direction, double delta, int discrete, bool mouse)> on_scrolled = nullptr;
 
-    std::function<bool(RawWindow *, int key, int state, bool update_mods)> on_key_press = nullptr;
+    std::function<bool(RawWindow *, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text)> on_key_press = nullptr;
     
     std::function<bool(RawWindow *, float x, float y)> on_mouse_enters = nullptr;
     

@@ -34,9 +34,9 @@
 #define ICON(str) [](){ return str; }
 
 static bool merge_windows = false;
-static bool labels = false;
+static bool labels = true;
 static int pixel_spacing = 1;
-static float max_width = 230;
+static float max_width = 165;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
 static void write_saved_pins_to_file(Container *icons);

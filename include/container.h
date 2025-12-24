@@ -377,7 +377,7 @@ struct Container {
     // call
     void (*when_layout)(Container* root, Container* self, const Bounds& bounds, double* target_w, double* target_h) = nullptr;
 
-    void (*when_key_event)(Container* root, Container* self, bool is_string, xkb_keysym_t keysym, char string[64], uint16_t mods, xkb_key_direction direction) = nullptr;
+    std::function<void(Container *root, Container* container, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text)> when_key_event = nullptr;
 
     Container* child(int wanted_width, int wanted_height);
 
