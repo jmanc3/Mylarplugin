@@ -318,28 +318,28 @@ struct Container {
     void (*after_paint)(Container* root, Container* self) = nullptr;
 
     // Called once when the mouse enters the container for the first time
-    void (*when_mouse_enters_container)(Container* root, Container* self) = nullptr;
+    std::function <void (Container* root, Container* self)> when_mouse_enters_container = nullptr;
 
     // Called every time the mouse moves and its inside the container unless if
     // its being dragged
-    void (*when_mouse_motion)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> when_mouse_motion = nullptr;
 
     // Called once when the mouse is no longer inside the container, or if
     // mouse_down happend, will be called when mouse_up happens
-    void (*when_mouse_leaves_container)(Container* root, Container* self) = nullptr;
+    std::function <void (Container* root, Container* self)> when_mouse_leaves_container = nullptr;
 
     // Called once if left_mouse, middle_mouse, or right_mouse is pressed down
     // inside this container
-    void (*when_mouse_down)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> when_mouse_down = nullptr;
 
     // TODO: is this really the behaviour we want????
     // Called once when the mouse_down is released regardless if the mouse is
     // actually inside the container it initially mouse_downed on
-    void (*when_mouse_up)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> when_mouse_up = nullptr;
 
     // Called when this container was mouse_downed and then mouse_upped regardless
     // of any motion the mouse did in between those two events
-    void (*when_clicked)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> when_clicked = nullptr;
 
     // Called when the containers status is changed
     void (*when_active_status_changed)(Container* root, Container* self) = nullptr;
@@ -352,14 +352,14 @@ struct Container {
 
     // Called once when after mouse_downing a container, there was a mouse_motion
     // event
-    void (*when_drag_start)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> when_drag_start = nullptr;
 
     // Called everytime when after mouse_downing a container, there where mouse
     // motion events until a mouse_up
-    void (*when_drag)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> when_drag = nullptr;
 
     // Called once when after dragging a container the mouse_up happens
-    void (*when_drag_end)(Container* root, Container* self) = nullptr;
+    std::function <void (Container* root, Container* self)> when_drag_end = nullptr;
 
     // If this function is set, it'll be called to determine if the container is
     // pierced
