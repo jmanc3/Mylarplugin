@@ -141,12 +141,14 @@ static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double
 
 static void setup_label(Container *root, Container *label_parent, bool bold, std::function<std::string (Container *root, Container *c)> func) {
     struct LabelData : UserData {
-        int index = 0;
+        int cursor = 0;
+        std::string text;
     };
     auto label_data = new LabelData;
     
     auto text = func(root, label_parent);
-    label_data->index = text.size();
+    label_data->cursor = text.size();
+    label_data->text = text;
     label_parent->type = ::absolute;
 
     static int padding = 10.0f;
@@ -194,9 +196,10 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
     auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
     label->user_data = label_data;
 
-    label->pre_layout = [bold, func](Container* root, Container* c, const Bounds &b) {
+    label->pre_layout = [bold](Container* root, Container* c, const Bounds &b) {
         auto data = (PinData *) root->user_data;
-        auto text = func(root, c);
+        auto label_data = (LabelData *) c->user_data;
+        auto text = label_data->text;
         auto cr = data->window->raw_window->cr;
 
         int size = 13 * data->window->raw_window->dpi;
@@ -213,30 +216,48 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         c->wanted_bounds.w = logical.width;
         c->wanted_bounds.h = logical.height;
     };
-    label->when_key_event = [func](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        if (!c->active)
+    label->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (!c->active && !c->parent->active)
             return;
-        auto label_text = func(root, c);
+        auto label_data = (LabelData *) c->user_data;
+        auto label_text = &label_data->text;
         if (!pressed)
             return;
         if (is_text) {
-            label_text.append(text);
+            label_text->insert(label_data->cursor, text);
+            label_data->cursor++;
             return;
         }
         if (sym == XKB_KEY_Return) {
-            label_text.append("\n");
+            label_text->insert(label_data->cursor, "\n");
+            label_data->cursor++;
         } else if (sym == XKB_KEY_Tab) {
-            label_text.append("\t");
+            label_text->insert(label_data->cursor, "\t");
+            label_data->cursor++;
         } else if (sym == XKB_KEY_BackSpace) {
-            if (!label_text.empty())
-                label_text.pop_back();
+            if (!label_text->empty() && label_data->cursor > 0) {
+                label_text->erase(label_data->cursor - 1, 1);
+                label_data->cursor--;
+            }
+        } else if (sym == XKB_KEY_Left) {
+            label_data->cursor--;
+            if (label_data->cursor < 0)
+               label_data->cursor = 0;
+        } else if (sym == XKB_KEY_Right) {
+            label_data->cursor++;
+            if (label_data->cursor > label_text->size())
+               label_data->cursor = label_text->size();
+        } else if (sym == XKB_KEY_Delete) {
+            if (!label_text->empty() && label_data->cursor != label_text->size()) {
+                label_text->erase(label_data->cursor, 1);
+            }
         }
     };
-    label->when_paint = [bold, func](Container* root, Container* c) {
+    label->when_paint = [bold](Container* root, Container* c) {
         auto data = (PinData *) root->user_data;
-        auto text = func(root, c);
-        auto cr = data->window->raw_window->cr;
         auto label_data = (LabelData *) c->user_data;
+        auto text = label_data->text;
+        auto cr = data->window->raw_window->cr;
 
         int size = 13 * data->window->raw_window->dpi;
         
@@ -257,7 +278,7 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         if ((c->active || c->parent->active) && !bold) {
             PangoRectangle cursor_strong_pos;
             PangoRectangle cursor_weak_pos;
-            pango_layout_get_cursor_pos(layout, label_data->index, &cursor_strong_pos, &cursor_weak_pos);
+            pango_layout_get_cursor_pos(layout, label_data->cursor, &cursor_strong_pos, &cursor_weak_pos);
             int kern_offset = cursor_strong_pos.x != 0 ? -1 : 0;
             set_rect(cr, Bounds(cursor_strong_pos.x / PANGO_SCALE + c->real_bounds.x + kern_offset,
                             cursor_strong_pos.y / PANGO_SCALE + c->real_bounds.y,
@@ -267,9 +288,8 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
             cairo_fill(cr);
         }
     };
-    static auto update_index = [](Container* root, Container* c, bool bold, std::function<std::string(Container *, Container*)> func) {
+    static auto update_index = [](Container* root, Container* c, bool bold, std::string text) {
         auto data = (PinData *) root->user_data;
-        auto text = func(root, c);
         auto cr = data->window->raw_window->cr;
         auto label_data = (LabelData *) c->user_data;
         
@@ -285,27 +305,39 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         float x = root->mouse_current_x - c->real_bounds.x;
         float y = root->mouse_current_y - c->real_bounds.y;
         bool inside = pango_layout_xy_to_index(layout, x * PANGO_SCALE, y * PANGO_SCALE, &index, &trailing);
-        label_data->index = index + trailing;        
+        label_data->cursor = index + trailing;        
     };
-    label->when_mouse_down = [bold, func](Container *root, Container *c) {
-        update_index(root, c, bold, func);
+    label->when_mouse_down = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->user_data;
+        auto text = label_data->text;
+        update_index(root, c, bold, text);
     };
-    label->when_mouse_up = [bold, func](Container *root, Container *c) {
-        update_index(root, c, bold, func);
+    label->when_mouse_up = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->user_data;
+        auto text = label_data->text;
+        update_index(root, c, bold, text);
     };
-    label->when_drag = [bold, func](Container *root, Container *c) {
-        update_index(root, c, bold, func);
+    label->when_drag = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->user_data;
+        auto text = label_data->text;
+        update_index(root, c, bold, text);
     };
-    label_parent->when_mouse_down = [bold, func](Container *root, Container *c) {
-        update_index(root, c->children[0], bold, func);
+    label_parent->when_mouse_down = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        auto text = label_data->text;
+        update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
     };
-    label_parent->when_mouse_up = [bold, func](Container *root, Container *c) {
-        update_index(root, c->children[0], bold, func);
+    label_parent->when_mouse_up = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        auto text = label_data->text;
+        update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
     };
-    label_parent->when_drag = [bold, func](Container *root, Container *c) {
-        update_index(root, c->children[0], bold, func);
+    label_parent->when_drag = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        auto text = label_data->text;
+        update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
     };
 }
