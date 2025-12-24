@@ -7,6 +7,7 @@
 
 #include <cairo.h>
 #include <cmath>
+#include <cstdio>
 #include <pango/pango-font.h>
 #include <thread>
 #include <pango/pango-layout.h>
@@ -126,13 +127,71 @@ static void remove_cached_fonts(cairo_t *cr) {
     }
 }
 
-static void setup_label(Container *root, Container *label, bool bold, std::function<std::string (Container *root, Container *c)> func) {
+static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double y, double width, double height) {
+    double radius = corner_radius;
+    double degrees = M_PI / 180.0;
+    
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + width - radius, y + radius, radius, -90 * degrees, 0 * degrees);
+    cairo_arc(cr, x + width - radius, y + height - radius, radius, 0 * degrees, 90 * degrees);
+    cairo_arc(cr, x + radius, y + height - radius, radius, 90 * degrees, 180 * degrees);
+    cairo_arc(cr, x + radius, y + radius, radius, 180 * degrees, 270 * degrees);
+    cairo_close_path(cr);
+}
+
+static void setup_label(Container *root, Container *label_parent, bool bold, std::function<std::string (Container *root, Container *c)> func) {
     struct LabelData : UserData {
         int index = 0;
     };
     auto label_data = new LabelData;
-    auto text = func(root, label);
+    
+    auto text = func(root, label_parent);
     label_data->index = text.size();
+    label_parent->type = ::absolute;
+
+    static int padding = 10.0f;
+    static float rounding = 6.0f;
+    
+    label_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto child = c->children[0];
+        auto data = (PinData *) root->user_data;
+        auto dpi = data->window->raw_window->dpi;
+        
+        if (child->pre_layout) {
+            child->pre_layout(root, child, b);
+            auto hh = child->wanted_bounds.w + padding * 2 * dpi;
+            auto hhh = child->wanted_bounds.h + padding * dpi;
+            //if (child->wanted_bounds.w > b.w)
+                //child->wanted_bounds.w = b.w - padding;
+            auto bounds = Bounds(b.x + hh * .5 - child->wanted_bounds.w * .5, b.y + hhh * .5 - child->wanted_bounds.h * .5, 
+            child->wanted_bounds.w, child->wanted_bounds.h);
+            ::layout(root, child, bounds);
+        }
+        
+        c->wanted_bounds.w = FILL_SPACE;
+        c->wanted_bounds.h = child->wanted_bounds.h + padding * dpi;
+    };
+    label_parent->when_paint = [bold](Container *root, Container *c) {
+        if (bold)
+            return;
+        auto data = (PinData *) root->user_data;
+        auto cr = data->window->raw_window->cr;
+        auto dpi = data->window->raw_window->dpi;
+        
+        set_argb(cr, {1, 1, 1, 1});
+        rounded_rect_new(cr, rounding * dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cairo_fill(cr);
+
+        if (c->children[0]->active || c->active) {
+            set_argb(cr, {.23, .6, 1, 1});
+        } else {
+            set_argb(cr, {0, 0, 0, .2});
+        }
+        rounded_rect_new(cr, rounding * dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cairo_stroke(cr);
+    };
+
+    auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
     label->user_data = label_data;
 
     label->pre_layout = [bold, func](Container* root, Container* c, const Bounds &b) {
@@ -195,7 +254,7 @@ static void setup_label(Container *root, Container *label, bool bold, std::funct
             c->real_bounds.y + c->real_bounds.h * .5 - logical.height * .5);
         pango_cairo_show_layout(cr, layout);
 
-        if (c->active && !bold) {
+        if ((c->active || c->parent->active) && !bold) {
             PangoRectangle cursor_strong_pos;
             PangoRectangle cursor_weak_pos;
             pango_layout_get_cursor_pos(layout, label_data->index, &cursor_strong_pos, &cursor_weak_pos);
@@ -223,10 +282,10 @@ static void setup_label(Container *root, Container *label, bool bold, std::funct
  
         int index;
         int trailing;
-        int x = root->mouse_current_x - c->real_bounds.x;
-        int y = root->mouse_current_y - c->real_bounds.y;
+        float x = root->mouse_current_x - c->real_bounds.x;
+        float y = root->mouse_current_y - c->real_bounds.y;
         bool inside = pango_layout_xy_to_index(layout, x * PANGO_SCALE, y * PANGO_SCALE, &index, &trailing);
-        label_data->index = index;        
+        label_data->index = index + trailing;        
     };
     label->when_mouse_down = [bold, func](Container *root, Container *c) {
         update_index(root, c, bold, func);
@@ -237,11 +296,24 @@ static void setup_label(Container *root, Container *label, bool bold, std::funct
     label->when_drag = [bold, func](Container *root, Container *c) {
         update_index(root, c, bold, func);
     };
+    label_parent->when_mouse_down = [bold, func](Container *root, Container *c) {
+        update_index(root, c->children[0], bold, func);
+        c->children[0]->active = true;
+    };
+    label_parent->when_mouse_up = [bold, func](Container *root, Container *c) {
+        update_index(root, c->children[0], bold, func);
+        c->children[0]->active = true;
+    };
+    label_parent->when_drag = [bold, func](Container *root, Container *c) {
+        update_index(root, c->children[0], bold, func);
+        c->children[0]->active = true;
+    };
 }
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
     root->type = ::vbox;
+    root->wanted_pad = Bounds(30, 30, 30, 30);
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
         setup_label(root, label, true, [](Container* root, Container* c) { return "Icon"; });
