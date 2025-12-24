@@ -5,6 +5,8 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 
+#include <cairo.h>
+#include <cmath>
 #include <thread>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
@@ -122,12 +124,34 @@ static void remove_cached_fonts(cairo_t *cr) {
     }
 }
 
-
 static void setup_label(Container *root, Container *label, std::function<std::string(Container *root, Container *c)> func) {
+    label->pre_layout = [func](Container* root, Container* c, const Bounds &b) {
+        auto data = (PinData *) root->user_data;
+        auto text = func(root, c);
+        auto cr = data->window->raw_window->cr;
+
+        int size = 15 * data->window->raw_window->dpi;
+        
+        auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+        pango_layout_set_text(layout, text.data(), text.size());
+        cairo_set_source_rgba(cr, 0, 0, 0, 1);
+        PangoRectangle ink;
+        PangoRectangle logical;
+        pango_layout_get_pixel_extents(layout, &ink, &logical);
+        
+        c->wanted_bounds.w = logical.width;
+        c->wanted_bounds.h = logical.height;
+    };
     label->when_paint = [func](Container* root, Container* c) {
         auto data = (PinData *) root->user_data;
         auto text = func(root, c);
         auto cr = data->window->raw_window->cr;
+
+        if (c->active) {
+            set_rect(cr, c->real_bounds); 
+            set_argb(cr, {1, 0, 0, 1});
+            cairo_stroke(cr);
+        }
 
         int size = 15 * data->window->raw_window->dpi;
         

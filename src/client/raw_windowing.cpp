@@ -102,6 +102,8 @@ struct wl_context {
     struct wp_cursor_shape_manager_v1 *shape_manager = nullptr;
     struct wp_cursor_shape_device_v1 *shape_device = nullptr;
     struct zwlr_foreign_toplevel_manager_v1 *top_level_manager = nullptr;
+    struct xkb_keymap *keymap = nullptr;
+    struct xkb_state *xkb_state = nullptr;
 
     std::vector<output *> outputs;
     uint32_t shm_format;
@@ -121,8 +123,6 @@ struct wl_window {
     struct xdg_toplevel *xdg_toplevel = nullptr;
     struct zwlr_layer_surface_v1 *layer_surface = nullptr;
     struct wl_output *output = nullptr;
-    struct xkb_keymap *keymap = nullptr;
-    struct xkb_state *xkb_state = nullptr;
     struct wl_shm_pool *pool = nullptr;
     struct wp_fractional_scale_v1 *fractional_scale = nullptr;
     wp_viewport *viewport = nullptr;
@@ -852,17 +852,6 @@ static const struct wl_pointer_listener pointer_listener = {
 static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
                                    uint32_t format, int fd, uint32_t size) {
     wl_context *ctx = (wl_context *) data;
-    wl_window *win = nullptr;
-    for (auto w : ctx->windows)
-        if (w->has_keyboard_focus)
-            win = w;
-    if (!win) {
-        for (auto w : ctx->windows)
-            if (w->has_pointer_focus)
-                win = w;
-    }
-    if (!win)
-        return;
     if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
         close(fd);
         return;
@@ -881,10 +870,10 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
     if (!keymap) {
         printf("Failed to compile xkb keymap\n");
     } else {
-        if (win->keymap) xkb_keymap_unref(win->keymap);
-        if (win->xkb_state) xkb_state_unref(win->xkb_state);
-        win->keymap = keymap;
-        win->xkb_state = xkb_state_new(win->keymap);
+        if (ctx->keymap) xkb_keymap_unref(ctx->keymap);
+        if (ctx->xkb_state) xkb_state_unref(ctx->xkb_state);
+        ctx->keymap = keymap;
+        ctx->xkb_state = xkb_state_new(ctx->keymap);
     }
 
     munmap(map_shm, size);
@@ -946,13 +935,14 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
     const char *st = (state == WL_KEYBOARD_KEY_STATE_PRESSED) ? "pressed" : "released";
     printf("keyboard: key %u %s for %s", key, st, win->title.data());
 
-    if (win->xkb_state) {
+    if (ctx->xkb_state) {
         // Wayland keycodes are +8 from evdev
-        xkb_keysym_t sym = xkb_state_key_get_one_sym(win->xkb_state, key + 8);
+        xkb_keysym_t sym = xkb_state_key_get_one_sym(ctx->xkb_state, key + 8);
         char buf[64];
         int n = xkb_keysym_get_name(sym, buf, sizeof(buf));
         if (n > 0) {
             printf(" -> %s", buf);
+            notify(fz("{}", buf));
         } else {
             // try printable UTF-8
             char utf8[64];
@@ -960,6 +950,7 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
             if (len > 0) {
                 printf(" -> '%s'", utf8);
             }
+            notify(fz("{}", utf8));
         }
     }
     printf("\n");
@@ -1250,8 +1241,6 @@ void wl_window_destroy(struct wl_window *win) {
 
     if (win->surface) wl_surface_destroy(win->surface);
 
-    if (win->xkb_state) xkb_state_unref(win->xkb_state);
-    if (win->keymap) xkb_keymap_unref(win->keymap);
     cairo_destroy(win->cr);
 
     delete win;
@@ -1264,6 +1253,8 @@ void wl_context_destroy(struct wl_context *ctx) {
         wl_window_destroy(w); 
 
     if (ctx->keyboard) wl_keyboard_release(ctx->keyboard);
+    if (ctx->xkb_state) xkb_state_unref(ctx->xkb_state);
+    if (ctx->keymap) xkb_keymap_unref(ctx->keymap);
     if (ctx->pointer) wl_pointer_release(ctx->pointer);
     if (ctx->seat) wl_seat_release(ctx->seat);
     if (ctx->shm) wl_shm_destroy(ctx->shm);
