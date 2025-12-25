@@ -972,7 +972,7 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
                     is_text = false;
                 }
             }
-            win->rw->on_key_press(win->rw, key, state == WL_KEYBOARD_KEY_STATE_PRESSED, sym, mods, is_text, std::string(utf8, len));
+            win->rw->on_key_press(win->rw, key, state == WL_KEYBOARD_KEY_STATE_PRESSED, sym, modmask, is_text, std::string(utf8, len));
         }
     }
 

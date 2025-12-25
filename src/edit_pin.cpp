@@ -142,6 +142,10 @@ static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double
 static void setup_label(Container *root, Container *label_parent, bool bold, std::function<std::string (Container *root, Container *c)> func) {
     struct LabelData : UserData {
         int cursor = 0;
+        
+        int selection = 0;
+        bool selecting = false;
+        
         std::string text;
     };
     auto label_data = new LabelData;
@@ -221,41 +225,94 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
             return;
         auto label_data = (LabelData *) c->user_data;
         auto label_text = &label_data->text;
+        
         if (!pressed)
             return;
         if (is_text) {
+            if (label_data->selecting) {
+                int min = std::min(label_data->cursor, label_data->selection);
+                int max = std::max(label_data->cursor, label_data->selection);
+                int len = max - min;
+                label_text->erase(min, len);
+                label_data->selecting = false;
+                label_data->cursor = min;
+            } 
             label_text->insert(label_data->cursor, text);
             label_data->cursor++;
             return;
         }
         if (sym == XKB_KEY_Return) {
+            if (label_data->selecting) {
+                int min = std::min(label_data->cursor, label_data->selection);
+                int max = std::max(label_data->cursor, label_data->selection);
+                int len = max - min;
+                label_text->erase(min, len);
+                label_data->selecting = false;
+                label_data->cursor = min;
+            } 
             label_text->insert(label_data->cursor, "\n");
             label_data->cursor++;
         } else if (sym == XKB_KEY_Tab) {
+            if (label_data->selecting) {
+                int min = std::min(label_data->cursor, label_data->selection);
+                int max = std::max(label_data->cursor, label_data->selection);
+                int len = max - min;
+                label_text->erase(min, len);
+                label_data->selecting = false;
+                label_data->cursor = min;
+            } 
             label_text->insert(label_data->cursor, "\t");
             label_data->cursor++;
         } else if (sym == XKB_KEY_BackSpace) {
-            if (!label_text->empty() && label_data->cursor > 0) {
-                label_text->erase(label_data->cursor - 1, 1);
-                label_data->cursor--;
+            if (label_data->selecting) {
+                int min = std::min(label_data->cursor, label_data->selection);
+                int max = std::max(label_data->cursor, label_data->selection);
+                int len = max - min;
+                label_text->erase(min, len);
+                label_data->selecting = false;
+                label_data->cursor = min;
+            } else {
+               if (!label_text->empty() && label_data->cursor > 0) {
+                    label_text->erase(label_data->cursor - 1, 1);
+                    label_data->cursor--;
+               }
             }
         } else if (sym == XKB_KEY_Left) {
+            label_data->selecting = false;
             label_data->cursor--;
             if (label_data->cursor < 0)
                label_data->cursor = 0;
         } else if (sym == XKB_KEY_Right) {
+            label_data->selecting = false;
             label_data->cursor++;
             if (label_data->cursor > label_text->size())
                label_data->cursor = label_text->size();
         } else if (sym == XKB_KEY_Delete) {
-            if (!label_text->empty() && label_data->cursor != label_text->size()) {
-                label_text->erase(label_data->cursor, 1);
+            if (label_data->selecting) {
+                int min = std::min(label_data->cursor, label_data->selection);
+                int max = std::max(label_data->cursor, label_data->selection);
+                int len = max - min;
+                label_text->erase(min, len);
+                label_data->selecting = false;
+                label_data->cursor = min;
+            } else {
+                if (!label_text->empty() && label_data->cursor != label_text->size()) {
+                    label_text->erase(label_data->cursor, 1);
+                }
+            }
+        } else if (sym == XKB_KEY_a) {
+            if (mods & Modifier::MOD_CTRL) {
+                label_data->selecting = true;
+                label_data->cursor = label_data->text.size();
+                label_data->selection = 0;
             }
         }
     };
     label->when_paint = [bold](Container* root, Container* c) {
         auto data = (PinData *) root->user_data;
         auto label_data = (LabelData *) c->user_data;
+        if (!c->active && !c->parent->active)
+            label_data->selecting = false;
         auto text = label_data->text;
         auto cr = data->window->raw_window->cr;
 
@@ -265,20 +322,101 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         if (bold)
             layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_BOLD, false);
         pango_layout_set_text(layout, text.data(), text.size());
-        cairo_set_source_rgba(cr, 0, 0, 0, 1);
         PangoRectangle ink;
         PangoRectangle logical;
         pango_layout_get_pixel_extents(layout, &ink, &logical);
         
+        PangoRectangle cursor_strong_pos;
+        PangoRectangle cursor_weak_pos;
+        pango_layout_get_cursor_pos(layout, label_data->cursor, &cursor_strong_pos, &cursor_weak_pos);
+
+        if (label_data->selecting) { // selection painting
+            set_argb(cr, RGBA(.2, .5, .8, 1));
+            PangoRectangle selection_strong_pos;
+            PangoRectangle selection_weak_pos;
+            pango_layout_get_cursor_pos(layout, label_data->selection, &selection_strong_pos, &selection_weak_pos);
+            
+            bool cursor_first = false;
+            if (cursor_strong_pos.y == selection_strong_pos.y) {
+                if (cursor_strong_pos.x < selection_strong_pos.x) {
+                    cursor_first = true;
+                }
+            } else if (cursor_strong_pos.y < selection_strong_pos.y) {
+                cursor_first = true;
+            }
+            
+            double w = std::max(c->real_bounds.w, c->parent->real_bounds.w);
+            
+            double minx = std::min(selection_strong_pos.x, cursor_strong_pos.x) / PANGO_SCALE;
+            double miny = std::min(selection_strong_pos.y, cursor_strong_pos.y) / PANGO_SCALE;
+            double maxx = std::max(selection_strong_pos.x, cursor_strong_pos.x) / PANGO_SCALE;
+            double maxy = std::max(selection_strong_pos.y, cursor_strong_pos.y) / PANGO_SCALE;
+            double h = selection_strong_pos.height / PANGO_SCALE;
+            
+            if (maxy == miny) {// Same line
+                set_argb(cr, RGBA(.2, .5, .8, 1));
+                set_rect(cr, Bounds(c->real_bounds.x + minx, c->real_bounds.y + miny, maxx - minx, h));
+                cairo_fill(cr);
+            } else {
+                Bounds b;
+                if ((maxy - miny) > h) {// More than one line off difference
+                    b = Bounds(c->real_bounds.x, c->real_bounds.y + miny + h, w, maxy - miny - h);
+                    set_rect(cr, b);
+                    set_argb(cr, RGBA(.2, .5, .8, 1));
+                    cairo_fill(cr);
+                }
+                // If the y's aren't on the same line then we always draw the two rects
+                // for when there's a one line diff
+                
+                if (cursor_first) {
+                    // Top line
+                    b = Bounds(c->real_bounds.x + cursor_strong_pos.x / PANGO_SCALE,
+                               c->real_bounds.y + cursor_strong_pos.y / PANGO_SCALE,
+                               w,
+                               h);
+                    set_rect(cr, b);
+                    set_argb(cr, RGBA(.2, .5, .8, 1));
+                    cairo_fill(cr);
+                    
+                    // Bottom line
+                    int bottom_width = selection_strong_pos.x / PANGO_SCALE;
+                    b = Bounds(c->real_bounds.x,
+                               c->real_bounds.y + selection_strong_pos.y / PANGO_SCALE,
+                               bottom_width,
+                               h);
+                    set_rect(cr, b);
+                    set_argb(cr, RGBA(.2, .5, .8, 1));
+                    cairo_fill(cr);
+                } else {
+                    // Top line
+                    b = Bounds(c->real_bounds.x + selection_strong_pos.x / PANGO_SCALE,
+                               c->real_bounds.y + selection_strong_pos.y / PANGO_SCALE,
+                               w,
+                               h);
+                    set_rect(cr, b);
+                    set_argb(cr, RGBA(.2, .5, .8, 1));
+                    cairo_fill(cr);
+                    
+                    // Bottom line
+                    int bottom_width = cursor_strong_pos.x / PANGO_SCALE;
+                    b = Bounds(c->real_bounds.x,
+                               c->real_bounds.y + cursor_strong_pos.y / PANGO_SCALE,
+                               bottom_width,
+                               h);
+                    set_rect(cr, b);
+                    set_argb(cr, RGBA(.2, .5, .8, 1));
+                    cairo_fill(cr);
+                 }
+            }
+        }
+        
+        cairo_set_source_rgba(cr, 0, 0, 0, 1);
         cairo_move_to(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - logical.width * .5, 
             c->real_bounds.y + c->real_bounds.h * .5 - logical.height * .5);
         pango_cairo_show_layout(cr, layout);
 
         if ((c->active || c->parent->active) && !bold) {
-            PangoRectangle cursor_strong_pos;
-            PangoRectangle cursor_weak_pos;
-            pango_layout_get_cursor_pos(layout, label_data->cursor, &cursor_strong_pos, &cursor_weak_pos);
             int kern_offset = cursor_strong_pos.x != 0 ? -1 : 0;
             set_rect(cr, Bounds(cursor_strong_pos.x / PANGO_SCALE + c->real_bounds.x + kern_offset,
                             cursor_strong_pos.y / PANGO_SCALE + c->real_bounds.y,
@@ -288,7 +426,7 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
             cairo_fill(cr);
         }
     };
-    static auto update_index = [](Container* root, Container* c, bool bold, std::string text) {
+    static auto update_index = [](Container* root, Container* c, bool bold, std::string text, int *target = nullptr) {
         auto data = (PinData *) root->user_data;
         auto cr = data->window->raw_window->cr;
         auto label_data = (LabelData *) c->user_data;
@@ -305,37 +443,64 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         float x = root->mouse_current_x - c->real_bounds.x;
         float y = root->mouse_current_y - c->real_bounds.y;
         bool inside = pango_layout_xy_to_index(layout, x * PANGO_SCALE, y * PANGO_SCALE, &index, &trailing);
-        label_data->cursor = index + trailing;        
+        if (target) {
+            *target = index + trailing;        
+        } else {
+            label_data->cursor = index + trailing;        
+        }
     };
     label->when_mouse_down = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->user_data;
+        label_data->selecting = false;
         auto text = label_data->text;
         update_index(root, c, bold, text);
+        label_data->selection = label_data->cursor;
     };
-    label->when_mouse_up = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->user_data;
+    label->when_drag_start = [bold](Container* root, Container* c) {
+        auto label_data = (LabelData*)c->user_data;
         auto text = label_data->text;
+        label_data->selecting = true;
         update_index(root, c, bold, text);
+        label_data->selecting = label_data->cursor;
     };
     label->when_drag = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->user_data;
+        label_data->selecting = true;
+        auto text = label_data->text;
+        update_index(root, c, bold, text);
+    };
+    label->when_drag_end = [bold](Container* root, Container* c) {
+        auto label_data = (LabelData*)c->user_data;
+        label_data->selecting = true;
         auto text = label_data->text;
         update_index(root, c, bold, text);
     };
     label_parent->when_mouse_down = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->children[0]->user_data;
+        label_data->selecting = false;
         auto text = label_data->text;
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
-    };
-    label_parent->when_mouse_up = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        auto text = label_data->text;
-        update_index(root, c->children[0], bold, text);
-        c->children[0]->active = true;
+        label_data->selection = label_data->cursor;
     };
     label_parent->when_drag = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->children[0]->user_data;
+        label_data->selecting = true;
+        auto text = label_data->text;
+        update_index(root, c->children[0], bold, text);
+        c->children[0]->active = true;
+    };
+    label_parent->when_drag_start = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        label_data->selecting = true;
+        auto text = label_data->text;
+        update_index(root, c->children[0], bold, text);
+        c->children[0]->active = true;
+        label_data->selection = label_data->cursor;
+    };
+    label_parent->when_drag_end = [bold](Container *root, Container *c) {
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        label_data->selecting = true;
         auto text = label_data->text;
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
