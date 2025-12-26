@@ -139,6 +139,19 @@ static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double
     cairo_close_path(cr);
 }
 
+// Returns the starting index of the line containing `pos`.
+static int line_start(const std::string &text, int pos) {
+    if (pos <= 0) return 0;
+    int nl = text.rfind('\n', pos - 1);
+    return (nl == std::string::npos) ? 0 : nl + 1;
+}
+
+// Returns the index *after* the end of the line containing `pos`.
+static int line_end(const std::string &text, int pos) {
+    int nl = text.find('\n', pos);
+    return (nl == std::string::npos) ? text.size() : nl;
+}
+
 static void setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     struct LabelData : UserData {
         int cursor = 0;
@@ -330,6 +343,61 @@ static void setup_label(Container *root, Container *label_parent, bool bold, boo
                 label_data->cursor = label_data->text.size();
                 label_data->selection = 0;
             }
+        } else if (sym == XKB_KEY_Up) {
+            int cur = label_data->cursor;
+            int start = line_start(label_data->text, cur);
+            if (start == 0)
+                return; // already on first line
+
+            // Current column
+            int col = cur - start;
+
+            // Previous line boundaries
+            int prev_end = start - 1; // the '\n' before this line
+            int prev_start = line_start(label_data->text, prev_end);
+
+            int prev_len = prev_end - prev_start;
+            int new_cursor = prev_start + std::min(col, prev_len);
+
+            // Selection logic (matches your Left-arrow example)
+            if (mods & Modifier::MOD_SHIFT) {
+                if (!label_data->selecting) {
+                    label_data->selecting = true;
+                    label_data->selection = label_data->cursor;
+                }
+            } else {
+                label_data->selecting = false;
+            }
+
+            label_data->cursor = new_cursor;
+        } else if (sym == XKB_KEY_Down) {
+            int cur = label_data->cursor;
+            int start = line_start(label_data->text, cur);
+            int end = line_end(label_data->text, cur);
+            if (end >= (int)label_data->text.size())
+                return; // last line; nowhere to go
+
+            // Current column
+            int col = cur - start;
+
+            // Next line starts right after '\n'
+            int next_start = end + 1;
+            int next_end = line_end(label_data->text, next_start);
+            int next_len = next_end - next_start;
+
+            int new_cursor = next_start + std::min(col, next_len);
+
+            // Selection logic
+            if (mods & Modifier::MOD_SHIFT) {
+                if (!label_data->selecting) {
+                    label_data->selecting = true;
+                    label_data->selection = label_data->cursor;
+                }
+            } else {
+                label_data->selecting = false;
+            }
+
+            label_data->cursor = new_cursor;
         }
     };
     label->when_paint = [bold, editable](Container* root, Container* c) {
