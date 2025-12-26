@@ -139,7 +139,7 @@ static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double
     cairo_close_path(cr);
 }
 
-static void setup_label(Container *root, Container *label_parent, bool bold, std::function<std::string (Container *root, Container *c)> func) {
+static void setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     struct LabelData : UserData {
         int cursor = 0;
         
@@ -177,8 +177,8 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         c->wanted_bounds.w = FILL_SPACE;
         c->wanted_bounds.h = child->wanted_bounds.h + padding * dpi;
     };
-    label_parent->when_paint = [bold](Container *root, Container *c) {
-        if (bold)
+    label_parent->when_paint = [bold, editable](Container *root, Container *c) {
+        if (!editable)
             return;
         auto data = (PinData *) root->user_data;
         auto cr = data->window->raw_window->cr;
@@ -200,7 +200,7 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
     auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
     label->user_data = label_data;
 
-    label->pre_layout = [bold](Container* root, Container* c, const Bounds &b) {
+    label->pre_layout = [bold, editable](Container* root, Container* c, const Bounds &b) {
         auto data = (PinData *) root->user_data;
         auto label_data = (LabelData *) c->user_data;
         auto text = label_data->text;
@@ -220,13 +220,15 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
         c->wanted_bounds.w = logical.width;
         c->wanted_bounds.h = logical.height;
     };
-    label->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+    label->when_key_event = [editable](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         if (!c->active && !c->parent->active)
             return;
         auto label_data = (LabelData *) c->user_data;
         auto label_text = &label_data->text;
         
         if (!pressed)
+            return;
+        if (!editable)
             return;
         if (is_text) {
             if (label_data->selecting) {
@@ -308,7 +310,7 @@ static void setup_label(Container *root, Container *label_parent, bool bold, std
             }
         }
     };
-    label->when_paint = [bold](Container* root, Container* c) {
+    label->when_paint = [bold, editable](Container* root, Container* c) {
         auto data = (PinData *) root->user_data;
         auto label_data = (LabelData *) c->user_data;
         if (!c->active && !c->parent->active)
@@ -513,27 +515,27 @@ static void fill_root(Container *root) {
     root->wanted_pad = Bounds(30, 30, 30, 30);
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, true, [](Container* root, Container* c) { return "Icon"; });
+        setup_label(root, label, true, false, [](Container* root, Container* c) { return "Icon"; });
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, false, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
+        setup_label(root, label, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, true, [](Container* root, Container* c) { return "Terminal Command"; });
+        setup_label(root, label, true, false, [](Container* root, Container* c) { return "Terminal Command"; });
     } 
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, false, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
+        setup_label(root, label, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, true, [](Container* root, Container* c) { return "Stacking rule"; });
+        setup_label(root, label, true, false, [](Container* root, Container* c) { return "Stacking rule"; });
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, false, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
+        setup_label(root, label, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
     }
 }
 

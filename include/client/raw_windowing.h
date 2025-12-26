@@ -18,6 +18,7 @@ enum Modifier : uint32_t {
 struct PolledFunction {
     int fd = 0;
     int revents = 0;
+    std::string name;
     std::function<void(PolledFunction f)> func = nullptr;
 };
 

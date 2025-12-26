@@ -24,6 +24,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <ctype.h>
+#include <sys/timerfd.h>
 
 #include <wayland-client.h>
 #include <vector>
@@ -89,7 +90,9 @@ struct wl_context {
     bool have_functions_to_execute = false;
   
     bool running = true;
+    
     struct wl_display *display = nullptr;
+    
     struct wl_registry *registry = nullptr;
     struct wl_compositor *compositor = nullptr;
     struct wl_shm *shm = nullptr;
@@ -111,6 +114,11 @@ struct wl_context {
     xkb_mod_index_t mod_alt;
     xkb_mod_index_t mod_ctrl;
     xkb_mod_index_t mod_super;
+    int most_recently_pressed = -1;
+    bool key_repeat_going_to_happen = false;
+    int key_repeat_rate = 100;
+    int key_repeat_delay = 100;
+    int key_repeat_type = 0;
 
     std::vector<output *> outputs;
     uint32_t shm_format;
@@ -213,6 +221,46 @@ static void handle_toplevel_configure(
 
     // Usually you’d handle resize here
     printf("size reconfigured\n");
+}
+
+int create_timerfd_ms(uint32_t time_ms) {
+    // 1. Create the timerfd
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (tfd < 0) {
+        return -1;
+    }
+
+    // 2. Prepare the time specification
+    struct itimerspec ts;
+    ts.it_interval.tv_sec = 0;
+    ts.it_interval.tv_nsec = 0;
+
+    // Handle the 0ms case: timerfd_settime disarms if tv_sec/tv_nsec are both 0.
+    // If 0 is passed, we set the smallest possible expiration (1 nanosecond).
+    if (time_ms == 0) {
+        ts.it_value.tv_sec = 0;
+        ts.it_value.tv_nsec = 1;
+    } else {
+        ts.it_value.tv_sec = time_ms / 1000;
+        ts.it_value.tv_nsec = (time_ms % 1000) * 1000000L;
+    }
+
+    // 3. Set the timer
+    // Flags = 0 means relative time (it expires 'time_ms' from now)
+    if (timerfd_settime(tfd, 0, &ts, NULL) < 0) {
+        close(tfd);
+        return -1;
+    }
+
+    return tfd;
+}
+
+void timerfd_update(int tfd, uint32_t ms) {
+    struct itimerspec ts = {0};
+    ts.it_value.tv_sec  = ms / 1000;
+    ts.it_value.tv_nsec = (ms % 1000) * 1000000L;
+    // interval stays zero: still one-shot
+    timerfd_settime(tfd, 0, &ts, NULL);
 }
 
 static void config_surface(wl_window *win, uint32_t w, uint32_t h) {
@@ -927,6 +975,8 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
     }
 }
 
+static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
+                                uint32_t serial, uint32_t time, uint32_t key, uint32_t state);
 
 static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
                                 uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
@@ -978,6 +1028,44 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
 
     if (win->on_render)
         win->on_render(win);
+
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+        ctx->most_recently_pressed = key;
+        if (!ctx->key_repeat_going_to_happen) {
+            ctx->key_repeat_going_to_happen = true;
+            PolledFunction pf;
+            auto time_ms = ctx->key_repeat_delay;
+            if (ctx->key_repeat_type == 1)
+                time_ms = ctx->key_repeat_rate;
+            ctx->key_repeat_type = 1;
+            pf.fd = create_timerfd_ms(time_ms);
+            pf.name = "Popping func";
+            pf.func = [ctx](PolledFunction f) {
+                for (int i = 0; i < ctx->polled_fds.size(); i++) {
+                    if (ctx->polled_fds[i].fd == f.fd) {
+                        close(f.fd);
+                        ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
+                        break;
+                    }
+                }
+                ctx->key_repeat_going_to_happen = false;
+                ctx->key_repeat_type = 1;
+                keyboard_handle_key(ctx, nullptr, 0, 0, ctx->most_recently_pressed, WL_KEYBOARD_KEY_STATE_PRESSED);
+            };
+            ctx->polled_fds.push_back(pf);
+        } else {
+            for (int i = 0; i < ctx->polled_fds.size(); i++) {
+                if (ctx->polled_fds[i].name == "Popping func") {
+                    timerfd_update(ctx->polled_fds[i].fd, ctx->key_repeat_delay);
+                }
+            }
+        }
+    } else {
+        if (ctx->most_recently_pressed == key) {
+            ctx->most_recently_pressed = -1;
+        }
+        ctx->key_repeat_type = 0;
+    }
 }
 
 static void keyboard_handle_modifiers(void *data, struct wl_keyboard *wl_keyboard,
@@ -1007,7 +1095,9 @@ static void keyboard_handle_repeat_info(void *data,
                             		    struct wl_keyboard *wl_keyboard,
                             		    int32_t rate,
                             		    int32_t delay) {
-                    		   
+    wl_context *ctx = (wl_context *)data;
+    ctx->key_repeat_rate = rate;
+    ctx->key_repeat_delay = delay;
 }
 
 
@@ -1350,6 +1440,7 @@ void windowing::main_loop(RawApp *app) {
 
     PolledFunction wake_pf;
     wake_pf.fd = ctx->wake_pipe[0];
+    wake_pf.name = "wake pipe";
     wake_pf.func = [ctx](PolledFunction pf) {
         if (pf.revents & POLLIN) {
             char buf[64];
@@ -1389,7 +1480,8 @@ void windowing::main_loop(RawApp *app) {
             break;
 
         // Dispatch
-        for (size_t i = 0; i < ctx->polled_fds.size(); i++) {
+        int end = ctx->polled_fds.size();
+        for (size_t i = 0; i < end; i++) {
             auto &p = ctx->polled_fds[i];
             p.revents = pfds[i].revents;
 
@@ -1513,10 +1605,6 @@ void windowing::redraw(RawWindow *window) {
     if (!win)
         return;
     write(ctx->wake_pipe[1], "x", 1);
-    
-    /*
-
-    */
 }
 
 void windowing::set_size(RawWindow *window, int width, int height) {
