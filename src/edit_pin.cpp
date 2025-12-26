@@ -162,7 +162,20 @@ struct LabelData : UserData {
     bool selecting = false;
     
     std::string text;
+
+    long last_time = 0;
+    long last_activation = 0;
 };
+
+static bool did_double_click(long *last_time, long *last_activation, long timeout) {
+    long current = get_current_time_in_ms();
+    if (current - *last_time < timeout && current - *last_activation > 600) {
+        *last_activation = current;
+        return true; 
+    }
+    *last_time = current;
+    return false;
+}
 
 static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     auto label_data = new LabelData;
@@ -215,6 +228,9 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
     };
 
     auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
+    label_parent->when_drag_end_is_click = false;
+    label->when_drag_end_is_click = false;
+    
     label->user_data = label_data;
 
     label->pre_layout = [bold, editable](Container* root, Container* c, const Bounds &b) {
@@ -545,6 +561,18 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             label_data->cursor = index + trailing;        
         }
     };
+    label->when_clicked = paint {
+        auto label_data = (LabelData *) c->user_data;
+        if (did_double_click(&label_data->last_time, &label_data->last_activation, 400))  {
+            if (label_data->selecting) {
+                label_data->selecting = false;
+            } else {
+                label_data->selecting = true;
+                label_data->selection = 0;
+                label_data->cursor = label_data->text.size();
+            }
+        }
+    };
     label->when_mouse_down = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->user_data;
         label_data->selecting = false;
@@ -570,6 +598,18 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         label_data->selecting = true;
         auto text = label_data->text;
         update_index(root, c, bold, text);
+    };
+    label_parent->when_clicked = paint {
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        if (did_double_click(&label_data->last_time, &label_data->last_activation, 400))  {
+            if (label_data->selecting) {
+                label_data->selecting = false;
+            } else {
+                label_data->selecting = true;
+                label_data->selection = 0;
+                label_data->cursor = label_data->text.size();
+            }
+        }
     };
     label_parent->when_mouse_down = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->children[0]->user_data;
