@@ -104,6 +104,11 @@ void on_resize(RawWindow *rw, int w, int h) {
     m->root->real_bounds = Bounds(0, 0, w, h);
 }
 
+void on_close(RawWindow *rw) {
+    auto m = mylar(rw);
+    if (!m) return;
+}
+
 MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings) {
     auto m = new MylarWindow;
     m->raw_window = windowing::open_window(app, type, settings);
@@ -119,6 +124,7 @@ MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings s
     m->raw_window->on_keyboard_focus = on_keyboard_focus;
     m->raw_window->on_render = on_render;
     m->raw_window->on_resize = on_resize;
+    m->raw_window->on_close = on_close;
     mylar_windows.push_back(m);
     return m;
 }

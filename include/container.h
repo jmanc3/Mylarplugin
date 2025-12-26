@@ -307,7 +307,7 @@ struct Container {
     void* user_data = nullptr;
     
     // Called when client needs to repaint itself
-    void (*on_closed)(Container* self) = nullptr;
+    std::function<void (Container* self)> on_closed = nullptr;
 
     // Called when client needs to repaint itself
     //void (*when_paint)(Container* root, Container* self) = nullptr;

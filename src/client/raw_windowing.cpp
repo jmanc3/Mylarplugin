@@ -1204,8 +1204,8 @@ static const zwlr_foreign_toplevel_handle_v1_listener toplevel_listener = {
     .parent = parent
 };
 
-static void handle_manager_toplevel(void*, zwlr_foreign_toplevel_manager_v1*, zwlr_foreign_toplevel_handle_v1* toplevel_handle) {
-    zwlr_foreign_toplevel_handle_v1_add_listener(toplevel_handle, &toplevel_listener, nullptr);
+static void handle_manager_toplevel(void*d, zwlr_foreign_toplevel_manager_v1*, zwlr_foreign_toplevel_handle_v1* toplevel_handle) {
+    zwlr_foreign_toplevel_handle_v1_add_listener(toplevel_handle, &toplevel_listener, d);
 }
 
 static void handle_manager_finished(void*, zwlr_foreign_toplevel_manager_v1*) {
@@ -1319,7 +1319,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
             d->shape_device = wp_cursor_shape_manager_v1_get_pointer(d->shape_manager, d->pointer);
     } else if (strcmp(interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
         d->top_level_manager = (zwlr_foreign_toplevel_manager_v1*) wl_registry_bind(registry, id, &zwlr_foreign_toplevel_manager_v1_interface, 3);
-        zwlr_foreign_toplevel_manager_v1_add_listener(d->top_level_manager, &manager_listener, nullptr);
+        zwlr_foreign_toplevel_manager_v1_add_listener(d->top_level_manager, &manager_listener, d);
     }
 }
 
@@ -1503,6 +1503,8 @@ void windowing::main_loop(RawApp *app) {
         for (int i = ctx->windows.size() - 1; i >= 0; i--) {
             auto win = ctx->windows[i];
             if (win->marked_for_closing) {
+                if (win->rw->on_close)
+                    win->rw->on_close(win->rw);
                 wl_window_destroy(win);
                 ctx->windows.erase(ctx->windows.begin() + i);
             }

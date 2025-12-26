@@ -4,6 +4,7 @@
 
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
+#include "dock.h"
 
 #include <cairo.h>
 #include <cmath>
@@ -18,6 +19,8 @@
 struct PinData : UserData {
     RawApp *app = nullptr;
     MylarWindow *window = nullptr;
+    std::string original_stacking_rule;
+    
     std::string stacking_rule;
     std::string icon;
     std::string command;
@@ -152,15 +155,16 @@ static int line_end(const std::string &text, int pos) {
     return (nl == std::string::npos) ? text.size() : nl;
 }
 
-static void setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
-    struct LabelData : UserData {
-        int cursor = 0;
-        
-        int selection = 0;
-        bool selecting = false;
-        
-        std::string text;
-    };
+struct LabelData : UserData {
+    int cursor = 0;
+    
+    int selection = 0;
+    bool selecting = false;
+    
+    std::string text;
+};
+
+static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     auto label_data = new LabelData;
     
     auto text = func(root, label_parent);
@@ -597,6 +601,7 @@ static void setup_label(Container *root, Container *label_parent, bool bold, boo
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
     };
+    return label;
 }
 
 static void fill_root(Container *root) {
@@ -608,24 +613,27 @@ static void fill_root(Container *root) {
         setup_label(root, label, true, false, [](Container* root, Container* c) { return "Icon"; });
     }
     {
-        auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
+        auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
+        auto label = setup_label(root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
+        label->name = "icon_container";
     }
-    {
+    {        
         auto label = root->child(FILL_SPACE, FILL_SPACE);
         setup_label(root, label, true, false, [](Container* root, Container* c) { return "Terminal Command"; });
     } 
     {
-        auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
+        auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
+        auto label = setup_label(root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
+        label->name = "command_container";
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
         setup_label(root, label, true, false, [](Container* root, Container* c) { return "Stacking rule"; });
     }
     {
-        auto label = root->child(FILL_SPACE, FILL_SPACE);
-        setup_label(root, label, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
+        auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
+        auto label = setup_label(root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
+        label->name = "stacking_rule_container";
     }
 }
 
@@ -636,7 +644,18 @@ static void start_edit_pin(std::string stacking_rule, std::string icon, std::str
     settings.pos.h = 600;
     settings.name = "Edit pin";
     auto mylar = open_mylar_window(app, WindowType::NORMAL, settings);
+    mylar->raw_window->on_close = [mylar](RawWindow *m) {
+        auto stacking_rule_container = container_by_name("stacking_rule_container", mylar->root);
+        auto stacking_rule_data = (LabelData *) stacking_rule_container->user_data;
+        auto command_container = container_by_name("command_container", mylar->root);
+        auto command_data = (LabelData *) command_container->user_data;
+        auto icon_container = container_by_name("icon_container", mylar->root);
+        auto icon_data = (LabelData *) icon_container->user_data;
+        auto pin_data = (PinData *) mylar->root->user_data;
+        dock::edit_pin(pin_data->original_stacking_rule, stacking_rule_data->text, icon_data->text, command_data->text);
+    };
     auto pin_data = new PinData;
+    pin_data->original_stacking_rule = stacking_rule;
     pin_data->stacking_rule = stacking_rule;
     pin_data->icon = icon;
     pin_data->command = command;

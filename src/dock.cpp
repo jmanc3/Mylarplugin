@@ -1,5 +1,6 @@
 #include "dock.h"
 
+#include "client/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 #include "second.h"
 
 #include "client/raw_windowing.h"
@@ -2037,7 +2038,20 @@ void dock::toggle_dock_merge() {
     dock::redraw();
 }
 
-void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_command, std::string new_icon) {
-    
+void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {
+    for (auto d : docks) {
+        if (auto icons = container_by_name("icons", d->window->root)) {
+            for (auto p : icons->children) {
+                auto pin = (Pin*)p->user_data;
+                if (pin->stacking_rule == original_stacking_rule) {
+                    pin->stacking_rule = new_stacking_rule;
+                    pin->command = new_command;
+                    pin->icon = new_icon;
+                    pin->scale_change = true;
+                }
+            }
+        }
+    }
+    //notify(fz("{} {} {} {}", original_stacking_rule, new_stacking_rule, new_command, new_icon));
 }
 
