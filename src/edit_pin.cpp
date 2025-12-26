@@ -280,15 +280,37 @@ static void setup_label(Container *root, Container *label_parent, bool bold, boo
                }
             }
         } else if (sym == XKB_KEY_Left) {
-            label_data->selecting = false;
-            label_data->cursor--;
-            if (label_data->cursor < 0)
-               label_data->cursor = 0;
+            if (mods & Modifier::MOD_SHIFT) {
+                if (!label_data->selecting) {
+                    label_data->selecting = true;
+                    label_data->selection = label_data->cursor;
+                    label_data->cursor = label_data->cursor;
+                }
+                label_data->cursor--;
+                if (label_data->cursor < 0)
+                   label_data->cursor = 0;                    
+            } else {
+                label_data->selecting = false;
+                label_data->cursor--;
+                if (label_data->cursor < 0)
+                   label_data->cursor = 0;
+            }
         } else if (sym == XKB_KEY_Right) {
-            label_data->selecting = false;
-            label_data->cursor++;
-            if (label_data->cursor > label_text->size())
-               label_data->cursor = label_text->size();
+            if (mods & Modifier::MOD_SHIFT) {
+                if (!label_data->selecting) {
+                    label_data->selecting = true;
+                    label_data->selection = label_data->cursor;
+                    label_data->cursor = label_data->cursor;
+                }
+                label_data->cursor++;
+                if (label_data->cursor > label_text->size())
+                    label_data->cursor = label_text->size();
+            } else {
+                label_data->selecting = false;
+                label_data->cursor++;
+                if (label_data->cursor > label_text->size())
+                    label_data->cursor = label_text->size();
+            }
         } else if (sym == XKB_KEY_Delete) {
             if (label_data->selecting) {
                 int min = std::min(label_data->cursor, label_data->selection);
