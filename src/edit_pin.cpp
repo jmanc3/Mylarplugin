@@ -7,6 +7,7 @@
 #include "dock.h"
 
 #include <cairo.h>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <pango/pango-font.h>
@@ -160,7 +161,7 @@ struct LabelData : UserData {
     
     int selection = 0;
     bool selecting = false;
-    
+
     std::string text;
 
     long last_time = 0;
@@ -169,7 +170,7 @@ struct LabelData : UserData {
 
 static bool did_double_click(long *last_time, long *last_activation, long timeout) {
     long current = get_current_time_in_ms();
-    if (current - *last_time < timeout && current - *last_activation > 600) {
+    if (current - *last_time < timeout && current - *last_activation > timeout * 2) {
         *last_activation = current;
         return true; 
     }
@@ -575,7 +576,6 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
     };
     label->when_mouse_down = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->user_data;
-        label_data->selecting = false;
         auto text = label_data->text;
         update_index(root, c, bold, text);
         label_data->selection = label_data->cursor;
@@ -644,6 +644,67 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
     return label;
 }
 
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
+    auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+    //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
+    pango_layout_set_text(layout, text.data(), text.size());
+    if (wrap == -1) {
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+        pango_layout_set_width(layout, -1);
+        pango_layout_set_height(layout, -1);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
+    } else {
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_width(layout, wrap);
+        pango_layout_set_height(layout, h);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
+    }
+    set_argb(cr, color);
+    PangoRectangle ink;
+    PangoRectangle logical;
+    pango_layout_get_pixel_extents(layout, &ink, &logical);
+    if (draw) {
+        cairo_move_to(cr, std::round(x), std::round(y));
+        pango_cairo_show_layout(cr, layout);
+    }
+    return Bounds(ink.width, ink.height, logical.width, logical.height);
+}
+
+static void button(Container *root, std::string text, std::function<void(Container *, Container *)> on_click) {
+    int size = 12;
+    
+    auto child = root->child(FILL_SPACE, FILL_SPACE);
+    child->when_clicked = on_click;
+    child->when_paint = [size, text](Container *root, Container *c) {
+        auto mylar = (PinData*)root->user_data;
+        auto cr = mylar->window->raw_window->cr;
+        auto dpi = mylar->window->raw_window->dpi;
+ 
+        set_rect(cr, c->real_bounds);
+        if (c->state.mouse_pressing) {
+            set_argb(cr, {.4, .4, .4, 1});
+        } else if (c->state.mouse_hovering) {
+            set_argb(cr, {.55, .55, .55, 1});
+        } else {
+            set_argb(cr, {.7, .7, .7, 1});
+        }
+        cairo_fill(cr);
+        
+        auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5,
+            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, text, size * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
+    };
+    child->pre_layout = [size, text](Container* root, Container* c, const Bounds& b) {
+        auto mylar = (PinData*)root->user_data;
+        auto cr = mylar->window->raw_window->cr;
+        auto dpi = mylar->window->raw_window->dpi;
+
+        auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
+        c->wanted_bounds.w = bounds.w + 50 * dpi;
+    };
+};
+
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
     root->type = ::vbox;
@@ -675,6 +736,36 @@ static void fill_root(Container *root) {
         auto label = setup_label(root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
         label->name = "stacking_rule_container";
     }
+
+    root->child(FILL_SPACE, FILL_SPACE);
+    
+    {
+        auto parent = root->child(::hbox, FILL_SPACE, 32);
+        parent->pre_layout = [](Container* root, Container* c, const Bounds& b) {
+            auto mylar = (PinData*)root->user_data;
+            auto dpi = mylar->window->raw_window->dpi;
+            c->wanted_bounds.h = 32 * dpi;
+            c->spacing = 10 * dpi;
+        };
+        parent->alignment = ALIGN_RIGHT;
+        
+        button(parent, "Save & Quit", [](Container *root, Container *c) {
+            auto mylar = (PinData*)root->user_data;
+            auto stacking_rule_container = container_by_name("stacking_rule_container", root);
+            auto stacking_rule_data = (LabelData*)stacking_rule_container->user_data;
+            auto command_container = container_by_name("command_container", root);
+            auto command_data = (LabelData*)command_container->user_data;
+            auto icon_container = container_by_name("icon_container", root);
+            auto icon_data = (LabelData*)icon_container->user_data;
+            auto pin_data = (PinData*)root->user_data;
+            dock::edit_pin(pin_data->original_stacking_rule, stacking_rule_data->text, icon_data->text, command_data->text);
+            windowing::close_window(mylar->window->raw_window); 
+        });
+        button(parent, "Close", [](Container *root, Container *c) {
+            auto mylar = (PinData*)root->user_data;
+            windowing::close_window(mylar->window->raw_window);
+        });
+    }
 }
 
 static void start_edit_pin(std::string stacking_rule, std::string icon, std::string command) {
@@ -684,16 +775,6 @@ static void start_edit_pin(std::string stacking_rule, std::string icon, std::str
     settings.pos.h = 600;
     settings.name = "Edit pin";
     auto mylar = open_mylar_window(app, WindowType::NORMAL, settings);
-    mylar->raw_window->on_close = [mylar](RawWindow *m) {
-        auto stacking_rule_container = container_by_name("stacking_rule_container", mylar->root);
-        auto stacking_rule_data = (LabelData *) stacking_rule_container->user_data;
-        auto command_container = container_by_name("command_container", mylar->root);
-        auto command_data = (LabelData *) command_container->user_data;
-        auto icon_container = container_by_name("icon_container", mylar->root);
-        auto icon_data = (LabelData *) icon_container->user_data;
-        auto pin_data = (PinData *) mylar->root->user_data;
-        dock::edit_pin(pin_data->original_stacking_rule, stacking_rule_data->text, icon_data->text, command_data->text);
-    };
     auto pin_data = new PinData;
     pin_data->original_stacking_rule = stacking_rule;
     pin_data->stacking_rule = stacking_rule;

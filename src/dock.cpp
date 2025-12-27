@@ -323,7 +323,7 @@ static void paint_root(Container *root, Container *c) {
     cairo_fill(cr);
 }
 
-Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
@@ -961,7 +961,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
         c->z_index = 0;
         data->wants_reposition_animation = true;
-        data->init_repo_vel = 6500;
+        data->init_repo_vel = 4500;
     };
 }
 
