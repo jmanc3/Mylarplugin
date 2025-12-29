@@ -606,7 +606,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
         auto stacking_rule = pin->stacking_rule;
         {
             PopOption pop;
-            pop.text = "Launch task (" + pin->command + ")";
+            pop.text = "Launch task";
             pop.on_clicked = [uuid]() {
                 for (auto d : docks) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
@@ -648,9 +648,9 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
 #endif
             std::string pin_text;
             if (pin->pinned) {
-                pop.text = "Unpin (" + pin->stacking_rule + ")";
+                pop.text = "Unpin";
             } else {
-                pop.text = "Pin (" + pin->stacking_rule + ")";
+                pop.text = "Pin";
                 pin_text = pop.text;
             }
             auto text = pop.text;
