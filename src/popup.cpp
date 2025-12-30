@@ -177,15 +177,26 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
                 auto popdata = (PopOptionData*)c->user_data;
                 auto pop_option = popdata->p;
 
-                if (!pop_option.icon_left.empty()) {
-                    auto ico = one_shot_icon(14 * s, {pop_option.icon_left});
-                    if (!ico.empty()) {
-                        auto info = gen_texture(ico, 18 * s);
-                        draw_texture(info, c->real_bounds.x + 16 * s, center_y(c, info.h));
-                        free_text_texture(info.id);
+                if (!pop_option.has_attempted_loadin_icon) {
+                    pop_option.has_attempted_loadin_icon = true;
+                    if (!pop_option.icon_left.empty()) {
+                        if (pop_option.is_text_icon) {
+
+                        } else {
+                            pop_option.icon_path = one_shot_icon(14 * s, {pop_option.icon_left});
+                        }
                     }
                 }
-                
+                if (pop_option.is_text_icon) {
+                    auto info = gen_text_texture("Segoe Fluent Icons", pop_option.icon_left, 14 * s, {0, 0, 0, 1});
+                    draw_texture(info, c->real_bounds.x + (40 * s * .5) - info.w * .5, center_y(c, info.h));
+                    free_text_texture(info.id);
+                } else if (!pop_option.icon_path.empty()) {
+                    auto info = gen_texture(pop_option.icon_path, 18 * s);
+                    draw_texture(info, c->real_bounds.x + (40 * s * .5) - info.w * .5, center_y(c, info.h));
+                    free_text_texture(info.id);
+                }
+
                 auto info = gen_text_texture(mylar_font, pop_option.text, 14 * s, {0, 0, 0, 1});
                 draw_texture(info, c->real_bounds.x + 40 * s, center_y(c, info.h));
                 free_text_texture(info.id);

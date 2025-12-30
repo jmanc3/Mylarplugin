@@ -37,7 +37,7 @@
 static bool merge_windows = false;
 static bool labels = true;
 static int pixel_spacing = 1;
-static float max_width = 165;
+static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
 static void write_saved_pins_to_file(Container *icons);
@@ -599,14 +599,15 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     return c;
 }
 
-static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin) {
-    main_thread([cid, startoff, cw, uuid, pin] {
+static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff) {
+    main_thread([cid, startoff, cw, uuid, pin, dpi, yoff] {
         auto m = mouse();
         std::vector<PopOption> root;
         auto stacking_rule = pin->stacking_rule;
         {
             PopOption pop;
-            pop.text = "Launch task";
+            pop.text = stacking_rule;
+            pop.icon_left = stacking_rule;
             pop.on_clicked = [uuid]() {
                 for (auto d : docks) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
@@ -624,6 +625,8 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
         {
             PopOption pop;
             pop.text = "Edit pin";
+            pop.icon_left = "\uE713";
+            pop.is_text_icon = true;
             pop.on_clicked = [stacking_rule]() {
                 // go through the dock and find the first pin to match the stacking rule and copy over the data then, when edit done
                 // call docK::edit_pin(original_stacking_rule, new_stacking_rule, new_command, new_icon);
@@ -649,10 +652,13 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             std::string pin_text;
             if (pin->pinned) {
                 pop.text = "Unpin";
+                pop.icon_left = "\uE77A";
             } else {
                 pop.text = "Pin";
+                pop.icon_left = "\uE718";
                 pin_text = pop.text;
             }
+            pop.is_text_icon = true;
             auto text = pop.text;
             pop.on_clicked = [text, stacking_rule, pin_text]() {
                 for (auto d : docks) {
@@ -682,6 +688,8 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                 } else {
                     pop.text = "End tasks";
                 }
+                pop.icon_left = "\uF140";
+                pop.is_text_icon = true;
                 auto text = pop.text;
                 pop.on_clicked = [text, stacking_rule, uuid]() {
                     for (auto d : docks) {
@@ -720,6 +728,8 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                 } else {
                     pop.text = "Close windows";
                 }
+                pop.is_text_icon = true;
+                pop.icon_left = "\uE10A";
                 auto text = pop.text;
                 pop.on_clicked = [text, stacking_rule, uuid]() {
                     for (auto d : docks) {
@@ -747,8 +757,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             }
         }
 
-        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y);
-        //popup::open(root, m.x - (277 * .5), m.y);
+        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y - (yoff / dpi) - 3 - (24 * root.size() * dpi));
     });
 }
 
@@ -926,7 +935,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             int cw = c->real_bounds.w / mylar->raw_window->dpi;
             auto uuid = c->uuid;
             
-            pinned_right_click(cid, startoff, cw, uuid, pin);
+            pinned_right_click(cid, startoff, cw, uuid, pin, dock->window->raw_window->dpi, dock->window->root->mouse_current_y);
         }
     };
     ch->pre_layout = [](Container* root, Container* c, const Bounds& b) {

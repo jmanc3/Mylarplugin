@@ -15,6 +15,11 @@ struct PopOption {
     
     std::string text;
     std::string icon_left;
+    std::string icon_path;
+
+    bool is_text_icon = false;
+
+    bool has_attempted_loadin_icon = false;
 
     std::vector<PopOption> submenu;
 

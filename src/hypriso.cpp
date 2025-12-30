@@ -2111,6 +2111,11 @@ bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
                 rectdata.xray = false;
                 color = {0, 0, 0, 1.0f * (1.0f - pull(fadein, scalar))};
                 g_pHyprOpenGL->renderRect(box, color, rectdata);
+                /*auto pancake_scalar = pull(zoomin, scalar * 3);
+                auto sfactor = 200;
+                monbox.y += sfactor * (1.0f - pancake_scalar);
+                monbox.h -= sfactor * 2 * (1.0f - pancake_scalar);
+                */
                 monbox.scaleFromCenter(1.0 + (0.05 * (1.0 - pull(zoomin, scalar)))); 
                 hypriso->damage_entire(h->id);
                 return true;
