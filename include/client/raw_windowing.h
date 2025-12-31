@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <string>
+#include <mutex>
 #include <cairo.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -18,6 +19,7 @@ enum Modifier : uint32_t {
 struct PolledFunction {
     int fd = 0;
     int revents = 0;
+    void *data = nullptr;
     std::string name;
     std::function<void(PolledFunction f)> func = nullptr;
 };
@@ -45,6 +47,8 @@ struct RawWindowSettings {
 };
 
 struct RawWindow {
+    std::mutex mutex;
+    
     int id = -1;
 
     float dpi = 1.0;
@@ -88,8 +92,6 @@ enum struct WindowType {
 namespace windowing {
     RawApp *open_app();
 
-    void add_fb(RawApp *app, int fd, std::function<void(PolledFunction pf)> func);
-    
     RawWindow *open_window(RawApp *app, WindowType type, RawWindowSettings settings);
      
     void main_loop(RawApp *app);
@@ -101,6 +103,10 @@ namespace windowing {
     void close_window(RawWindow *window);   
     
     void close_app(RawApp *app);
+
+    int timer(RawApp *, int ms, std::function<void(void *data)> func, void *data);
+    void timer_update(int fd, int ms);
+    void timer_stop(RawApp *, int fd);
 };
 
 #endif // windowing_h_INCLUDED

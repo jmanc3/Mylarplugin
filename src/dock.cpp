@@ -2,6 +2,7 @@
 
 #include "client/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 #include "second.h"
+#include "dock_thumbnails.h"
 
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
@@ -15,6 +16,7 @@
 #include <cairo.h>
 #include "process.hpp"
 #include <chrono>
+#include <mutex>
 #include <cmath>
 #include <functional>
 #include <pango/pango-layout.h>
@@ -118,6 +120,8 @@ struct Pin : UserData {
     std::string icon;
     std::string command;
     std::string stacking_rule;
+
+    std::string full_icon;
     
     cairo_surface_t* icon_surf = nullptr; 
     bool attempted_load = false;
@@ -129,6 +133,8 @@ struct Pin : UserData {
     SpringAnimation spring;
     double actual_w = 0;
     long animation_start_time = 0;
+
+    int hover_timer_fd = -1;
 
     ~Pin() {
         if (icon_surf)
@@ -599,15 +605,15 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     return c;
 }
 
-static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff) {
-    main_thread([cid, startoff, cw, uuid, pin, dpi, yoff] {
+static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff, std::string full_icon_path) {
+    main_thread([cid, startoff, cw, uuid, pin, dpi, yoff, full_icon_path] {
         auto m = mouse();
         std::vector<PopOption> root;
         auto stacking_rule = pin->stacking_rule;
         {
             PopOption pop;
             pop.text = stacking_rule;
-            pop.icon_left = stacking_rule;
+            pop.icon_left = full_icon_path;
             pop.on_clicked = [uuid]() {
                 for (auto d : docks) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
@@ -757,7 +763,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             }
         }
 
-        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y - (yoff / dpi) - 3 - (24 * root.size() * dpi));
+        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y - (yoff / dpi) - 5 - (24 * root.size() * dpi));
     });
 }
 
@@ -898,6 +904,47 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             cairo_fill(cr);
         }
     };
+    struct PopData {
+        std::string uuid;
+    };
+    ch->when_mouse_enters_container = paint {
+        Pin* pin = (Pin*)c->user_data;
+        auto dock = (Dock*)root->user_data;
+        auto uuid = c->uuid;
+        auto popdata = new PopData{uuid};
+        pin->hover_timer_fd = windowing::timer(dock->app, 500, [](void *data) {
+            auto pop_data = ((PopData *) data);
+            for (auto d : docks) {                
+                std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+                if (auto icons = container_by_name("icons", d->window->root)) {
+                    for (auto p : icons->children) {
+                        if (p->uuid == pop_data->uuid) {
+                            auto pin = (Pin *) p->user_data;
+                            std::vector<int> ids;
+                            for (auto w : pin->windows)
+                                ids.push_back(w.cid);
+                            delete pop_data;
+
+                            float posx = (p->real_bounds.x + p->real_bounds.w * .5) / d->window->raw_window->dpi;
+                            float posy = p->real_bounds.y / d->window->raw_window->dpi - 10;
+
+                            main_thread([posx, posy, ids]() { dock_thumbnails::open(posx, posy, 1, ids); });
+                            goto out;
+                        }
+                    }
+                }
+            }
+            out:
+        }, popdata); 
+    };
+    ch->when_mouse_leaves_container = paint {
+        Pin* pin = (Pin*)c->user_data;
+        auto dock = (Dock*)root->user_data;
+        if (pin->hover_timer_fd != -1) {
+            windowing::timer_stop(dock->app, pin->hover_timer_fd); 
+            pin->hover_timer_fd = -1;
+        }
+    };
     ch->when_clicked = paint {
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
@@ -934,8 +981,8 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
             int cw = c->real_bounds.w / mylar->raw_window->dpi;
             auto uuid = c->uuid;
-            
-            pinned_right_click(cid, startoff, cw, uuid, pin, dock->window->raw_window->dpi, dock->window->root->mouse_current_y);
+
+            pinned_right_click(cid, startoff, cw, uuid, pin, dock->window->raw_window->dpi, dock->window->root->mouse_current_y, pin->full_icon);
         }
     };
     ch->pre_layout = [](Container* root, Container* c, const Bounds& b) {
@@ -955,6 +1002,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 auto icon = pin->icon;
                 auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon)});
                 if (!full.empty()) {                        
+                    pin->full_icon = full;
                     load_icon_full_path(&pin->icon_surf, full, size);
                 }
             }
@@ -1852,6 +1900,8 @@ static void write_saved_pins_to_file(Container *icons) {
 void dock_start(std::string monitor_name) {
     if (!monitor_name.empty()) {
         for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+            
             if (d->creation_settings.monitor_name == monitor_name) {
                 return; // already created that dock
             }
@@ -1923,6 +1973,8 @@ void dock::stop(std::string monitor_name) {
     if (monitor_name.empty()) {
         finished = true;
         for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+            
             windowing::close_app(d->app);
         }
         docks.clear();
@@ -1930,6 +1982,8 @@ void dock::stop(std::string monitor_name) {
         cleanup_cached_fonts();   
     } else {
         for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+            
             if (d->creation_settings.monitor_name == monitor_name) {
                 windowing::close_app(d->app);
             }
@@ -1967,6 +2021,8 @@ std::string get_launch_command(int cid) {
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
     for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        
         // Check if cid should even be displayed in dock
         if (!hypriso->alt_tabbable(cid))
             return;
@@ -1991,7 +2047,7 @@ void dock::add_window(int cid) {
 // This happens on the main thread, not the dock thread
 void dock::remove_window(int cid) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> guard(d->collection->mut);
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
         d->collection->to_be_removed.push_back(cid);
         windowing::redraw(d->window->raw_window);
     }
@@ -1999,7 +2055,7 @@ void dock::remove_window(int cid) {
 
 void dock::title_change(int cid, std::string title) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> guard(d->collection->mut);
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
         for (auto window : d->collection->list) {
             if (window->cid == cid) {
                 window->title = title;
@@ -2012,6 +2068,7 @@ void dock::title_change(int cid, std::string title) {
 void dock::on_activated(int cid) {
     active_cid = cid;
     for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto p : icons->children) {
                 auto pin = (Pin *) p->user_data;
@@ -2026,13 +2083,17 @@ void dock::on_activated(int cid) {
             }
         }
     }
-    for (auto d : docks)
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
         windowing::redraw(d->window->raw_window);
+    }
 }
 
 void dock::redraw() {
-    for (auto d : docks)
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
         windowing::redraw(d->window->raw_window);
+    }
 }
 
 void dock::toggle_dock_merge() {
@@ -2049,6 +2110,7 @@ void dock::toggle_dock_merge() {
 
 void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {
     for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto p : icons->children) {
                 auto pin = (Pin*)p->user_data;

@@ -109,7 +109,7 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
             auto pud = (PopupUserData *) c->user_data;
             auto b = c->real_bounds;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .07}, 7 * s, 2.0f, b);
-            rect(b, {1, 1, 1, .95}, 0, 7 * s);
+            rect(b, {1, 1, 1, .75}, 0, 7 * s);
         }
     };
     p->after_paint = [](Container *actual_root, Container *c) {
@@ -183,7 +183,8 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
                         if (pop_option.is_text_icon) {
 
                         } else {
-                            pop_option.icon_path = one_shot_icon(14 * s, {pop_option.icon_left});
+                            auto icon = pop_option.icon_left;
+                            pop_option.icon_path= one_shot_icon(14 * s, {icon, to_lower(icon), c3ic_fix_wm_class(icon), to_lower(icon)});
                         }
                     }
                 }

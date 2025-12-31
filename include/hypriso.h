@@ -324,8 +324,6 @@ struct HyprIso {
 
     void logout();
 
-    void set_reserved_edge(int side, int amount);
-
     void show_desktop();
     void hide_desktop();
     void move_to_workspace(int id, int workspace);

@@ -9,12 +9,15 @@
 #include "hypriso.h"
 #include "second.h"
 
+#include <fstream>
+#include <iostream>
 #include <bits/types/idtype_t.h>
 #include <cmath>
 #include <cstring>
 #include <drm_fourcc.h>
 #include <glib-object.h>
-#include <hyprland/src/desktop/Popup.hpp>
+//#include <hyprland/src/desktop/Popup.hpp>
+#include <hyprland/src/desktop/view/Popup.hpp>
 #include <unordered_map>
 #include <wayland-server-core.h>
 #include <wlr-layer-shell-unstable-v1.hpp>
@@ -48,7 +51,8 @@
 
 #include <hyprland/src/render/pass/ShadowPassElement.hpp>
 #include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
-#include <hyprland/src/desktop/LayerSurface.hpp>
+//#include <hyprland/src/desktop/LayerSurface.hpp>
+#include <hyprland/src/desktop/view/LayerSurface.hpp>
 #include <hyprland/src/protocols/core/DataDevice.hpp>
 #include <hyprland/src/protocols/PointerConstraints.hpp>
 #include <hyprland/src/protocols/RelativePointer.hpp>
@@ -68,7 +72,7 @@
 #include <hyprland/src/xwayland/XWM.hpp>
 #include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
-#include <hyprland/src/desktop/Window.hpp>
+#include <hyprland/src/desktop/view/Window.hpp>
 #undef private
 
 #include <hyprland/src/xwayland/XWayland.hpp>
@@ -355,7 +359,7 @@ void set_rounding(int mask) {
 
 PHLWINDOW get_window_from_mouse() {
     const auto      MOUSECOORDS = g_pInputManager->getMouseCoordsInternal();
-    const PHLWINDOW PWINDOW     = g_pCompositor->vectorToWindowUnified(MOUSECOORDS, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
+    const PHLWINDOW PWINDOW     = g_pCompositor->vectorToWindowUnified(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
     return PWINDOW;
 }
 
@@ -662,20 +666,20 @@ CSurfacePassElement::SRenderData collect_mdata(PHLWINDOW w) {
     // m_data.w,h
     renderdata.pWindow = w; // m_data.pWindow
 
-    renderdata.surface = pWindow->m_wlSurface->resource(); // m_data.surface
+    renderdata.surface = pWindow->wlSurface()->resource(); // m_data.surface
     // m_data.mainSurface
     renderdata.pos.x = textureBox.x; // m_data.pos.x,y
     renderdata.pos.y = textureBox.y;
     renderdata.pos.x += pWindow->m_floatingOffset.x;
     renderdata.pos.y += pWindow->m_floatingOffset.y;
     renderdata.surfaceCounter = 0;
-    pWindow->m_wlSurface->resource()->breadthfirst(
+    pWindow->wlSurface()->resource()->breadthfirst(
         [&renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
             // m_data.localPos
             renderdata.localPos = offset;
             renderdata.texture = s->m_current.texture;
             renderdata.surface = s;
-            renderdata.mainSurface = s == pWindow->m_wlSurface->resource();
+            renderdata.mainSurface = s == pWindow->wlSurface()->resource();
             renderdata.surfaceCounter++;
             //notify(std::to_string(renderdata.surfaceCounter));
         },
@@ -688,6 +692,12 @@ CSurfacePassElement::SRenderData collect_mdata(PHLWINDOW w) {
 Bounds tobounds(CBox box);
 
 Bounds HyprIso::getTexBox(int id) {
+#ifdef FORK_WARN
+    static_assert(false, "[Function Body] Make sure our `CSurfacePassElement::getTexBox()` and Hyprland's are synced!");
+    //src/render/pass/SurfacePassElement.cpp
+    //CBox CSurfacePassElement::getTexBox() {
+#endif
+
     PHLWINDOW w;
     bool found = false;
     for (auto h : hyprwindows) {
@@ -701,17 +711,20 @@ Bounds HyprIso::getTexBox(int id) {
     if (!found)
         return {};
     auto m_data = collect_mdata(w); 
+
+    // ===========================
+    
     const double outputX = -m_data.pMonitor->m_position.x, outputY = -m_data.pMonitor->m_position.y;
 
     const auto   INTERACTIVERESIZEINPROGRESS = m_data.pWindow && g_pInputManager->m_currentlyDraggedWindow && g_pInputManager->m_dragMode == MBIND_RESIZE;
-    auto         PSURFACE                    = CWLSurface::fromResource(m_data.surface);
+    auto         PSURFACE                    = Desktop::View::CWLSurface::fromResource(m_data.surface);
 
     CBox         windowBox;
     if (m_data.surface && m_data.mainSurface) {
         windowBox = {sc<int>(outputX) + m_data.pos.x + m_data.localPos.x, sc<int>(outputY) + m_data.pos.y + m_data.localPos.y, m_data.w, m_data.h};
 
         // however, if surface buffer w / h < box, we need to adjust them
-        const auto PWINDOW = PSURFACE ? PSURFACE->getWindow() : nullptr;
+        const auto PWINDOW = PSURFACE ? Desktop::View::CWindow::fromView(PSURFACE->view()) : nullptr;
 
         // center the surface if it's smaller than the viewport we assign it
         if (PSURFACE && !PSURFACE->m_fillIgnoreSmall && PSURFACE->small() /* guarantees PWINDOW */) {
@@ -912,6 +925,7 @@ Vector2D hook_OnRMS(void* thisptr) {
 }
 
 void overwrite_min() {
+    return;
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -1228,66 +1242,6 @@ void detect_x11_move_resize_requests() {
     }
 }
 
-static Hyprlang::CParseResult configHandleGradientSet(const char* VALUE, void** data) {
-    std::string V = VALUE;
-
-    if (!*data)
-        *data = new CGradientValueData();
-
-    const auto DATA = sc<CGradientValueData*>(*data);
-
-    CVarList   varlist(V, 0, ' ');
-    DATA->m_colors.clear();
-
-    std::string parseError = "";
-
-    for (auto const& var : varlist) {
-        if (var.find("deg") != std::string::npos) {
-            // last arg
-            try {
-                DATA->m_angle = std::stoi(var.substr(0, var.find("deg"))) * (PI / 180.0); // radians
-            } catch (...) {
-                Debug::log(WARN, "Error parsing gradient {}", V);
-                parseError = "Error parsing gradient " + V;
-            }
-
-            break;
-        }
-
-        if (DATA->m_colors.size() >= 10) {
-            Debug::log(WARN, "Error parsing gradient {}: max colors is 10.", V);
-            parseError = "Error parsing gradient " + V + ": max colors is 10.";
-            break;
-        }
-
-        try {
-            const auto COL = configStringToInt(var);
-            if (!COL)
-                throw std::runtime_error(std::format("failed to parse {} as a color", var));
-            DATA->m_colors.emplace_back(COL.value());
-        } catch (std::exception& e) {
-            Debug::log(WARN, "Error parsing gradient {}", V);
-            parseError = "Error parsing gradient " + V + ": " + e.what();
-        }
-    }
-
-    if (DATA->m_colors.empty()) {
-        Debug::log(WARN, "Error parsing gradient {}", V);
-        if (parseError.empty())
-            parseError = "Error parsing gradient " + V + ": No colors?";
-
-        DATA->m_colors.emplace_back(0); // transparent
-    }
-
-    DATA->updateColorsOk();
-
-    Hyprlang::CParseResult result;
-    if (!parseError.empty())
-        result.setError(parseError.c_str());
-
-    return result;
-}
-
 static void configHandleGradientDestroy(void** data) {
     if (*data)
         delete sc<CGradientValueData*>(*data);
@@ -1329,14 +1283,6 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
             border_size = (Hyprlang::INT*)val2->dataPtr();
             initial_border_size = *border_size;
             *border_size = 0;
-
-            /*if (hw->w->m_pinned) {
-                Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("general:col.active_border");
-                active_border = (Hyprlang::CConfigCustomValueType*)val->dataPtr();
-                initial_active_border = active_border;
-                *active_border = Hyprlang::CConfigCustomValueType{&configHandleGradientSet, configHandleGradientDestroy, "0xffffffff"};
-            }*/
-
         }
     }
     
@@ -1351,22 +1297,30 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
 }
 
 inline CFunctionHook* g_pWindowRoundingHook = nullptr;
-typedef float (*origWindowRoundingFunc)(CWindow *);
+typedef float (*origWindowRoundingFunc)(Desktop::View::CWindow *);
 float hook_WindowRounding(void* thisptr) {
+#ifdef FORK_WARN
+//float CWindow::rounding() {
+    static_assert(false, "[Function Body] Make sure our `roundingPower` and Hyprland's are synced!");
+#endif
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    float result = (*(origWindowRoundingFunc)g_pWindowRoundingHook->m_original)((CWindow *)thisptr);
+    float result = (*(origWindowRoundingFunc)g_pWindowRoundingHook->m_original)((Desktop::View::CWindow *)thisptr);
     return result;
 }
 
 inline CFunctionHook* g_pWindowRoundingPowerHook = nullptr;
-typedef float (*origWindowRoundingPowerFunc)(CWindow *);
+typedef float (*origWindowRoundingPowerFunc)(Desktop::View::CWindow *);
 float hook_WindowRoundingPower(void* thisptr) {
+#ifdef FORK_WARN
+//float CWindow::roundingPower() {
+    static_assert(false, "[Function Body] Make sure our `roundingPower` and Hyprland's are synced!");
+#endif
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    float result = (*(origWindowRoundingPowerFunc)g_pWindowRoundingPowerHook->m_original)((CWindow *)thisptr);
+    float result = (*(origWindowRoundingPowerFunc)g_pWindowRoundingPowerHook->m_original)((Desktop::View::CWindow *)thisptr);
     return result;
 }
 
@@ -1979,15 +1933,15 @@ void hook_shadow_decorations() {
 
 void hook_popup_creation_and_destruction();
 
-void onUpdateState(CWindow *ptr) {
+void onUpdateState(Desktop::View::CWindow *ptr) {
     std::optional<bool>      requestsFS = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreen : ptr->m_xwaylandSurface->m_state.requestsFullscreen;
     std::optional<MONITORID> requestsID = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreenMonitor : MONITOR_INVALID;
     std::optional<bool>      requestsMX = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMaximize : ptr->m_xwaylandSurface->m_state.requestsMaximize;
     std::optional<bool>      requestsMin = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMinimize : ptr->m_xwaylandSurface->m_state.requestsMinimize;
     
 
-    if (requestsFS.has_value() && !(ptr->m_suppressedEvents & SUPPRESS_FULLSCREEN)) {
-        if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(ptr->m_suppressedEvents & SUPPRESS_FULLSCREEN_OUTPUT)) {
+    if (requestsFS.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN)) {
+        if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN_OUTPUT)) {
             if (ptr->m_isMapped) {
                 const auto monitor = g_pCompositor->getMonitorFromID(requestsID.value());
                 g_pCompositor->moveWindowToWorkspaceSafe(ptr->m_self.lock(), monitor->m_activeWorkspace);
@@ -2006,7 +1960,7 @@ void onUpdateState(CWindow *ptr) {
             ptr->m_wantsInitialFullscreen = fs;
     }
 
-    if (requestsMX.has_value() && !(ptr->m_suppressedEvents & SUPPRESS_MAXIMIZE)) {
+    if (requestsMX.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_MAXIMIZE)) {
         if (ptr->m_isMapped) {
             //auto window    = ptr->m_self.lock();
             //auto state     = sc<int8_t>(window->m_fullscreenState.client);
@@ -2031,15 +1985,16 @@ void onUpdateState(CWindow *ptr) {
 }
 
 inline CFunctionHook* g_pOnUpdateStateHook = nullptr;
-typedef void (*origUpdateState)(CWindow *);
+typedef void (*origUpdateState)(Desktop::View::CWindow *);
 void hook_onUpdateState(void* thisptr) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
 #ifdef FORK_WARN
-    assert(false && "[Function Body] Make sure our `onUpdateState` and Hyprland's are synced!");
+    //void CWindow::onUpdateState() {
+    static_assert(false, "[Function Body] Make sure our `onUpdateState` and Hyprland's are synced!");
 #endif
-    onUpdateState((CWindow *) thisptr);
+    onUpdateState((Desktop::View::CWindow *) thisptr);
 }
 
 void hook_maximize_minimize() {
@@ -2204,7 +2159,7 @@ void hook_onMonitorEnd(void* thisptr) {
     ZoneScoped;
 #endif
 #ifdef FORK_WARN
-    assert(false && "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
+    static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
 #endif
     monitor_finish((CHyprOpenGLImpl *) thisptr);
 }
@@ -2971,9 +2926,9 @@ void HyprIso::fake_fullscreen(int id, bool state) {
             //hw->w->m_windowData.syncFullscreen = CWindowOverridableVar(false, PRIORITY_SET_PROP);
             
             if (state) {
-                g_pCompositor->setWindowFullscreenState(hw->w, SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 2});
+                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 2});
             } else {
-                g_pCompositor->setWindowFullscreenState(hw->w, SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 0});
+                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 0});
             }
             hw->w->m_ruleApplicator->syncFullscreenOverride(
                 Desktop::Types::COverridableVar(hw->w->m_fullscreenState.internal == hw->w->m_fullscreenState.client, Desktop::Types::PRIORITY_SET_PROP));
@@ -3653,8 +3608,9 @@ Bounds HyprIso::min_size(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            auto s = hw->w->requestedMinSize();
-            return {s.x, s.y, s.x, s.y};
+            //auto s = hw->w->requestedMinSize();
+            //return {s.x, s.y, s.x, s.y};
+            return {20, 20, 20, 20};
         }
     }
     return {20, 20, 20, 20};
@@ -3989,8 +3945,6 @@ void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
     if (!g_pHyprRenderer->shouldRenderWindow(pWindow))
         return; // ignore, window is not being rendered
 
-    Debug::log(LOG, "renderer: making a snapshot of {:x}", rc<uintptr_t>(pWindow.get()));
-
     // we need to "damage" the entire monitor
     // so that we render the entire window
     // this is temporary, doesn't mess with the actual damage
@@ -4018,6 +3972,10 @@ void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
 }
 
 void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+#ifdef FORK_WARN
+//void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+    static_assert(true, "[Function Body] Make sure our `CHyprRenderer::renderWindow` and Hyprland's are synced!");
+#endif
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4061,7 +4019,7 @@ void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp&
     // whether to use m_fMovingToWorkspaceAlpha, only if fading out into an invisible ws
     const bool USE_WORKSPACE_FADE_ALPHA = pWindow->m_monitorMovedFrom != -1 && (!PWORKSPACE || !PWORKSPACE->isVisible());
 
-    renderdata.surface   = pWindow->m_wlSurface->resource();
+    renderdata.surface   = pWindow->wlSurface()->resource();
     renderdata.dontRound = pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
     renderdata.fadeAlpha = pWindow->m_alpha->value() * (pWindow->m_pinned || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
         (USE_WORKSPACE_FADE_ALPHA ? pWindow->m_movingToWorkspaceAlpha->value() : 1.F) * pWindow->m_movingFromWorkspaceAlpha->value();
@@ -4142,7 +4100,7 @@ void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp&
         if ((pWindow->m_isX11 && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
             renderdata.useNearestNeighbor = true;
 
-        if (pWindow->m_wlSurface->small() && !pWindow->m_wlSurface->m_fillIgnoreSmall && renderdata.blur) {
+        if (pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
             CBox wb = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
             wb.scale(pMonitor->m_scale).round();
             CRectPassElement::SRectData data;
@@ -4157,7 +4115,7 @@ void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp&
         }
 
         renderdata.surfaceCounter = 0;
-        pWindow->m_wlSurface->resource()->breadthfirst(
+        pWindow->wlSurface()->resource()->breadthfirst(
             [&renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
                 if (!s->m_current.texture)
                     return;
@@ -4168,7 +4126,7 @@ void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp&
                 renderdata.localPos    = offset;
                 renderdata.texture     = s->m_current.texture;
                 renderdata.surface     = s;
-                renderdata.mainSurface = s == pWindow->m_wlSurface->resource();
+                renderdata.mainSurface = s == pWindow->wlSurface()->resource();
                 g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
                 renderdata.surfaceCounter++;
             },
@@ -4223,20 +4181,21 @@ void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp&
             renderdata.surfaceCounter = 0;
 
             pWindow->m_popupHead->breadthfirst(
-                [&renderdata](WP<CPopup> popup, void* data) {
+                [&renderdata](WP<Desktop::View::CPopup> popup, void* data) {
                     if (popup->m_fadingOut) {
                         g_pHyprRenderer->renderSnapshot(popup);
                         return;
                     }
 
-                    if (!popup->m_wlSurface || !popup->m_wlSurface->resource() || !popup->m_mapped)
+                    if (!popup->aliveAndVisible())
                         return;
+
                     const auto     pos    = popup->coordsRelativeToParent();
                     const Vector2D oldPos = renderdata.pos;
                     renderdata.pos += pos;
                     renderdata.fadeAlpha = popup->m_alpha->value();
 
-                    popup->m_wlSurface->resource()->breadthfirst(
+                    popup->wlSurface()->resource()->breadthfirst(
                         [&renderdata](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
                             if (!s->m_current.texture)
                                 return;
@@ -4274,7 +4233,6 @@ void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp&
 
     g_pHyprOpenGL->m_renderData.currentWindow.reset();
 }
-
 
 void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w) {
 #ifdef TRACY_ENABLE
@@ -4697,23 +4655,6 @@ int HyprIso::parent(int id) {
     return -1;
 }
 
-void HyprIso::set_reserved_edge(int side, int amount) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    SMonitorAdditionalReservedArea value;
-    if (side == (int) RESIZE_TYPE::TOP) {
-        value.top = amount;
-    } else if (side == (int) RESIZE_TYPE::LEFT) {
-        value.left = amount;
-    } else if (side == (int) RESIZE_TYPE::RIGHT) {
-        value.right = amount;
-    } else if (side == (int) RESIZE_TYPE::BOTTOM) {
-        value.bottom = amount;
-    }
-    g_pConfigManager->m_mAdditionalReservedAreas["Mylardesktop"] = value;
-}
-
 void HyprIso::show_desktop() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -4760,6 +4701,9 @@ void HyprIso::move_to_workspace(int workspace) {
 }
 
 void HyprIso::move_to_workspace(int id, int workspace) {
+#ifdef FORK_WARN
+    static_assert(false, "[Function Body] Make sure our `CSurfacePassElement::getTexBox()` and Hyprland's are synced!");
+#endif
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4770,25 +4714,25 @@ void HyprIso::move_to_workspace(int id, int workspace) {
             break;
         }
     }
-    if (!PWINDOW.get())
-        return;        
+
+    if (!PWINDOW)
+        return;
     std::string args = std::to_string(workspace);
 
-    const auto& [WORKSPACEID, workspaceName, isAuto] = getWorkspaceIDNameFromString(args);
+    const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
     if (WORKSPACEID == WORKSPACE_INVALID) {
-        Debug::log(LOG, "Invalid workspace in moveActiveToWorkspace");
+        Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
         return;
     }
 
     if (WORKSPACEID == PWINDOW->workspaceID()) {
-        Debug::log(LOG, "Not moving to workspace because it didn't change.");
+        Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
         return;
     }
 
-    auto        pWorkspace            = g_pCompositor->getWorkspaceByID(WORKSPACEID);
-    PHLMONITOR  pMonitor              = nullptr;
-    const auto  POLDWS                = PWINDOW->m_workspace;
-    static auto PALLOWWORKSPACECYCLES = CConfigValue<Hyprlang::INT>("binds:allow_workspace_cycles");
+    auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+    PHLMONITOR pMonitor   = nullptr;
+    const auto POLDWS     = PWINDOW->m_workspace;
 
     updateRelativeCursorCoords();
 
@@ -4812,9 +4756,6 @@ void HyprIso::move_to_workspace(int id, int workspace) {
         pMonitor->setSpecialWorkspace(pWorkspace);
     else if (POLDWS->m_isSpecialWorkspace)
         POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
-
-    if (*PALLOWWORKSPACECYCLES)
-        pWorkspace->rememberPrevWorkspace(POLDWS);
 
     pMonitor->changeWorkspace(pWorkspace);
 
@@ -5824,10 +5765,10 @@ Bounds bounds_reserved_monitor(int id) {
         if (hyprmonitor->id == id) {
             if (auto m = hyprmonitor->m.get()) {
                 auto b = m->logicalBox();
-                b.x += m->m_reservedTopLeft.x;
-                b.y += m->m_reservedTopLeft.y;
-                b.w -= (m->m_reservedTopLeft.x + m->m_reservedBottomRight.x);
-                b.h -= (m->m_reservedTopLeft.y + m->m_reservedBottomRight.y);
+                b.x += m->m_reservedArea.left();
+                b.y += m->m_reservedArea.top();
+                b.w -= (m->m_reservedArea.left() + m->m_reservedArea.right());
+                b.h -= (m->m_reservedArea.top() + m->m_reservedArea.bottom());
                 return tobounds(b);
             }
         }
@@ -5997,7 +5938,7 @@ bool HyprIso::has_popup_at(int cid, Bounds b) {
 
 struct HyprPopup {
     int id;  
-    CPopup *p;
+    Desktop::View::CPopup *p;
 };
 
 std::vector<HyprPopup *> hyprpopus;
@@ -6009,7 +5950,7 @@ std::vector<HyprPopup *> hyprpopus;
 // UP<CPopup> CPopup::create(SP<CXDGPopupResource> resource, WP<CPopup> pOwner) {
 // void CPopup::fullyDestroy() {
 
-void popup_created(CPopup *popup) {
+void popup_created(Desktop::View::CPopup *popup) {
     auto hp = new HyprPopup;
     hp->p = popup;
     hp->id = unique_id++;
@@ -6020,7 +5961,7 @@ void popup_created(CPopup *popup) {
     }
 }
 
-void popup_destroyed(int id, CPopup *popup) {
+void popup_destroyed(int id, Desktop::View::CPopup *popup) {
     for (int i = 0; i < hyprpopus.size(); i++) {
         auto hp = hyprpopus[i];
         if (hp->id == id) {

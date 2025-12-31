@@ -1394,19 +1394,6 @@ void wl_context_destroy(struct wl_context *ctx) {
 
 int wake_pipe[2];
 
-void windowing::add_fb(RawApp *app, int fd, std::function<void(PolledFunction pf)> func) {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
-    if (!ctx)
-        return;
-    PolledFunction pf;
-    pf.fd = fd;
-    pf.func = func;
-    ctx->polled_fds.push_back(pf);
-}
-
 void windowing::main_loop(RawApp *app) {
     wl_context *ctx = nullptr;
     for (auto c : apps)
@@ -1675,5 +1662,61 @@ void RawApp::print_monitors() {
     //notify(fz("{}", ctx->outputs.size())); 
     for (auto o : ctx->outputs) {
         //notify(fz("{} {} {}", o->name, o->physical_width, o->physical_height)); 
+    }
+}
+
+// returns file descriptor takes the function that will be called after ms time
+int windowing::timer(RawApp *app, int ms, std::function<void(void *data)> actual_function, void *data) {
+    if (!app)
+        return -1;
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == app->id)
+            ctx = c;
+    if (!ctx)
+        return -1;
+    PolledFunction pf;
+    pf.fd = create_timerfd_ms(ms);
+    pf.data = data;
+    pf.func = [ctx, actual_function](PolledFunction f) {
+        for (int i = 0; i < ctx->polled_fds.size(); i++) {
+            if (ctx->polled_fds[i].fd == f.fd) {
+                close(f.fd);
+                ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
+                break;
+            }
+        }
+        if (actual_function)
+            actual_function(f.data);
+    };
+    ctx->polled_fds.push_back(pf);
+
+    return pf.fd;
+}
+
+// updates the file descriptor to pop in ms amount of time
+void windowing::timer_update(int fd, int ms) {
+    if (fd == -1)
+        return;
+    timerfd_update(fd, ms);
+}
+
+void windowing::timer_stop(RawApp *app, int fd) {
+   if (fd == -1)
+        return;
+   if (!app)
+        return;
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == app->id)
+            ctx = c;
+    if (!ctx)
+        return;
+    for (int i = 0; i < ctx->polled_fds.size(); i++) {
+        if (ctx->polled_fds[i].fd == fd) {
+            close(fd);
+            ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
+            break;
+        }
     }
 }
