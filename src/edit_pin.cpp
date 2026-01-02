@@ -5,6 +5,7 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock.h"
+#include "events.h"
 
 #include <cairo.h>
 #include <climits>
@@ -27,7 +28,7 @@ struct PinData : UserData {
     std::string command;
 };
 
-static void paint_root(Container *root, Container *c) {
+static void paint_bg(Container *root, Container *c) {
     auto mylar = (PinData*)root->user_data;
     auto cr = mylar->window->raw_window->cr;
     cairo_save(cr);
@@ -188,9 +189,12 @@ static void collect_preorder(Container *node, std::vector<Container*> &out) {
 
 void activate_previous_activatable(Container *root, Container *c) {
     if (!root || !c) return;
-    c->active = false;
+    static std::vector<Container*> coll;
+    coll.push_back(c);
     if (c->parent)
-        c->parent->active = false;
+        coll.push_back(c->parent);
+    set_active(root, coll, root, false, true);
+    coll.clear();
 
     // 1. Collect a flat traversal of all containers.
     std::vector<Container*> order;
@@ -208,20 +212,27 @@ void activate_previous_activatable(Container *root, Container *c) {
         index_of_c = 0;
 
     if (index_of_c == 0) {
-        order[order.size() - 1]->active = true;
-        order[order.size() - 1]->parent->active = true;
+        coll.push_back(order[order.size() - 1]);
+        coll.push_back(order[order.size() - 1]->parent);
+        set_active(root, coll, root, true, true);
+        coll.clear();
     } else {
-        order[index_of_c - 1]->active = true;
-        order[index_of_c - 1]->parent->active = true;
+        coll.push_back(order[index_of_c - 1]);
+        coll.push_back(order[index_of_c - 1]->parent);
+        set_active(root, coll, root, true, true);
+        coll.clear();
     }
 }
 
 // needs to occur next frame because otherwise the tab key will effect the next container as well because it'll gain focus and then receive the tab event
 void activate_next_activatable(Container *root, Container *c) {
     if (!root || !c) return;
-    c->active = false;
+    static std::vector<Container*> coll;
+    coll.push_back(c);
     if (c->parent)
-        c->parent->active = false;
+        coll.push_back(c->parent);
+    set_active(root, coll, root, false, true);
+    coll.clear();
 
     // 1. Collect a flat traversal of all containers.
     std::vector<Container*> order;
@@ -239,11 +250,15 @@ void activate_next_activatable(Container *root, Container *c) {
         index_of_c = order.size() - 1;
 
     if (index_of_c == order.size() - 1) {
-        order[0]->active = true;
-        order[0]->parent->active = true;
+        coll.push_back(order[0]);
+        coll.push_back(order[0]->parent);
+        set_active(root, coll, root, true, true);
+        coll.clear();
     } else {
-        order[index_of_c + 1]->active = true;
-        order[index_of_c + 1]->parent->active = true;
+        coll.push_back(order[index_of_c + 1]);
+        coll.push_back(order[index_of_c + 1]->parent);
+        set_active(root, coll, root, true, true);
+        coll.clear();
     }
 }
 
@@ -699,6 +714,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         auto text = label_data->text;
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
+        c->children[0]->viakey = true;
         label_data->selection = label_data->cursor;
     };
     label_parent->when_drag = [bold](Container *root, Container *c) {
@@ -707,6 +723,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         auto text = label_data->text;
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
+        c->children[0]->viakey = true;
     };
     label_parent->when_drag_start = [bold](Container *root, Container *c) {
         auto label_data = (LabelData *) c->children[0]->user_data;
@@ -714,6 +731,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         auto text = label_data->text;
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
+        c->children[0]->viakey = true;
         label_data->selection = label_data->cursor;
     };
     label_parent->when_drag_end = [bold](Container *root, Container *c) {
@@ -722,6 +740,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         auto text = label_data->text;
         update_index(root, c->children[0], bold, text);
         c->children[0]->active = true;
+        c->children[0]->viakey = true;
     };
     return label;
 }
@@ -757,6 +776,43 @@ static void button(Container *root, std::string text, std::function<void(Contain
     
     auto child = root->child(FILL_SPACE, FILL_SPACE);
     child->when_clicked = on_click;
+    child->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if ((is_text && text == " ") || sym == XKB_KEY_Return) {
+            if (c->active) {
+                if (pressed) {
+                    c->state.mouse_pressing = true;
+                } else {
+                    c->state.mouse_pressing = false;
+                    if (c->when_clicked) {
+                        c->when_clicked(root, c);
+                    }                    
+                }
+            }
+        }
+        if (!c->active)
+            return;
+        if (!pressed)
+            return;
+        if (sym == XKB_KEY_Tab) {
+            auto root_data = (PinData *) root->user_data;
+            windowing::timer(root_data->app, 1, [root, c](void *data) {
+                auto actual_root = get_root(c);
+                activate_next_activatable(actual_root, c);
+            }, nullptr);
+        }
+        if (sym == XKB_KEY_ISO_Left_Tab) {
+            auto root_data = (PinData *) root->user_data;
+            windowing::timer(root_data->app, 1, [root, c](void *data) {
+                auto actual_root = get_root(c);
+                activate_previous_activatable(actual_root, c);
+            }, nullptr);
+        }
+    };
+    child->when_active_status_changed = [](Container* root, Container* self) {
+        if (!self->active)
+            self->state.mouse_pressing = false;
+    };
+    child->name = child->uuid;
     child->when_paint = [size, text](Container *root, Container *c) {
         auto mylar = (PinData*)root->user_data;
         auto cr = mylar->window->raw_window->cr;
@@ -771,7 +827,18 @@ static void button(Container *root, std::string text, std::function<void(Contain
             set_argb(cr, {.7, .7, .7, 1});
         }
         cairo_fill(cr);
-        
+
+        if (c->active && c->viakey) {
+            auto b = c->real_bounds;
+            b.shrink(std::round(1 * dpi));
+            set_rect(cr, b);
+            set_argb(cr, {.4, .4, .4, 1});
+            auto hehe = cairo_get_line_width(cr);
+            cairo_set_line_width(cr, std::round(2 * dpi));
+            cairo_stroke(cr);
+            cairo_set_line_width(cr, hehe);
+        }
+
         auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5,
@@ -788,7 +855,7 @@ static void button(Container *root, std::string text, std::function<void(Contain
 };
 
 static void fill_root(Container *root) {
-    root->when_paint = paint_root;
+    root->when_paint = paint_bg;
     root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         if (sym == XKB_KEY_Tab) {
             std::vector<Container*> order;

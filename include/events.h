@@ -41,6 +41,8 @@ void move_event(Container*, const Event&);
 void mouse_event(Container*, const Event&);
 void key_press(Container*, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text);
 
+void set_active(Container* root, const std::vector<Container*>& active_containers, Container* c, bool state, bool viakey);
+
 void paint_root(Container*);
 void paint_outline(Container*, Container*);
 

@@ -285,6 +285,8 @@ struct Container {
 
     // Is set to true when the container is the active last interacted with
     bool active = false;
+    // Is set to true if the container became active via a key press
+    bool viakey = false;
 
     // If we should call when_clicked if this container was dragged
     bool when_drag_end_is_click = true;

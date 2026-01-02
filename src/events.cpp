@@ -233,11 +233,11 @@ void handle_mouse_motion(Container* root, int x, int y) {
     }
 }
 
-void set_active(Container* root, const std::vector<Container*>& active_containers, Container* c, bool state) {
+void set_active(Container* root, const std::vector<Container*>& active_containers, Container* c, bool state, bool viakey) {
     if (c->type == ::newscroll) {
         auto s = (ScrollContainer*)c;
         for (auto child : s->content->children) {
-            set_active(root, active_containers, child, state);
+            set_active(root, active_containers, child, state, viakey);
         }
 
         bool will_be_activated = false;
@@ -249,6 +249,7 @@ void set_active(Container* root, const std::vector<Container*>& active_container
         if (will_be_activated) {
             if (!s->content->active) {
                 s->content->active = true;
+                s->content->viakey = viakey;
                 if (s->content->when_active_status_changed) {
                     s->content->when_active_status_changed(root, s->content);
                 }
@@ -256,6 +257,7 @@ void set_active(Container* root, const std::vector<Container*>& active_container
         } else {
             if (s->content->active) {
                 s->content->active = false;
+                s->content->viakey = viakey;
                 if (s->content->when_active_status_changed) {
                     s->content->when_active_status_changed(root, s->content);
                 }
@@ -263,7 +265,7 @@ void set_active(Container* root, const std::vector<Container*>& active_container
         }
     } else {
         for (auto child : c->children) {
-            set_active(root, active_containers, child, state);
+            set_active(root, active_containers, child, state, viakey);
         }
 
         bool will_be_activated = false;
@@ -275,6 +277,7 @@ void set_active(Container* root, const std::vector<Container*>& active_container
         if (will_be_activated) {
             if (!c->active) {
                 c->active = true;
+                c->viakey = viakey;
                 if (c->when_active_status_changed) {
                     c->when_active_status_changed(root, c);
                 }
@@ -282,6 +285,7 @@ void set_active(Container* root, const std::vector<Container*>& active_container
         } else {
             if (c->active) {
                 c->active = false;
+                c->viakey = viakey;
                 if (c->when_active_status_changed) {
                     c->when_active_status_changed(root, c);
                 }
@@ -359,7 +363,7 @@ void handle_mouse_button_press(Container* root, const Event& e) {
             }
         }
     }
-    set_active(root, mouse_downed, root, false);
+    set_active(root, mouse_downed, root, false, false);
 }
 
 bool handle_mouse_button_release(Container* root, const Event& e) {
