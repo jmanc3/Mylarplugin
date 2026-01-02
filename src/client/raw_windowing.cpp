@@ -992,6 +992,16 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
     }
     if (!win)
         return;
+
+    /* ---- CRITICAL: update XKB key state ---- */
+    if (ctx->xkb_state) {
+        enum xkb_key_direction dir =
+            (state == WL_KEYBOARD_KEY_STATE_PRESSED)
+                ? XKB_KEY_DOWN
+                : XKB_KEY_UP;
+
+        xkb_state_update_key(ctx->xkb_state, key + 8, dir);
+    }
                                     
     if (ctx->xkb_state) {
         xkb_keysym_t sym = xkb_state_key_get_one_sym(ctx->xkb_state, key + 8);

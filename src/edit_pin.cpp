@@ -366,20 +366,17 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             label_data->cursor++;
         } else if (sym == XKB_KEY_Tab) {
             auto root_data = (PinData *) root->user_data;
-
-            if (mods & Modifier::MOD_CTRL || mods & Modifier::MOD_SHIFT) {
-                 // we lose the first captured param for some reason, and crash if we attempt to use it?????
-                windowing::timer(root_data->app, 1, [root, c](void *data) {
-                    auto actual_root = get_root(c);
-                    activate_previous_activatable(actual_root, c);
-                }, nullptr);   
-            } else {
-                 // we lose the first captured param for some reason, and crash if we attempt to use it?????
-                windowing::timer(root_data->app, 1, [root, c](void *data) {
-                    auto actual_root = get_root(c);
-                    activate_next_activatable(actual_root, c);
-                }, nullptr);   
-            }
+            // we lose the first captured param for some reason, and crash if we attempt to use it?????
+            windowing::timer(root_data->app, 1, [root, c](void *data) {
+                auto actual_root = get_root(c);
+                activate_next_activatable(actual_root, c);
+            }, nullptr);
+        } else if (sym == XKB_KEY_ISO_Left_Tab) {
+            auto root_data = (PinData *) root->user_data;
+            windowing::timer(root_data->app, 1, [root, c](void *data) {
+                auto actual_root = get_root(c);
+                activate_previous_activatable(actual_root, c);
+            }, nullptr);
         } else if (sym == XKB_KEY_BackSpace) {
             if (label_data->selecting) {
                 int min = std::min(label_data->cursor, label_data->selection);
