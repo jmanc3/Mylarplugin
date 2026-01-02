@@ -178,6 +178,82 @@ static bool did_double_click(long *last_time, long *last_activation, long timeou
     return false;
 }
 
+static void collect_preorder(Container *node, std::vector<Container*> &out) {
+    if (!node) return;
+    for (auto *child : node->children)
+        collect_preorder(child, out);
+    if (node->when_key_event && !node->name.empty())
+        out.push_back(node);
+}
+
+void activate_previous_activatable(Container *root, Container *c) {
+    if (!root || !c) return;
+    c->active = false;
+    c->parent->active = false;
+
+    // 1. Collect a flat traversal of all containers.
+    std::vector<Container*> order;
+    collect_preorder(root, order);
+
+    // 2. Find the index of `c`.
+    int index_of_c = -1;
+    for (int i = 0; i < (int)order.size(); i++) {
+        if (order[i] == c) {
+            index_of_c = i;
+            break;
+        }
+    }
+    if (index_of_c < 0) return; // c not found in the tree
+    
+    if (index_of_c == 0) {
+        order[order.size() - 1]->active = true;
+        order[order.size() - 1]->parent->active = true;
+    } else {
+        order[index_of_c - 1]->active = true;
+        order[index_of_c - 1]->parent->active = true;
+    }
+}
+
+// needs to occur next frame because otherwise the tab key will effect the next container as well because it'll gain focus and then receive the tab event
+void activate_next_activatable(Container *root, Container *c) {
+    if (!root || !c) return;
+    c->active = false;
+    c->parent->active = false;
+
+    // 1. Collect a flat traversal of all containers.
+    std::vector<Container*> order;
+    collect_preorder(root, order);
+
+    // 2. Find the index of `c`.
+    int index_of_c = -1;
+    for (int i = 0; i < (int)order.size(); i++) {
+        if (order[i] == c) {
+            index_of_c = i;
+            break;
+        }
+    }
+    if (index_of_c < 0) return; // c not found in the tree
+    
+    if (index_of_c == order.size() - 1) {
+        order[0]->active = true;
+        order[0]->parent->active = true;
+    } else {
+        order[index_of_c + 1]->active = true;
+        order[index_of_c + 1]->parent->active = true;
+    }
+}
+
+Container *get_root(Container *c) {
+    Container *temp = c->parent;
+    int max = 100;
+    while (temp->parent != nullptr) {
+        if (max-- < 0)
+            return temp;
+        temp = temp->parent;
+    }
+    return temp;
+}
+
 static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     auto label_data = new LabelData;
     
@@ -289,16 +365,21 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             label_text->insert(label_data->cursor, "\n");
             label_data->cursor++;
         } else if (sym == XKB_KEY_Tab) {
-            if (label_data->selecting) {
-                int min = std::min(label_data->cursor, label_data->selection);
-                int max = std::max(label_data->cursor, label_data->selection);
-                int len = max - min;
-                label_text->erase(min, len);
-                label_data->selecting = false;
-                label_data->cursor = min;
-            } 
-            label_text->insert(label_data->cursor, "\t");
-            label_data->cursor++;
+            auto root_data = (PinData *) root->user_data;
+
+            if (mods & Modifier::MOD_CTRL || mods & Modifier::MOD_SHIFT) {
+                 // we lose the first captured param for some reason, and crash if we attempt to use it?????
+                windowing::timer(root_data->app, 1, [root, c](void *data) {
+                    auto actual_root = get_root(c);
+                    activate_previous_activatable(actual_root, c);
+                }, nullptr);   
+            } else {
+                 // we lose the first captured param for some reason, and crash if we attempt to use it?????
+                windowing::timer(root_data->app, 1, [root, c](void *data) {
+                    auto actual_root = get_root(c);
+                    activate_next_activatable(actual_root, c);
+                }, nullptr);   
+            }
         } else if (sym == XKB_KEY_BackSpace) {
             if (label_data->selecting) {
                 int min = std::min(label_data->cursor, label_data->selection);
