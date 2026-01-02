@@ -167,6 +167,9 @@ struct LabelData : UserData {
 
     long last_time = 0;
     long last_activation = 0;
+
+    float scroll_x = 0;
+    float scroll_y = 0;
 };
 
 static bool did_double_click(long *last_time, long *last_activation, long timeout) {
@@ -273,6 +276,8 @@ Container *get_root(Container *c) {
     return temp;
 }
 
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
+
 static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     auto label_data = new LabelData;
     
@@ -297,6 +302,8 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
                 //child->wanted_bounds.w = b.w - padding;
             auto bounds = Bounds(b.x + hh * .5 - child->wanted_bounds.w * .5, b.y + hhh * .5 - child->wanted_bounds.h * .5, 
             child->wanted_bounds.w, child->wanted_bounds.h);
+            auto label_data = (LabelData *) child->user_data;
+            bounds.x -= label_data->scroll_x; 
             ::layout(root, child, bounds);
         }
         
@@ -321,6 +328,20 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         }
         rounded_rect_new(cr, rounding * dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
         cairo_stroke(cr);
+
+        auto b = c->real_bounds;
+        b.x += padding * dpi;
+        b.w -= padding * 2 * dpi;
+        b.y += padding * dpi * .5;
+        b.h -= padding * dpi;
+        set_rect(cr, b);
+        cairo_clip(cr);
+    };
+    label_parent->after_paint = paint {
+        auto data = (PinData *) root->user_data;
+        auto cr = data->window->raw_window->cr;
+        auto dpi = data->window->raw_window->dpi;
+        cairo_reset_clip(cr);
     };
 
     auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
@@ -348,6 +369,39 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         
         c->wanted_bounds.w = logical.width;
         c->wanted_bounds.h = logical.height;
+    };
+    static auto execute_scroll = [](Container *c, PinData *data, LabelData *label_data, float scroll_y) {
+        auto cr = data->window->raw_window->cr;
+        int size = 13 * data->window->raw_window->dpi;
+
+        label_data->scroll_x -= scroll_y * .01;
+        if (label_data->scroll_x < 0)
+           label_data->scroll_x = 0;
+
+        auto dpi = data->window->raw_window->dpi;
+
+        auto bounds = draw_text(cr, 0, 0, label_data->text, size, false);
+        float overflow_x = bounds.w - (c->parent->real_bounds.w - padding * 2 * dpi);
+        if (overflow_x <= 0)
+            overflow_x = 0;
+
+        if (label_data->scroll_x > overflow_x) {
+            label_data->scroll_x = overflow_x;
+        }
+    };
+    label->when_fine_scrolled = [editable](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+        if (!editable)
+            return;
+        auto data = (PinData *) root->user_data;
+        auto label_data = (LabelData *) c->user_data;
+        execute_scroll(c, data, label_data, scroll_y);
+    };
+    label_parent->when_fine_scrolled = [editable](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+        if (!editable)
+            return;
+        auto data = (PinData *) root->user_data;
+        auto label_data = (LabelData *) c->children[0]->user_data;
+        execute_scroll(c->children[0], data, label_data, scroll_y);
     };
     label->when_key_event = [editable](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         if (!c->active && !c->parent->active)
@@ -745,7 +799,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
     return label;
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());

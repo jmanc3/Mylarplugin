@@ -350,7 +350,7 @@ struct Container {
     void (*when_scrolled)(Container* root, Container* self, int scroll_x, int scroll_y) = nullptr;
 
     // Called when this container was scrolled on
-    void (*when_fine_scrolled)(Container* root, Container* self, int scroll_x, int scroll_y, bool came_from_touchpad) = nullptr;
+    std::function<void(Container* root, Container* self, int scroll_x, int scroll_y, bool came_from_touchpad)> when_fine_scrolled = nullptr;
 
     // Called once when after mouse_downing a container, there was a mouse_motion
     // event
