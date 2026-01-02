@@ -189,7 +189,8 @@ static void collect_preorder(Container *node, std::vector<Container*> &out) {
 void activate_previous_activatable(Container *root, Container *c) {
     if (!root || !c) return;
     c->active = false;
-    c->parent->active = false;
+    if (c->parent)
+        c->parent->active = false;
 
     // 1. Collect a flat traversal of all containers.
     std::vector<Container*> order;
@@ -203,8 +204,9 @@ void activate_previous_activatable(Container *root, Container *c) {
             break;
         }
     }
-    if (index_of_c < 0) return; // c not found in the tree
-    
+    if (index_of_c < 0)
+        index_of_c = 0;
+
     if (index_of_c == 0) {
         order[order.size() - 1]->active = true;
         order[order.size() - 1]->parent->active = true;
@@ -218,7 +220,8 @@ void activate_previous_activatable(Container *root, Container *c) {
 void activate_next_activatable(Container *root, Container *c) {
     if (!root || !c) return;
     c->active = false;
-    c->parent->active = false;
+    if (c->parent)
+        c->parent->active = false;
 
     // 1. Collect a flat traversal of all containers.
     std::vector<Container*> order;
@@ -232,8 +235,9 @@ void activate_next_activatable(Container *root, Container *c) {
             break;
         }
     }
-    if (index_of_c < 0) return; // c not found in the tree
-    
+    if (index_of_c < 0)
+        index_of_c = order.size() - 1;
+
     if (index_of_c == order.size() - 1) {
         order[0]->active = true;
         order[0]->parent->active = true;
@@ -785,6 +789,16 @@ static void button(Container *root, std::string text, std::function<void(Contain
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
+    root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (sym == XKB_KEY_Tab) {
+            std::vector<Container*> order;
+            collect_preorder(root, order);
+            for (auto o : order)
+                if (o->active)
+                    return;
+            activate_next_activatable(root, root);
+        }
+    };
     root->type = ::vbox;
     root->wanted_pad = Bounds(30, 30, 30, 30);
     {
@@ -795,6 +809,7 @@ static void fill_root(Container *root) {
         auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
         auto label = setup_label(root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->icon; });
         label->name = "icon_container";
+        activate_next_activatable(root, root);
     }
     {        
         auto label = root->child(FILL_SPACE, FILL_SPACE);
