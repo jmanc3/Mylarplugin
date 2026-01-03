@@ -86,7 +86,13 @@ void fill_list_with_pierced(std::vector<Container*>& containers, Container* pare
             if (parent->handles_pierced(parent, x, y))
                 containers.push_back(parent);
         } else if (bounds_contains(parent->real_bounds, x, y)) {
-            containers.push_back(parent);
+            if (parent->parent_bounds_limit_input_bounds && parent->parent) {
+                if (bounds_contains(parent->parent->real_bounds, x, y)) {
+                    containers.push_back(parent);
+                }
+            } else {
+                containers.push_back(parent);
+            }
         }
     }
 }

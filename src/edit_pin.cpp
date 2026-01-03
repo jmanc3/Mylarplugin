@@ -302,8 +302,14 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
                 //child->wanted_bounds.w = b.w - padding;
             auto bounds = Bounds(b.x + hh * .5 - child->wanted_bounds.w * .5, b.y + hhh * .5 - child->wanted_bounds.h * .5, 
             child->wanted_bounds.w, child->wanted_bounds.h);
-            auto label_data = (LabelData *) child->user_data;
-            bounds.x -= label_data->scroll_x; 
+
+            {
+                auto label_data = (LabelData *) child->user_data;
+                bounds.x -= label_data->scroll_x; 
+                
+                // keep cursor on screen via scrolling
+            }
+            
             ::layout(root, child, bounds);
         }
         
