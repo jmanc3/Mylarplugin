@@ -10,6 +10,7 @@
 #include <cairo.h>
 #include <climits>
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
 #include <pango/pango-font.h>
 #include <thread>
@@ -376,6 +377,65 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         c->wanted_bounds.w = logical.width;
         c->wanted_bounds.h = logical.height;
     };
+    static auto keep_cursor_in_view = [](Container *c, PinData *data, LabelData *label_data) {
+        auto cr = data->window->raw_window->cr;
+        int size = 13 * data->window->raw_window->dpi;
+        float dpi = data->window->raw_window->dpi;
+
+        constexpr float caret_margin = 60.0f; // critical
+
+        auto layout = get_cached_pango_font(
+            cr,
+            mylar_font,
+            size,
+            PANGO_WEIGHT_NORMAL,
+            false
+        );
+
+        pango_layout_set_text(layout,
+                              label_data->text.data(),
+                              label_data->text.size());
+
+        PangoRectangle strong, weak;
+        pango_layout_get_cursor_pos(layout,
+                                    label_data->cursor,
+                                    &strong,
+                                    &weak);
+
+        // Pixel-accurate caret geometry
+        float caret_x =
+            std::floor(strong.x / (float)PANGO_SCALE);
+        float caret_w =
+            std::max(1.0f, std::ceil(strong.width / (float)PANGO_SCALE));
+
+        float view_w = c->parent->real_bounds.w - padding * 2 * dpi;
+        if (view_w <= 0)
+            return;
+
+        float view_left  = label_data->scroll_x;
+        float view_right = view_left + view_w;
+
+        // ---- LEFT SIDE FIX ----
+        if (caret_x < view_left + caret_margin) {
+            label_data->scroll_x = caret_x - caret_margin;
+        }
+        // ---- RIGHT SIDE FIX ----
+        else if (caret_x + caret_w > view_right - caret_margin) {
+            label_data->scroll_x =
+                caret_x + caret_w - view_w + caret_margin;
+        }
+
+        // Clamp
+        auto bounds = draw_text(cr, 0, 0, label_data->text, size, false);
+        float overflow_x = bounds.w - view_w;
+        if (overflow_x < 0)
+            overflow_x = 0;
+
+        if (label_data->scroll_x < 0)
+            label_data->scroll_x = 0;
+        if (label_data->scroll_x > overflow_x)
+            label_data->scroll_x = overflow_x;
+    };
     static auto execute_scroll = [](Container *c, PinData *data, LabelData *label_data, float scroll_y) {
         auto cr = data->window->raw_window->cr;
         int size = 13 * data->window->raw_window->dpi;
@@ -412,8 +472,10 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
     label->when_key_event = [editable](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         if (!c->active && !c->parent->active)
             return;
+        auto pin_data = (PinData *) root->user_data;
         auto label_data = (LabelData *) c->user_data;
         auto label_text = &label_data->text;
+        defer(keep_cursor_in_view(c, pin_data, label_data));
         
         if (!pressed)
             return;
