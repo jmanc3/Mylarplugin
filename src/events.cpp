@@ -369,7 +369,8 @@ void handle_mouse_button_press(Container* root, const Event& e) {
             }
         }
     }
-    set_active(root, mouse_downed, root, false, false);
+    if (!e.scroll)
+        set_active(root, mouse_downed, root, false, false);
 }
 
 bool handle_mouse_button_release(Container* root, const Event& e) {
