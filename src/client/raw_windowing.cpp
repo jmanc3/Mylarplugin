@@ -186,10 +186,11 @@ static void buffer_release(void *data, struct wl_buffer *wl_buffer) {
     win->busy = false;
     if (win->dropped_frame) {
         win->dropped_frame = false;
+        windowing::redraw(win->rw);
 
-        if (win->on_render) {
-            win->on_render(win);
-        }
+        //if (win->on_render) {
+            //win->on_render(win);
+        //}
     }
 }
 

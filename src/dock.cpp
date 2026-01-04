@@ -908,6 +908,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         std::string uuid;
     };
     ch->when_mouse_enters_container = paint {
+        return;
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto uuid = c->uuid;
@@ -915,7 +916,6 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         pin->hover_timer_fd = windowing::timer(dock->app, 500, [](void *data) {
             auto pop_data = ((PopData *) data);
             for (auto d : docks) {                
-                std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
                 if (auto icons = container_by_name("icons", d->window->root)) {
                     for (auto p : icons->children) {
                         if (p->uuid == pop_data->uuid) {
@@ -938,6 +938,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         }, popdata); 
     };
     ch->when_mouse_leaves_container = paint {
+        return;
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         if (pin->hover_timer_fd != -1) {
@@ -1900,8 +1901,8 @@ static void write_saved_pins_to_file(Container *icons) {
 void dock_start(std::string monitor_name) {
     if (!monitor_name.empty()) {
         for (auto d : docks) {
-            std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
-            
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+
             if (d->creation_settings.monitor_name == monitor_name) {
                 return; // already created that dock
             }
@@ -1973,8 +1974,8 @@ void dock::stop(std::string monitor_name) {
     if (monitor_name.empty()) {
         finished = true;
         for (auto d : docks) {
-            std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
-            
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+
             windowing::close_app(d->app);
         }
         docks.clear();
@@ -1982,8 +1983,8 @@ void dock::stop(std::string monitor_name) {
         cleanup_cached_fonts();   
     } else {
         for (auto d : docks) {
-            std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
-            
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+
             if (d->creation_settings.monitor_name == monitor_name) {
                 windowing::close_app(d->app);
             }
@@ -2021,7 +2022,8 @@ std::string get_launch_command(int cid) {
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+
         
         // Check if cid should even be displayed in dock
         if (!hypriso->alt_tabbable(cid))
@@ -2047,7 +2049,7 @@ void dock::add_window(int cid) {
 // This happens on the main thread, not the dock thread
 void dock::remove_window(int cid) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
         d->collection->to_be_removed.push_back(cid);
         windowing::redraw(d->window->raw_window);
     }
@@ -2055,7 +2057,7 @@ void dock::remove_window(int cid) {
 
 void dock::title_change(int cid, std::string title) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
         for (auto window : d->collection->list) {
             if (window->cid == cid) {
                 window->title = title;
@@ -2068,7 +2070,7 @@ void dock::title_change(int cid, std::string title) {
 void dock::on_activated(int cid) {
     active_cid = cid;
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto p : icons->children) {
                 auto pin = (Pin *) p->user_data;
@@ -2084,14 +2086,14 @@ void dock::on_activated(int cid) {
         }
     }
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
         windowing::redraw(d->window->raw_window);
     }
 }
 
 void dock::redraw() {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
         windowing::redraw(d->window->raw_window);
     }
 }
@@ -2110,7 +2112,7 @@ void dock::toggle_dock_merge() {
 
 void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {
     for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->window->raw_window->mutex);
+        std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto p : icons->children) {
                 auto pin = (Pin*)p->user_data;

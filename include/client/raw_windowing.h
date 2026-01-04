@@ -26,6 +26,7 @@ struct PolledFunction {
 
 struct RawApp {
     int id = -1;
+    std::mutex mutex;
 
     void print_monitors();
 };
@@ -46,9 +47,7 @@ struct RawWindowSettings {
     int alignment = 0; // 0 none, 1 top, clockwise + 1
 };
 
-struct RawWindow {
-    std::mutex mutex;
-    
+struct RawWindow {    
     int id = -1;
 
     float dpi = 1.0;

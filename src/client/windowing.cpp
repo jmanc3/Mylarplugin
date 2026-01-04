@@ -16,7 +16,7 @@ static MylarWindow *mylar(RawWindow *rw) {
 }
 
 bool on_mouse_move(RawWindow *rw, float x, float y) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_mouse_move");
     x *= rw->dpi;
     y *= rw->dpi;
@@ -29,7 +29,7 @@ bool on_mouse_move(RawWindow *rw, float x, float y) {
 }
 
 bool on_mouse_press(RawWindow *rw, int button, int state, float x, float y) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_mouse_press");
     x *= rw->dpi;
     y *= rw->dpi;
@@ -42,7 +42,7 @@ bool on_mouse_press(RawWindow *rw, int button, int state, float x, float y) {
 }
 
 bool on_scrolled(RawWindow *rw, int source, int axis, int direction, double delta, int discrete, bool mouse) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     // delta 3820
     log("on_scrolled");
     auto m = mylar(rw);
@@ -63,7 +63,7 @@ bool on_scrolled(RawWindow *rw, int source, int axis, int direction, double delt
 }
 
 bool on_key_press(RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     //on_key_press(rw, key, pressed, sym, mods, is_text, text);
     auto m = mylar(rw);
     if (!m) return false;
@@ -75,27 +75,27 @@ bool on_key_press(RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mo
 }
     
 bool on_mouse_enters(RawWindow *rw, float x, float y) {
-    //std::lock_guard<std::mutex> lock(rw->mutex);
+    //std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_mouse_enters");
     on_mouse_move(rw, x, y);
     return false;
 }
     
 bool on_mouse_leaves(RawWindow *rw, float x, float y) {
-    //std::lock_guard<std::mutex> lock(rw->mutex);
+    //std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_mouse_leaves");
     on_mouse_move(rw, -1000, -1000);
     return false;
 }
 
 bool on_keyboard_focus(RawWindow *rw, bool gained) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_keyboard_focus");
     return false;
 }
     
 void on_render(RawWindow *rw, int w, int h) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_render");
     auto m = mylar(rw);
     if (!m) return;
@@ -106,7 +106,7 @@ void on_render(RawWindow *rw, int w, int h) {
 }
 
 void on_resize(RawWindow *rw, int w, int h) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_resize");
     auto m = mylar(rw);
     if (!m) return;
@@ -114,7 +114,7 @@ void on_resize(RawWindow *rw, int w, int h) {
 }
 
 void on_close(RawWindow *rw) {
-    std::lock_guard<std::mutex> lock(rw->mutex);
+    std::lock_guard<std::mutex> lock(rw->creator->mutex);
     auto m = mylar(rw);
     if (!m) return;
 }
