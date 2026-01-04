@@ -1378,6 +1378,10 @@ void wl_window_destroy(struct wl_window *win) {
 
     cairo_destroy(win->cr);
 
+    for (int i = windows.size() - 1; i >= 0; i--)
+        if (windows[i] == win)
+            windows.erase(windows.begin() + i);
+
     delete win;
 }
 
@@ -1400,6 +1404,11 @@ void wl_context_destroy(struct wl_context *ctx) {
 
     wl_registry_destroy(ctx->registry);
     wl_display_disconnect(ctx->display);
+
+    for (int i = apps.size() - 1; i >= 0; i--)
+        if (apps[i] == ctx)
+            apps.erase(apps.begin() + i);
+
     delete ctx;
 }
 
@@ -1420,6 +1429,11 @@ void windowing::main_loop(RawApp *app) {
     wayland_pf.fd = fd;
     wayland_pf.func = [ctx, &need_flush](PolledFunction pf) {
         short re = pf.revents;
+
+        if (re & POLLERR) {
+            ctx->running = false;
+            return;
+        }
 
         if (re & POLLIN) {
             if (wl_display_prepare_read(ctx->display) == 0) {
@@ -1479,6 +1493,17 @@ void windowing::main_loop(RawApp *app) {
 
         // Dispatch
         int end = ctx->polled_fds.size();
+        for (size_t i = 0; i < end; i++) {
+            auto &p = ctx->polled_fds[i];
+            if (p.fd == wayland_pf.fd) {
+                if (p.revents & POLLERR) {
+                    return;
+                }
+            }
+        }
+
+        // Dispatch
+        end = ctx->polled_fds.size();
         for (size_t i = 0; i < end; i++) {
             auto &p = ctx->polled_fds[i];
             p.revents = pfds[i].revents;

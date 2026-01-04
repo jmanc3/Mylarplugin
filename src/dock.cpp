@@ -222,14 +222,7 @@ get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeig
             font->cr == cr &&
             font->italic == italic) { // New italic check
             pango_layout_set_attributes(font->layout, nullptr);
-            font->used_count++;
-            if (font->used_count < 512) {
-//            printf("returned: %p\n", font->layout);
-            	return font->layout;
-            } else {
-				delete font;
-				cached_fonts.erase(cached_fonts.begin() + i);
-            }
+            return font->layout;
         }
     }
 

@@ -117,6 +117,9 @@ void on_close(RawWindow *rw) {
     std::lock_guard<std::mutex> lock(rw->creator->mutex);
     auto m = mylar(rw);
     if (!m) return;
+    for (int i = mylar_windows.size() - 1; i >= 0; i--)
+        if (m == mylar_windows[i])
+            mylar_windows.erase(mylar_windows.begin() + i);
 }
 
 MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings) {
