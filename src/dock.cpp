@@ -1131,6 +1131,7 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
 
 static void merge_to_be_into_list(Dock *dock, Container *c) {
     std::lock_guard<std::mutex> guard(dock->collection->mut);
+    bool no_modification = dock->collection->to_be_removed.empty() && dock->collection->to_be_added.empty();
     if (!dock->collection->to_be_removed.empty()) {
         for (auto t : dock->collection->to_be_removed) {
             for (int i = dock->collection->list.size() - 1; i >= 0; i--) {
@@ -1157,6 +1158,14 @@ static void merge_to_be_into_list(Dock *dock, Container *c) {
             }
         }
         dock->collection->to_be_added.clear();
+    }
+    if (!no_modification) {
+        if (auto icons = container_by_name("icons", dock->window->root)) {
+            for (auto p : icons->children) {
+                auto pin = (Pin *) p->user_data;
+                pin->wants_reposition_animation = true;
+            }
+        }
     }
 }
 

@@ -314,6 +314,7 @@ struct HyprIso {
     void draw_thumbnail(int id, Bounds b, int rounding = 0, float roundingPower = 2.0f, int cornermask = 0, float alpha = 1.0);
     void draw_deco_thumbnail(int id, Bounds b, int rounding = 0, float roundingPower = 2.0f, int cornermask = 0);
     void draw_raw_deco_thumbnail(int id, Bounds b, int rounding = 0, float roundingPower = 2.0f, int cornermask = 0);
+    void draw_raw_min_thumbnail(int id, Bounds b, float scalar);
     void draw_workspace(int mon, int id, Bounds b, int rounding = 0);
     void draw_wallpaper(int mon, Bounds b, int rounding = 0);
 

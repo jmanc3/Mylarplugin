@@ -673,6 +673,8 @@ static void on_window_open(int id) {
         
         *datum<int>(c, "cid") = id; 
         *datum<bool>(c, "snapped") = false; 
+        *datum<bool>(c, "previous_hidden_state") = hypriso->is_hidden(id); 
+        *datum<long>(c, "hidden_state_change_time") = 0; 
 
         auto client_info = new ClientInfo;
         c->user_data = client_info;
@@ -905,20 +907,26 @@ static void on_render(int id, int stage) {
     }
     
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
-        /*
-        auto root = get_rendering_root();
-        hypriso->damage_entire(*datum<int>(root, "cid"));
-        if (!root) return;
-        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
- 
-        auto m = mouse();
-        auto box = Bounds(m.x - root->real_bounds.x, m.y - root->real_bounds.y, 100, 100);
-        auto b2 = box;
-        b2.shrink(30);
-        clip(b2, s);
-        box.scale(s);
-        rect(box, {1, 0, 1, 1});
-        */
+        for (auto c : actual_root->children) {
+            if (c->custom_type == (int)TYPE::CLIENT) {
+                auto cid = *datum<int>(c, "cid");
+                auto time = datum<long>(c, "hidden_state_change_time");
+                auto previous = datum<bool>(c, "previous_hidden_state");
+                auto current = hypriso->is_hidden(cid);
+                auto current_time = get_current_time_in_ms();
+                if (*previous != current) {
+                    *previous = current; 
+                    *time = current_time;
+                }
+                // draw minimizing animation
+                long delta = current_time - *time;
+                if (delta < 100 && current) { 
+                    float scalar = ((float) delta) / 100.0f;
+                    hypriso->draw_raw_min_thumbnail(cid, {0, 0, 300, 300}, scalar);
+                    hypriso->damage_entire(get_monitor(cid));
+                }
+            }
+        }
     }
 }
 

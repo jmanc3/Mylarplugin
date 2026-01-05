@@ -234,6 +234,11 @@ struct HyprWindow {
     Bounds w_deco_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_decos_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 
+    CFramebuffer *min_fb = nullptr;
+    Bounds w_min_mon;
+    Bounds w_min_raw;
+    Bounds w_min_size;
+
     int cornermask = 0; // when rendering the surface, what corners should be rounded
     bool no_rounding = false;
 
@@ -270,7 +275,7 @@ static std::vector<HyprLayer *> hyprlayers;
 struct HyprWorkspaces {
     int id;
     PHLWORKSPACEREF w;
-    CFramebuffer *buffer;
+    CFramebuffer *buffer = nullptr;
 
     bool is_tiling = false;
 };
@@ -1248,7 +1253,9 @@ static void configHandleGradientDestroy(void** data) {
 }
 
 inline CFunctionHook* g_pRenderWindowHook = nullptr;
-typedef void (*origRenderWindowFunc)(void*, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
+
+typedef void (*origRenderWindowFunc)(CHyprRenderer *, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
+
 void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1285,8 +1292,7 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
             *border_size = 0;
         }
     }
-    
-    (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)(thisptr, pWindow, pMonitor, time, decorate, mode, ignorePosition, standalone);
+    (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)((CHyprRenderer *) thisptr, pWindow, pMonitor, Time::steadyNow(), decorate, mode, ignorePosition, standalone);
     if (rounding_amount) {
         *rounding_amount = initial_value;
         *border_size = initial_border_size;
@@ -2206,6 +2212,49 @@ std::string get_previous_instance_signature() {
     return previous; 
 }
 
+void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w);
+
+inline CFunctionHook* g_pOnSetHiddenHook = nullptr;
+typedef void (*origSetHidden)(Desktop::View::CWindow *, bool);
+void hook_onSetHidden(void* thisptr, bool state) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+#ifdef FORK_WARN
+    static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
+#endif
+    auto w = (Desktop::View::CWindow *) thisptr;
+    if (state) {
+        for (auto hw : hyprwindows) {
+            if  (hw->w.get() == w) {
+                if (!hw->min_fb)
+                    hw->min_fb = new CFramebuffer;
+                screenshot_window_with_decos(hw->min_fb, hw->w);
+                hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
+                hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_size.scale(w->m_monitor->m_scale);
+                hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+            }
+        }
+    }
+    (*(origSetHidden)g_pOnSetHiddenHook->m_original)(w, state);
+}
+
+void hook_hidden_state_change() {
+#ifdef FORK_WARN
+    static_assert(false, "[Function Body] Make sure our `CWindow::setHidden(bool)` and Hyprland's are synced!");
+#endif
+
+    static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "setHidden");
+    for (auto m : METHODS) {
+        if (m.demangled.find("CWindow::setHidden") != std::string::npos) {
+            g_pOnSetHiddenHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSetHidden);
+            g_pOnSetHiddenHook->hook();
+            break;
+        }
+    }
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2226,6 +2275,7 @@ void HyprIso::create_hooks() {
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
     hook_monitor_render();
+    hook_hidden_state_change();
 }
 
 bool xcb_get_transient_for(xcb_connection_t* conn, xcb_window_t window, xcb_window_t* out) {
@@ -3971,7 +4021,7 @@ void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
     g_pHyprRenderer->m_bRenderingSnapshot = false;
 }
 
-void renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
 #ifdef FORK_WARN
 //void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
     static_assert(true, "[Function Body] Make sure our `CHyprRenderer::renderWindow` and Hyprland's are synced!");
@@ -4238,9 +4288,6 @@ void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //makeSnapshot(w, buffer);
-    //return;
-    //return;
     if (!buffer || !pRenderWindow || !w)
         return;
     const auto m = w->m_monitor.lock();
@@ -4257,37 +4304,13 @@ void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w) {
     g_pHyprRenderer->m_bRenderingSnapshot = true;
     g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
 
-    auto const NOW = Time::steadyNow();
-
     auto fo = w->m_floatingOffset;
-    w->m_floatingOffset.x -= w->m_realPosition->value().x - ex.topLeft.x;
-    w->m_floatingOffset.y -= w->m_realPosition->value().y - ex.topLeft.y;
     auto before = w->m_hidden;
     w->m_hidden = false;
-    //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, true, RENDER_PASS_ALL, false, true);
 
-    //notify("screen deco");
-    //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, true, RENDER_PASS_ALL, false, true);
-    //
-    renderWindow(w, m, NOW, true, RENDER_PASS_ALL, false, true);
+    ourRenderWindow(w, m, Time::steadyNow(), true, RENDER_PASS_ALL, false, true);
     w->m_hidden = before;
     
-    /*
-    for (auto& de : w->m_windowDecorations) {
-        if (de->getDisplayName() == "MylarBar") {
-            int clientid = 0;
-            for (auto ci : hyprwindows) {
-                if (ci->w == w) {
-                    clientid = ci->id;
-                }
-            }
-            int monitorid = get_monitor(clientid);
-
-            hypriso->on_draw_decos(de->getDisplayName(), monitorid, clientid, 1.0);
-        }
-    }
-    */
-    //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, true, RENDER_PASS_ALL, false, true);
     w->m_floatingOffset = fo;
 
     g_pHyprRenderer->endRender();
@@ -4576,6 +4599,39 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     set_rounding(cornermask);
                     g_pHyprOpenGL->renderTexture(tex, box, data);
                     set_rounding(0);
+                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+                });
+                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+            }
+        }
+    }
+}
+
+void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            if (hw->min_fb && hw->min_fb->isAllocated()) {
+                AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
+                    auto tex = hw->min_fb->getTexture();
+                    auto sss = hw->w_min_mon;
+                    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
+                    auto box = tocbox({0, 0, 
+                                       sss.w + ex.topLeft.x + ex.bottomRight.x, 
+                                       sss.h + ex.bottomRight.y + ex.topLeft.y});
+                    CHyprOpenGLImpl::STextureRenderData data;
+                    data.allowCustomUV = true;
+                    data.round = 0.0;
+                    if (hw->w->m_hidden) {
+                        data.a = 1.0 - scalar;
+                    } else {
+                        data.a = scalar;
+                    }
+                    data.roundingPower = 2.0;
+                    g_pHyprOpenGL->renderTexture(tex, box, data);
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
                 });
