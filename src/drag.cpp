@@ -3,6 +3,7 @@
 #include "second.h"
 #include "defer.h"
 #include "snap_preview.h"
+#include "snap_assist.h"
 
 #include <string>
 #include <cmath>
@@ -276,7 +277,7 @@ void drag::end(int cid) {
                 }
             }
 
-            //snap_assist::create(cid);
+            snap_assist::open(get_monitor(cid), cid);
         }
     }
     //if (hypriso->on_activated) {
