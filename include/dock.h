@@ -2,6 +2,8 @@
 
 #include <string>
 
+struct Bounds;
+
 namespace dock {
     void start(std::string monitor_name = "");
     void stop(std::string monitor_name = "");
@@ -16,4 +18,6 @@ namespace dock {
     void edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command);
 
     void toggle_dock_merge();
+
+    Bounds get_location(std::string name, int cid);
 };

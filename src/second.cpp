@@ -909,6 +909,7 @@ static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
         for (auto c : actual_root->children) {
             if (c->custom_type == (int)TYPE::CLIENT) {
+                // TODO: should be interleaved where window WAS, not LAST_MOMENT
                 auto cid = *datum<int>(c, "cid");
                 auto time = datum<long>(c, "hidden_state_change_time");
                 auto previous = datum<bool>(c, "previous_hidden_state");
@@ -920,9 +921,16 @@ static void on_render(int id, int stage) {
                 }
                 // draw minimizing animation
                 long delta = current_time - *time;
-                if (delta < 100 && current) { 
-                    float scalar = ((float) delta) / 100.0f;
-                    hypriso->draw_raw_min_thumbnail(cid, {0, 0, 300, 300}, scalar);
+                if (delta < minimize_anim_time) { 
+                    float scalar = ((float) delta) / ((float) minimize_anim_time);
+
+                    auto mon_id = get_monitor(cid);
+                    auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+                    auto monitor_b = bounds_monitor(mon_id);
+                    bounds.y = monitor_b.h;
+                    bounds.scale(scale(mon_id));
+
+                    hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
                     hypriso->damage_entire(get_monitor(cid));
                 }
             }

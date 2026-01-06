@@ -224,8 +224,6 @@ struct HyprWindow {
     bool is_hidden = false; // used in show/hide desktop
     bool was_hidden = false; // used in show/hide desktop
 
-    bool was_hidden_last_frame = false;
-    
     CFramebuffer *fb = nullptr;
     Bounds w_bounds_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
@@ -238,6 +236,7 @@ struct HyprWindow {
     Bounds w_min_mon;
     Bounds w_min_raw;
     Bounds w_min_size;
+    long unminize_start = 0;
 
     int cornermask = 0; // when rendering the surface, what corners should be rounded
     bool no_rounding = false;
@@ -1268,15 +1267,12 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
 
     Hyprlang::CConfigCustomValueType* active_border = nullptr; 
     Hyprlang::CConfigCustomValueType* initial_active_border;
+    auto current = get_current_time_in_ms();
     
     for (auto hw : hyprwindows) {
         if (hw->w == pWindow) {
-            bool hidden = hw->w->m_hidden;
-            if (hidden != hw->was_hidden_last_frame) {
-                //notify("fade to/from dock");
-                
-                hw->was_hidden_last_frame = hidden;
-            }
+            if (current - hw->unminize_start < minimize_anim_time)
+                return;
         }
         if (hw->w == pWindow && hw->no_rounding) {
             {
@@ -2224,16 +2220,24 @@ void hook_onSetHidden(void* thisptr, bool state) {
     static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
 #endif
     auto w = (Desktop::View::CWindow *) thisptr;
-    if (state) {
-        for (auto hw : hyprwindows) {
-            if  (hw->w.get() == w) {
+    for (auto hw : hyprwindows) {
+        if  (hw->w.get() == w) {
+            if (state) {
+                // set to hide
                 if (!hw->min_fb)
                     hw->min_fb = new CFramebuffer;
                 screenshot_window_with_decos(hw->min_fb, hw->w);
                 hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
                 hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
+                hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
                 hw->w_min_size.scale(w->m_monitor->m_scale);
                 hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
+                hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
+            } else {
+                // set to show
+                hw->unminize_start = get_current_time_in_ms(); 
             }
         }
     }
@@ -4608,6 +4612,20 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
     }
 }
 
+Bounds lerp(Bounds start, Bounds end, float scalar) {
+    return {
+        start.x + (end.x - start.x) * scalar,
+        start.y + (end.y - start.y) * scalar,
+        start.w + (end.w - start.w) * scalar,
+        start.h + (end.h - start.h) * scalar
+    };
+    return end; 
+}
+
+double easeIn(double x) {
+    return x * x;
+}
+
 void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -4619,14 +4637,16 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     auto tex = hw->min_fb->getTexture();
                     auto sss = hw->w_min_mon;
                     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
-                    auto box = tocbox({0, 0, 
-                                       sss.w + ex.topLeft.x + ex.bottomRight.x, 
-                                       sss.h + ex.bottomRight.y + ex.topLeft.y});
+                    Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
+                    auto lerped = lerp(bounds, b, scalar);
+                    if (!hw->w->m_hidden)
+                        lerped = lerp(b, bounds, scalar);
+                    auto box = tocbox(lerped);
                     CHyprOpenGLImpl::STextureRenderData data;
                     data.allowCustomUV = true;
                     data.round = 0.0;
                     if (hw->w->m_hidden) {
-                        data.a = 1.0 - scalar;
+                        data.a = 1.0 - easeIn(scalar);
                     } else {
                         data.a = scalar;
                     }
@@ -4636,6 +4656,8 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
                 });
                 g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+                
+                //border(hw->w_min_size, {1, 0, 0, 1}, 10);
             }
         }
     }

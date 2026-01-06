@@ -2130,3 +2130,25 @@ void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking
     //notify(fz("{} {} {} {}", original_stacking_rule, new_stacking_rule, new_command, new_icon));
 }
 
+Bounds dock::get_location(std::string name, int cid) {
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (d->creation_settings.monitor_name == name) {
+            if (auto icons = container_by_name("icons", d->window->root)) {
+                for (auto p : icons->children) {
+                    auto pin = (Pin*)p->user_data;
+                    for (auto w : pin->windows) {
+                        if (w.cid == cid) {
+                            Bounds b = p->real_bounds;
+                            b.scale(1.0f / d->window->raw_window->dpi);
+                            return b;
+                        }
+                    }
+                }
+            }
+        }
+    }
+     
+    return {0, 0, 100, 100};
+}
+
