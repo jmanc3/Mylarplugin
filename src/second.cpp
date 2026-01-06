@@ -911,27 +911,32 @@ static void on_render(int id, int stage) {
             if (c->custom_type == (int)TYPE::CLIENT) {
                 // TODO: should be interleaved where window WAS, not LAST_MOMENT
                 auto cid = *datum<int>(c, "cid");
-                auto time = datum<long>(c, "hidden_state_change_time");
-                auto previous = datum<bool>(c, "previous_hidden_state");
-                auto current = hypriso->is_hidden(cid);
-                auto current_time = get_current_time_in_ms();
-                if (*previous != current) {
-                    *previous = current; 
-                    *time = current_time;
-                }
-                // draw minimizing animation
-                long delta = current_time - *time;
-                if (delta < minimize_anim_time) { 
-                    float scalar = ((float) delta) / ((float) minimize_anim_time);
+                auto mon_id = get_monitor(cid);
+                if (mon_id == current_monitor) {
+                    auto time = datum<long>(c, "hidden_state_change_time");
+                    auto previous = datum<bool>(c, "previous_hidden_state");
+                    auto current = hypriso->is_hidden(cid);
+                    auto current_time = get_current_time_in_ms();
+                    if (*previous != current) {
+                        *previous = current; 
+                        *time = current_time;
+                    }
+                    // draw minimizing animation
+                    long delta = current_time - *time;
+                    if (delta < minimize_anim_time) { 
+                        float scalar = ((float) delta) / ((float) minimize_anim_time);
 
-                    auto mon_id = get_monitor(cid);
-                    auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
-                    auto monitor_b = bounds_monitor(mon_id);
-                    bounds.y = monitor_b.h;
-                    bounds.scale(scale(mon_id));
+                        auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+                        auto monitor_b = bounds_monitor(mon_id);
+                        bounds.y = monitor_b.h;
+                        bounds.scale(scale(mon_id));
 
-                    hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
-                    hypriso->damage_entire(get_monitor(cid));
+                        hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
+                        for (int i = actual_monitors.size() - 1; i >= 0; i--) {
+                            auto cid = *datum<int>(actual_monitors[i], "cid");
+                            hypriso->damage_entire(cid);
+                        }
+                    }
                 }
             }
         }
