@@ -299,7 +299,7 @@ static RGBA color_dock_sel_press_color() {
 }
 
 static RGBA color_dock_sel_accent_color() {
-    static RGBA default_color("ffffff44");
+    static RGBA default_color("ffffff88");
     return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_accent_color", default_color);
 }
 

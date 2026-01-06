@@ -1518,7 +1518,7 @@ void HyprIso::create_config_variables() {
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_active_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_press_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_hover_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_accent_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_accent_color", Hyprlang::INT{*configStringToInt("rgba(ffffff88)")});
 
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_border_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
