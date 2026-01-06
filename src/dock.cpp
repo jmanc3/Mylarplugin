@@ -959,11 +959,11 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 // todo we need to focus next (already wrote this combine code)
                 bool is_hidden = hypriso->is_hidden(cid);
                 if (is_hidden) {
-                    hypriso->set_hidden(cid, false);
+                    hypriso->set_hidden(cid, false, true);
                     hypriso->bring_to_front(cid);
                 } else {
                     if (active_cid == cid) {
-                        hypriso->set_hidden(cid, true);
+                        hypriso->set_hidden(cid, true, true);
                     } else {
                         hypriso->bring_to_front(cid);
                     }

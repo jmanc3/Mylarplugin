@@ -237,6 +237,7 @@ struct HyprWindow {
     Bounds w_min_raw;
     Bounds w_min_size;
     long unminize_start = 0;
+    bool animate_to_dock = false;
 
     int cornermask = 0; // when rendering the surface, what corners should be rounded
     bool no_rounding = false;
@@ -1271,7 +1272,7 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
     
     for (auto hw : hyprwindows) {
         if (hw->w == pWindow) {
-            if (current - hw->unminize_start < minimize_anim_time)
+            if (current - hw->unminize_start < minimize_anim_time && hw->animate_to_dock)
                 return;
         }
         if (hw->w == pWindow && hw->no_rounding) {
@@ -3598,7 +3599,7 @@ bool HyprIso::is_hidden(int id) {
     return false; 
 }
 
-void HyprIso::set_hidden(int id, bool state) {
+void HyprIso::set_hidden(int id, bool state, bool animate_to_dock) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -3606,42 +3607,13 @@ void HyprIso::set_hidden(int id, bool state) {
         if (hw->id == id) {
             hw->w->updateWindowDecos();
             hw->w->setHidden(state);
+            hw->animate_to_dock = animate_to_dock;
             hw->is_hidden = state;
         }
     }
     for (auto m : hyprmonitors) {
         hypriso->damage_entire(m->id);
     }
- 
-    /*
-    if (state) {
-        // only if w is top w
-        alt_tab_menu.change_showing(true);
-        if (!alt_tab_menu.options.empty()) {
-            auto& o = alt_tab_menu.options[0];
-            if (o.window == w) {
-                tab_next_window();
-            }
-        }
-        alt_tab_menu.change_showing(false);
-
-        auto window_data = get_or_create_window_data(w.get());
-        //for (auto it = w.get()->m_windowDecorations.rbegin(); it != w.get()->m_windowDecorations.rend(); ++it) {
-            //auto bar = (IHyprWindowDecoration *) it->get();
-            //if (bar->getDisplayName() == "MylarBar" || bar->getDisplayName() == "MylarResize") {
-                //HyprlandAPI::removeWindowDecoration(stable_hypr::APIHANDLE, bar);
-            //}
-        //}
-        window_data->iconified = true;
-        w->updateWindowDecos();
-        w->setHidden(true);
-    } else {
-        w->setHidden(false);
-        //add_decorations_to_window(w);
-        get_or_create_window_data(w.get())->iconified = false;
-        switchToWindow(w, true);
-    }
-    */
 }
 
 void HyprIso::bring_to_front(int id, bool focus) {

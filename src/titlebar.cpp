@@ -549,7 +549,7 @@ void create_titlebar(Container *root, Container *parent) {
     min->when_mouse_up = consume_event;
     min->when_clicked = paint {
          auto client = first_above_of(c, TYPE::CLIENT);
-         hypriso->set_hidden(*datum<int>(client, "cid"), true);
+         hypriso->set_hidden(*datum<int>(client, "cid"), true, true);
     };
     auto max = titlebar_parent->child(FILL_SPACE, FILL_SPACE);
     max->when_paint = paint {
