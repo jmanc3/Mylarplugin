@@ -986,6 +986,21 @@ static void fill_root(Container *root) {
                 if (o->active)
                     return;
             activate_next_activatable(root, root);
+        } else if (sym == XKB_KEY_Escape && pressed) {
+            std::vector<Container*> order;
+            collect_preorder(root, order);
+            for (auto o : order)
+                if (o->active) {
+                    static std::vector<Container*> coll;
+                    coll.push_back(c);
+                    if (c->parent)
+                        coll.push_back(c->parent);
+                    set_active(root, coll, root, false, true);
+                    return;
+                }
+            
+            auto mylar = (PinData*)root->user_data;
+            windowing::close_window(mylar->window->raw_window);
         }
     };
     root->type = ::vbox;

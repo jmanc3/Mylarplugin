@@ -4615,7 +4615,7 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                         lerped = lerp(b, bounds, scalar);
                     auto box = tocbox(lerped);
                     CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = true;
+                    data.allowCustomUV = false;
                     data.round = 0.0;
                     if (hw->w->m_hidden) {
                         data.a = 1.0 - easeIn(scalar);
