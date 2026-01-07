@@ -80,6 +80,7 @@ void drag::begin(int cid) {
         data->bounds_start = bounds_client(cid);
     }
     drag::motion(cid);
+    hypriso->damage_entire(get_monitor(cid));
 }
 
 void drag::motion(int cid) {
