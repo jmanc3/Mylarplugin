@@ -1,5 +1,5 @@
-#ifndef second_h_INCLUDED
-#define second_h_INCLUDED
+#ifndef heart_h_INCLUDED
+#define heart_h_INCLUDED
 
 #include "container.h"
 #include "hypriso.h"
@@ -356,5 +356,5 @@ namespace second {
     void layout_containers();
 }
 
-#endif // second_h_INCLUDED
+#endif // heart_h_INCLUDED
 

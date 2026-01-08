@@ -7,7 +7,7 @@
  */
 
 #include "hypriso.h"
-#include "second.h"
+#include "heart.h"
 
 #include <fstream>
 #include <iostream>

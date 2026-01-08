@@ -1,7 +1,7 @@
 
 #include "alt_tab.h"
 
-#include "second.h"
+#include "heart.h"
 #include "drag.h"
 
 #define LAST_TIME_ACTIVE "last_time_active"

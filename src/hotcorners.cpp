@@ -1,7 +1,7 @@
 
 #include "hotcorners.h"
 
-#include "second.h"
+#include "heart.h"
 #include "alt_tab.h"
 #include "drag.h"
 #include "resizing.h"

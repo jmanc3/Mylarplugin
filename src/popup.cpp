@@ -1,7 +1,7 @@
 
 #include "popup.h"
 
-#include "second.h"
+#include "heart.h"
 #include "icons.h"
 
 #include <linux/input-event-codes.h>

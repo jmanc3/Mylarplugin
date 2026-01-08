@@ -1,7 +1,7 @@
 #include "dock.h"
 
 #include "client/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
-#include "second.h"
+#include "heart.h"
 #include "dock_thumbnails.h"
 
 #include "client/raw_windowing.h"

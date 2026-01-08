@@ -1,6 +1,6 @@
 #include "titlebar.h"
 
-#include "second.h"
+#include "heart.h"
 #include "hypriso.h"
 #include "events.h"
 #include "drag.h"

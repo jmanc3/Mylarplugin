@@ -1,7 +1,7 @@
 
 #include "resizing.h"
 
-#include "second.h"
+#include "heart.h"
 
 static bool is_resizing = false;
 static int window_resizing = -1;
