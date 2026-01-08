@@ -1,6 +1,7 @@
 #include "snap_assist.h"
 
 #include "heart.h"
+#include "events.h"
 
 void snap_assist::open(int monitor, int cid) {
     auto c = get_cid_container(cid);
@@ -58,10 +59,79 @@ void snap_assist::open(int monitor, int cid) {
         }
     }
 
+    // ==============================================
     // open containers
+    // ==============================================
+
+    long creation_time = get_current_time_in_ms();
+    for (auto pos : open_slots) {
+        auto snap_helper = actual_root->child(FILL_SPACE, FILL_SPACE);
+        snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
+        consume_everything(snap_helper);
+        snap_helper->when_mouse_enters_container = paint {
+            hypriso->send_false_position(-1, -1);
+        };
+        snap_helper->when_mouse_leaves_container = paint {
+            
+        };
+
+        snap_helper->pre_layout = [monitor, pos](Container *actual_root, Container *c, const Bounds &b) {
+            auto s = scale(monitor);
+            auto bounds = snap_position_to_bounds(monitor, pos);
+            bounds.grow(-8 * s);
+            c->wanted_bounds = bounds;
+            c->real_bounds = bounds;
+            ::layout(actual_root, c, c->real_bounds);
+            hypriso->damage_entire(monitor);
+        };
+
+        snap_helper->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+            auto root = get_rendering_root();
+            if (!root) return;
+            auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+            if (rid != monitor)
+                return;
+            if (stage != (int) STAGE::RENDER_POST_WINDOWS)
+                return;
+            renderfix
+
+            float alpha = ((float) (get_current_time_in_ms() - creation_time)) / 200.0f;
+            if (alpha > 1.0)
+                alpha = 1.0;
+
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, 8 * s, 2.0, c->real_bounds);
+            rect(c->real_bounds, {1, 1, 1, .8f * alpha}, 0, 8 * s);
+        };
+    }
+
+    for (auto m : actual_monitors)
+        hypriso->damage_entire(*datum<int>(m, "cid"));
 }
 
 void snap_assist::close() {
-    
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+       auto child = actual_root->children[i];
+       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           delete child;
+           actual_root->children.erase(actual_root->children.begin() + i);
+       }
+    }
+    for (auto m : actual_monitors)
+        hypriso->damage_entire(*datum<int>(m, "cid"));
 }
+
+void snap_assist::click(int id, int button, int state, float x, float y) {
+    auto pierced = pierced_containers(actual_root, x, y);
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+       auto child = actual_root->children[i];
+       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           for (auto p : pierced)
+               if (p == child)
+                   return;
+       }
+    }
+
+    snap_assist::close();
+}
+
 

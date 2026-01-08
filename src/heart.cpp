@@ -20,6 +20,7 @@
 #include "popup.h"
 #include "quick_shortcut_menu.h"
 #include "settings.h"
+#include "snap_assist.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -170,6 +171,8 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
            }
        }
     }
+
+    snap_assist::click(id, button, state, x, y);
     
     bool consumed = false;
     if (drag::dragging() && !state) {
@@ -387,6 +390,7 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
                 popup::close(c->uuid);
             }
         }
+        snap_assist::close();
         META_PRESSED = false;
         zoom_factor = 1.0;
     }
@@ -1478,6 +1482,14 @@ void second::layout_containers() {
         }
         
         if (c->custom_type == (int) TYPE::OUR_POPUP) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+            }
+            *datum<bool>(c, "touched") = true;
+        }
+
+        if (c->custom_type == (int) TYPE::SNAP_HELPER) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
                 c->pre_layout(actual_root, c, c->parent->real_bounds);
