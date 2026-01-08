@@ -32,7 +32,7 @@ int resizing::resizing_window() {
 
 void update_cursor(int type) {
    if (type == (int) RESIZE_TYPE::NONE) {
-        unsetCursorImage();
+        unsetCursorImage(true);
     } else if (type == (int) RESIZE_TYPE::BOTTOM) {
         setCursorImageUntilUnset("s-resize");
     } else if (type == (int) RESIZE_TYPE::BOTTOM_LEFT) {

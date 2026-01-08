@@ -3,6 +3,11 @@
 #include "heart.h"
 #include "events.h"
 
+static float fade_in_time() {
+    static float amount = 400;
+    return hypriso->get_varfloat("plugin:mylardesktop:snap_helper_fade_in", amount);
+}
+
 void snap_assist::open(int monitor, int cid) {
     auto c = get_cid_container(cid);
     if (!c)
@@ -67,12 +72,21 @@ void snap_assist::open(int monitor, int cid) {
     for (auto pos : open_slots) {
         auto snap_helper = actual_root->child(FILL_SPACE, FILL_SPACE);
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
-        consume_everything(snap_helper);
+        //consume_everything(snap_helper);
         snap_helper->when_mouse_enters_container = paint {
-            //hypriso->send_false_position(-1, -1);
+            setCursorImageUntilUnset("default");
         };
         snap_helper->when_mouse_leaves_container = paint {
-            
+            unsetCursorImage(true);
+        };
+        snap_helper->when_mouse_down = paint {
+            consume_event(root, c);
+        };
+        snap_helper->when_mouse_up = paint {
+            consume_event(root, c);
+        };
+        snap_helper->when_mouse_motion = paint {
+            consume_event(root, c);
         };
 
         snap_helper->pre_layout = [monitor, pos](Container *actual_root, Container *c, const Bounds &b) {
@@ -95,7 +109,7 @@ void snap_assist::open(int monitor, int cid) {
                 return;
             renderfix
 
-            float alpha = ((float) (get_current_time_in_ms() - creation_time)) / 250.0f;
+            float alpha = ((float) (get_current_time_in_ms() - creation_time)) / fade_in_time();
             if (alpha > 1.0)
                 alpha = 1.0;
 
@@ -136,5 +150,4 @@ void snap_assist::click(int id, int button, int state, float x, float y) {
 
     snap_assist::close();
 }
-
 
