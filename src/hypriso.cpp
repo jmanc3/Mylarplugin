@@ -5761,6 +5761,20 @@ Bounds bounds_client(int wid) {
     return {0, 0, 0, 0};
 }
 
+Bounds bounds_client_final(int wid) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hyprwindow : hyprwindows) {
+        if (hyprwindow->id == wid) {
+            if (auto w = hyprwindow->w.get()) {
+                return {w->m_realPosition->goal().x, w->m_realPosition->goal().y, w->m_realSize->goal().x, w->m_realSize->goal().y};
+            }
+        }
+    }    
+    return {0, 0, 0, 0};
+}
+
 Bounds bounds_layer(int wid) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

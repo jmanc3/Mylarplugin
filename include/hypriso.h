@@ -397,6 +397,7 @@ Bounds bounds_monitor(int id);
 Bounds bounds_reserved_monitor(int id);
 
 Bounds bounds_client(int id);
+Bounds bounds_client_final(int id);
 Bounds bounds_layer(int id);
 Bounds real_bounds_client(int id);
 Bounds bounds_full_client(int id);

@@ -69,7 +69,7 @@ void snap_assist::open(int monitor, int cid) {
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         consume_everything(snap_helper);
         snap_helper->when_mouse_enters_container = paint {
-            hypriso->send_false_position(-1, -1);
+            //hypriso->send_false_position(-1, -1);
         };
         snap_helper->when_mouse_leaves_container = paint {
             
@@ -95,12 +95,15 @@ void snap_assist::open(int monitor, int cid) {
                 return;
             renderfix
 
-            float alpha = ((float) (get_current_time_in_ms() - creation_time)) / 200.0f;
+            float alpha = ((float) (get_current_time_in_ms() - creation_time)) / 250.0f;
             if (alpha > 1.0)
                 alpha = 1.0;
 
             render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, 8 * s, 2.0, c->real_bounds);
-            rect(c->real_bounds, {1, 1, 1, .8f * alpha}, 0, 8 * s);
+            rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, 8 * s);
+            auto b = c->real_bounds;
+            b.shrink(std::round(1.0f * s));
+            border(b, {1.0, 1.0, 1.0, 0.1f}, std::round(1.0f * s), 0, std::round(8 * s * alpha), 2.0f, false, 1.0);
         };
     }
 

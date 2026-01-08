@@ -431,7 +431,7 @@ SnapLimits get_snap_limits(int monitor, SnapPosition wanted_pos) {
                 break;
             
             for (auto g : groups) {
-                auto b = bounds_client(g);
+                auto b = bounds_client_final(g);
                 auto g_snap_type = (SnapPosition) *datum<int>(get_cid_container(g), "snap_type");
                 if (g_snap_type == SnapPosition::TOP_LEFT) {
                     limits.left_middle = (b.h + titlebar_h) / reserved.h;
