@@ -17,8 +17,24 @@ void snap_assist::open(int monitor, int cid) {
     auto type = (SnapPosition) *datum<int>(c, "snap_type");
     if (type == SnapPosition::MAX || type == SnapPosition::NONE)
         return;
-    
+
+    // collect those that shall be represented
     auto cdata = (ClientInfo *) c->user_data;
+    std::vector<int> others;
+    for (auto o : get_window_stacking_order()) {
+        if (hypriso->alt_tabbable(o) && o != cid) {
+            bool skip = false;
+            for (auto grouped : cdata->grouped_with) {
+                if (grouped == o)
+                    skip = true;
+            }
+            if (!skip) {
+                others.push_back(o);
+            }
+        }
+    }
+    if (others.empty())
+        return;
 
     std::vector<int> ids;
     ids.push_back(cid);
@@ -130,23 +146,24 @@ void snap_assist::open(int monitor, int cid) {
             if (alpha > 1.0)
                 alpha = 1.0;
 
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, 8 * s, 2.0, c->real_bounds);
-            rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, 8 * s, 2.0, true, 1.0 * alpha);
+            auto sha = c->real_bounds;
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, std::round(8 * s), 2.0, sha);
+            rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, std::round(8 * s), 2.0, true, 1.0 * alpha);
             auto data = (HelperData *) c->user_data;
             if (c->state.mouse_hovering || c->state.mouse_pressing) {
                 float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_in)) / fade_in_time();
                 if (alpha2 > 1.0)
                     alpha2 = 1.0;
-                rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, 8 * s, 2.0, false, 1.0);
+                rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, std::round(8 * s), 2.0, false, 1.0);
             } else {
                 float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_out)) / fade_in_time();
                 if (alpha2 > 1.0)
                     alpha2 = 1.0;
-                rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, 8 * s, 2.0, false, 1.0); 
+                rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
             }
             auto b = c->real_bounds;
-            b.shrink(std::round(1.0f * s));
-            border(b, {1.0, 1.0, 1.0, 0.1f}, std::round(1.0f * s), 0, std::round(8 * s * alpha), 2.0f, false, 1.0);
+            b.shrink(1.0f);
+            border(b, {0.6, 0.6, 0.6, 0.5f * alpha}, 1.0f, 0, 8 * s, 2.0f, false, 1.0);
         };
     }
 
