@@ -147,7 +147,7 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
             hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
         } else {
             if (pos == (int) SnapPosition::BOTTOM_LEFT || pos == (int) SnapPosition::BOTTOM_RIGHT || 
-                pos == (int) SnapPosition::LEFT || pos == (int) SnapPosition::RIGHT ) {
+                pos == (int) SnapPosition::LEFT || pos == (int) SnapPosition::RIGHT || pos == (int) SnapPosition::MAX) {
                 hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
             } else {
                 hypriso->move_resize(cid, p.x, p.y, p.w, p.h + titlebar_h, false);
