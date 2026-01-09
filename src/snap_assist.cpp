@@ -72,12 +72,21 @@ void snap_assist::open(int monitor, int cid) {
     long creation_time = get_current_time_in_ms();
     for (auto pos : open_slots) {
         auto snap_helper = actual_root->child(FILL_SPACE, FILL_SPACE);
+        struct HelperData : UserData {
+            long time_mouse_in = 0;
+            long time_mouse_out = 0;
+        };
+        snap_helper->user_data = new HelperData; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         //consume_everything(snap_helper);
         snap_helper->when_mouse_enters_container = paint {
+            auto data = (HelperData *) c->user_data;
+            data->time_mouse_in = get_current_time_in_ms();
             setCursorImageUntilUnset("default");
         };
         snap_helper->when_mouse_leaves_container = paint {
+            auto data = (HelperData *) c->user_data;
+            data->time_mouse_out = get_current_time_in_ms();
             unsetCursorImage(true);
         };
         snap_helper->when_mouse_down = paint {
@@ -88,6 +97,11 @@ void snap_assist::open(int monitor, int cid) {
         };
         snap_helper->when_mouse_motion = paint {
             consume_event(root, c);
+        };
+        snap_helper->when_clicked = paint {
+            later_immediate([](Timer *) {
+                snap_assist::close();
+            });
         };
 
         snap_helper->pre_layout = [monitor, pos](Container *actual_root, Container *c, const Bounds &b) {
@@ -117,7 +131,19 @@ void snap_assist::open(int monitor, int cid) {
                 alpha = 1.0;
 
             render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, 8 * s, 2.0, c->real_bounds);
-            rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, 8 * s);
+            rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, 8 * s, 2.0, true, 1.0 * alpha);
+            auto data = (HelperData *) c->user_data;
+            if (c->state.mouse_hovering || c->state.mouse_pressing) {
+                float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_in)) / fade_in_time();
+                if (alpha2 > 1.0)
+                    alpha2 = 1.0;
+                rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, 8 * s, 2.0, false, 1.0);
+            } else {
+                float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_out)) / fade_in_time();
+                if (alpha2 > 1.0)
+                    alpha2 = 1.0;
+                rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, 8 * s, 2.0, false, 1.0); 
+            }
             auto b = c->real_bounds;
             b.shrink(std::round(1.0f * s));
             border(b, {1.0, 1.0, 1.0, 0.1f}, std::round(1.0f * s), 0, std::round(8 * s * alpha), 2.0f, false, 1.0);
