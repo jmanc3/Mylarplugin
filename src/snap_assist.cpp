@@ -1,3 +1,4 @@
+
 #include "snap_assist.h"
 
 #include "heart.h"
@@ -99,13 +100,15 @@ void snap_assist::open(int monitor, int cid) {
             hypriso->damage_entire(monitor);
         };
 
-        snap_helper->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+        snap_helper->when_paint = [cid, monitor, creation_time](Container *actual_root, Container *c) {
             auto root = get_rendering_root();
             if (!root) return;
             auto [rid, s, stage, active_id] = roots_info(actual_root, root);
             if (rid != monitor)
                 return;
-            if (stage != (int) STAGE::RENDER_POST_WINDOWS)
+            if (stage != (int) STAGE::RENDER_PRE_WINDOW)
+                return;
+            if (active_id != cid)
                 return;
             renderfix
 
