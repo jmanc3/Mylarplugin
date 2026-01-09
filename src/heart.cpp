@@ -433,17 +433,30 @@ SnapLimits get_snap_limits(int monitor, SnapPosition wanted_pos) {
             for (auto g : groups) {
                 auto b = bounds_client_final(g);
                 auto g_snap_type = (SnapPosition) *datum<int>(get_cid_container(g), "snap_type");
+                bool has_decos = hypriso->has_decorations(g);
                 if (g_snap_type == SnapPosition::TOP_LEFT) {
-                    limits.left_middle = (b.h + titlebar_h) / reserved.h;
+                    if (has_decos)
+                        limits.left_middle = (b.h + titlebar_h) / reserved.h;
+                    else
+                        limits.left_middle = (b.h) / reserved.h;
                     limits.middle_middle = (b.w) / reserved.w;
                 } else if (g_snap_type == SnapPosition::TOP_RIGHT) {
-                    limits.right_middle = (b.h + titlebar_h) / reserved.h;
+                    if (has_decos)
+                        limits.right_middle = (b.h + titlebar_h) / reserved.h;
+                    else
+                        limits.right_middle = (b.h) / reserved.h;
                     limits.middle_middle = 1.0 - ((b.w) / reserved.w);
                 } else if (g_snap_type == SnapPosition::BOTTOM_LEFT) {
-                    limits.left_middle = (b.y - titlebar_h) / reserved.h;
+                    if (has_decos)
+                        limits.left_middle = (b.y - titlebar_h) / reserved.h;
+                    else
+                        limits.left_middle = (b.y) / reserved.h;
                     limits.middle_middle = (b.w) / reserved.w;
                 } else if (g_snap_type == SnapPosition::BOTTOM_RIGHT) {
-                    limits.right_middle = (b.y - titlebar_h) / reserved.h;
+                    if (has_decos)
+                        limits.right_middle = (b.y - titlebar_h) / reserved.h;
+                    else
+                        limits.right_middle = (b.y) / reserved.h;
                     limits.middle_middle = 1.0 - ((b.w) / reserved.w);
                 } else if (g_snap_type == SnapPosition::LEFT) {
                     limits.middle_middle = (b.w) / reserved.w;
