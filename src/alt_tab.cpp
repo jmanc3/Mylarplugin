@@ -70,7 +70,18 @@ void paint_tab_option(Container *actual_root, Container *c) {
 }
 
 void create_tab_option(int cid, Container *parent) {
+    bool is_first = parent->children.size() <= 1;
     auto c = parent->child(FILL_SPACE, FILL_SPACE);
+    if (is_first) {
+        std::weak_ptr<bool> r = c->lifetime;
+        auto timer = later(1000.0f / 30.0f, [cid, r](Timer *timer) {
+            if (!r.lock())
+                timer->keep_running = false;
+            hypriso->screenshot(cid);
+        });
+        timer->keep_running = true;
+    }
+    
     *datum<int>(c, "cid") = cid;
     c->when_paint = paint_tab_option;
     c->when_clicked = paint {
@@ -109,27 +120,6 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
     if (!root) return {0, 0, 1280, 720};
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
 
-    /*
-    int max_thumb_w = max_thumb.w / s;
-    int max_thumb_h = max_thumb.h / s;
-
-    for (auto c : parent->children) {
-        if (x + max_thumb_w > max_row_width) {
-            // went over end
-            y += max_thumb_h + pad;
-            x = 0;
-        }
-        if (info.max_row_w < x + max_thumb_w) {
-            info.max_row_w = x + max_thumb_w;
-        }
-        if (info.max_row_h < y + max_thumb_h) {
-            info.max_row_h = y + max_thumb_h;
-        }
-        c->real_bounds = Bounds(x, y, max_thumb_w, max_thumb_h);
-        x += max_thumb_w + pad;
-    }
-    */
-
     std::vector<Item> items;
     for (auto ch : parent->children) {
         auto cid = *datum<int>(ch, "cid");
@@ -158,7 +148,9 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
     for (int i = 0; i < parent->children.size(); i++) {
         auto ch = parent->children[i];
         ch->wanted_bounds = result.items[i];
+        ch->wanted_bounds.x += 20;
         ch->real_bounds = result.items[i];
+        ch->real_bounds.x += 20;
     }
 
     return result.bounds;
@@ -242,6 +234,7 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
     //c->wanted_bounds = Bounds(center_x(root, 600), center_y(root, 450), 600, 450);
     c->wanted_bounds = Bounds(thumb_bounds.x, thumb_bounds.y, thumb_bounds.w, thumb_bounds.h);
     c->real_bounds = c->wanted_bounds;
+    c->real_bounds.x += 20;
     //modify_all(c, center_x(root, c->real_bounds.w), center_y(root, c->real_bounds.h));
     c->real_bounds.grow(20);
 

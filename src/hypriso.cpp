@@ -4359,6 +4359,28 @@ void HyprIso::screenshot_all() {
     }
 }
 
+void HyprIso::screenshot(int id) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto w : g_pCompositor->m_windows) {
+        bool has_mylar_bar = false;
+        for (const auto &decos : w->m_windowDecorations) 
+            if (decos->getDisplayName() == "MylarBar")
+                has_mylar_bar = true;
+            
+        if (true) {
+            for (auto hw : hyprwindows) {
+                if (hw->w == w && hw->id == id) {
+                    if (!hw->fb)
+                        hw->fb = new CFramebuffer;
+                    screenshot_window(hw, w, false);
+                }
+            }
+        }
+    }
+}
+
 void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

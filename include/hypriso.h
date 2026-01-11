@@ -306,6 +306,7 @@ struct HyprIso {
     void damage_box(Bounds b);
 
     void screenshot_all();
+    void screenshot(int id);
     void screenshot_deco(int id);
     void screenshot_space(int mon, int id);
     void screenshot_wallpaper(int mon);
