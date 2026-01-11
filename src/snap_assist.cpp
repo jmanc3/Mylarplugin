@@ -4,6 +4,7 @@
 #include "heart.h"
 #include "events.h"
 #include "layout_thumbnails.h"
+#include <algorithm>
 
 struct HelperData : UserData {
     int cid = 0;
@@ -48,6 +49,7 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
 
     {
         auto order = get_window_stacking_order();
+        std::reverse(order.begin(), order.end());
 
         std::vector<int> add;
         std::vector<int> remove;
