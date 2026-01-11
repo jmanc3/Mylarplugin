@@ -3,8 +3,10 @@
 
 #include "heart.h"
 #include "events.h"
+#include "layout_thumbnails.h"
 
 struct HelperData : UserData {
+    int cid = 0;
     long time_mouse_in = 0;
     long time_mouse_out = 0;
     long creation_time = 0;
@@ -15,18 +17,35 @@ static float fade_in_time() {
     return hypriso->get_varfloat("plugin:mylardesktop:snap_helper_fade_in", amount);
 }
 
+bool part_of_group(int o, int cid) {
+    if (cid == o)
+        return true;
+    
+    if (auto c = get_cid_container(cid)) {
+        auto data = (ClientInfo *) c->user_data;
+        for (auto other : data->grouped_with) {
+            if (other == o) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &b, int monitor, SnapPosition pos) {
     auto s = scale(monitor);
     auto bounds = snap_position_to_bounds(monitor, pos);
     bounds.grow(-8 * s);
     c->wanted_bounds = bounds;
     c->real_bounds = bounds;
+    auto helper_data = (HelperData *) c->user_data;
 
+    struct SnapThumb : UserData {
+        int cid = 0;
+        long creation_time = 0;
+    };
     {
-        struct SnapThumb : UserData {
-            int cid = 0;
-        };
-
         auto order = get_window_stacking_order();
 
         std::vector<int> add;
@@ -51,8 +70,9 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
                     found = true;
             }
             if (!found) {
-                if (hypriso->alt_tabbable(o))
+                if (hypriso->alt_tabbable(o) && !part_of_group(o, helper_data->cid)) {
                     add.push_back(o);
+                }
             }
         }
         
@@ -72,26 +92,87 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
             auto thumb = c->child(40, 40);
             auto data = new SnapThumb;
             data->cid = o;
+            data->creation_time = get_current_time_in_ms();
             thumb->user_data = data;
+            later_immediate([](Timer *) {
+                hypriso->screenshot_all();
+            }); 
             thumb->when_paint = [](Container *actual_root, Container *c) {
                 auto root = get_rendering_root();
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
                 renderfix
-                auto data = (HelperData *) c->parent->user_data;
-                float alpha = ((float) (get_current_time_in_ms() - data->creation_time)) / fade_in_time();
+                auto parent_data = (HelperData *) c->parent->user_data;
+                auto data = (SnapThumb *) c->user_data;
+                auto parent_space = hypriso->get_workspace(parent_data->cid);
+                auto our_space = hypriso->get_workspace(data->cid);
+                float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 300.0f;
                 if (alpha > 1.0)
                     alpha = 1.0;
+                float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 550.0f;
+                if (fadea > 1.0)
+                    fadea = 1.0;
 
-                if (c->state.mouse_hovering) {
-                    //rect(c->real_bounds, {1, 1, 1, 1 * alpha});
+                auto size = hypriso->thumbnail_size(data->cid).scale(s);
+                auto pos = bounds_client(data->cid);
+                size.x = pos.x * s;
+                size.y = pos.y * s;
+                auto l = lerp(size, c->real_bounds, alpha * alpha * alpha * alpha);
+                if (our_space != parent_space) {
+                    l = c->real_bounds;
                 }
-                //border(c->real_bounds, {1, 0, 0, 1 * alpha}, 4);
+                hypriso->clip = true;
+                auto clipbox = c->parent->real_bounds;
+                clipbox.scale(s);
+                hypriso->clipbox = clipbox;
+                if (our_space != parent_space) {
+                    hypriso->draw_thumbnail(data->cid, l, 0, 2.0, 0, fadea * fadea);
+                } else {
+                    hypriso->draw_thumbnail(data->cid, l);
+                }
+                hypriso->clip = false;
+                
+                if (c->state.mouse_hovering) {
+                    rect(c->real_bounds, {1, 1, 1, .1f}, 0, 0, 2.0, false);
+                }
             };
         }
     }
 
-    ::layout(actual_root, c, c->real_bounds);
+    std::vector<Item> items;
+    for (auto ch : c->children) {
+        auto data = (SnapThumb *) ch->user_data;
+        auto size = hypriso->thumbnail_size(data->cid);
+        Item item;
+        item.aspectRatio = size.w / size.h;
+        items.push_back(item);
+    }
+
+    LayoutParams params {
+        .availableWidth = (int) c->real_bounds.w,
+        .availableHeight = (int) c->real_bounds.h,
+        .horizontalSpacing = (int) (10 * s),
+        .verticalSpacing = (int) (10 * s),
+        .margin = (int) (10 * s),
+        .densityPresets = {
+            { 4, (int) (200 * s * .75) },
+            { 9, (int) (166 * s * .75)},
+            { 16, (int) (133 * s * .75) },
+            { INT_MAX, (int) (100 * s * .75) }
+        }
+    };
+
+    auto result = layoutAltTabThumbnails(params, items);
+    for (int i = 0; i < c->children.size(); i++) {
+        auto ch = c->children[i];
+        ch->wanted_bounds = result.items[i];
+        ch->wanted_bounds.x += bounds.x;
+        ch->wanted_bounds.y += bounds.y;
+        ch->real_bounds = result.items[i];
+        ch->real_bounds.x += bounds.x;
+        ch->real_bounds.y += bounds.y;
+    }
+
     hypriso->damage_entire(monitor);
 }
 
@@ -172,8 +253,9 @@ void snap_assist::open(int monitor, int cid) {
     // ==============================================
 
     for (auto pos : open_slots) {
-        auto snap_helper = actual_root->child(::vbox, FILL_SPACE, FILL_SPACE);
+        auto snap_helper = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
         auto helper_data = new HelperData;
+        helper_data->cid = cid;
         helper_data->creation_time = get_current_time_in_ms();
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
