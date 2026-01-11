@@ -433,7 +433,7 @@ void fill_root(Container *root, Container *alt_tab_parent) {
             //rect(c->real_bounds, {1, 0, 1, 1});
         }
         auto b = c->real_bounds; 
-        b.grow(4 * s);
+        b.grow(10 * s);
         rect(b, {1, 1, 1, .4}, 0, 8 * s, 2.0);
     };
     alt_tab_parent->after_paint = [](Container *actual_root, Container *c) {
