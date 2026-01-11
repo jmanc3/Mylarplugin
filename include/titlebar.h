@@ -12,4 +12,9 @@ namespace titlebar {
     void titlebar_right_click(int cid, bool centered = false);
 }
 
+struct Container;
+struct RGBA;
+struct TextureInfo;
+
+TextureInfo *get_cached_texture(Container *root_with_scale, Container *container_texture_saved_on, std::string needle, std::string font, std::string text, RGBA color, int wanted_h);
 #endif // titlebar_h_INCLUDED

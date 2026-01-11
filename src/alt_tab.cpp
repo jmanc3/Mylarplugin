@@ -3,6 +3,8 @@
 
 #include "heart.h"
 #include "drag.h"
+#include "icons.h"
+#include "titlebar.h"
 #include "layout_thumbnails.h"
 
 #define LAST_TIME_ACTIVE "last_time_active"
@@ -12,6 +14,37 @@ Bounds max_thumb = { 510 * sd, 310 * sd, 510 * sd, 310 * sd };
 static int active_index = 0;
 static long show_time = 0;
 static long show_delay = 40;
+
+static RGBA color_titlebar_focused() {
+    static RGBA default_color("ffffffff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_color", default_color);
+}
+static RGBA color_titlebar_unfocused() {
+    static RGBA default_color("f0f0f0ff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_color", default_color);
+}
+static RGBA color_titlebar_text_focused() {
+    static RGBA default_color("000000ff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_text_color", default_color);
+}
+static RGBA color_titlebar_text_unfocused() {
+    static RGBA default_color("303030ff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_text_color", default_color);
+}
+static float titlebar_button_ratio() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_ratio", 1.4375f);
+}
+static float titlebar_text_h() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_text_h", 15);
+}
+static float titlebar_icon_h() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_icon_h", 21);
+}
+static float titlebar_button_icon_h() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
+}
+
+
 
 void alt_tab::on_window_open(int id) {
     Container *c = get_cid_container(id);
@@ -33,7 +66,12 @@ void alt_tab::on_window_closed(int id) {
 void paint_tab_option(Container *actual_root, Container *c) {
     if (get_current_time_in_ms() - show_time < show_delay)
         return;
- 
+
+    auto backup = c->real_bounds;
+    c->real_bounds.y += titlebar_h;
+    c->real_bounds.h -= titlebar_h;
+    defer(c->real_bounds = backup);
+    
     auto root = get_rendering_root();
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -62,10 +100,104 @@ void paint_tab_option(Container *actual_root, Container *c) {
 
     //rect(c->real_bounds, {1, 0, 1, 1});
     auto cid = *datum<int>(c, "cid");
-    hypriso->draw_thumbnail(cid, c->real_bounds);
+    hypriso->draw_thumbnail(cid, c->real_bounds, hypriso->get_rounding(cid) * s, 2.0f, 3);
+    auto above = c->real_bounds;
+    above.y -= std::round(titlebar_h * s);
+    above.h = std::round(titlebar_h * s);
+    c->real_bounds = above;
+    
     if (real_active_index == index) {
-        rect(c->real_bounds, {1, 1, 1, .3}, 0, 0, 2.0f, false, 0.0);
-        border(c->real_bounds, {0, 0, 0, 1}, 4);
+        rect(c->real_bounds, color_titlebar_focused(), 12, hypriso->get_rounding(cid) * s, 2.0f, false, 0.0);
+    } else {
+        rect(c->real_bounds, color_titlebar_unfocused(), 12, hypriso->get_rounding(cid) * s, 2.0f, false, 0.0);
+    }
+    
+    int icon_width = 0; 
+    { // load icon
+        TextureInfo *info = datum<TextureInfo>(c, std::to_string(rid) + "_icon");
+        auto real_icon_h = std::round(titlebar_icon_h() * s);
+        if (info->id != -1) {
+            if (info->cached_h != real_icon_h) {
+                free_text_texture(info->id);
+                info->id = -1;
+                info->reattempts_count = 0;
+                info->last_reattempt_time = 0;
+            }                
+        }
+        if (info->id == -1 && info->reattempts_count < 30) {
+            if (icons_loaded && enough_time_since_last_check(1000, info->last_reattempt_time)) {
+                info->last_reattempt_time = get_current_time_in_ms();
+                auto name = hypriso->class_name(cid);
+                auto path = one_shot_icon(real_icon_h, {
+                    name, c3ic_fix_wm_class(name), to_lower(name), to_lower(c3ic_fix_wm_class(name))
+                });
+                if (!path.empty()) {
+                    log(fz("{} {} {} ",path, real_icon_h, info->cached_h));
+
+                    *info = gen_texture(path, real_icon_h);
+                    info->cached_h = real_icon_h;
+                }
+            }
+        }
+        if (info->id != -1)
+            icon_width = info->w;
+        float focus_alpha = 1.0;
+        if (real_active_index == index || true) {
+            focus_alpha = color_titlebar_text_focused().a;
+        } else {
+            focus_alpha = color_titlebar_text_unfocused().a;
+        }
+        clip(to_parent(root, c), s);
+        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), 1.0 * focus_alpha);
+    }
+    
+    std::string title_text = hypriso->title_name(cid);
+    if (!title_text.empty()) {
+        TextureInfo *focused = nullptr;
+        TextureInfo *unfocused = nullptr;
+        auto color_titlebar_textfo = color_titlebar_text_focused();
+        auto titlebar_text = titlebar_text_h();
+        auto color_titlebar_textunfo = color_titlebar_text_unfocused();
+        focused = get_cached_texture(root, c, std::to_string(rid) + "_title_focused", mylar_font, 
+            title_text, color_titlebar_textfo, titlebar_text);
+        unfocused = get_cached_texture(root, c, std::to_string(rid) + "_title_unfocused", mylar_font, 
+            title_text, color_titlebar_textunfo, titlebar_text);
+        
+        auto texture_info = focused;
+        if (real_active_index != index)
+            texture_info = unfocused;
+
+        if (texture_info->id != -1) {
+            auto overflow = std::max((c->real_bounds.h - texture_info->h), 0.0);
+            if (icon_width != 0)
+                overflow = icon_width + 16 * s;
+
+            auto clip_w = c->real_bounds.w - overflow;
+            if (clip_w > 0) {
+                draw_texture(*texture_info, 
+                    above.x + overflow, above.y + above.h * .5 - texture_info->h * .5, 1.0, clip_w);
+            }
+        }
+    }
+
+    c->real_bounds = backup;
+
+    bool any_hovered = false;
+    for (auto ch : c->parent->children) {
+        if (ch->state.mouse_hovering)
+            any_hovered = true;
+    }
+
+    if (real_active_index == index) {
+        Bounds bo = c->real_bounds;
+        bo.grow(3);
+        auto bb = bo;
+        bo.grow(3);
+        auto rounding = hypriso->get_rounding(cid);
+        bo.scale(s);
+        border(bo, {.1, .6, .84, 1}, 2 * s, 0, (rounding + (rounding * .3)) * s);
+        bb.scale(s);
+        border(bb, {0, 0, 0, 1}, 2 * s, 0, rounding * s);
     }
 }
 
@@ -125,7 +257,7 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
         auto cid = *datum<int>(ch, "cid");
         auto size = hypriso->thumbnail_size(cid);
         Item item;
-        item.aspectRatio = size.w / size.h;
+        item.aspectRatio = size.w / (size.h + titlebar_h);
         items.push_back(item);
     }
 
@@ -297,8 +429,9 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         } else if (c->state.mouse_hovering) {
             //rect(c->real_bounds, {1, 0, 1, 1});
         }
- 
-        rect(c->real_bounds, {1, 1, 1, .4}, 20);
+        auto b = c->real_bounds; 
+        b.grow(4 * s);
+        rect(b, {1, 1, 1, .4}, 0, 8 * s, 2.0);
     };
     alt_tab_parent->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;

@@ -29,7 +29,7 @@ static float titlebar_button_ratio() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_ratio", 1.4375f);
 }
 
-float titlebar_text_h() {
+static float titlebar_text_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_text_h", 15);
 }
 
@@ -37,43 +37,43 @@ static float titlebar_icon_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_icon_h", 21);
 }
 
-float titlebar_button_icon_h() {
+static float titlebar_button_icon_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
 }
 
-RGBA color_titlebar_focused() {
+static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_color", default_color);
 }
-RGBA color_titlebar_unfocused() {
+static RGBA color_titlebar_unfocused() {
     static RGBA default_color("f0f0f0ff");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_color", default_color);
 }
-RGBA color_titlebar_text_focused() {
+static RGBA color_titlebar_text_focused() {
     static RGBA default_color("000000ff");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_text_color", default_color);
 }
-RGBA color_titlebar_text_unfocused() {
+static RGBA color_titlebar_text_unfocused() {
     static RGBA default_color("303030ff");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_text_color", default_color);
 }
-RGBA titlebar_button_bg_hovered_color() {
+static RGBA titlebar_button_bg_hovered_color() {
     static RGBA default_color("rgba(ff0000ff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_button_bg_hovered_color", default_color);
 }
-RGBA titlebar_button_bg_pressed_color() {
+static RGBA titlebar_button_bg_pressed_color() {
     static RGBA default_color("rgba(0000ffff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_button_bg_pressed_color", default_color);
 }
-RGBA titlebar_closed_button_bg_hovered_color() {
+static RGBA titlebar_closed_button_bg_hovered_color() {
     static RGBA default_color("rgba(ff0000ff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", default_color);
 }
-RGBA titlebar_closed_button_bg_pressed_color() {
+static RGBA titlebar_closed_button_bg_pressed_color() {
     static RGBA default_color("rgba(0000ffff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", default_color);
 }
-RGBA titlebar_closed_button_icon_color_hovered_pressed() {
+static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
     static RGBA default_color("rgba(999999ff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", default_color);
 }

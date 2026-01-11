@@ -3,11 +3,15 @@
 
 #include "heart.h"
 #include "events.h"
+#include "drag.h"
 #include "layout_thumbnails.h"
 #include <algorithm>
 
 struct HelperData : UserData {
+    bool showing = false;
     int cid = 0;
+    int monitor = 0;
+    SnapPosition pos;
     long time_mouse_in = 0;
     long time_mouse_out = 0;
     long creation_time = 0;
@@ -39,7 +43,7 @@ struct SnapThumb : UserData {
     long creation_time = 0;
 };
     
-void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &b, int monitor, SnapPosition pos) {
+void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds &b, int monitor, SnapPosition pos) {
     auto s = scale(monitor);
     auto bounds = snap_position_to_bounds(monitor, pos);
     bounds.grow(-8 * s);
@@ -103,6 +107,24 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
             later_immediate([](Timer *) {
                 hypriso->screenshot_all();
             }); 
+            thumb->when_clicked = paint {
+                auto parent_data = (HelperData *) c->parent->user_data;
+                auto data = (SnapThumb *) c->user_data;
+                drag::snap_window(parent_data->monitor, parent_data->cid, (int) parent_data->pos);
+                
+                later_immediate([parent_data](Timer *) {
+                    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+                       auto child = actual_root->children[i];
+                       auto child_data = (HelperData *) child->user_data;
+                       if (child->custom_type == (int) TYPE::SNAP_HELPER && parent_data == child_data && child_data->showing) {
+                           delete child;
+                           actual_root->children.erase(actual_root->children.begin() + i);
+                       }
+                    }
+                    for (auto m : actual_monitors)
+                        hypriso->damage_entire(*datum<int>(m, "cid"));
+                });
+            };
             thumb->when_paint = [](Container *actual_root, Container *c) {
                 auto root = get_rendering_root();
                 if (!root) return;
@@ -127,10 +149,12 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
                 if (our_space != parent_space) {
                     l = c->real_bounds;
                 }
-                hypriso->clip = true;
-                auto clipbox = c->parent->real_bounds;
-                clipbox.scale(s);
-                hypriso->clipbox = clipbox;
+                if (alpha >= 1.0) {
+                    hypriso->clip = true;
+                    auto clipbox = c->parent->real_bounds;
+                    clipbox.scale(s);
+                    hypriso->clipbox = clipbox;
+                }
                 if (our_space != parent_space) {
                     hypriso->draw_thumbnail(data->cid, l, 0, 2.0, 0, fadea * fadea);
                 } else {
@@ -259,10 +283,17 @@ void snap_assist::open(int monitor, int cid) {
     // open containers
     // ==============================================
 
+    bool first = true;
     for (auto pos : open_slots) {
         auto snap_helper = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
         auto helper_data = new HelperData;
         helper_data->cid = cid;
+        helper_data->monitor = monitor;
+        helper_data->pos = pos;
+        if (first) {
+            first = false;
+            helper_data->showing = true;
+        }
         helper_data->creation_time = get_current_time_in_ms();
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
@@ -289,7 +320,7 @@ void snap_assist::open(int monitor, int cid) {
         };
         snap_helper->when_clicked = paint {
             later_immediate([](Timer *) {
-                snap_assist::close();
+                //snap_assist::close();
             });
         };
 
@@ -307,10 +338,11 @@ void snap_assist::open(int monitor, int cid) {
                 return;
             if (active_id != cid)
                 return;
-            c->automatically_paint_children = true;
+            auto data = (HelperData *) c->user_data;
+            if (data->showing)
+                c->automatically_paint_children = true;
             renderfix
 
-            auto data = (HelperData *) c->user_data;
             float alpha = ((float) (get_current_time_in_ms() - data->creation_time)) / fade_in_time();
             if (alpha > 1.0)
                 alpha = 1.0;
