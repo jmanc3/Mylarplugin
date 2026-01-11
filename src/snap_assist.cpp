@@ -171,6 +171,7 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
     auto result = layoutAltTabThumbnails(params, items);
     for (int i = 0; i < c->children.size(); i++) {
         auto ch = c->children[i];
+        ch->z_index = c->children.size() + 10 - i;
         ch->wanted_bounds = result.items[i];
         ch->wanted_bounds.x += bounds.x;
         ch->wanted_bounds.y += bounds.y;

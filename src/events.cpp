@@ -577,8 +577,15 @@ void paint_outline(Container* root, Container* c) {
         if (s->bottom && s->bottom->exists)
             paint_outline(s, s->bottom);
     } else {
-        for (auto ch : c->children) {
-            paint_outline(root, ch);
+        std::vector<int> render_order;
+        for (int i = 0; i < c->children.size(); i++) {
+            render_order.push_back(i);
+        }
+        std::sort(render_order.begin(), render_order.end(), [c](int a, int b) -> bool {
+            return c->children[a]->z_index < c->children[b]->z_index;
+        });
+        for (auto index: render_order) {
+            paint_outline(root, c->children[index]);
         }
     }
    
