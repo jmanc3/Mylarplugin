@@ -3,6 +3,7 @@
 
 #include "heart.h"
 #include "drag.h"
+#include "layout_thumbnails.h"
 
 #define LAST_TIME_ACTIVE "last_time_active"
 
@@ -99,21 +100,16 @@ void create_tab_option(int cid, Container *parent) {
     
 }
 
-struct LayoutInfo {
-    int max_row_w = 0;
-    int max_row_h = 0;
-};
-
-LayoutInfo position_tab_options(Container *parent, int max_row_width) {
+Bounds position_tab_options(Container *parent, int max_row_width) {
     int x = 0;
     int y = 0;
     int pad = 10;
-    LayoutInfo info;
     
     auto root = get_rendering_root();
-    if (!root) return info;
+    if (!root) return {0, 0, 1280, 720};
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-    
+
+    /*
     int max_thumb_w = max_thumb.w / s;
     int max_thumb_h = max_thumb.h / s;
 
@@ -132,8 +128,40 @@ LayoutInfo position_tab_options(Container *parent, int max_row_width) {
         c->real_bounds = Bounds(x, y, max_thumb_w, max_thumb_h);
         x += max_thumb_w + pad;
     }
-    
-    return info;
+    */
+
+    std::vector<Item> items;
+    for (auto ch : parent->children) {
+        auto cid = *datum<int>(ch, "cid");
+        auto size = hypriso->thumbnail_size(cid);
+        Item item;
+        item.aspectRatio = size.w / size.h;
+        items.push_back(item);
+    }
+
+    auto reserved = bounds_reserved_monitor(rid);
+    LayoutParams params {
+        .availableWidth = (int) reserved.w - 40,
+        .availableHeight = (int) reserved.h - 40,
+        .horizontalSpacing = (int) (10 * s),
+        .verticalSpacing = (int) (10 * s),
+        .margin = (int) (10 * s),
+        .densityPresets = {
+            { 4, (int) (200 * s * .75) },
+            { 9, (int) (166 * s * .75)},
+            { 16, (int) (133 * s * .75) },
+            { INT_MAX, (int) (100 * s * .75) }
+        }
+    };
+
+    auto result = layoutAltTabThumbnails(params, items);
+    for (int i = 0; i < parent->children.size(); i++) {
+        auto ch = parent->children[i];
+        ch->wanted_bounds = result.items[i];
+        ch->real_bounds = result.items[i];
+    }
+
+    return result.bounds;
 }
 
 
@@ -148,8 +176,8 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
     }
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-    
-    LayoutInfo info;
+
+    Bounds thumb_bounds;
     {  // Populate 
         auto order = get_window_stacking_order();
         // remove if no longer exists
@@ -208,13 +236,13 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
             }
         });
 
-        info = position_tab_options(c, root->real_bounds.w * .6); 
+        thumb_bounds = position_tab_options(c, root->real_bounds.w * .6); 
     }
 
     //c->wanted_bounds = Bounds(center_x(root, 600), center_y(root, 450), 600, 450);
-    c->wanted_bounds = Bounds(0, 0, info.max_row_w, info.max_row_h);
+    c->wanted_bounds = Bounds(thumb_bounds.x, thumb_bounds.y, thumb_bounds.w, thumb_bounds.h);
     c->real_bounds = c->wanted_bounds;
-    modify_all(c, center_x(root, c->real_bounds.w), center_y(root, c->real_bounds.h));
+    //modify_all(c, center_x(root, c->real_bounds.w), center_y(root, c->real_bounds.h));
     c->real_bounds.grow(20);
 
     // Don't draw if tab option fully outside
