@@ -191,14 +191,15 @@ void paint_tab_option(Container *actual_root, Container *c) {
 
     if (real_active_index == index) {
         Bounds bo = c->real_bounds;
-        bo.grow(3);
-        auto bb = bo;
-        bo.grow(3);
-        auto rounding = hypriso->get_rounding(cid);
         bo.scale(s);
-        border(bo, {.1, .6, .84, 1}, 2 * s, 0, (rounding + (rounding * .3)) * s);
-        bb.scale(s);
-        border(bb, {0, 0, 0, 1}, 2 * s, 0, rounding * s);
+        bo.round();
+        bo.grow(std::round(3 * s));
+        auto bb = bo;
+        bo.grow(std::round(2 * s));
+        auto rounding = hypriso->get_rounding(cid);
+        hypriso->clip = false;
+        border(bo, {.1, .6, .84, 1}, std::round(3 * s), 0, (rounding + (rounding * .3)) * s);
+        border(bb, {0, 0, 0, 1}, std::round(2 * s), 0, rounding * s);
     }
 }
 
@@ -266,9 +267,9 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
     LayoutParams params {
         .availableWidth = (int) reserved.w - 40,
         .availableHeight = (int) reserved.h - 40,
-        .horizontalSpacing = (int) (10 * s),
-        .verticalSpacing = (int) (10 * s),
-        .margin = (int) (10 * s),
+        .horizontalSpacing = (int) (12 * s),
+        .verticalSpacing = (int) (12 * s),
+        .margin = (int) (40 * s),
         .maxThumbWidth = (int) (350 * s * .85),
         .densityPresets = {
             { 4, (int) (200 * s * .85) },
