@@ -33,6 +33,11 @@ bool part_of_group(int o, int cid) {
     return false;
 }
 
+struct SnapThumb : UserData {
+    int cid = 0;
+    long creation_time = 0;
+};
+    
 void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &b, int monitor, SnapPosition pos) {
     auto s = scale(monitor);
     auto bounds = snap_position_to_bounds(monitor, pos);
@@ -41,10 +46,6 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
     c->real_bounds = bounds;
     auto helper_data = (HelperData *) c->user_data;
 
-    struct SnapThumb : UserData {
-        int cid = 0;
-        long creation_time = 0;
-    };
     {
         auto order = get_window_stacking_order();
 
@@ -71,6 +72,9 @@ void snap_helper_pre_layout(Container *actual_root, Container *c, const Bounds &
             }
             if (!found) {
                 if (hypriso->alt_tabbable(o) && !part_of_group(o, helper_data->cid)) {
+                    later_immediate([o](Timer *) {
+                        hypriso->set_hidden(o, true, false);
+                    });
                     add.push_back(o);
                 }
             }
@@ -339,6 +343,10 @@ void snap_assist::close() {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           for (auto ch : child->children) {
+               auto data = (SnapThumb * ) ch->user_data;
+               hypriso->set_hidden(data->cid, false, false);
+           }
            delete child;
            actual_root->children.erase(actual_root->children.begin() + i);
        }

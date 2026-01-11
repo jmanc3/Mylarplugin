@@ -862,6 +862,7 @@ static void on_activated(int id) {
     titlebar::on_activated(id);
     alt_tab::on_activated(id);
     dock::on_activated(id);
+    snap_assist::close();
 }
 
 static void on_draw_decos(std::string name, int monitor, int id, float a) {

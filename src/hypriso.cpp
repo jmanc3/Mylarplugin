@@ -4627,6 +4627,8 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             if (hw->min_fb && hw->min_fb->isAllocated()) {
+                if (!hw->animate_to_dock)
+                    return;
                 AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
                     auto tex = hw->min_fb->getTexture();
                     auto sss = hw->w_min_mon;
