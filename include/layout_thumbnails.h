@@ -24,6 +24,7 @@ struct LayoutParams {
     int horizontalSpacing;
     int verticalSpacing;
     int margin;
+    int maxThumbWidth;
 
     std::vector<DensityPreset> densityPresets;
 };

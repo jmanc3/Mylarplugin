@@ -184,6 +184,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
         .horizontalSpacing = (int) (10 * s),
         .verticalSpacing = (int) (10 * s),
         .margin = (int) (10 * s),
+        .maxThumbWidth = (int) (350 * s * .85),
         .densityPresets = {
             { 4, (int) (200 * s * .75) },
             { 9, (int) (166 * s * .75)},

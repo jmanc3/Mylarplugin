@@ -33,12 +33,13 @@ LayoutResult layoutAltTabThumbnails(
     const int usableWidth =
         params.availableWidth - params.margin * 2;
 
-    const int thumbHeight =
+    const int thumbHeight_ =
         chooseThumbnailHeight((int)items.size(), params.densityPresets);
 
     struct RowItem {
         int index;
         int width;
+        int height;
     };
 
     std::vector<std::vector<RowItem>> rows;
@@ -46,7 +47,12 @@ LayoutResult layoutAltTabThumbnails(
     int rowWidth = 0;
 
     for (int i = 0; i < (int)items.size(); ++i) {
-        int w = (int)std::round(items[i].aspectRatio * thumbHeight);
+        int w = (int)std::round(items[i].aspectRatio * thumbHeight_);
+        int h = thumbHeight_;
+        if (w > params.maxThumbWidth) {
+            w = params.maxThumbWidth;
+            h = w / items[i].aspectRatio;
+        }
         int extra = currentRow.empty() ? 0 : params.horizontalSpacing;
 
         if (!currentRow.empty() &&
@@ -58,7 +64,7 @@ LayoutResult layoutAltTabThumbnails(
             extra = 0;
         }
 
-        currentRow.push_back({ i, w });
+        currentRow.push_back({ i, w, h });
         rowWidth += extra + w;
     }
 
@@ -66,7 +72,7 @@ LayoutResult layoutAltTabThumbnails(
         rows.push_back(currentRow);
 
     // Compute total content height
-    int totalHeight = thumbHeight * (int)rows.size()
+    int totalHeight = thumbHeight_ * (int)rows.size()
         + params.verticalSpacing * ((int)rows.size() - 1);
 
     // Vertical placement: center, but never above top edge
@@ -92,7 +98,7 @@ LayoutResult layoutAltTabThumbnails(
                 x,
                 y,
                 r.width,
-                thumbHeight
+                r.height
             );
 
             out.items[r.index] = rect;
@@ -105,7 +111,7 @@ LayoutResult layoutAltTabThumbnails(
             x += r.width + params.horizontalSpacing;
         }
 
-        y += thumbHeight + params.verticalSpacing;
+        y += thumbHeight_ + params.verticalSpacing;
     }
 
     out.bounds = {

@@ -169,10 +169,11 @@ void paint_tab_option(Container *actual_root, Container *c) {
 
         if (texture_info->id != -1) {
             auto overflow = std::max((c->real_bounds.h - texture_info->h), 0.0);
+            auto overflow_amount = std::max((c->real_bounds.h - texture_info->h), 0.0);
             if (icon_width != 0)
                 overflow = icon_width + 16 * s;
 
-            auto clip_w = c->real_bounds.w - overflow;
+            auto clip_w = c->real_bounds.w - overflow - overflow_amount;
             if (clip_w > 0) {
                 draw_texture(*texture_info, 
                     above.x + overflow, above.y + above.h * .5 - texture_info->h * .5, 1.0, clip_w);
@@ -268,6 +269,7 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
         .horizontalSpacing = (int) (10 * s),
         .verticalSpacing = (int) (10 * s),
         .margin = (int) (10 * s),
+        .maxThumbWidth = (int) (350 * s * .85),
         .densityPresets = {
             { 4, (int) (200 * s * .85) },
             { 9, (int) (166 * s * .85)},
