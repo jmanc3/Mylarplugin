@@ -147,10 +147,10 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
         .verticalSpacing = (int) (10 * s),
         .margin = (int) (10 * s),
         .densityPresets = {
-            { 4, (int) (200 * s * .75) },
-            { 9, (int) (166 * s * .75)},
-            { 16, (int) (133 * s * .75) },
-            { INT_MAX, (int) (100 * s * .75) }
+            { 4, (int) (200 * s * .85) },
+            { 9, (int) (166 * s * .85)},
+            { 16, (int) (133 * s * .85) },
+            { INT_MAX, (int) (100 * s * .85) }
         }
     };
 
