@@ -66,10 +66,10 @@ void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
     if (!c) return;
 
     auto snapped = datum<bool>(c, "snapped");
+    if (!*snapped)
+        *datum<Bounds>(c, "pre_snap_bounds") = bounds_client(cid);
 
-    // perform snap
     *snapped = true;
-    *datum<Bounds>(c, "pre_snap_bounds") = bounds_client(cid);
     *datum<int>(c, "snap_type") = pos;
 
     auto p = snap_position_to_bounds(snap_mon, (SnapPosition) pos);
@@ -337,7 +337,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
                 }
                 if (c->state.mouse_hovering) {
-                    rect(final_thumb_spot, {1, 1, 1, .3}, 0, 10 * s, 2.0, false, 1.0);
+                    rect(final_thumb_spot, {1, 1, 1, .3}, 3, 10 * s, 2.0, false, 1.0);
                 }
                 hypriso->clip = false;
             };
