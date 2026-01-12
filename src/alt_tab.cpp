@@ -218,6 +218,16 @@ void create_tab_option(int cid, Container *parent) {
     
     *datum<int>(c, "cid") = cid;
     c->when_paint = paint_tab_option;
+    c->when_mouse_enters_container = paint {
+        int index = 0;
+        for (int i = 0; i < c->parent->children.size(); i++) {
+            if (c->parent->children[i] == c) {
+                index = i;
+                break;
+            }
+        }
+        active_index = index;
+    };
     c->when_clicked = paint {
         int index = 0;
         for (int i = 0; i < c->parent->children.size(); i++) {
