@@ -9,6 +9,9 @@
 #include "layout_thumbnails.h"
 
 #include <algorithm>
+#include <ios>
+
+static bool skip_close = false;
 
 struct HelperData : UserData {
     bool showing = false;
@@ -19,7 +22,7 @@ struct HelperData : UserData {
     long time_mouse_out = 0;
     long creation_time = 0;
 };
-        
+
 static float fade_in_time() {
     static float amount = 400;
     return hypriso->get_varfloat("plugin:mylardesktop:snap_helper_fade_in", amount);
@@ -54,6 +57,40 @@ static float titlebar_button_icon_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
 }
 
+
+void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
+    if (snap_mon == -1)
+        return;
+    auto c = get_cid_container(cid);
+    if (!c) return;
+
+    auto snapped = datum<bool>(c, "snapped");
+
+    // perform snap
+    *snapped = true;
+    *datum<Bounds>(c, "pre_snap_bounds") = bounds_client(cid);
+    *datum<int>(c, "snap_type") = pos;
+
+    auto p = snap_position_to_bounds(snap_mon, (SnapPosition) pos);
+    {
+        auto s = start_pos;
+        hypriso->move_resize(cid, s.x, s.y, s.w, s.h, true);
+    }
+    hypriso->set_hidden(cid, false);
+    if (hypriso->has_decorations(cid)) {
+        hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
+    } else {
+        if (pos == (int) SnapPosition::BOTTOM_LEFT || pos == (int) SnapPosition::BOTTOM_RIGHT ||
+            pos == (int) SnapPosition::LEFT || pos == (int) SnapPosition::RIGHT || pos == (int) SnapPosition::MAX) {
+            hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
+        } else {
+            hypriso->move_resize(cid, p.x, p.y, p.w, p.h + titlebar_h, false);
+        }
+    }
+    hypriso->should_round(cid, false);
+    skip_close = true;
+    hypriso->bring_to_front(cid, true);
+}
 
 bool part_of_group(int o, int cid) {
     if (cid == o)
@@ -151,9 +188,16 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             thumb->when_clicked = paint {
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
-                drag::snap_window(parent_data->monitor, parent_data->cid, (int) parent_data->pos);
+                auto b = c->real_bounds;
+                auto s = scale(parent_data->monitor);
+                b.y += titlebar_h * s;
+                b.h -= titlebar_h * s;
+                do_snap(parent_data->monitor, data->cid, (int) parent_data->pos, b);
                 
                 later_immediate([parent_data](Timer *) {
+                    skip_close = false;
+                    snap_assist::close();
+                    /*
                     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                        auto child = actual_root->children[i];
                        auto child_data = (HelperData *) child->user_data;
@@ -164,6 +208,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     }
                     for (auto m : actual_monitors)
                         hypriso->damage_entire(*datum<int>(m, "cid"));
+                    */
                 });
             };
             thumb->when_paint = [](Container *actual_root, Container *c) {
@@ -502,6 +547,8 @@ void snap_assist::open(int monitor, int cid) {
 }
 
 void snap_assist::close() {
+    if (skip_close)
+        return;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
