@@ -182,10 +182,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             }
         }
 
-        std::reverse(add.begin(), add.end());
+        //std::reverse(add.begin(), add.end());
 
         for (auto o : add) {
-            auto thumb = c->child(40, 40);
+            auto thumb = c->child(::absolute, 40, 40);
             auto data = new SnapThumb;
             data->cid = o;
             data->creation_time = get_current_time_in_ms();
@@ -196,6 +196,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             thumb->when_clicked = paint {
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
+                auto close_cid = data->cid;
                 auto b = c->real_bounds;
                 auto s = scale(parent_data->monitor);
                 b.y += titlebar_h * s;
@@ -205,10 +206,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto other_cdata = (ClientInfo *) get_cid_container(parent_data->cid)->user_data;
                 add_to_snap_group(data->cid, parent_data->cid, other_cdata->grouped_with);
 
-                later_immediate([parent_data](Timer *) {
+                later_immediate([parent_data, close_cid](Timer *) {
                     skip_close = false;
-                    snap_assist::close();
-                    /*
                     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                        auto child = actual_root->children[i];
                        auto child_data = (HelperData *) child->user_data;
@@ -217,9 +216,41 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                            actual_root->children.erase(actual_root->children.begin() + i);
                        }
                     }
+                    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+                       auto child = actual_root->children[i];
+                       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+                           for (int snap_i = child->children.size() - 1; snap_i >= 0; snap_i--) {
+                               auto snap = child->children[snap_i];
+                               auto snap_data = (SnapThumb *) snap->user_data;
+                               if (snap_data->cid == close_cid) {
+                                   delete snap;
+                                   child->children.erase(child->children.begin() + i);
+                               }
+                           }
+                       }
+                    }
+                    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+                       auto child = actual_root->children[i];
+                       auto child_data = (HelperData *) child->user_data;
+                       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+                           child_data->showing = true;
+                           break;
+                       }
+                    }
+                    bool any_seen = false;
+                    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+                       auto child = actual_root->children[i];
+                       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+                           if (!child->children.empty()) {
+                               any_seen = true;
+                           }
+                       }
+                    }
+                    if (!any_seen) {
+                        snap_assist::close();
+                    }
                     for (auto m : actual_monitors)
                         hypriso->damage_entire(*datum<int>(m, "cid"));
-                    */
                 });
             };
             thumb->when_paint = [](Container *actual_root, Container *c) {
@@ -232,14 +263,13 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto cid = data->cid;
                 auto parent_space = hypriso->get_workspace(parent_data->cid);
                 auto our_space = hypriso->get_workspace(data->cid);
-                auto ratioscalar = .55;
+                auto ratioscalar = .56;
                 float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
                 if (alpha > 1.0)
                     alpha = 1.0;
-                float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (750.0f * ratioscalar);
-                if (fadea > 1.0)
+                float fadea = alpha;
+                if (hypriso->has_decorations(cid))
                     fadea = 1.0;
-                fadea = 1.0;
 
                 auto size = hypriso->thumbnail_size(data->cid).scale(s);
                 auto pos = bounds_client(data->cid);
@@ -260,14 +290,25 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 c->real_bounds.y -= std::round(titlebar_h * s);
                 c->real_bounds.h = std::round(titlebar_h * s) + 1;
 
-                if (c->state.mouse_hovering) {
-                    auto focused = color_titlebar_focused();
-                    focused.a = fadea;
-                    rect(c->real_bounds, focused, 12, 10 * s, 2.0f, false, pull(slidetopos, fadea));
-                } else {
-                    auto unfocused = color_titlebar_unfocused();
-                    unfocused.a = fadea;
-                    rect(c->real_bounds, unfocused, 12, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                {
+                    int titlebar_mask = 12;
+                    Bounds titlebar_bounds = c->real_bounds;
+                    bool child_hovered = false;
+                    if (!c->children.empty()) {
+                        if (c->children[0]->state.mouse_hovering || c->children[0]->state.mouse_pressing) {
+                            titlebar_bounds.w -= titlebar_h * s * .5;
+                            child_hovered = true;
+                        }
+                    }
+                    if (c->state.mouse_hovering || child_hovered) {
+                        auto focused = color_titlebar_focused();
+                        focused.a = fadea;
+                        rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                    } else {
+                        auto unfocused = color_titlebar_unfocused();
+                        unfocused.a = fadea;
+                        rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                    }
                 }
 
                 int icon_width = 0; 
@@ -290,8 +331,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                                 name, c3ic_fix_wm_class(name), to_lower(name), to_lower(c3ic_fix_wm_class(name))
                             });
                             if (!path.empty()) {
-                                log(fz("{} {} {} ",path, real_icon_h, info->cached_h));
-
                                 *info = gen_texture(path, real_icon_h);
                                 info->cached_h = real_icon_h;
                             }
@@ -353,6 +392,36 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 }
                 hypriso->clip = false;
             };
+
+            auto close = thumb->child(FILL_SPACE, FILL_SPACE);
+            close->skip_delete = true;
+            close->user_data = thumb->user_data;
+            close->when_paint = [](Container *actual_root, Container *c) {
+                auto root = get_rendering_root();
+                if (!root) return;
+                auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+                renderfix
+
+                c->real_bounds.h += 1;
+                c->real_bounds.round();
+
+                if (c->state.mouse_hovering) {
+                    rect(c->real_bounds, {1, 0, 0, 1}, 13, 10 * s, 2.0);
+                }
+            };
+            close->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
+                auto root = get_rendering_root();
+                if (!root) return;
+                auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+                
+                auto w = titlebar_h * titlebar_button_ratio();
+                c->wanted_bounds = {b.x + b.w - w, b.y, w, (float) titlebar_h};
+                c->real_bounds = c->wanted_bounds;
+            };
+            close->when_clicked = paint {
+                auto data = (SnapThumb *) c->user_data;
+                close_window(data->cid);
+            };
         }
     }
 
@@ -390,6 +459,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
         ch->real_bounds = result.items[i];
         ch->real_bounds.x += bounds.x;
         ch->real_bounds.y += bounds.y;
+        ::layout(actual_root, ch, ch->real_bounds);
     }
 
     hypriso->damage_entire(monitor);
@@ -471,8 +541,9 @@ void snap_assist::open(int monitor, int cid) {
     // open containers
     // ==============================================
 
-    bool first = true;
-    for (auto pos : open_slots) {
+    std::reverse(open_slots.begin(), open_slots.end());
+    for (int i = 0; i < open_slots.size(); i++) {
+        auto pos = open_slots[i];
         auto snap_helper = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
         auto helper_data = new HelperData;
         helper_data->cid = cid;
@@ -493,8 +564,7 @@ void snap_assist::open(int monitor, int cid) {
             }
         }
         done:
-        if (first) {
-            first = false;
+        if (i == open_slots.size() - 1) {
             helper_data->showing = true;
         }
         helper_data->creation_time = get_current_time_in_ms();
@@ -558,12 +628,12 @@ void snap_assist::open(int monitor, int cid) {
                 float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_in)) / fade_in_time();
                 if (alpha2 > 1.0)
                     alpha2 = 1.0;
-                rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, std::round(8 * s), 2.0, false, 1.0);
+                //rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, std::round(8 * s), 2.0, false, 1.0);
             } else {
                 float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_out)) / fade_in_time();
                 if (alpha2 > 1.0)
                     alpha2 = 1.0;
-                rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
+                //rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
             }
             auto b = c->real_bounds;
             b.shrink(1.0f);
