@@ -16,6 +16,7 @@ static bool skip_close = false;
 struct HelperData : UserData {
     bool showing = false;
     int cid = 0;
+    int lowest_group_cid = cid;
     int monitor = 0;
     SnapPosition pos;
     long time_mouse_in = 0;
@@ -462,6 +463,21 @@ void snap_assist::open(int monitor, int cid) {
         helper_data->cid = cid;
         helper_data->monitor = monitor;
         helper_data->pos = pos;
+        helper_data->lowest_group_cid = helper_data->cid;
+        auto cid_data = (ClientInfo *) get_cid_container(cid)->user_data;
+        for (auto actual_cid : get_window_stacking_order()) {
+            for (auto g : cid_data->grouped_with) {
+                if (g == actual_cid) {
+                    helper_data->lowest_group_cid = actual_cid;
+                    goto done;
+                }
+            }
+            if (actual_cid == cid) {
+                helper_data->lowest_group_cid = cid;
+                goto done;
+            }
+        }
+        done:
         if (first) {
             first = false;
             helper_data->showing = true;
@@ -496,21 +512,22 @@ void snap_assist::open(int monitor, int cid) {
             });
         };
 
-        snap_helper->pre_layout = [monitor, pos](Container *actual_root, Container *c, const Bounds &b) {
-            snap_helper_pre_layout(actual_root, c, b, monitor, pos);
+        snap_helper->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
+            auto data = (HelperData *) c->user_data;
+            snap_helper_pre_layout(actual_root, c, b, data->monitor, data->pos);
         };
 
-        snap_helper->when_paint = [cid, monitor](Container *actual_root, Container *c) {
+        snap_helper->when_paint = [](Container *actual_root, Container *c) {
+            auto data = (HelperData *) c->user_data;
             auto root = get_rendering_root();
             if (!root) return;
             auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-            if (rid != monitor)
+            if (rid != data->monitor)
                 return;
             if (stage != (int) STAGE::RENDER_PRE_WINDOW)
                 return;
-            if (active_id != cid)
+            if (active_id != data->lowest_group_cid)
                 return;
-            auto data = (HelperData *) c->user_data;
             if (data->showing)
                 c->automatically_paint_children = true;
             renderfix
