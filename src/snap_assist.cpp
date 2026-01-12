@@ -202,10 +202,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 b.h -= titlebar_h * s;
                 skip_close = true;
                 do_snap(parent_data->monitor, data->cid, (int) parent_data->pos, b);
-                auto other_cdata = (ClientInfo *) get_cid_container(data->cid)->user_data;
-                add_to_snap_group(parent_data->cid, data->cid, other_cdata->grouped_with);
-                // join to group
-                
+                auto other_cdata = (ClientInfo *) get_cid_container(parent_data->cid)->user_data;
+                add_to_snap_group(data->cid, parent_data->cid, other_cdata->grouped_with);
+
                 later_immediate([parent_data](Timer *) {
                     skip_close = false;
                     snap_assist::close();
