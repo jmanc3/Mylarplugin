@@ -179,6 +179,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             }
         }
 
+        std::reverse(add.begin(), add.end());
+
         for (auto o : add) {
             auto thumb = c->child(40, 40);
             auto data = new SnapThumb;
