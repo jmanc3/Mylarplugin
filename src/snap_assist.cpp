@@ -118,6 +118,37 @@ struct SnapThumb : UserData {
     int cid = 0;
     long creation_time = 0;
 };
+
+void remove_all_of_cid(int close_cid) {
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+       auto child = actual_root->children[i];
+       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           for (int snap_i = child->children.size() - 1; snap_i >= 0; snap_i--) {
+               auto snap = child->children[snap_i];
+               auto snap_data = (SnapThumb *) snap->user_data;
+               if (snap_data->cid == close_cid) {
+                   delete snap;
+                   child->children.erase(child->children.begin() + i);
+               }
+           }
+       }
+    }    
+}
+
+void possibly_close_if_none_left() {
+    bool any_seen = false;
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+       auto child = actual_root->children[i];
+       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           if (!child->children.empty()) {
+               any_seen = true;
+           }
+       }
+    }
+    if (!any_seen) {
+        snap_assist::close();
+    }
+}
     
 void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds &b, int monitor, SnapPosition pos) {
     auto s = scale(monitor);
@@ -169,7 +200,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 }
             }
         }
-        
+
         for (int i = c->children.size() - 1; i >= 0; i--) {
             auto ch = c->children[i];
             auto data = (SnapThumb *) ch->user_data;
@@ -216,19 +247,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                            actual_root->children.erase(actual_root->children.begin() + i);
                        }
                     }
-                    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-                       auto child = actual_root->children[i];
-                       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
-                           for (int snap_i = child->children.size() - 1; snap_i >= 0; snap_i--) {
-                               auto snap = child->children[snap_i];
-                               auto snap_data = (SnapThumb *) snap->user_data;
-                               if (snap_data->cid == close_cid) {
-                                   delete snap;
-                                   child->children.erase(child->children.begin() + i);
-                               }
-                           }
-                       }
-                    }
+
+                    remove_all_of_cid(close_cid);
+
                     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                        auto child = actual_root->children[i];
                        auto child_data = (HelperData *) child->user_data;
@@ -237,18 +258,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                            break;
                        }
                     }
-                    bool any_seen = false;
-                    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-                       auto child = actual_root->children[i];
-                       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
-                           if (!child->children.empty()) {
-                               any_seen = true;
-                           }
-                       }
-                    }
-                    if (!any_seen) {
-                        snap_assist::close();
-                    }
+                    possibly_close_if_none_left();
                     for (auto m : actual_monitors)
                         hypriso->damage_entire(*datum<int>(m, "cid"));
                 });
@@ -421,6 +431,11 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             close->when_clicked = paint {
                 auto data = (SnapThumb *) c->user_data;
                 close_window(data->cid);
+                auto close_cid = data->cid;
+                later(10, [close_cid](Timer *) { 
+                    remove_all_of_cid(close_cid);
+                    possibly_close_if_none_left(); 
+                });
             };
         }
     }
