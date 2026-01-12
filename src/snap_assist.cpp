@@ -79,6 +79,9 @@ void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
         auto s = start_pos;
         hypriso->move_resize(cid, s.x, s.y, s.w, s.h, true);
     }
+    if (hypriso->get_active_workspace_id(snap_mon) != hypriso->get_active_workspace_id_client(cid)) {
+        hypriso->move_to_workspace(cid, hypriso->get_active_workspace(snap_mon));
+    }
     hypriso->set_hidden(cid, false);
     if (hypriso->has_decorations(cid)) {
         hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
@@ -197,6 +200,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto s = scale(parent_data->monitor);
                 b.y += titlebar_h * s;
                 b.h -= titlebar_h * s;
+                skip_close = true;
                 do_snap(parent_data->monitor, data->cid, (int) parent_data->pos, b);
                 auto other_cdata = (ClientInfo *) get_cid_container(data->cid)->user_data;
                 add_to_snap_group(parent_data->cid, data->cid, other_cdata->grouped_with);
