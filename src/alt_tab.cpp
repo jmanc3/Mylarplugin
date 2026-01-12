@@ -192,14 +192,15 @@ void paint_tab_option(Container *actual_root, Container *c) {
     if (real_active_index == index) {
         Bounds bo = c->real_bounds;
         bo.scale(s);
+        bo.grow(std::round(4 * s));
         bo.round();
-        bo.grow(std::round(3 * s));
         auto bb = bo;
-        bo.grow(std::round(2 * s));
+        bo.grow(std::round(3 * s));
+        bo.round();
         auto rounding = hypriso->get_rounding(cid);
         hypriso->clip = false;
-        border(bo, {.1, .6, .84, 1}, std::round(3 * s), 0, (rounding + (rounding * .3)) * s);
-        border(bb, {0, 0, 0, 1}, std::round(2 * s), 0, rounding * s);
+        border(bo, {.1, .6, .84, 1}, std::round(4 * s), 0, (rounding + (rounding * .3)) * s);
+        border(bb, {0, 0, 0, 1}, std::round(3 * s), 0, rounding * s);
     }
 }
 
