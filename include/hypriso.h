@@ -444,4 +444,6 @@ void load_icon_full_path(cairo_surface_t** surface, std::string path, int target
 
 Bounds lerp(Bounds start, Bounds end, float scalar);
 
+float pull(std::vector<float>& fls, float scalar);
+
 #endif // hypriso_h_INCLUDED

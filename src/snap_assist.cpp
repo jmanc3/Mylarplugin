@@ -58,6 +58,8 @@ static float titlebar_button_icon_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
 }
 
+// {"anchors":[{"x":0,"y":1},{"x":0.47500000000000003,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.2911752162835537,"y":0.9622916751437718},{"x":0.6883506970527843,"y":0.08506946563720702}]}
+static std::vector<float> slidetopos = { 0, 0.0030000000000000027, 0.006000000000000005, 0.01100000000000001, 0.016000000000000014, 0.02200000000000002, 0.030000000000000027, 0.038000000000000034, 0.04800000000000004, 0.05900000000000005, 0.07099999999999995, 0.08399999999999996, 0.09899999999999998, 0.11499999999999999, 0.132, 0.15100000000000002, 0.17200000000000004, 0.19399999999999995, 0.21799999999999997, 0.243, 0.271, 0.30000000000000004, 0.33199999999999996, 0.366, 0.402, 0.44099999999999995, 0.483, 0.527, 0.575, 0.612, 0.636, 0.6579999999999999, 0.6799999999999999, 0.7, 0.72, 0.738, 0.756, 0.773, 0.789, 0.8049999999999999, 0.8200000000000001, 0.834, 0.847, 0.86, 0.873, 0.884, 0.895, 0.906, 0.916, 0.925, 0.9339999999999999, 0.943, 0.951, 0.959, 0.966, 0.972, 0.979, 0.985, 0.99, 0.995, 1 };
 
 void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
     if (snap_mon == -1)
@@ -225,10 +227,11 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto cid = data->cid;
                 auto parent_space = hypriso->get_workspace(parent_data->cid);
                 auto our_space = hypriso->get_workspace(data->cid);
-                float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 150.0f;
+                auto ratioscalar = .55;
+                float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
                 if (alpha > 1.0)
                     alpha = 1.0;
-                float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 270.0f;
+                float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (750.0f * ratioscalar);
                 if (fadea > 1.0)
                     fadea = 1.0;
 
@@ -239,7 +242,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto final_thumb_spot = c->real_bounds;
                 final_thumb_spot.y += std::round(titlebar_h * s);
                 final_thumb_spot.h -= std::round(titlebar_h * s);
-                auto l = lerp(size, final_thumb_spot, alpha * alpha * alpha * alpha);
+                auto l = lerp(size, final_thumb_spot, pull(slidetopos, alpha));
                 if (our_space != parent_space) {
                     l = final_thumb_spot;
                 }
@@ -251,11 +254,11 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 if (c->state.mouse_hovering) {
                     auto focused = color_titlebar_focused();
                     focused.a = fadea;
-                    rect(c->real_bounds, focused, 12, 10 * s, 2.0f, false, fadea);
+                    rect(c->real_bounds, focused, 12, 10 * s, 2.0f, false, pull(slidetopos, fadea));
                 } else {
                     auto unfocused = color_titlebar_unfocused();
                     unfocused.a = fadea;
-                    rect(c->real_bounds, unfocused, 12, 10 * s, 2.0f, false, fadea);
+                    rect(c->real_bounds, unfocused, 12, 10 * s, 2.0f, false, pull(slidetopos, fadea));
                 }
 
                 int icon_width = 0; 
@@ -294,7 +297,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         focus_alpha = color_titlebar_text_unfocused().a;
                     }
                     clip(to_parent(root, c), s);
-                    draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), 1.0 * focus_alpha * fadea);
+                    draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
                 }
                 
                 std::string title_text = hypriso->title_name(cid);
@@ -320,7 +323,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         auto clip_w = c->real_bounds.w - overflow - overflow_amount;
                         if (clip_w > 0) {
                             draw_texture(*texture_info, 
-                                c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea, clip_w);
+                                c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
                         }
                     }
                 }
@@ -332,7 +335,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     hypriso->clipbox = clipbox;
                 }
                 if (our_space != parent_space) {
-                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, fadea * fadea);
+                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, pull(slidetopos, fadea));
                 } else {
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
                 }
