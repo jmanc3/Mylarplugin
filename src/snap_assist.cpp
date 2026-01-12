@@ -4,7 +4,10 @@
 #include "heart.h"
 #include "events.h"
 #include "drag.h"
+#include "titlebar.h"
+#include "icons.h"
 #include "layout_thumbnails.h"
+
 #include <algorithm>
 
 struct HelperData : UserData {
@@ -21,6 +24,36 @@ static float fade_in_time() {
     static float amount = 400;
     return hypriso->get_varfloat("plugin:mylardesktop:snap_helper_fade_in", amount);
 }
+
+static RGBA color_titlebar_focused() {
+    static RGBA default_color("ffffffff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_color", default_color);
+}
+static RGBA color_titlebar_unfocused() {
+    static RGBA default_color("f0f0f0ff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_color", default_color);
+}
+static RGBA color_titlebar_text_focused() {
+    static RGBA default_color("000000ff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_text_color", default_color);
+}
+static RGBA color_titlebar_text_unfocused() {
+    static RGBA default_color("303030ff");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_text_color", default_color);
+}
+static float titlebar_button_ratio() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_ratio", 1.4375f);
+}
+static float titlebar_text_h() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_text_h", 15);
+}
+static float titlebar_icon_h() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_icon_h", 21);
+}
+static float titlebar_button_icon_h() {
+    return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
+}
+
 
 bool part_of_group(int o, int cid) {
     if (cid == o)
@@ -54,6 +87,14 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     {
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
+        auto our_workspace = hypriso->get_active_workspace(monitor);
+        std::stable_sort(order.begin(), order.end(),
+            [our_workspace](int a, int b) {
+                const bool a_on = hypriso->get_active_workspace_id_client(a) == our_workspace;
+                const bool b_on = hypriso->get_active_workspace_id_client(b) == our_workspace;
+                return b_on && !a_on;
+            }
+        );
 
         std::vector<int> add;
         std::vector<int> remove;
@@ -132,12 +173,13 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 renderfix
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
+                auto cid = data->cid;
                 auto parent_space = hypriso->get_workspace(parent_data->cid);
                 auto our_space = hypriso->get_workspace(data->cid);
-                float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 300.0f;
+                float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 150.0f;
                 if (alpha > 1.0)
                     alpha = 1.0;
-                float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 550.0f;
+                float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / 270.0f;
                 if (fadea > 1.0)
                     fadea = 1.0;
 
@@ -145,10 +187,95 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto pos = bounds_client(data->cid);
                 size.x = pos.x * s;
                 size.y = pos.y * s;
-                auto l = lerp(size, c->real_bounds, alpha * alpha * alpha * alpha);
+                auto final_thumb_spot = c->real_bounds;
+                final_thumb_spot.y += std::round(titlebar_h * s);
+                final_thumb_spot.h -= std::round(titlebar_h * s);
+                auto l = lerp(size, final_thumb_spot, alpha * alpha * alpha * alpha);
                 if (our_space != parent_space) {
-                    l = c->real_bounds;
+                    l = final_thumb_spot;
                 }
+                
+                auto backup = c->real_bounds;
+                defer(c->real_bounds = backup);
+                c->real_bounds.h = std::round(titlebar_h * s);
+
+                if (c->state.mouse_hovering) {
+                    auto focused = color_titlebar_focused();
+                    focused.a = fadea;
+                    rect(c->real_bounds, focused, 12, 10 * s, 2.0f, false, fadea);
+                } else {
+                    auto unfocused = color_titlebar_unfocused();
+                    unfocused.a = fadea;
+                    rect(c->real_bounds, unfocused, 12, 10 * s, 2.0f, false, fadea);
+                }
+
+                int icon_width = 0; 
+                { // load icon
+                    TextureInfo *info = datum<TextureInfo>(c, std::to_string(rid) + "_icon");
+                    auto real_icon_h = std::round(titlebar_icon_h() * s);
+                    if (info->id != -1) {
+                        if (info->cached_h != real_icon_h) {
+                            free_text_texture(info->id);
+                            info->id = -1;
+                            info->reattempts_count = 0;
+                            info->last_reattempt_time = 0;
+                        }                
+                    }
+                    if (info->id == -1 && info->reattempts_count < 30) {
+                        if (icons_loaded && enough_time_since_last_check(1000, info->last_reattempt_time)) {
+                            info->last_reattempt_time = get_current_time_in_ms();
+                            auto name = hypriso->class_name(cid);
+                            auto path = one_shot_icon(real_icon_h, {
+                                name, c3ic_fix_wm_class(name), to_lower(name), to_lower(c3ic_fix_wm_class(name))
+                            });
+                            if (!path.empty()) {
+                                log(fz("{} {} {} ",path, real_icon_h, info->cached_h));
+
+                                *info = gen_texture(path, real_icon_h);
+                                info->cached_h = real_icon_h;
+                            }
+                        }
+                    }
+                    if (info->id != -1)
+                        icon_width = info->w;
+                    float focus_alpha = 1.0;
+                    if (true) {
+                        focus_alpha = color_titlebar_text_focused().a;
+                    } else {
+                        focus_alpha = color_titlebar_text_unfocused().a;
+                    }
+                    clip(to_parent(root, c), s);
+                    draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), 1.0 * focus_alpha * fadea);
+                }
+                
+                std::string title_text = hypriso->title_name(cid);
+                if (!title_text.empty()) {
+                    TextureInfo *focused = nullptr;
+                    TextureInfo *unfocused = nullptr;
+                    auto color_titlebar_textfo = color_titlebar_text_focused();
+                    auto titlebar_text = titlebar_text_h();
+                    auto color_titlebar_textunfo = color_titlebar_text_unfocused();
+                    focused = get_cached_texture(root, c, std::to_string(rid) + "_title_focused", mylar_font, 
+                        title_text, color_titlebar_textfo, titlebar_text);
+                    unfocused = get_cached_texture(root, c, std::to_string(rid) + "_title_unfocused", mylar_font, 
+                        title_text, color_titlebar_textunfo, titlebar_text);
+                    
+                    auto texture_info = focused;
+
+                    if (texture_info->id != -1) {
+                        auto overflow = std::max((c->real_bounds.h - texture_info->h), 0.0);
+                        auto overflow_amount = std::max((c->real_bounds.h - texture_info->h), 0.0);
+                        if (icon_width != 0)
+                            overflow = icon_width + 16 * s;
+
+                        auto clip_w = c->real_bounds.w - overflow - overflow_amount;
+                        if (clip_w > 0) {
+                            draw_texture(*texture_info, 
+                                c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea, clip_w);
+                        }
+                    }
+                }
+
                 if (alpha >= 1.0) {
                     hypriso->clip = true;
                     auto clipbox = c->parent->real_bounds;
@@ -156,15 +283,14 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     hypriso->clipbox = clipbox;
                 }
                 if (our_space != parent_space) {
-                    hypriso->draw_thumbnail(data->cid, l, 0, 2.0, 0, fadea * fadea);
+                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, fadea * fadea);
                 } else {
-                    hypriso->draw_thumbnail(data->cid, l);
+                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
+                }
+                if (c->state.mouse_hovering) {
+                    rect(final_thumb_spot, {1, 1, 1, .3}, 0, 10 * s, 2.0, false, 1.0);
                 }
                 hypriso->clip = false;
-                
-                if (c->state.mouse_hovering) {
-                    rect(c->real_bounds, {1, 1, 1, .1f}, 0, 0, 2.0, false);
-                }
             };
         }
     }
@@ -174,7 +300,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
         auto data = (SnapThumb *) ch->user_data;
         auto size = hypriso->thumbnail_size(data->cid);
         Item item;
-        item.aspectRatio = size.w / size.h;
+        item.aspectRatio = size.w / (size.h + titlebar_h);
         items.push_back(item);
     }
 
