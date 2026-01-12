@@ -239,6 +239,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 float fadea = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (750.0f * ratioscalar);
                 if (fadea > 1.0)
                     fadea = 1.0;
+                fadea = 1.0;
 
                 auto size = hypriso->thumbnail_size(data->cid).scale(s);
                 auto pos = bounds_client(data->cid);
@@ -255,6 +256,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto backup = c->real_bounds;
                 defer(c->real_bounds = backup);
                 c->real_bounds.h = std::round(titlebar_h * s);
+                c->real_bounds = l;
+                c->real_bounds.y -= std::round(titlebar_h * s);
+                c->real_bounds.h = std::round(titlebar_h * s) + 1;
 
                 if (c->state.mouse_hovering) {
                     auto focused = color_titlebar_focused();
@@ -345,7 +349,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
                 }
                 if (c->state.mouse_hovering) {
-                    rect(final_thumb_spot, {1, 1, 1, .3}, 3, 10 * s, 2.0, false, 1.0);
+                    //rect(final_thumb_spot, {1, 1, 1, .3}, 3, 10 * s, 2.0, false, 1.0);
                 }
                 hypriso->clip = false;
             };
