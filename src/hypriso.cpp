@@ -18,10 +18,13 @@
 #include <glib-object.h>
 //#include <hyprland/src/desktop/Popup.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
+#include <src/managers/SeatManager.hpp>
 #include <unordered_map>
-#include <wayland-server-core.h>
 #include <wlr-layer-shell-unstable-v1.hpp>
-#include <xcb/render.h>
+
+#include <wayland-server-core.h>
+#include <wayland-server-protocol.h>
+#include <wlr-layer-shell-unstable-v1.hpp>
 #include <xcb/xproto.h>
 #include <xkbcommon/xkbcommon.h>
 #include <filesystem>
@@ -6000,6 +6003,11 @@ void HyprIso::logout() {
 
 void HyprIso::send_false_position(int x, int y) {
     g_pSeatManager->sendPointerMotion(Time::millis(Time::steadyNow()), {x, y});
+}
+
+void HyprIso::send_false_click() {
+    g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+    g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
 }
 
 uint32_t HyprIso::keycode_to_keysym(int keycode) {

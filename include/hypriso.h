@@ -321,6 +321,7 @@ struct HyprIso {
     void draw_wallpaper(int mon, Bounds b, int rounding = 0);
 
     void send_false_position(int x, int y);
+    void send_false_click();
 
     void set_zoom_factor(float amount, bool instant = false);
     int parent(int id);

@@ -523,6 +523,7 @@ void create_titlebar(Container *root, Container *parent) {
         if (auto c = get_cid_container(cid)) {
             *datum<bool>(client, "drag_from_titlebar") = true;
         }
+        hypriso->send_false_click();
         drag::begin(cid);
         root->consumed_event = false;
         hypriso->bring_to_front(cid);
