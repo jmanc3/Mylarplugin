@@ -30,5 +30,6 @@ struct LayoutParams {
 };
 
 LayoutResult layoutAltTabThumbnails(const LayoutParams& params, const std::vector<Item>& items); 
-
+LayoutResult layoutOverview(const LayoutParams& params, const std::vector<Item>& items);
+ 
 #endif // layout_thumbnails_h_INCLUDED

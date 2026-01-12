@@ -5,6 +5,8 @@
 #include "alt_tab.h"
 #include "drag.h"
 #include "resizing.h"
+#include "overview.h"
+
 #include <linux/input-event-codes.h>
 
 void do_alt_tab() {
@@ -24,7 +26,7 @@ void do_overview() {
     static long last_time = 0;
     auto current = get_current_time_in_ms();
     if (current - last_time > 300) {
-        alt_tab::show();
+        overview::show();
         last_time = current;
     }
 }

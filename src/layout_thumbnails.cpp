@@ -124,3 +124,170 @@ LayoutResult layoutAltTabThumbnails(
     return out;
 }
 
+
+static inline double clamp(double v, double lo, double hi) {
+    return std::max(lo, std::min(v, hi));
+}
+
+LayoutResult layoutOverview(
+    const LayoutParams& params,
+    const std::vector<Item>& items
+) {
+    LayoutResult out;
+    out.items.resize(items.size());
+
+    if (items.empty()) {
+        out.bounds = {0, 0, 0, 0};
+        return out;
+    }
+
+    const double edgeMargin = params.margin;          // renamed logically
+    const double minSpacing = std::max(
+        params.horizontalSpacing,
+        params.verticalSpacing
+    );
+
+    const double usableW =
+        params.availableWidth  - 2.0 * edgeMargin;
+    const double usableH =
+        params.availableHeight - 2.0 * edgeMargin;
+
+    const double cx = params.availableWidth  * 0.5;
+    const double cy = params.availableHeight * 0.5;
+
+    // ---------------------------------------------------------------------
+    // 1. Compute global scale (uniform)
+    // ---------------------------------------------------------------------
+
+    double scale = 1.0;
+    for (const auto& it : items) {
+        // normalize height to 1.0, scale width by aspect
+        scale = std::min(scale, usableW / it.aspectRatio);
+        scale = std::min(scale, usableH);
+    }
+
+    // Reduce scale slightly to allow spacing
+    scale *= 0.9;
+
+    struct Tmp {
+        double tx, ty, tw, th;
+    };
+
+    std::vector<Tmp> tmp(items.size());
+
+    // ---------------------------------------------------------------------
+    // 2. Initial radial placement (macOS-style)
+    // ---------------------------------------------------------------------
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        const double h = scale;
+        const double w = h * items[i].aspectRatio;
+
+        // pseudo-original distribution: stable ordering along a spiral
+        const double angle =
+            (double)i / (double)items.size() * 2.0 * M_PI;
+        const double radius =
+            std::min(usableW, usableH) * 0.25;
+
+        const double ox = std::cos(angle) * radius;
+        const double oy = std::sin(angle) * radius;
+
+        tmp[i].tw = w;
+        tmp[i].th = h;
+        tmp[i].tx = cx + ox - w * 0.5;
+        tmp[i].ty = cy + oy - h * 0.5;
+    }
+
+    // ---------------------------------------------------------------------
+    // 3. Bounded overlap relaxation (deterministic)
+    // ---------------------------------------------------------------------
+
+    constexpr int RELAX_PASSES = 8;
+
+    for (int pass = 0; pass < RELAX_PASSES; ++pass) {
+        for (size_t i = 0; i < tmp.size(); ++i) {
+            for (size_t j = i + 1; j < tmp.size(); ++j) {
+                auto& a = tmp[i];
+                auto& b = tmp[j];
+
+                const double ax = a.tx + a.tw * 0.5;
+                const double ay = a.ty + a.th * 0.5;
+                const double bx = b.tx + b.tw * 0.5;
+                const double by = b.ty + b.th * 0.5;
+
+                const double dx = ax - bx;
+                const double dy = ay - by;
+
+                const double minX =
+                    (a.tw + b.tw) * 0.5 + minSpacing;
+                const double minY =
+                    (a.th + b.th) * 0.5 + minSpacing;
+
+                const double ox = minX - std::abs(dx);
+                const double oy = minY - std::abs(dy);
+
+                if (ox > 0.0 && oy > 0.0) {
+                    // resolve along weaker axis
+                    if (ox < oy) {
+                        const double push = ox * 0.5;
+                        const double dir = (dx >= 0.0) ? 1.0 : -1.0;
+                        a.tx += push * dir;
+                        b.tx -= push * dir;
+                    } else {
+                        const double push = oy * 0.5;
+                        const double dir = (dy >= 0.0) ? 1.0 : -1.0;
+                        a.ty += push * dir;
+                        b.ty -= push * dir;
+                    }
+                }
+            }
+        }
+
+        // Clamp after each pass (critical)
+        for (auto& w : tmp) {
+            w.tx = clamp(
+                w.tx,
+                edgeMargin,
+                params.availableWidth - edgeMargin - w.tw
+            );
+            w.ty = clamp(
+                w.ty,
+                edgeMargin,
+                params.availableHeight - edgeMargin - w.th
+            );
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // 4. Emit results + bounds
+    // ---------------------------------------------------------------------
+
+    double minX = std::numeric_limits<double>::max();
+    double minY = std::numeric_limits<double>::max();
+    double maxX = std::numeric_limits<double>::lowest();
+    double maxY = std::numeric_limits<double>::lowest();
+
+    for (size_t i = 0; i < tmp.size(); ++i) {
+        out.items[i] = {
+            tmp[i].tx,
+            tmp[i].ty,
+            tmp[i].tw,
+            tmp[i].th
+        };
+
+        minX = std::min(minX, tmp[i].tx);
+        minY = std::min(minY, tmp[i].ty);
+        maxX = std::max(maxX, tmp[i].tx + tmp[i].tw);
+        maxY = std::max(maxY, tmp[i].ty + tmp[i].th);
+    }
+
+    out.bounds = {
+        minX,
+        minY,
+        maxX - minX,
+        maxY - minY
+    };
+
+    return out;
+}
+
