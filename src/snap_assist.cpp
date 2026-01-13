@@ -3,13 +3,11 @@
 
 #include "heart.h"
 #include "events.h"
-#include "drag.h"
 #include "titlebar.h"
 #include "icons.h"
 #include "layout_thumbnails.h"
 
 #include <algorithm>
-#include <ios>
 
 static bool skip_close = false;
 
@@ -24,7 +22,9 @@ struct HelperData : UserData {
     long time_mouse_out = 0;
     long creation_time = 0;
 
-    bool force_fade_in = false;
+    long slide_start;
+    bool should_slide = false;
+    SnapPosition came_from; // For slide
 };
 
 static float fade_in_time() {
@@ -75,6 +75,9 @@ static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
 
 // {"anchors":[{"x":0,"y":1},{"x":0.47500000000000003,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.2911752162835537,"y":0.9622916751437718},{"x":0.6883506970527843,"y":0.08506946563720702}]}
 static std::vector<float> slidetopos = { 0, 0.0030000000000000027, 0.006000000000000005, 0.01100000000000001, 0.016000000000000014, 0.02200000000000002, 0.030000000000000027, 0.038000000000000034, 0.04800000000000004, 0.05900000000000005, 0.07099999999999995, 0.08399999999999996, 0.09899999999999998, 0.11499999999999999, 0.132, 0.15100000000000002, 0.17200000000000004, 0.19399999999999995, 0.21799999999999997, 0.243, 0.271, 0.30000000000000004, 0.33199999999999996, 0.366, 0.402, 0.44099999999999995, 0.483, 0.527, 0.575, 0.612, 0.636, 0.6579999999999999, 0.6799999999999999, 0.7, 0.72, 0.738, 0.756, 0.773, 0.789, 0.8049999999999999, 0.8200000000000001, 0.834, 0.847, 0.86, 0.873, 0.884, 0.895, 0.906, 0.916, 0.925, 0.9339999999999999, 0.943, 0.951, 0.959, 0.966, 0.972, 0.979, 0.985, 0.99, 0.995, 1 };
+
+// {"anchors":[{"x":0,"y":1},{"x":0.5,"y":0.5},{"x":1,"y":0}],"controls":[{"x":0.3529243508363383,"y":0.9106944613986545},{"x":0.6939499918619793,"y":0.057916683620876735}]}
+std::vector<float> slidetopos2 = { 0, 0.0040000000000000036, 0.009000000000000008, 0.015000000000000013, 0.020000000000000018, 0.027000000000000024, 0.03300000000000003, 0.041000000000000036, 0.049000000000000044, 0.05700000000000005, 0.06599999999999995, 0.07599999999999996, 0.08699999999999997, 0.09799999999999998, 0.10999999999999999, 0.123, 0.137, 0.15200000000000002, 0.16800000000000004, 0.18500000000000005, 0.20399999999999996, 0.22399999999999998, 0.245, 0.268, 0.29300000000000004, 0.31999999999999995, 0.349, 0.381, 0.41700000000000004, 0.45599999999999996, 0.5, 0.5369999999999999, 0.571, 0.604, 0.635, 0.6639999999999999, 0.6910000000000001, 0.716, 0.74, 0.763, 0.784, 0.804, 0.823, 0.841, 0.857, 0.873, 0.887, 0.9, 0.913, 0.924, 0.935, 0.945, 0.954, 0.962, 0.97, 0.976, 0.982, 0.988, 0.992, 0.997 };
 
 void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
     if (snap_mon == -1)
@@ -251,10 +254,12 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
                 later_immediate([parent_data, close_cid](Timer *) {
                     skip_close = false;
+                    auto came_from = SnapPosition::NONE;
                     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                        auto child = actual_root->children[i];
                        auto child_data = (HelperData *) child->user_data;
                        if (child->custom_type == (int) TYPE::SNAP_HELPER && parent_data == child_data && child_data->showing) {
+                           came_from = child_data->pos;
                            delete child;
                            actual_root->children.erase(actual_root->children.begin() + i);
                        }
@@ -267,9 +272,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                        auto child_data = (HelperData *) child->user_data;
                        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
                            child_data->showing = true;
+                           child_data->came_from = came_from;
                            child->interactable = true;
-                           child_data->creation_time = get_current_time_in_ms() - 175;
-                           child_data->force_fade_in = true;
+                           child_data->slide_start = get_current_time_in_ms() - 175;
+                           child_data->should_slide = true;
                            break;
                        }
                     }
@@ -310,6 +316,82 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 if (our_space != parent_space) {
                     l = final_thumb_spot;
                 }
+                if (parent_data->should_slide) {
+                    l = final_thumb_spot;
+                    float alpha2 = ((float) (get_current_time_in_ms() - parent_data->slide_start)) / (700.0 * ratioscalar);
+                    if (alpha2 > 1.0)
+                        alpha2 = 1.0;
+
+                    bool from_right = false;
+                    bool from_left = false;
+                    bool from_top = false;
+                    bool from_bottom = false;
+
+                    switch (parent_data->came_from) {
+                        case SnapPosition::BOTTOM_LEFT: {
+                            if (parent_data->pos == SnapPosition::BOTTOM_LEFT) {
+                            } else if (parent_data->pos == SnapPosition::BOTTOM_RIGHT) {
+                                from_left = true;
+                            } else if (parent_data->pos == SnapPosition::TOP_LEFT) {
+                                from_bottom = true;
+                            } else if (parent_data->pos == SnapPosition::TOP_RIGHT) {
+                                from_bottom = true;
+                                from_left = true;
+                            }
+                            break;
+                        }
+                        case SnapPosition::BOTTOM_RIGHT: {
+                            if (parent_data->pos == SnapPosition::BOTTOM_LEFT) {
+                                from_right = true;
+                            } else if (parent_data->pos == SnapPosition::BOTTOM_RIGHT) {
+                            } else if (parent_data->pos == SnapPosition::TOP_LEFT) {
+                                from_right = true;
+                                from_bottom = true;
+                            } else if (parent_data->pos == SnapPosition::TOP_RIGHT) {
+                                from_bottom = true;
+                            }
+                            break;
+                        }
+                        case SnapPosition::TOP_LEFT: {
+                            if (parent_data->pos == SnapPosition::BOTTOM_LEFT) {
+                                from_top = true;
+                            } else if (parent_data->pos == SnapPosition::BOTTOM_RIGHT) {
+                                from_top = true;
+                                from_left = true;
+                            } else if (parent_data->pos == SnapPosition::TOP_LEFT) {
+                            } else if (parent_data->pos == SnapPosition::TOP_RIGHT) {
+                                from_left = true;
+                            }
+                            break;
+                        }
+                        case SnapPosition::TOP_RIGHT: {
+                            if (parent_data->pos == SnapPosition::BOTTOM_LEFT) {
+                                from_top = true;
+                                from_right = true;
+                            } else if (parent_data->pos == SnapPosition::BOTTOM_RIGHT) {
+                                from_top = true;
+                            } else if (parent_data->pos == SnapPosition::TOP_LEFT) {
+                                from_right = true;
+                            } else if (parent_data->pos == SnapPosition::TOP_RIGHT) {
+                            }
+                            break;
+                        }
+                    }
+                    
+                    float slide_amount = 150 * s;
+                    if (from_right)
+                        l.x += (slide_amount) * (1.0 - pull(slidetopos2, alpha2));
+                    if (from_left)
+                        l.x -= (slide_amount) * (1.0 - pull(slidetopos2, alpha2));
+                    if (from_bottom)
+                        l.y += (slide_amount) * (1.0 - pull(slidetopos2, alpha2));
+                    if (from_top)
+                        l.y -= (slide_amount) * (1.0 - pull(slidetopos2, alpha2));
+                }
+                auto full = l;
+                full.y -= titlebar_h * s;
+                full.h += titlebar_h * s;
+                render_drop_shadow(rid, 1.0, {0, 0, 0, .15}, 10 * s, 2.0, full);
                 
                 auto backup = c->real_bounds;
                 defer(c->real_bounds = backup);
@@ -410,9 +492,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     clipbox.scale(s);
                     hypriso->clipbox = clipbox;
                 }
-                if (parent_data->force_fade_in) {
-                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, pull(slidetopos, alpha));
-                } else if (our_space != parent_space) {
+                if (our_space != parent_space) {
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, pull(slidetopos, fadea));
                 } else {
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
@@ -568,19 +648,19 @@ void snap_assist::open(int monitor, int cid) {
         }
     } else {
         if (type == SnapPosition::TOP_LEFT) {
-            for (auto pos : {SnapPosition::BOTTOM_LEFT, SnapPosition::BOTTOM_RIGHT, SnapPosition::TOP_RIGHT})
+            for (auto pos : {SnapPosition::BOTTOM_LEFT, SnapPosition::TOP_RIGHT, SnapPosition::BOTTOM_RIGHT})
                 if (groupable(pos, ids))
                     open_slots.push_back(pos);
         } else if (type == SnapPosition::BOTTOM_LEFT) {
-            for (auto pos : {SnapPosition::TOP_LEFT, SnapPosition::TOP_RIGHT, SnapPosition::BOTTOM_RIGHT})
+            for (auto pos : {SnapPosition::TOP_LEFT, SnapPosition::BOTTOM_RIGHT, SnapPosition::TOP_RIGHT, })
                 if (groupable(pos, ids))
                     open_slots.push_back(pos);
         } else if (type == SnapPosition::BOTTOM_RIGHT) {
-            for (auto pos : {SnapPosition::TOP_RIGHT, SnapPosition::TOP_LEFT, SnapPosition::BOTTOM_LEFT})
+            for (auto pos : {SnapPosition::TOP_RIGHT, SnapPosition::BOTTOM_LEFT, SnapPosition::TOP_LEFT,})
                 if (groupable(pos, ids))
                     open_slots.push_back(pos);
         } else if (type == SnapPosition::TOP_RIGHT) {
-            for (auto pos : {SnapPosition::BOTTOM_RIGHT, SnapPosition::BOTTOM_LEFT, SnapPosition::TOP_LEFT})
+            for (auto pos : {SnapPosition::BOTTOM_RIGHT, SnapPosition::TOP_LEFT, SnapPosition::BOTTOM_LEFT, })
                 if (groupable(pos, ids))
                     open_slots.push_back(pos);
         }
