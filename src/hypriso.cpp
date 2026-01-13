@@ -18,7 +18,7 @@
 #include <glib-object.h>
 //#include <hyprland/src/desktop/Popup.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
-#include <src/managers/SeatManager.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
 #include <unordered_map>
 #include <wlr-layer-shell-unstable-v1.hpp>
 

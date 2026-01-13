@@ -128,7 +128,7 @@ void remove_all_of_cid(int close_cid) {
                auto snap_data = (SnapThumb *) snap->user_data;
                if (snap_data->cid == close_cid) {
                    delete snap;
-                   child->children.erase(child->children.begin() + i);
+                   child->children.erase(child->children.begin() + snap_i);
                }
            }
        }
