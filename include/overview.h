@@ -2,7 +2,9 @@
 #define overview_h_INCLUDED
 
 namespace overview {
-    void show();
+    void open(int monitor);
+    void close();
+    void click(int id, int button, int state, float x, float y);
 };
 
 #endif // overview_h_INCLUDED

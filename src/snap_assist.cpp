@@ -23,6 +23,8 @@ struct HelperData : UserData {
     long time_mouse_in = 0;
     long time_mouse_out = 0;
     long creation_time = 0;
+
+    bool force_fade_in = false;
 };
 
 static float fade_in_time() {
@@ -57,6 +59,18 @@ static float titlebar_icon_h() {
 }
 static float titlebar_button_icon_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
+}
+static RGBA titlebar_closed_button_bg_hovered_color() {
+    static RGBA default_color("rgba(ff0000ff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", default_color);
+}
+static RGBA titlebar_closed_button_bg_pressed_color() {
+    static RGBA default_color("rgba(0000ffff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", default_color);
+}
+static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
+    static RGBA default_color("rgba(999999ff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", default_color);
 }
 
 // {"anchors":[{"x":0,"y":1},{"x":0.47500000000000003,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.2911752162835537,"y":0.9622916751437718},{"x":0.6883506970527843,"y":0.08506946563720702}]}
@@ -222,9 +236,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             data->cid = o;
             data->creation_time = get_current_time_in_ms();
             thumb->user_data = data;
-            later_immediate([](Timer *) {
-                hypriso->screenshot_all();
-            }); 
             thumb->when_clicked = paint {
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
@@ -257,6 +268,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
                            child_data->showing = true;
                            child->interactable = true;
+                           child_data->creation_time = get_current_time_in_ms() - 175;
+                           child_data->force_fade_in = true;
                            break;
                        }
                     }
@@ -275,9 +288,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto cid = data->cid;
                 auto parent_space = hypriso->get_workspace(parent_data->cid);
                 auto our_space = hypriso->get_workspace(data->cid);
-                auto ratioscalar = .575;
+                auto ratioscalar = .53;
                 if (parent_data->pos != SnapPosition::LEFT && parent_data->pos != SnapPosition::RIGHT) {
-                    ratioscalar = .67;
+                    ratioscalar *= 1.15;
                 }
                 float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
                 if (alpha > 1.0)
@@ -397,7 +410,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     clipbox.scale(s);
                     hypriso->clipbox = clipbox;
                 }
-                if (our_space != parent_space) {
+                if (parent_data->force_fade_in) {
+                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, pull(slidetopos, alpha));
+                } else if (our_space != parent_space) {
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, pull(slidetopos, fadea));
                 } else {
                     hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
@@ -409,8 +424,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             };
 
             auto close = thumb->child(FILL_SPACE, FILL_SPACE);
-            close->skip_delete = true;
-            close->user_data = thumb->user_data;
             close->when_paint = [](Container *actual_root, Container *c) {
                 auto root = get_rendering_root();
                 if (!root) return;
@@ -420,8 +433,24 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 c->real_bounds.h += 1;
                 c->real_bounds.round();
 
-                if (c->state.mouse_hovering) {
-                    rect(c->real_bounds, {1, 0, 0, 1}, 13, 10 * s, 2.0);
+                if (c->state.mouse_pressing) {
+                    rect(c->real_bounds, titlebar_closed_button_bg_pressed_color(), 13, 10 * s, 2.0);
+                } else if (c->state.mouse_hovering) {
+                    rect(c->real_bounds, titlebar_closed_button_bg_hovered_color(), 13, 10 * s, 2.0);
+                } else if (c->parent->state.mouse_hovering) {
+                    rect(c->real_bounds, color_titlebar_focused(), 13, 10 * s, 2.0);
+                }
+
+                auto icon = "\ue8bb";
+                auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+                    icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h());
+
+                if (c->state.mouse_pressing || c->state.mouse_hovering || c->parent->state.mouse_hovering) {
+                    auto texture_info = closed;
+                    if (texture_info->id != -1) {
+                        clip(to_parent(root, c), s);
+                        draw_texture(*texture_info, center_x(c, texture_info->w), center_y(c, texture_info->h), 1.0);
+                    }
                 }
             };
             close->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
@@ -433,10 +462,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 c->wanted_bounds = {b.x + b.w - w, b.y, w, (float) titlebar_h};
                 c->real_bounds = c->wanted_bounds;
             };
-            close->when_clicked = paint {
-                auto data = (SnapThumb *) c->user_data;
-                close_window(data->cid);
-                auto close_cid = data->cid;
+            auto cid_copy = data->cid;
+            close->when_clicked = [cid_copy](Container *root, Container *c) {
+                close_window(cid_copy);
+                auto close_cid = cid_copy;
                 later(10, [close_cid](Timer *) { 
                     remove_all_of_cid(close_cid);
                     possibly_close_if_none_left(); 
@@ -560,6 +589,8 @@ void snap_assist::open(int monitor, int cid) {
     // ==============================================
     // open containers
     // ==============================================
+    if (!open_slots.empty())
+        later_immediate([](Timer *) { hypriso->screenshot_all(); }); 
 
     for (int i = 0; i < open_slots.size(); i++) {
         auto pos = open_slots[i];

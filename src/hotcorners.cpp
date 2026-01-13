@@ -22,11 +22,11 @@ void do_alt_tab() {
     }
 }
 
-void do_overview() {
+void do_overview(int monitor_id) {
     static long last_time = 0;
     auto current = get_current_time_in_ms();
     if (current - last_time > 300) {
-        overview::show();
+        overview::open(monitor_id);
         last_time = current;
     }
 }
@@ -61,7 +61,7 @@ void do_spotify_toggle() {
     }
 }
 
-void monitor_hotspot(Container *m, int x, int y) {
+void monitor_hotspot(Container *m, int x, int y, int monitor_id) {
     if (drag::dragging() || resizing::resizing())
         return;
     auto current = get_current_time_in_ms();
@@ -78,7 +78,7 @@ void monitor_hotspot(Container *m, int x, int y) {
                 do_alt_tab();
             }
         } else if (y_off < 50) {
-            do_overview();
+            do_overview(monitor_id);
         }
     }
 }
@@ -89,7 +89,7 @@ void hotcorners::motion(int id, int x, int y) {
         auto monitor_bounds = bounds_monitor(cid);
         m->real_bounds = monitor_bounds;
         if (bounds_contains(monitor_bounds, x, y)) {
-            monitor_hotspot(m, x, y);
+            monitor_hotspot(m, x, y, cid);
             break;
         }
     }

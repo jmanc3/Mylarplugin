@@ -21,6 +21,7 @@
 #include "quick_shortcut_menu.h"
 #include "settings.h"
 #include "snap_assist.h"
+#include "overview.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -173,6 +174,7 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
     }
 
     snap_assist::click(id, button, state, x, y);
+    overview::click(id, button, state, x, y);
     
     bool consumed = false;
     if (drag::dragging() && !state) {
@@ -391,6 +393,7 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
             }
         }
         snap_assist::close();
+        overview::close();
         META_PRESSED = false;
         zoom_factor = 1.0;
     }
@@ -863,6 +866,7 @@ static void on_activated(int id) {
     alt_tab::on_activated(id);
     dock::on_activated(id);
     snap_assist::close();
+    overview::close();
 }
 
 static void on_draw_decos(std::string name, int monitor, int id, float a) {
@@ -1287,6 +1291,7 @@ void on_title_change(int cid) {
 
 void on_workspace_change(int cid) {
     snap_assist::close();
+    overview::close();
 }
 
 void second::begin() {
@@ -1467,6 +1472,13 @@ void second::layout_containers() {
 
     for (auto c : backup) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+                *datum<bool>(c, "touched") = true;
+            }
+        }
+        if (c->custom_type == (int) TYPE::OVERVIEW) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
                 c->pre_layout(actual_root, c, c->parent->real_bounds);

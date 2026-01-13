@@ -43,7 +43,18 @@ static float titlebar_icon_h() {
 static float titlebar_button_icon_h() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_icon_h", 13);
 }
-
+static RGBA titlebar_closed_button_bg_hovered_color() {
+    static RGBA default_color("rgba(ff0000ff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", default_color);
+}
+static RGBA titlebar_closed_button_bg_pressed_color() {
+    static RGBA default_color("rgba(0000ffff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", default_color);
+}
+static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
+    static RGBA default_color("rgba(999999ff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", default_color);
+}
 
 
 void alt_tab::on_window_open(int id) {
@@ -206,7 +217,7 @@ void paint_tab_option(Container *actual_root, Container *c) {
 
 void create_tab_option(int cid, Container *parent) {
     bool is_first = parent->children.size() <= 1;
-    auto c = parent->child(FILL_SPACE, FILL_SPACE);
+    auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     if (is_first) {
         std::weak_ptr<bool> r = c->lifetime;
         auto timer = later(1000.0f / 30.0f, [cid, r](Timer *timer) {
@@ -219,6 +230,8 @@ void create_tab_option(int cid, Container *parent) {
     
     *datum<int>(c, "cid") = cid;
     c->when_paint = paint_tab_option;
+    c->receive_events_even_if_obstructed_by_one = true;
+    c->when_drag_end_is_click = false;
     c->when_mouse_enters_container = paint {
         int index = 0;
         for (int i = 0; i < c->parent->children.size(); i++) {
@@ -244,16 +257,63 @@ void create_tab_option(int cid, Container *parent) {
         });
     };
     c->when_drag_start = paint {
-        *datum<bool>(c, "dragging") = true;
-        *datum<Bounds>(c, "drag_start") = mouse();
+        //*datum<bool>(c, "dragging") = true;
+        //*datum<Bounds>(c, "drag_start") = mouse();
     };
     c->when_drag = paint {
         
     };
     c->when_drag_end = paint {
-        *datum<bool>(c, "dragging") = false;
+        //*datum<bool>(c, "dragging") = false;
     };
-    
+
+    auto close = c->child(FILL_SPACE, FILL_SPACE);
+    close->when_paint = [](Container *actual_root, Container *c) {
+        auto root = get_rendering_root();
+        if (!root) return;
+        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        renderfix
+
+        int index = 0;
+        for (int i = 0; i < c->parent->parent->children.size(); i++) {
+            if (c->parent->parent->children[i] == c->parent) {
+                index = i;
+                break;
+            }
+        }
+
+        if (active_index != index)
+            return;
+        if (c->state.mouse_pressing) {
+            rect(c->real_bounds, titlebar_closed_button_bg_pressed_color(), 13, 10 * s, 2.0);
+        } else if (c->state.mouse_hovering) {
+            rect(c->real_bounds, titlebar_closed_button_bg_hovered_color(), 13, 10 * s, 2.0);
+        } else {
+            rect(c->real_bounds, color_titlebar_focused(), 13, 10 * s, 2.0);
+        }
+
+        auto icon = "\ue8bb";
+        auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+            icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h());
+
+        auto texture_info = closed;
+        if (texture_info->id != -1) {
+            clip(to_parent(root, c), s);
+            draw_texture(*texture_info, center_x(c, texture_info->w), center_y(c, texture_info->h), 1.0);
+        }
+    };
+    close->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
+        auto root = get_rendering_root();
+        if (!root) return;
+        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        
+        auto w = titlebar_h * titlebar_button_ratio();
+        c->wanted_bounds = {b.x + b.w - w, b.y, w, (float) titlebar_h};
+        c->real_bounds = c->wanted_bounds;
+    };
+    close->when_clicked = [cid](Container *root, Container *c) {
+        later_immediate([cid](Timer *) { close_window(cid); });
+    };
 }
 
 Bounds position_tab_options(Container *parent, int max_row_width) {
@@ -297,6 +357,7 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
         ch->wanted_bounds.x += 20;
         ch->real_bounds = result.items[i];
         ch->real_bounds.x += 20;
+        ::layout(actual_root, ch, ch->real_bounds);
     }
 
     return result.bounds;
