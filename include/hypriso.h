@@ -200,6 +200,8 @@ struct HyprIso {
     // So things can be cleaned
     void end(); 
     
+    std::function<void(int id)> on_workspace_change = nullptr;
+    
     std::function<bool(int id, float x, float y)> on_mouse_move = nullptr;
 
     std::function<bool(int id, int button, int state, float x, float y)> on_mouse_press = nullptr;

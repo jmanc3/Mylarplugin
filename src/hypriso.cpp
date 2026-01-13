@@ -1794,6 +1794,14 @@ void HyprIso::create_callbacks() {
             auto m = g_pCompositor->getMonitorFromCursor();
             hypriso->on_mouse_move(0, mouse.x * m->m_scale, mouse.y * m->m_scale);
         }
+        if (hypriso->on_workspace_change) {
+            auto w = std::any_cast<PHLWORKSPACE>(data); 
+            for (auto space : hyprspaces) {
+                if (space->w == w) {
+                    hypriso->on_workspace_change(space->id);
+                }
+            }
+        }
     });
 
     static auto activeWindow = HyprlandAPI::registerCallbackDynamic(globals->api, "activeWindow", [](void* self, SCallbackInfo& info, std::any data) {

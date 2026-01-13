@@ -1285,6 +1285,10 @@ void on_title_change(int cid) {
     dock::title_change(cid, hypriso->title_name(cid));
 }
 
+void on_workspace_change(int cid) {
+    snap_assist::close();
+}
+
 void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1316,6 +1320,7 @@ void second::begin() {
     hypriso->on_config_reload = on_config_reload;
     hypriso->on_activated = on_activated;
     hypriso->on_requests_max_or_min = on_requests_max_or_min;
+    hypriso->on_workspace_change = on_workspace_change;
 
     load_restore_infos();
 
@@ -1522,6 +1527,9 @@ void second::layout_containers() {
             *datum<bool>(c, "touched") = true;
         }
     }
+
+    snap_assist::fix_order();
+    
     for (auto c : backup) {
         if (!(*datum<bool>(c, "touched"))) {
             notify("hey you forgot to layout one of the containers in layout_containers probably leading to it not getting drawn");

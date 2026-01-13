@@ -17,6 +17,7 @@ struct HelperData : UserData {
     bool showing = false;
     int cid = 0;
     int lowest_group_cid = cid;
+    int index = 0;
     int monitor = 0;
     SnapPosition pos;
     long time_mouse_in = 0;
@@ -255,6 +256,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                        auto child_data = (HelperData *) child->user_data;
                        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
                            child_data->showing = true;
+                           child->interactable = true;
                            break;
                        }
                     }
@@ -273,7 +275,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto cid = data->cid;
                 auto parent_space = hypriso->get_workspace(parent_data->cid);
                 auto our_space = hypriso->get_workspace(data->cid);
-                auto ratioscalar = .56;
+                auto ratioscalar = .575;
+                if (parent_data->pos != SnapPosition::LEFT && parent_data->pos != SnapPosition::RIGHT) {
+                    ratioscalar = .67;
+                }
                 float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
                 if (alpha > 1.0)
                     alpha = 1.0;
@@ -556,11 +561,11 @@ void snap_assist::open(int monitor, int cid) {
     // open containers
     // ==============================================
 
-    std::reverse(open_slots.begin(), open_slots.end());
     for (int i = 0; i < open_slots.size(); i++) {
         auto pos = open_slots[i];
         auto snap_helper = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
         auto helper_data = new HelperData;
+        helper_data->index = i;
         helper_data->cid = cid;
         helper_data->monitor = monitor;
         helper_data->pos = pos;
@@ -579,8 +584,11 @@ void snap_assist::open(int monitor, int cid) {
             }
         }
         done:
-        if (i == open_slots.size() - 1) {
+        if (i == 0) {
             helper_data->showing = true;
+            snap_helper->interactable = true;
+        } else {
+            snap_helper->interactable = false;
         }
         helper_data->creation_time = get_current_time_in_ms();
         snap_helper->user_data = helper_data; 
@@ -693,5 +701,57 @@ void snap_assist::click(int id, int button, int state, float x, float y) {
     }
 
     snap_assist::close();
+}
+
+void snap_assist::fix_order() {
+    struct TempLocation {
+        Container* c;
+        int target_index;
+    };
+
+    auto& children = actual_root->children;
+    std::vector<TempLocation> helpers;
+
+    // Collect helpers
+    for (int i = 0; i < (int)children.size(); ++i) {
+        Container* child = children[i];
+        if (child->custom_type == (int)TYPE::SNAP_HELPER) {
+            auto* helper_data = (HelperData*)child->user_data;
+            helpers.push_back({
+                child,
+                helper_data->index
+            });
+        }
+    }
+
+    if (helpers.empty())
+        return;
+
+    // Sort by desired target index
+    std::sort(helpers.begin(), helpers.end(),
+        [](const TempLocation& a, const TempLocation& b) {
+            return a.target_index < b.target_index;
+        }
+    );
+
+    // Perform swaps
+    for (const auto& h : helpers) {
+        int target = std::clamp(h.target_index, 0, (int)children.size() - 1);
+
+        // Find current index of this container
+        int current = -1;
+        for (int i = 0; i < (int)children.size(); ++i) {
+            if (children[i] == h.c) {
+                current = i;
+                break;
+            }
+        }
+
+        if (current == -1 || current == target)
+            continue;
+
+        // Swap directly into place
+        std::swap(children[current], children[target]);
+    }
 }
 
