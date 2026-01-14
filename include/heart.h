@@ -290,10 +290,6 @@ static void render_fix(Container *root, Container *c) {
     // Then we also need to scale our raw unscaled coordianates, to scaled ones (scaled by the current scale set by the monitor)
     c->real_bounds.scale(scale(rendering_monitor));
     c->real_bounds.round();
-    /*c->real_bounds.x = std::round(c->real_bounds.x);
-    c->real_bounds.y = std::round(c->real_bounds.y);
-    c->real_bounds.w = std::round(c->real_bounds.w);
-    c->real_bounds.h = std::round(c->real_bounds.h);*/
 }
 
 struct WindowRestoreLocation {

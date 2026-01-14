@@ -1361,6 +1361,11 @@ void on_title_change(int cid) {
 void on_workspace_change(int cid) {
     snap_assist::close();
     overview::close();
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::OUR_POPUP) {
+            popup::close(c->uuid);
+        }
+    }
 }
 
 void second::begin() {

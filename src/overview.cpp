@@ -14,7 +14,7 @@ void overview::open(int monitor) {
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         renderfix
         
-        rect(c->real_bounds, {0, 0, 0, .1}, 0, 0, 2.0, false);
+        //rect(c->real_bounds, {0, 0, 0, .1}, 0, 0, 2.0, false);
         hypriso->damage_entire(monitor);
     };
     over->pre_layout = [monitor](Container *actual_root, Container *c, const Bounds &b) {

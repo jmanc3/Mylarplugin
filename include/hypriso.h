@@ -15,7 +15,7 @@
 #include "tracy/Tracy.hpp"
 #endif
 
-static int titlebar_h = 27;
+static int titlebar_h = 29;
 //static std::string mylar_font = "Noto Sans";
 static std::string mylar_font = "SF Pro Rounded";
 static long minimize_anim_time = 100;
@@ -180,6 +180,8 @@ struct HyprIso {
     
     bool resizing = false;
     int resizing_id = false;
+
+    std::vector<int> render_whitelist;
 
     float get_varfloat(std::string target, float default_float = 1.0);    
     RGBA get_varcolor(std::string target, RGBA default_color = {1.0, 0.0, 1.0, 1.0});

@@ -80,14 +80,21 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
             p->real_bounds.x += overflow_x;
         }
     }
-    
+    p->on_closed = [](Container *c) {
+        if (*datum<bool>(c, "setting_cursor")) {
+            unsetCursorImage(true);
+        }
+    };
+    *datum<bool>(p, "setting_cursor") = false;
     p->when_mouse_enters_container = paint {
         //hypriso->all_lose_focus();
+        *datum<bool>(c, "setting_cursor") = true;
         setCursorImageUntilUnset("default");
         hypriso->send_false_position(-1, -1);
         consume_event(root, c);
     };
     p->when_mouse_leaves_container = paint {
+        *datum<bool>(c, "setting_cursor") = false;
         //hypriso->all_gain_focus();
         unsetCursorImage(true);
         consume_event(root, c);

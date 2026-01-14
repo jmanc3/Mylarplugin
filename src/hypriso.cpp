@@ -1263,6 +1263,24 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (!hypriso->render_whitelist.empty()) {
+        for (auto hw : hyprwindows) {
+            if (hw->w == pWindow) {
+                bool found = false;
+                for (auto white : hypriso->render_whitelist) {
+                    if (white == hw->id) {
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    if (!g_pHyprRenderer->m_bRenderingSnapshot) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     Hyprlang::INT* rounding_amount = nullptr;
     int initial_value = 0;
 

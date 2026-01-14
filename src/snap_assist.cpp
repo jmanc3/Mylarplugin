@@ -22,6 +22,8 @@ struct HelperData : UserData {
     long time_mouse_out = 0;
     long creation_time = 0;
 
+    float scroll_amount = 0;
+
     long slide_start;
     bool should_slide = false;
     SnapPosition came_from; // For slide
@@ -100,7 +102,7 @@ void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
     if (hypriso->get_active_workspace_id(snap_mon) != hypriso->get_active_workspace_id_client(cid)) {
         hypriso->move_to_workspace(cid, hypriso->get_active_workspace(snap_mon));
     }
-    hypriso->set_hidden(cid, false);
+    hypriso->render_whitelist.push_back(cid);
     if (hypriso->has_decorations(cid)) {
         hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
     } else {
@@ -211,9 +213,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             }
             if (!found) {
                 if (hypriso->alt_tabbable(o) && !part_of_group(o, helper_data->cid)) {
-                    later_immediate([o](Timer *) {
-                        hypriso->set_hidden(o, true, false);
-                    });
                     add.push_back(o);
                 }
             }
@@ -397,7 +396,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto full = l;
                 full.y -= titlebar_h * s;
                 full.h += titlebar_h * s;
-                render_drop_shadow(rid, 1.0, {0, 0, 0, .15f * fadea}, 10 * s, 2.0, full);
+                {
+                    render_drop_shadow(rid, 1.0, {0, 0, 0, .15f * fadea}, 10 * s, 2.0, full);
+                }
                 
                 auto backup = c->real_bounds;
                 defer(c->real_bounds = backup);
@@ -587,15 +588,22 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     };
 
     auto result = layoutAltTabThumbnails(params, items);
+    auto scroll_amount = helper_data->scroll_amount;
+    if (scroll_amount < 0)
+        scroll_amount = 0;
+    if (scroll_amount > result.bounds.h) {
+        scroll_amount = result.bounds.h;
+    }
+
     for (int i = 0; i < c->children.size(); i++) {
         auto ch = c->children[i];
         ch->z_index = c->children.size() + 10 - i;
         ch->wanted_bounds = result.items[i];
         ch->wanted_bounds.x += bounds.x;
-        ch->wanted_bounds.y += bounds.y;
+        ch->wanted_bounds.y += bounds.y + scroll_amount;
         ch->real_bounds = result.items[i];
         ch->real_bounds.x += bounds.x;
-        ch->real_bounds.y += bounds.y;
+        ch->real_bounds.y += bounds.y + scroll_amount;
         ::layout(actual_root, ch, ch->real_bounds);
     }
 
@@ -713,16 +721,24 @@ void snap_assist::open(int monitor, int cid) {
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         snap_helper->receive_events_even_if_obstructed = true;
-        //consume_everything(snap_helper);
+        *datum<bool>(snap_helper, "setting_cursor") = false;
+        snap_helper->on_closed = [](Container *c) {
+            // unset the resize if it's set?
+            if (*datum<bool>(c, "setting_cursor")) {
+                unsetCursorImage(true);
+            }
+        };
         snap_helper->when_mouse_enters_container = paint {
             auto data = (HelperData *) c->user_data;
             data->time_mouse_in = get_current_time_in_ms();
             setCursorImageUntilUnset("default");
+            *datum<bool>(c, "setting_cursor") = true;
         };
         snap_helper->when_mouse_leaves_container = paint {
             auto data = (HelperData *) c->user_data;
             data->time_mouse_out = get_current_time_in_ms();
             unsetCursorImage(true);
+            *datum<bool>(c, "setting_cursor") = false;
         };
         snap_helper->when_mouse_down = paint {
             consume_event(root, c);
@@ -737,6 +753,10 @@ void snap_assist::open(int monitor, int cid) {
             later_immediate([](Timer *) {
                 //snap_assist::close();
             });
+        };
+        snap_helper->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+            auto data = (HelperData *) c->user_data;
+            data->scroll_amount += scroll_y;
         };
 
         snap_helper->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
@@ -788,6 +808,9 @@ void snap_assist::open(int monitor, int cid) {
 
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
+
+    for (auto i : ids)
+        hypriso->render_whitelist.push_back(i);
 }
 
 void snap_assist::close() {
@@ -798,12 +821,13 @@ void snap_assist::close() {
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
            for (auto ch : child->children) {
                auto data = (SnapThumb * ) ch->user_data;
-               hypriso->set_hidden(data->cid, false, false);
+               //hypriso->set_hidden(data->cid, false, false);
            }
            delete child;
            actual_root->children.erase(actual_root->children.begin() + i);
        }
     }
+    hypriso->render_whitelist.clear();
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
 }

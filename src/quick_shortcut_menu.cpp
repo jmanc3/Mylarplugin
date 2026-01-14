@@ -229,14 +229,23 @@ void open_quick_shortcut_menu() {
 
     Bounds mb = bounds_monitor(hypriso->monitor_from_cursor());
     p->real_bounds = Bounds(mb.x + mb.w * .5 - p->wanted_bounds.w * .5, mb.h * .05, p->wanted_bounds.w, p->wanted_bounds.h);
+    *datum<bool>(p, "setting_cursor") = false;
+    p->on_closed = [](Container *c) {
+        // unset the resize if it's set?
+        if (*datum<bool>(c, "setting_cursor")) {
+            unsetCursorImage(true);
+        }
+    }; 
     p->when_mouse_enters_container = paint {
         setCursorImageUntilUnset("default");
         hypriso->send_false_position(-1, -1);
         consume_event(root, c);
+        *datum<bool>(c, "setting_cursor") = true;
     };
     p->when_mouse_leaves_container = paint {
         unsetCursorImage(true);
         consume_event(root, c);
+        *datum<bool>(c, "setting_cursor") = false;
     };
     p->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();

@@ -10,6 +10,8 @@ static int initial_y = 0;
 static int active_resize_type = 0;
 static Bounds initial_win_box;
 
+int get_current_resize_type(Container *c);
+
 static float titlebar_button_ratio() {
     return hypriso->get_varfloat("plugin:mylardesktop:titlebar_button_ratio", 1.4375f);
 }
@@ -264,9 +266,75 @@ void paint_resize_edge(Container *actual_root, Container *c) {
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
     auto cid = *datum<int>(c, "cid");
 
-    if (active_id == cid && stage == (int) STAGE::RENDER_POST_WINDOW) {
+    // TODO: should be after a window who is highest in grouped_with
+    if (stage == (int) STAGE::RENDER_POST_WINDOWS && c->state.concerned) {
         renderfix
-        //border(c->real_bounds, {1, 0, 1, 1}, 4);
+        
+        bool snapped = false;
+        int snap_type = (int) SnapPosition::NONE;
+        if (auto container = get_cid_container(cid)) {
+            if (*datum<bool>(container, "snapped")) {
+                snapped = true;
+                snap_type = *datum<int>(container, "snap_type");
+            }
+        }
+        
+        auto b = c->real_bounds;
+        b.shrink(resize_edge_size() * s);
+
+        auto resize_split_w = 10 * s;
+
+        if (snapped) {
+            auto resize_type = get_current_resize_type(c); 
+            //notify(fz("{}", resize_type));
+            auto mb = bounds_reserved_monitor(rid);
+            bool anyone_drew = false;
+            switch (resize_type) {
+                case (int) RESIZE_TYPE::LEFT: {
+                    b.x -= resize_split_w * .5;
+                    b.w = resize_split_w;
+                    b.y = mb.y * s;
+                    b.h = mb.h * s;
+
+                    render_drop_shadow(rid, 1.0, {0, 0, 0, .1}, 0, 2.0, b);                    
+                    
+                    if (is_resizing) {
+                        rect(b, {0, 0, 0, 1});
+                        
+                        auto split_h = 30 * s;
+                        b.y = b.y + b.h * .5 - split_h * .5;
+                        b.h = split_h;
+                        
+                        auto split_w = 4 * s;
+                        b.x = b.x + b.w * .5 - split_w * .5;
+                        b.w = split_w;
+                        rect(b, {.4, .4, .4, 1}, 0, split_w * .5, 2.0);
+
+                        auto drawing_split = datum<bool>(c, "drawing_split");
+                        auto drawing_split_time = datum<long>(c, "drawing_split_time");
+                        if (!*drawing_split) {
+                            *drawing_split = true;
+                            *drawing_split_time = get_current_time_in_ms();
+                        }                        
+                    } else {
+                        rect(b, {0, 0, 0, .2});
+                    }
+
+                    anyone_drew = true;
+
+                    break;
+                }
+                case (int) RESIZE_TYPE::RIGHT: {
+                    b.x += b.w - resize_split_w * .5;
+                    b.w = resize_split_w;
+                    b.y = mb.y * s;
+                    b.h = mb.h * s;
+                    rect(b, {0, 0, 0, .3});
+                    break;
+                }
+            }
+        }
+        //border(b, {1, 0, 1, 1}, 4);
     }
 }
 
@@ -295,11 +363,97 @@ bool mouse_inside_rounded(const Bounds& r, float mx, float my, float radius)
     return dx*dx + dy*dy <= radius * radius;
 }
 
+int get_current_resize_type(Container *c) {
+    auto cid = *datum<int>(c, "cid");
+    bool snapped = false;
+    int snap_type = (int) SnapPosition::NONE;
+    if (auto container = get_cid_container(cid)) {
+        if (*datum<bool>(container, "snapped")) {
+            snapped = true;
+            snap_type = *datum<int>(container, "snap_type");
+        }
+    }
+
+    auto box = c->real_bounds;
+    auto m = mouse();
+    box.shrink(resize_edge_size());
+    int corner = 20;
+
+    bool left = false;
+    bool right = false;
+    bool top = false;
+    bool bottom = false;
+    int resize_type = (int) RESIZE_TYPE::NONE;
+    if (m.x < box.x + corner)
+        left = true;
+    if (m.x > box.x + box.w - corner)
+        right = true;
+    if (m.y < box.y + corner)
+        top = true;
+    if (m.y > box.y + box.h - corner)
+        bottom = true;
+
+    // get rid of those options that shouldn't happen if snapped
+    if (snapped) {
+        switch (snap_type) {
+            case (int) SnapPosition::TOP_LEFT: {
+                left = false;
+                top = false;
+                break;
+            }
+            case (int) SnapPosition::BOTTOM_LEFT: {
+                left = false;
+                bottom = false;
+                break;
+            }
+            case (int) SnapPosition::TOP_RIGHT: {
+                right = false;
+                top = false;
+                break;
+            }
+            case (int) SnapPosition::BOTTOM_RIGHT: {
+                right = false;
+                bottom = false;
+                break;
+            }
+        }
+    }
+    
+    if (top && left) {
+        resize_type = (int) RESIZE_TYPE::TOP_LEFT;
+    } else if (top && right) {
+        resize_type = (int) RESIZE_TYPE::TOP_RIGHT;
+    } else if (bottom && left) {
+        resize_type = (int) RESIZE_TYPE::BOTTOM_LEFT;
+    } else if (bottom && right) {
+        resize_type = (int) RESIZE_TYPE::BOTTOM_RIGHT;
+    } else if (top) {
+        resize_type = (int) RESIZE_TYPE::TOP;
+    } else if (right) {
+        resize_type = (int) RESIZE_TYPE::RIGHT;
+    } else if (bottom) {
+        resize_type = (int) RESIZE_TYPE::BOTTOM;
+    } else if (left) {
+        resize_type = (int) RESIZE_TYPE::LEFT;
+    }
+
+    return resize_type;
+}
+
 void create_resize_container_for_window(int id) {
     auto c = actual_root->child(FILL_SPACE, FILL_SPACE);
     c->custom_type = (int) TYPE::CLIENT_RESIZE;
+    c->on_closed = [](Container *c) {
+        // unset the resize if it's set?
+        if (*datum<bool>(c, "setting_cursor")) {
+            update_cursor((int) RESIZE_TYPE::NONE);
+        }
+    };
     *datum<int>(c, "cid") = id;
     *datum<int>(c, "resize_type") = (int) RESIZE_TYPE::NONE;
+    *datum<bool>(c, "setting_cursor") = false;
+    *datum<bool>(c, "drawing_split") = false;
+    *datum<long>(c, "drawing_split_time") = 0;
     c->when_paint = paint_resize_edge; 
     c->when_mouse_down = paint {
         hypriso->bring_to_front(*datum<int>(c, "cid"));  
@@ -308,80 +462,11 @@ void create_resize_container_for_window(int id) {
     c->when_mouse_up = consume_event;
     c->when_mouse_enters_container = paint {
         setCursorImageUntilUnset("grabbing");
-        auto cid = *datum<int>(c, "cid");
-        bool snapped = false;
-        int snap_type = (int) SnapPosition::NONE;
-        if (auto container = get_cid_container(cid)) {
-            if (*datum<bool>(container, "snapped")) {
-                snapped = true;
-                snap_type = *datum<int>(container, "snap_type");
-            }
-        }
 
-        auto box = c->real_bounds;
-        auto m = mouse();
-        box.shrink(resize_edge_size());
-        int corner = 20;
- 
-        bool left = false;
-        bool right = false;
-        bool top = false;
-        bool bottom = false;
-        int resize_type = (int) RESIZE_TYPE::NONE;
-        if (m.x < box.x + corner)
-            left = true;
-        if (m.x > box.x + box.w - corner)
-            right = true;
-        if (m.y < box.y + corner)
-            top = true;
-        if (m.y > box.y + box.h - corner)
-            bottom = true;
-
-        // get rid of those options that shouldn't happen if snapped
-        if (snapped) {
-            switch (snap_type) {
-                case (int) SnapPosition::TOP_LEFT: {
-                    left = false;
-                    top = false;
-                    break;
-                }
-                case (int) SnapPosition::BOTTOM_LEFT: {
-                    left = false;
-                    bottom = false;
-                    break;
-                }
-                case (int) SnapPosition::TOP_RIGHT: {
-                    right = false;
-                    top = false;
-                    break;
-                }
-                case (int) SnapPosition::BOTTOM_RIGHT: {
-                    right = false;
-                    bottom = false;
-                    break;
-                }
-            }
-        }
-        
-        if (top && left) {
-            resize_type = (int) RESIZE_TYPE::TOP_LEFT;
-        } else if (top && right) {
-            resize_type = (int) RESIZE_TYPE::TOP_RIGHT;
-        } else if (bottom && left) {
-            resize_type = (int) RESIZE_TYPE::BOTTOM_LEFT;
-        } else if (bottom && right) {
-            resize_type = (int) RESIZE_TYPE::BOTTOM_RIGHT;
-        } else if (top) {
-            resize_type = (int) RESIZE_TYPE::TOP;
-        } else if (right) {
-            resize_type = (int) RESIZE_TYPE::RIGHT;
-        } else if (bottom) {
-            resize_type = (int) RESIZE_TYPE::BOTTOM;
-        } else if (left) {
-            resize_type = (int) RESIZE_TYPE::LEFT;
-        }
+        auto resize_type = get_current_resize_type(c);
 
         *datum<int>(c, "resize_type") = resize_type;
+        *datum<bool>(c, "setting_cursor") = true;
 
         update_cursor(resize_type);
 
@@ -391,6 +476,7 @@ void create_resize_container_for_window(int id) {
     c->when_mouse_leaves_container = paint {
         consume_event(root, c);
         update_cursor((int) RESIZE_TYPE::NONE);
+        *datum<bool>(c, "setting_cursor") = false;
     };
     c->when_clicked = paint {
         hypriso->bring_to_front(*datum<int>(c, "cid"));  
