@@ -970,7 +970,76 @@ static void on_drag_start_requested(int id) {
 }
 
 static void on_resize_start_requested(int id, RESIZE_TYPE type) {
-    resizing::begin(id, (int) type);
+    auto cid = id;
+    bool snapped = false;
+    int snap_type = (int) SnapPosition::NONE;
+    if (auto container = get_cid_container(cid)) {
+        if (*datum<bool>(container, "snapped")) {
+            snapped = true;
+            snap_type = *datum<int>(container, "snap_type");
+        }
+    }
+
+    bool left = false;
+    bool right = false;
+    bool top = false;
+    bool bottom = false;
+    int resize_type = (int) RESIZE_TYPE::NONE;
+    if (type == RESIZE_TYPE::LEFT || type == RESIZE_TYPE::BOTTOM_LEFT || type == RESIZE_TYPE::TOP_LEFT)
+        left = true;
+    if (type == RESIZE_TYPE::RIGHT || type == RESIZE_TYPE::BOTTOM_RIGHT || type == RESIZE_TYPE::TOP_RIGHT)
+        right = true;
+    if (type == RESIZE_TYPE::TOP || type == RESIZE_TYPE::TOP_RIGHT || type == RESIZE_TYPE::TOP_LEFT)
+        top = true;
+    if (type == RESIZE_TYPE::BOTTOM || type == RESIZE_TYPE::BOTTOM_RIGHT || type == RESIZE_TYPE::BOTTOM_LEFT)
+        bottom = true;
+
+    if (snapped) {
+        switch (snap_type) {
+            case (int) SnapPosition::TOP_LEFT: {
+                left = false;
+                top = false;
+                break;
+            }
+            case (int) SnapPosition::BOTTOM_LEFT: {
+                left = false;
+                bottom = false;
+                break;
+            }
+            case (int) SnapPosition::TOP_RIGHT: {
+                right = false;
+                top = false;
+                break;
+            }
+            case (int) SnapPosition::BOTTOM_RIGHT: {
+                right = false;
+                bottom = false;
+                break;
+            }
+        }
+    }
+    
+    if (top && left) {
+        resize_type = (int) RESIZE_TYPE::TOP_LEFT;
+    } else if (top && right) {
+        resize_type = (int) RESIZE_TYPE::TOP_RIGHT;
+    } else if (bottom && left) {
+        resize_type = (int) RESIZE_TYPE::BOTTOM_LEFT;
+    } else if (bottom && right) {
+        resize_type = (int) RESIZE_TYPE::BOTTOM_RIGHT;
+    } else if (top) {
+        resize_type = (int) RESIZE_TYPE::TOP;
+    } else if (right) {
+        resize_type = (int) RESIZE_TYPE::RIGHT;
+    } else if (bottom) {
+        resize_type = (int) RESIZE_TYPE::BOTTOM;
+    } else if (left) {
+        resize_type = (int) RESIZE_TYPE::LEFT;
+    }
+
+    if (resize_type != (int) RESIZE_TYPE::NONE) {
+        resizing::begin(id, resize_type);
+    }
 }
 
 static void on_drag_or_resize_cancel_requested() {

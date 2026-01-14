@@ -308,6 +308,15 @@ void create_resize_container_for_window(int id) {
     c->when_mouse_up = consume_event;
     c->when_mouse_enters_container = paint {
         setCursorImageUntilUnset("grabbing");
+        auto cid = *datum<int>(c, "cid");
+        bool snapped = false;
+        int snap_type = (int) SnapPosition::NONE;
+        if (auto container = get_cid_container(cid)) {
+            if (*datum<bool>(container, "snapped")) {
+                snapped = true;
+                snap_type = *datum<int>(container, "snap_type");
+            }
+        }
 
         auto box = c->real_bounds;
         auto m = mouse();
@@ -327,6 +336,33 @@ void create_resize_container_for_window(int id) {
             top = true;
         if (m.y > box.y + box.h - corner)
             bottom = true;
+
+        // get rid of those options that shouldn't happen if snapped
+        if (snapped) {
+            switch (snap_type) {
+                case (int) SnapPosition::TOP_LEFT: {
+                    left = false;
+                    top = false;
+                    break;
+                }
+                case (int) SnapPosition::BOTTOM_LEFT: {
+                    left = false;
+                    bottom = false;
+                    break;
+                }
+                case (int) SnapPosition::TOP_RIGHT: {
+                    right = false;
+                    top = false;
+                    break;
+                }
+                case (int) SnapPosition::BOTTOM_RIGHT: {
+                    right = false;
+                    bottom = false;
+                    break;
+                }
+            }
+        }
+        
         if (top && left) {
             resize_type = (int) RESIZE_TYPE::TOP_LEFT;
         } else if (top && right) {
