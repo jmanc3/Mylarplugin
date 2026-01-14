@@ -1833,4 +1833,7 @@ void add_to_snap_group(int id, int other, const std::vector<int> &grouped) {
     }
 }
 
-
+void damage_all() {
+    for (auto m : actual_monitors)
+        hypriso->damage_entire(*datum<int>(m, "cid")); 
+}

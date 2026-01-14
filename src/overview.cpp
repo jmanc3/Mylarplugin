@@ -4,6 +4,7 @@
 #include "heart.h"
 
 void overview::open(int monitor) {
+    hypriso->whitelist_on = true;
     alt_tab::show();
     
     auto over = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
@@ -20,9 +21,11 @@ void overview::open(int monitor) {
     over->pre_layout = [monitor](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
     };
+    hypriso->damage_entire(monitor);
 }
 
 void overview::close() {
+    hypriso->whitelist_on = false;
     auto m = actual_root;
     for (int i = m->children.size() - 1; i >= 0; i--) {
         auto c = m->children[i];
@@ -31,10 +34,11 @@ void overview::close() {
             m->children.erase(m->children.begin() + i);
         }
     }
+    damage_all();
 }
 
 void overview::click(int id, int button, int state, float x, float y) {
     overview::close();
-    hypriso->damage_entire(hypriso->monitor_from_cursor());
+    damage_all();
 }
 

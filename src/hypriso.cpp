@@ -1263,7 +1263,7 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    if (!hypriso->render_whitelist.empty()) {
+    if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
         for (auto hw : hyprwindows) {
             if (hw->w == pWindow) {
                 bool found = false;

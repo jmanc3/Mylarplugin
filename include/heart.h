@@ -262,6 +262,8 @@ static void paint_debug(Container *root, Container *c) {
      border(c->real_bounds, {1, 0, 1, 1}, 4);
 }
 
+void damage_all();
+
 static void request_damage(Container *root, Container *c) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

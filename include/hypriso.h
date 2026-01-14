@@ -181,6 +181,7 @@ struct HyprIso {
     bool resizing = false;
     int resizing_id = false;
 
+    bool whitelist_on = false;
     std::vector<int> render_whitelist;
 
     float get_varfloat(std::string target, float default_float = 1.0);    
