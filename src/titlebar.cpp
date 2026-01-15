@@ -474,7 +474,13 @@ void create_titlebar(Container *root, Container *parent) {
     };
     titlebar_parent->receive_events_even_if_obstructed_by_one = true;
     titlebar_parent->when_mouse_motion = request_damage;
-    titlebar_parent->when_mouse_enters_container = titlebar_parent->when_mouse_motion;
+    titlebar_parent->when_mouse_enters_container = [titlebar_parent](Container *actual_root, Container *c) {
+        auto client = first_above_of(c, TYPE::CLIENT);
+        auto cid = *datum<int>(client, "cid");
+        if (hypriso->has_focus(cid))
+            hypriso->send_false_position(-1, -1);
+        titlebar_parent->when_mouse_motion(actual_root, c);
+    };
     titlebar_parent->when_mouse_leaves_container = titlebar_parent->when_mouse_motion;
 
     auto titlebar = titlebar_parent->child(FILL_SPACE, FILL_SPACE);

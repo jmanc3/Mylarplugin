@@ -1016,6 +1016,18 @@ static void on_resize_start_requested(int id, RESIZE_TYPE type) {
                 bottom = false;
                 break;
             }
+            case (int) SnapPosition::LEFT: {
+                left = false;
+                top = false;
+                bottom = false;
+                break;
+            }
+            case (int) SnapPosition::RIGHT: {
+                right = false;
+                top = false;
+                bottom = false;
+                break;
+            }
         }
     }
     

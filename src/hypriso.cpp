@@ -2700,7 +2700,7 @@ struct MylarBar : public IHyprWindowDecoration {
         return true; 
     }
     eDecorationLayer getDecorationLayer() { return eDecorationLayer::DECORATION_LAYER_BOTTOM; }
-    uint64_t getDecorationFlags() { return DECORATION_ALLOWS_MOUSE_INPUT | DECORATION_PART_OF_MAIN_WINDOW; }
+    uint64_t getDecorationFlags() { return DECORATION_ALLOWS_MOUSE_INPUT; }
     std::string getDisplayName() { return "MylarBar"; }
 };
 

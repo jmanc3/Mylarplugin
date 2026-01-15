@@ -3,6 +3,8 @@
 #include "heart.h"
 #include "hypriso.h"
 #include "layout_thumbnails.h"
+#include <climits>
+#include <cmath>
 
 struct OverviewData : UserData {
     std::vector<int> order;
@@ -48,6 +50,11 @@ void overview::open(int monitor) {
         renderfix
 
         auto data = (OverviewData *) c->user_data;
+        
+        auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / 200.0f; 
+        if (scalar > 1.0)
+            scalar = 1.0;
+        scalar = pull(slidetopos, scalar);
 
         auto reserved = bounds_reserved_monitor(rid);
 
@@ -70,10 +77,25 @@ void overview::open(int monitor) {
         layout.setAreaSize(reserved.w - totalpad * 2, reserved.h - totalpad * 2);
         layout.calculate();
 
-        auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / 200.0f; 
-        if (scalar > 1.0)
-            scalar = 1.0;
-        scalar = pull(slidetopos, scalar);
+        int minX = INT_MAX;
+        int minY = INT_MAX;
+        int maxW = 0;
+        int maxH = 0;
+        for (int i = 0; i < data->order.size(); i++) {
+            auto cell = cells[i];
+            auto rect = ((DemoCell *) cell)->result();
+            if (rect.x < minX) 
+                minX = rect.x;
+            if (rect.y < minY) 
+                minY = rect.y;                 
+            if (rect.x + rect.w > maxW) 
+                maxW = rect.x + rect.w;
+            if (rect.y + rect.w > maxH) 
+                maxH = rect.x + rect.h;
+        }
+
+        //notify(fz("{} {} {}", reserved.w, minX, maxW));
+        auto overx = reserved.w - minX - maxW; 
 
         for (int i = 0; i < data->order.size(); i++) {
             auto o = data->order[i];
@@ -89,6 +111,7 @@ void overview::open(int monitor) {
             start.h = size.h * s;
             
             b.scale(s);
+            b.x += (overx * s) * .5;
             hypriso->draw_thumbnail(data->order[i], lerp(start, b, scalar));
         }
 
@@ -98,20 +121,27 @@ void overview::open(int monitor) {
         c->real_bounds = bounds_reserved_monitor(monitor);
     };
     hypriso->damage_entire(monitor);
+    hypriso->all_lose_focus();
 }
 
 void overview::close() {
     running = false;
     hypriso->whitelist_on = false;
     auto m = actual_root;
+    bool removed = false;
     for (int i = m->children.size() - 1; i >= 0; i--) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
+            removed = true;
             delete c;
             m->children.erase(m->children.begin() + i);
         }
     }
     damage_all();
+    if (removed)
+        later_immediate([](Timer *) {
+            hypriso->all_gain_focus();
+        });
 }
 
 void overview::click(int id, int button, int state, float x, float y) {

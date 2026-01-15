@@ -416,6 +416,18 @@ int get_current_resize_type(Container *c) {
                 bottom = false;
                 break;
             }
+            case (int) SnapPosition::LEFT: {
+                left = false;
+                top = false;
+                bottom = false;
+                break;
+            }
+            case (int) SnapPosition::RIGHT: {
+                right = false;
+                top = false;
+                bottom = false;
+                break;
+            }
         }
     }
     

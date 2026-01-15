@@ -276,7 +276,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                            child_data->showing = true;
                            child_data->came_from = came_from;
                            child->interactable = true;
-                           child_data->slide_start = get_current_time_in_ms() + 50;
+                           child_data->slide_start = get_current_time_in_ms();
                            child_data->should_slide = true;
                            break;
                        }
