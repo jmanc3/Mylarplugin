@@ -3071,17 +3071,30 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
     for (auto c : hyprwindows) {
         if (c->id == id) {
             auto scaling_factor = c->w->m_monitor->m_scale;
-            float x_scaled = ((float) x) * scaling_factor;
-            auto rounded = std::round(x_scaled);
-            auto top = std::ceil(x_scaled);
-            auto bottom = std::floor(x_scaled);
-            // detect a position that is going to experience a problem
-            if (top == rounded && bottom != rounded) {
-                // hack workaround
-                x = x + 1;
-                w = w - 1;
+            /*
+            {
+                float x_scaled = ((float) x) * scaling_factor;
+                auto rounded = std::round(x_scaled);
+                auto top = std::ceil(x_scaled);
+                auto bottom = std::floor(x_scaled);
+                // detect a position that is going to experience a problem 
+                if (top == rounded && bottom != rounded) { 
+                    // hack workaround
+                    x = x - 1; 
+                }
             }
-
+            {
+                float x_scaled = ((float) x + w) * scaling_factor;
+                auto rounded = std::round(x_scaled);
+                auto top = std::ceil(x_scaled);
+                auto bottom = std::floor(x_scaled);
+                // detect a position that is going to experience a problem 
+                if (top == rounded && bottom != rounded) { 
+                    // hack workaround
+                    w = w + 1; 
+                }
+            }
+            */
             if (instant) {
                 c->w->m_realPosition->setValueAndWarp({x, y});
                 c->w->m_realSize->setValueAndWarp({w, h});

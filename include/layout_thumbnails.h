@@ -6,6 +6,8 @@
 
 struct Item {
     float aspectRatio;   // width / height
+    float width;
+    float height;
 };
 
 struct DensityPreset {

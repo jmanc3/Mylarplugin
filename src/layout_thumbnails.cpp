@@ -141,7 +141,7 @@ LayoutResult layoutOverview(
         return out;
     }
 
-    const double edgeMargin = params.margin;          // renamed logically
+    const double edgeMargin = params.margin;
     const double minSpacing = std::max(
         params.horizontalSpacing,
         params.verticalSpacing
@@ -156,17 +156,23 @@ LayoutResult layoutOverview(
     const double cy = params.availableHeight * 0.5;
 
     // ---------------------------------------------------------------------
-    // 1. Compute global scale (uniform)
+    // 1. Compute uniform global scale
     // ---------------------------------------------------------------------
 
-    double scale = 1.0;
+    double scale = std::numeric_limits<double>::infinity();
+
     for (const auto& it : items) {
-        // normalize height to 1.0, scale width by aspect
-        scale = std::min(scale, usableW / it.aspectRatio);
-        scale = std::min(scale, usableH);
+        if (it.width <= 0.0 || it.height <= 0.0)
+            continue;
+
+        scale = std::min(scale, usableW / it.width);
+        scale = std::min(scale, usableH / it.height);
     }
 
-    // Reduce scale slightly to allow spacing
+    if (!std::isfinite(scale))
+        scale = 1.0;
+
+    // Leave headroom for spacing and relaxation
     scale *= 0.9;
 
     struct Tmp {
@@ -179,15 +185,15 @@ LayoutResult layoutOverview(
     // 2. Initial radial placement (macOS-style)
     // ---------------------------------------------------------------------
 
-    for (size_t i = 0; i < items.size(); ++i) {
-        const double h = scale;
-        const double w = h * items[i].aspectRatio;
+    const double radius =
+        std::min(usableW, usableH) * 0.25;
 
-        // pseudo-original distribution: stable ordering along a spiral
+    for (size_t i = 0; i < items.size(); ++i) {
+        const double w = items[i].width  * scale;
+        const double h = items[i].height * scale;
+
         const double angle =
             (double)i / (double)items.size() * 2.0 * M_PI;
-        const double radius =
-            std::min(usableW, usableH) * 0.25;
 
         const double ox = std::cos(angle) * radius;
         const double oy = std::sin(angle) * radius;
@@ -202,7 +208,7 @@ LayoutResult layoutOverview(
     // 3. Bounded overlap relaxation (deterministic)
     // ---------------------------------------------------------------------
 
-    constexpr int RELAX_PASSES = 8;
+    constexpr int RELAX_PASSES = 30;
 
     for (int pass = 0; pass < RELAX_PASSES; ++pass) {
         for (size_t i = 0; i < tmp.size(); ++i) {
@@ -227,7 +233,6 @@ LayoutResult layoutOverview(
                 const double oy = minY - std::abs(dy);
 
                 if (ox > 0.0 && oy > 0.0) {
-                    // resolve along weaker axis
                     if (ox < oy) {
                         const double push = ox * 0.5;
                         const double dir = (dx >= 0.0) ? 1.0 : -1.0;
@@ -243,7 +248,7 @@ LayoutResult layoutOverview(
             }
         }
 
-        // Clamp after each pass (critical)
+        // Clamp every pass (critical for stability)
         for (auto& w : tmp) {
             w.tx = clamp(
                 w.tx,
@@ -290,4 +295,3 @@ LayoutResult layoutOverview(
 
     return out;
 }
-

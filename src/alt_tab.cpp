@@ -216,6 +216,10 @@ void paint_tab_option(Container *actual_root, Container *c) {
 }
 
 void create_tab_option(int cid, Container *parent) {
+    later_immediate([cid](Timer *) { hypriso->screenshot(cid); });
+    later(100, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
+    later(240, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
+    later(500, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
     bool is_first = parent->children.size() <= 1;
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     if (is_first) {
@@ -416,7 +420,9 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
             for (int i = c->children.size() - 1; i >= 0; i--) {
                 if (order[index] == (*datum<int>(c->children[i], "cid"))) {
                     *datum<int>(c->children[i], "stacking_index") = index;
-                    *datum<long>(c->children[i], LAST_TIME_ACTIVE) = *datum<long>(get_cid_container(order[index]), LAST_TIME_ACTIVE);
+                    if (auto cidtainer = get_cid_container(order[index])) {
+                        *datum<long>(c->children[i], LAST_TIME_ACTIVE) = *datum<long>(cidtainer, LAST_TIME_ACTIVE);
+                    }
                 }
             }
         }
@@ -584,8 +590,8 @@ void alt_tab::on_activated(int id) {
     assert(c && "alt_tab::on_activated assumes Container for id exists");    
 
     for (auto g : ((ClientInfo *)c->user_data)->grouped_with) {
-        *datum<bool>(get_cid_container(id), "eat") = true;
-        hypriso->bring_to_front(g, false);
+        //*datum<bool>(get_cid_container(id), "eat") = true;
+        //hypriso->bring_to_front(g, false);
     }
 
     auto current = get_current_time_in_ms();

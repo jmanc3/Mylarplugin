@@ -471,12 +471,14 @@ void create_resize_container_for_window(int id) {
         update_cursor(resize_type);
 
         consume_event(root, c);
+        damage_all();
     };
     c->when_mouse_motion = c->when_mouse_enters_container;
     c->when_mouse_leaves_container = paint {
         consume_event(root, c);
         update_cursor((int) RESIZE_TYPE::NONE);
         *datum<bool>(c, "setting_cursor") = false;
+        damage_all();
     };
     c->when_clicked = paint {
         hypriso->bring_to_front(*datum<int>(c, "cid"));  
