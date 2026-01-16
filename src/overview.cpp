@@ -66,19 +66,20 @@ static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000
 
 void screenshot_loop() {
     running = true;
-    return;
-    later(1000.0f / 1.0f, [](Timer *t) {
+    later(1000.0f / 60.0f, [](Timer *t) { 
         t->keep_running = running;
-        hypriso->screenshot_all();
-    });
-    /*later(1000.0f / 60.0f, [order](Timer *t) {
-        t->keep_running = running;
-        for (int i = 0; i < 3; i++) {
-            if (i < order.size()) {
-                hypriso->screenshot(order[i]);
+        auto order = get_window_stacking_order();
+        std::reverse(order.begin(), order.end());
+        int amount = 0;
+        for (auto o : order) {
+            if (hypriso->alt_tabbable(o)) {
+                hypriso->screenshot(o); 
+                if (amount++ > 2) {
+                    break;
+                }
             }
         }
-    });*/
+    });
 }
 
 static bool screenshotting_wallpaper = false;
@@ -134,7 +135,7 @@ void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, lon
     m = lerp(rawmon, m, scalar);
     hypriso->draw_wallpaper(monitor, m, 14 * s * scalar);
     auto b = m;
-    render_drop_shadow(rid, 1, {.1, .1, .1, .33}, 14 * s * scalar, 2.0, b, 50 * s);
+    render_drop_shadow(rid, 1, {.1, .1, .1, .33f * scalar}, 14 * s * scalar, 2.0, b, 50 * s);
     b.shrink(2);
     border(b, {1, 1, 1, .05}, 1, 0, 14 * s); 
 }
