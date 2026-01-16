@@ -3882,36 +3882,6 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
     static auto PXPMODE          = CConfigValue<Hyprlang::INT>("render:xp_mode");
     static auto PSESSIONLOCKXRAY = CConfigValue<Hyprlang::INT>("misc:session_lock_xray");
 
-    /*
-    if (!pMonitor)
-        return;
-
-    if (g_pSessionLockManager->isSessionLocked() && !*PSESSIONLOCKXRAY) {
-        // We stop to render workspaces as soon as the lockscreen was sent the "locked" or "finished" (aka denied) event.
-        // In addition we make sure to stop rendering workspaces after misc:lockdead_screen_delay has passed.
-        if (g_pSessionLockManager->shallConsiderLockMissing() || g_pSessionLockManager->clientLocked() || g_pSessionLockManager->clientDenied())
-            return;
-    }
-
-    // todo: matrices are buggy atm for some reason, but probably would be preferable in the long run
-    // g_pHyprOpenGL->saveMatrix();
-    // g_pHyprOpenGL->setMatrixScaleTranslate(translate, scale);
-
-    SRenderModifData RENDERMODIFDATA;
-    if (translate != Vector2D{0, 0})
-        RENDERMODIFDATA.modifs.emplace_back(std::make_pair<>(SRenderModifData::eRenderModifType::RMOD_TYPE_TRANSLATE, translate));
-    if (scale != 1.f)
-        RENDERMODIFDATA.modifs.emplace_back(std::make_pair<>(SRenderModifData::eRenderModifType::RMOD_TYPE_SCALE, scale));
-
-    if (!RENDERMODIFDATA.modifs.empty())
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{RENDERMODIFDATA}));
-
-    Hyprutils::Utils::CScopeGuard x([&RENDERMODIFDATA] {
-        if (!RENDERMODIFDATA.modifs.empty()) {
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRendererHintsPassElement>(CRendererHintsPassElement::SData{SRenderModifData{}}));
-        }
-    });
-    */
     //g_pHyprRenderer->renderBackground(pMonitor);
     g_pHyprOpenGL->clearWithTex();
 
@@ -3919,8 +3889,9 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
         g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
     }
 
-    EMIT_HOOK_EVENT("render", RENDER_POST_WALLPAPER);
+    //EMIT_HOOK_EVENT("render", RENDER_POST_WALLPAPER);
 
+    /*
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM]) {
         g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
     }
@@ -3932,6 +3903,7 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY]) {
         g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
     }
+    */
 }
 
 void actual_screenshot_wallpaper(CFramebuffer* buffer, PHLMONITOR m) {

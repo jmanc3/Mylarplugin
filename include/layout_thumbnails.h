@@ -176,6 +176,7 @@ public:
 
         // Push overlapping windows apart
         bool overlap;
+        int times = 0;
         do {
             overlap = false;
             for (auto* a : m_cells) {
@@ -212,7 +213,7 @@ public:
                     }
                 }
             }
-        } while (overlap);
+        } while (overlap && times++ < 300);
 
         // Scale to fit area
         float sx = float(m_area.w) / bounds.w;
