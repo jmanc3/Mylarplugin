@@ -104,7 +104,7 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     auto rawmon = m;
     //rect(rawmon, {.14, .14, .14, 1 * scalar}, 0, 0, 2.0, false);
     hypriso->draw_wallpaper(monitor, m);
-    rect(m, {0, 0, 0, .5}, 0, 0, 2.0, true);
+    rect(m, {0, 0, 0, .3}, 0, 0, 2.0, true);
 }
 
 void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, long creation_time) {
@@ -165,7 +165,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         c->z_index = 0;
     }
     static float roundingAmt = 8;
-    render_drop_shadow(monitor, 1.0, {0, 0, 0, .2}, roundingAmt * s, 2.0, c->real_bounds);
+    render_drop_shadow(monitor, 1.0, {0, 0, 0, .1}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
     auto th = titlebar_h;
     titlebar_h = ((float) titlebar_h) * (1.0 - (.2 * scalar));
     defer(titlebar_h = th);
@@ -192,33 +192,6 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         auto focused = color_titlebar_focused();
         focused.a = fadea;
         rect(titlebar_bounds, focused, titlebar_mask, roundingAmt * s, 2.0f, false);
-
-        if (!c->children.empty()) {
-            auto ch = c->children[0];
-            auto close_bounds = c->real_bounds;
-            auto bw = std::round(close_bounds.h * titlebar_button_ratio());
-            close_bounds.x += close_bounds.w - bw; 
-            close_bounds.w = bw;
-            if (ch->state.mouse_pressing) {
-                rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0);
-            } else if (ch->state.mouse_hovering) {
-                rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0);
-            } else if (ch->parent->state.mouse_hovering) {
-                rect(close_bounds, color_titlebar_focused(), 13, roundingAmt * s, 2.0);
-            }
-            auto icon = "\ue8bb";
-            auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
-                icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h() * .9);
-
-            auto texture_info = closed;
-            if (texture_info->id != -1) {
-                clip(to_parent(root, c), s);
-                draw_texture(*texture_info, 
-                    close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
-                    close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
-                    1.0);
-            }
-        }
 
         int icon_width = 0; 
         { // load icon
@@ -282,6 +255,35 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                     draw_texture(*texture_info, 
                         c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos2, fadea), clip_w);
                 }
+            }
+        }
+
+        if (!c->children.empty()) {
+            auto ch = c->children[0];
+            auto close_bounds = c->real_bounds;
+            auto bw = std::round(close_bounds.h * titlebar_button_ratio());
+            close_bounds.x += close_bounds.w - bw; 
+            close_bounds.w = bw;
+            if (ch->state.mouse_pressing) {
+                rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0);
+            } else if (ch->state.mouse_hovering) {
+                rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0);
+            } else {
+                rect(close_bounds, color_titlebar_focused(), 13, roundingAmt * s, 2.0);
+            }
+            auto icon = "\ue8bb";
+            auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
+            ico_color.a = fadea;
+            auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+                icon, ico_color, titlebar_button_icon_h() * .9);
+
+            auto texture_info = closed;
+            if (texture_info->id != -1) {
+                clip(to_parent(root, c), s);
+                draw_texture(*texture_info, 
+                    close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
+                    close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
+                    1.0);
             }
         }
     }
@@ -454,7 +456,6 @@ void actual_open(int monitor) {
     //consume_everything(over);
     over->when_mouse_down = nullptr;
     over->when_clicked = paint {
-        return;
         later_immediate([](Timer *) {
             overview::close();
         });

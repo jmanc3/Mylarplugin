@@ -1442,6 +1442,9 @@ void second::begin() {
         start_dock();
     });
     t.detach();*/
+    //later(100, [](Timer *) {
+        //overview::open(hypriso->monitor_from_cursor());
+    //});
 }
 
 void second::end() {
