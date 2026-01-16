@@ -11,7 +11,7 @@ struct OverviewData : UserData {
 };
 
 static bool running = false;
-static float overview_anim_time = 370.0f;
+static float overview_anim_time = 300.0f;
 
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
@@ -26,9 +26,30 @@ void screenshot_loop() {
 
 static bool screenshotting_wallpaper = false;
 
+void fadeout_docks(Container *actual_root, Container *c, int monitor, long creation_time) {
+    auto root = get_rendering_root();
+    if (!root) return;
+    auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+    if (stage != (int) STAGE::RENDER_POST_WALLPAPER || monitor != rid)
+        return;
+    renderfix
+    
+    auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
+    if (scalar > 1.0)
+        scalar = 1.0;
+    scalar = pull(slidetopos2, scalar);
+    
+    auto m = bounds_monitor(monitor);
+    m.scale(s);
+    auto rawmon = m;
+    rect(rawmon, {.14, .14, .14, 1 * scalar}, 0, 0, 2.0, false);
+}
+
 void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, long creation_time) {
     if (screenshotting_wallpaper)
         return;
+    fadeout_docks(actual_root, c, monitor, creation_time);
+    
     auto root = get_rendering_root();
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
