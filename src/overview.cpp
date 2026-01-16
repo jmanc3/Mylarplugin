@@ -90,11 +90,15 @@ void overview::open(int monitor) {
     for (auto o : order) {
         if (hypriso->alt_tabbable(o) && get_monitor(o) == monitor && hypriso->get_active_workspace_id_client(o) == hypriso->get_active_workspace_id(monitor)) {
             overview_data->order.push_back(o);
+            hypriso->set_hidden(o, true);
         }
     }
     over->user_data = overview_data;
     over->custom_type = (int) TYPE::OVERVIEW;
-    consume_everything(over);
+    //consume_everything(over);
+    over->when_mouse_down = nullptr;
+    over->when_clicked = nullptr;
+    over->when_mouse_up = nullptr;
     later_immediate([monitor](Timer *) { 
         screenshotting_wallpaper = true;
         hypriso->screenshot_wallpaper(monitor);
@@ -182,8 +186,8 @@ void overview::open(int monitor) {
             b.x += (overx * s) * .5;
             b.y += (overy * s) * .5;
             float alpha = 1.0;
-            if (hypriso->is_hidden(o))
-                alpha = scalar;
+            //if (hypriso->is_hidden(o))
+                //alpha = scalar;
             render_drop_shadow(rid, 1, {0, 0, 0, .25}, 6 * s, 2.0, lerp(start, b, scalar));
             hypriso->draw_thumbnail(data->order[i], lerp(start, b, scalar), 6 * s, 2.0f, 0, alpha);
         }
@@ -205,6 +209,13 @@ void overview::close() {
     for (int i = m->children.size() - 1; i >= 0; i--) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
+            auto o_data = (OverviewData *) c->user_data;
+            for (auto o : o_data->order) {
+                later(20, [o](Timer *) {
+                    hypriso->set_hidden(o, false);
+                });
+            }
+            
             removed = true;
             delete c;
             m->children.erase(m->children.begin() + i);

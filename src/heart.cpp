@@ -1028,6 +1028,13 @@ static void on_resize_start_requested(int id, RESIZE_TYPE type) {
                 bottom = false;
                 break;
             }
+            case (int) SnapPosition::MAX: {
+                right = false;
+                top = false;
+                bottom = false;
+                left = false;
+                break;
+            }
         }
     }
     
