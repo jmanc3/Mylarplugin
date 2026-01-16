@@ -76,7 +76,7 @@ void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, lon
     m = lerp(rawmon, m, scalar);
     hypriso->draw_wallpaper(monitor, m, 14 * s * scalar);
     auto b = m;
-    render_drop_shadow(rid, 1, {0, 0, 0, .3}, 14 * s * scalar, 2.0, b);
+    render_drop_shadow(rid, 1, {0, 0, 0, .33}, 14 * s * scalar, 2.0, b, 50 * s);
     b.shrink(2);
     border(b, {1, 1, 1, .1}, 1, 0, 14 * s); 
 }

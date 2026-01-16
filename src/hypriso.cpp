@@ -5999,7 +5999,7 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
-void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, float ROUNDINGPOWER, Bounds fullB) {
+void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, float ROUNDINGPOWER, Bounds fullB, float size) {
     PHLMONITOR pMonitor;
     for (auto hm : hyprmonitors) {
         if (hm->id == mon) {
@@ -6011,8 +6011,12 @@ void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, flo
     CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
     static auto PSHADOWSIZE = CConfigValue<Hyprlang::INT>("decoration:shadow:range");
     static auto PSHADOWSCALE = CConfigValue<Hyprlang::FLOAT>("decoration:shadow:scale");
- 
-    drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), *PSHADOWSIZE, false);
+
+    if (size != 0) {
+        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), size, false);
+    } else {
+        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), *PSHADOWSIZE, false);
+    }
 }
 
 
