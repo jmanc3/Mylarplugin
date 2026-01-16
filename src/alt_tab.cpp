@@ -549,9 +549,8 @@ void alt_tab::close(bool focus) {
         return;
     is_showing = false;
     {
-        auto m = actual_root;
-        for (int i = m->children.size() - 1; i >= 0; i--) {
-            auto c = m->children[i];
+        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+            auto c = actual_root->children[i];
             if (c->custom_type == (int) TYPE::ALT_TAB) {
                 if (focus) {
                     if (!c->children.empty()) {
@@ -561,10 +560,10 @@ void alt_tab::close(bool focus) {
                         hypriso->bring_to_front(cid);
                     }
                 }
-                request_damage(m, c);
+                request_damage(actual_root, c);
                 delete c;
-                m->children.erase(m->children.begin() + i);
-                hypriso->simulateMouseMovement();
+                actual_root->children.erase(actual_root->children.begin() + i);
+//              later_immediate([](Timer *) { hypriso->simulateMouseMovement(); });
             }
         }
     }
