@@ -68,8 +68,20 @@ void do_spotify_toggle() {
     }
 }
 
+bool any_fullscreen(int monitor) {
+    auto order = get_window_stacking_order();
+    for (auto o : order) {
+        if (get_monitor(o) == monitor) {
+            if (hypriso->is_fullscreen(o)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void monitor_hotspot(Container *m, int x, int y, int monitor_id) {
-    if (drag::dragging() || resizing::resizing())
+    if (drag::dragging() || resizing::resizing() || overview::is_showing() || any_fullscreen(monitor_id))
         return;
     auto current = get_current_time_in_ms();
     auto drag_end_time = *datum<long>(actual_root, "drag_end_time");
@@ -94,9 +106,11 @@ void hotcorners::motion(int id, int x, int y) {
     for (auto m : actual_monitors) {
         auto cid = *datum<int>(m, "cid");
         auto monitor_bounds = bounds_monitor(cid);
+        auto xx = x - monitor_bounds.x;
+        auto yy = y - monitor_bounds.y;
         m->real_bounds = monitor_bounds;
-        if (bounds_contains(monitor_bounds, x, y)) {
-            monitor_hotspot(m, x, y, cid);
+        if (bounds_contains(monitor_bounds, xx, yy)) {
+            monitor_hotspot(m, xx, yy, cid);
             break;
         }
     }

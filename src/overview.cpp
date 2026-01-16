@@ -8,6 +8,7 @@
 
 #include <climits>
 #include <math.h>
+#include <system_error>
 
 struct OverviewData : UserData {
     std::vector<int> order;
@@ -168,8 +169,8 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     titlebar_h = ((float) titlebar_h) * (1.0 - (.2 * scalar));
     defer(titlebar_h = th);
 
+    auto pre_title_backup = c->real_bounds;
     {
-        auto pre_title_backup = c->real_bounds;
         defer(c->real_bounds = pre_title_backup);
         
         c->real_bounds.h = std::round(titlebar_h * s);
@@ -188,16 +189,10 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         if (hypriso->has_decorations(cid)) {
             fadea = 1.0f;
         }
-        if (c->state.mouse_hovering || child_hovered) {
-            auto focused = color_titlebar_focused();
-            focused.a = fadea;
-            rect(titlebar_bounds, focused, titlebar_mask, roundingAmt * s, 2.0f, false);
-        } else {
-            auto unfocused = color_titlebar_unfocused();
-            unfocused.a = fadea;
-            rect(titlebar_bounds, unfocused, titlebar_mask, roundingAmt * s, 2.0f, false);
-        }
-
+        
+        auto focused = color_titlebar_focused();
+        focused.a = fadea;
+        rect(titlebar_bounds, focused, titlebar_mask, roundingAmt * s, 2.0f, false);
 
         int icon_width = 0; 
         { // load icon
@@ -269,11 +264,20 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     c->real_bounds.h -= std::round(titlebar_h * s);
     
     hypriso->draw_thumbnail(cid, c->real_bounds, roundingAmt * s, 2.0, 3);
+
+    if (c->state.mouse_hovering) {
+        auto b = pre_title_backup;
+        //b.shrink(std::round(2.0 * s));
+        //border(b, {1, 1, 1, .5}, std::round(2.0 * s), 0, roundingAmt * s, 2.0, false);
+        //rect(b, {1, 1, 1, .1}, 0, roundingAmt * s, 2.0, false);
+    }
 }
 
 static void create_option(int cid, Container *parent, int monitor, long creation_time) {
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     *datum<int>(c, "cid") = cid;
+    *datum<bool>(c, "was_hovering") = false;
+    *datum<long>(c, "time_since_hovering_change") = 0;
     c->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
         paint_option(actual_root, c, monitor, creation_time);
     };
@@ -365,6 +369,35 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
         if (scalar > 1.0)
             scalar = 1.0;
         scalar = pull(slidetopos2, scalar);
+        
+        auto was_hovering = datum<bool>(ch, "was_hovering");
+        auto time_since_hovering_change = datum<long>(ch, "time_since_hovering_change");
+        if (scalar >= 1.0) {
+            if (*was_hovering != ch->state.mouse_hovering) {
+                *was_hovering = ch->state.mouse_hovering;
+                *time_since_hovering_change = get_current_time_in_ms();
+            }
+            auto current = get_current_time_in_ms();
+            auto scalar = ((float) (current - *time_since_hovering_change)) / 100.0f;
+            if (scalar > 1.0)
+                scalar = 1.0;
+
+            if (ch->state.mouse_hovering) {
+                auto uu = std::round(final_bounds.w * (1.0 + (.03 * scalar)));
+                auto hh = std::round(final_bounds.h * (1.0 + (.03 * scalar)));
+                final_bounds.x -= (uu - final_bounds.w) * .5;
+                final_bounds.y -= (hh - final_bounds.h) * .5;
+                final_bounds.w = uu; 
+                final_bounds.h = hh; 
+            } else {
+                auto uu = std::round(final_bounds.w * (1.03 - (.03 * scalar)));
+                auto hh = std::round(final_bounds.h * (1.03 - (.03 * scalar)));
+                final_bounds.x -= (uu - final_bounds.w) * .5;
+                final_bounds.y -= (hh - final_bounds.h) * .5;
+                final_bounds.w = uu; 
+                final_bounds.h = hh; 
+            }
+        }
         auto lerped = lerp(bounds, final_bounds, scalar); 
 
         ch->wanted_bounds = lerped;
@@ -538,5 +571,9 @@ void overview::click(int id, int button, int state, float x, float y) {
         overview::close();
         damage_all();
     }
+}
+
+bool overview::is_showing() {
+    return running;
 }
 

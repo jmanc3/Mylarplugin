@@ -5,6 +5,8 @@ namespace overview {
     void open(int monitor);
     void close();
     void click(int id, int button, int state, float x, float y);
+
+    bool is_showing();
 };
 
 #endif // overview_h_INCLUDED
