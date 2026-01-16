@@ -74,7 +74,7 @@ void alt_tab::on_window_closed(int id) {
     
 }
 
-void paint_tab_option(Container *actual_root, Container *c) {
+static void paint_tab_option(Container *actual_root, Container *c) {
     if (get_current_time_in_ms() - show_time < show_delay)
         return;
 
@@ -215,7 +215,7 @@ void paint_tab_option(Container *actual_root, Container *c) {
     }
 }
 
-void create_tab_option(int cid, Container *parent) {
+static void create_tab_option(int cid, Container *parent) {
     later_immediate([cid](Timer *) { hypriso->screenshot(cid); });
     later(100, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
     later(240, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
@@ -563,7 +563,6 @@ void alt_tab::close(bool focus) {
                 request_damage(actual_root, c);
                 delete c;
                 actual_root->children.erase(actual_root->children.begin() + i);
-//              later_immediate([](Timer *) { hypriso->simulateMouseMovement(); });
             }
         }
     }

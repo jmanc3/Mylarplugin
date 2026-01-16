@@ -10,6 +10,10 @@ struct OverviewData : UserData {
     std::vector<int> order;
 };
 
+struct ThumbData : UserData {
+    int cid;
+};
+
 static bool running = false;
 static float overview_anim_time = 285.0f;
 
@@ -90,6 +94,63 @@ void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, lon
     border(b, {1, 1, 1, .05}, 1, 0, 14 * s); 
 }
 
+static void paint_option(Container *actual_root, Container *c, int monitor) {
+    auto root = get_rendering_root();
+    if (!root) return;
+    auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+    if (stage != (int) STAGE::RENDER_POST_WINDOWS || monitor != rid)
+        return;
+    renderfix
+    auto cid = *datum<int>(c, "cid");
+    hypriso->draw_thumbnail(cid, c->real_bounds);
+    
+    //rect(c->real_bounds, {1, 0, 0, 1});
+}
+
+static void create_option(int cid, Container *parent, int monitor) {
+    auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
+    *datum<int>(c, "cid") = cid;
+    c->when_paint = [monitor](Container *actual_root, Container *c) {
+        paint_option(actual_root, c, monitor);
+    };
+    c->receive_events_even_if_obstructed_by_one = true;
+    c->when_drag_end_is_click = false;
+    c->when_mouse_enters_container = paint {
+    };
+    c->when_clicked = paint {
+        //notify("here");
+        auto cid = *datum<int>(c, "cid");
+        hypriso->bring_to_front(cid, true);
+        later_immediate([](Timer *) {
+            overview::close();
+        });
+    };
+    c->when_drag_start = paint {
+    };
+    c->when_drag = paint {
+    };
+    c->when_drag_end = paint {
+    };
+}
+
+static void layout_options(Container *actual_root, Container *c, const Bounds &b, long creation_time, float overx, float overy) {
+    for (auto ch : c->children) {
+        auto cid = *datum<int>(ch, "cid");
+        auto final_bounds = *datum<Bounds>(ch, "final_bounds");
+        final_bounds.x += overx * .5;
+        final_bounds.y += overy * .5;
+        auto bounds = real_bounds_client(cid);
+        auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
+        if (scalar > 1.0)
+            scalar = 1.0;
+        scalar = pull(slidetopos2, scalar);
+        auto lerped = lerp(bounds, final_bounds, scalar); 
+
+        ch->wanted_bounds = lerped;
+        ch->real_bounds = ch->wanted_bounds;
+        ::layout(actual_root, ch, ch->real_bounds);
+    }
+}
 
 void actual_open(int monitor) {
     hypriso->whitelist_on = true;
@@ -122,7 +183,7 @@ void actual_open(int monitor) {
         renderfix
         hypriso->damage_entire(monitor);
         
-        //return;
+        return;
 
         auto data = (OverviewData *) c->user_data;
         
@@ -200,8 +261,90 @@ void actual_open(int monitor) {
 
         hypriso->damage_entire(monitor);
     };
-    over->pre_layout = [monitor](Container *actual_root, Container *c, const Bounds &b) {
+    over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
+
+        auto order = get_window_stacking_order();
+        std::reverse(order.begin(), order.end());
+        for (int i = c->children.size() - 1; i >= 0; i--) {
+            auto child = c->children[i];
+            auto cid = *datum<int>(child, "cid");
+            bool found = false;
+            for (auto option : order) {
+                if (option == cid)
+                    found = true;
+            }
+            if (!found) {
+                delete child;
+                c->children.erase(c->children.begin() + i);
+                request_damage(actual_root, c);
+            }
+        }
+
+        auto workspace_monitor = hypriso->get_active_workspace_id(monitor);
+
+        // add if doesn't exist yet
+        for (int i = order.size() - 1; i >= 0; i--) {
+            auto option = order[i];
+            if (hypriso->alt_tabbable(option) && hypriso->get_active_workspace_id_client(option) == workspace_monitor) {
+                bool found = false;
+                for (auto child : c->children) {
+                    if (option == *datum<int>(child, "cid")) {
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    create_option(option, c, monitor);
+                    request_damage(actual_root, c);
+                }
+            }
+        }
+
+        auto reserved = bounds_reserved_monitor(monitor);
+
+        ExpoLayout layout;
+        auto s = scale(monitor);
+        std::vector<ExpoCell *> cells;
+        for (int i = 0; i < c->children.size(); i++) {
+            auto o = *datum<int>(c->children[i], "cid");
+            auto size = hypriso->thumbnail_size(o);
+            auto height = size.h * (1/s);
+            auto width = size.w * (1/s);
+            auto x = bounds_client(o).x - reserved.x;
+            auto y = bounds_client(o).y - reserved.y;
+            auto cell = new DemoCell(i, x, y, width, height);
+            cells.push_back(cell);
+        }
+
+        float pad = 120;
+
+        layout.setCells(cells);
+        layout.setAreaSize(reserved.w - reserved.x - pad, reserved.h - reserved.y - pad);
+        layout.calculate();
+
+        int minX = INT_MAX;
+        int minY = INT_MAX;
+        int maxW = 0;
+        int maxH = 0;
+        for (int i = 0; i < cells.size(); i++) {
+            auto cell = cells[i];
+            auto rect = ((DemoCell *) cell)->result();
+            *datum<Bounds>(c->children[i], "final_bounds") = Bounds(rect.x, rect.y, rect.w, rect.h);
+            if (rect.x < minX) 
+                minX = rect.x;
+            if (rect.y < minY) 
+                minY = rect.y;                 
+            if (rect.x + rect.w > maxW) 
+                maxW = rect.x + rect.w;
+            if (rect.y + rect.h > maxH) 
+                maxH = rect.y + rect.h;
+        }
+
+        //notify(fz("{} {} {}", reserved.w, minX, maxW));
+        auto overx = reserved.w - minX - maxW;
+        auto overy = reserved.h - minY - maxH;
+
+        layout_options(actual_root, c, b, creation_time, overx, overy);
     };
     hypriso->damage_entire(monitor);
     hypriso->all_lose_focus();
@@ -248,6 +391,7 @@ void overview::close() {
 }
 
 void overview::click(int id, int button, int state, float x, float y) {
+    return;
     if (state == 0) {
         overview::close();
         damage_all();
