@@ -300,6 +300,9 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
 }
 
 static void create_option(int cid, Container *parent, int monitor, long creation_time) {
+    later_immediate([cid](Timer *) {
+        hypriso->set_hidden(cid, true);
+    });
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     *datum<int>(c, "cid") = cid;
     *datum<bool>(c, "was_hovering") = false;
@@ -314,6 +317,8 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     c->when_mouse_enters_container = paint {
     };
     c->when_clicked = paint {
+        if (bounds_contains(c->children[0]->real_bounds, root->mouse_current_x, root->mouse_current_y))
+            return;
         auto cid = *datum<int>(c, "cid");
         hypriso->bring_to_front(cid, true);
         later_immediate([](Timer *) {
@@ -449,6 +454,7 @@ void actual_open(int monitor) {
     //consume_everything(over);
     over->when_mouse_down = nullptr;
     over->when_clicked = paint {
+        return;
         later_immediate([](Timer *) {
             overview::close();
         });
