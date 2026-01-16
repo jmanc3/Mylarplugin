@@ -162,6 +162,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         c->z_index = 0;
     }
     static float roundingAmt = 8;
+    render_drop_shadow(monitor, 1.0, {0, 0, 0, .2}, roundingAmt * s, 2.0, c->real_bounds);
     auto th = titlebar_h;
     titlebar_h = ((float) titlebar_h) * (1.0 - (.2 * scalar));
     defer(titlebar_h = th);
@@ -277,6 +278,8 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     };
     c->receive_events_even_if_obstructed_by_one = true;
     c->when_drag_end_is_click = false;
+    c->minimum_x_distance_to_move_before_drag_begins = 3;
+    c->minimum_y_distance_to_move_before_drag_begins = 3;
     c->when_mouse_enters_container = paint {
     };
     c->when_clicked = paint {
