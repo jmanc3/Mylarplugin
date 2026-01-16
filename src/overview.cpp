@@ -358,6 +358,8 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
         final_bounds.x += overx * .5;
         final_bounds.y += overy * .5;
         auto bounds = real_bounds_client(cid);
+        bounds.y -= titlebar_h;
+        bounds.h += titlebar_h;
         auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
         if (scalar > 1.0)
             scalar = 1.0;
