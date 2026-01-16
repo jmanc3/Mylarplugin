@@ -613,8 +613,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     hypriso->damage_entire(monitor);
 }
 
-void snap_assist::open(int monitor, int cid) {
-    auto c = get_cid_container(cid);
+void actual_open(int monitor, int cid) {
+        auto c = get_cid_container(cid);
     if (!c)
         return;
 
@@ -688,8 +688,6 @@ void snap_assist::open(int monitor, int cid) {
     // ==============================================
     // open containers
     // ==============================================
-    if (!open_slots.empty())
-        later_immediate([](Timer *) { hypriso->screenshot_all(); }); 
 
     for (int i = 0; i < open_slots.size(); i++) {
         auto pos = open_slots[i];
@@ -814,6 +812,13 @@ void snap_assist::open(int monitor, int cid) {
 
     for (auto i : ids)
         hypriso->render_whitelist.push_back(i);
+}
+
+void snap_assist::open(int monitor, int cid) {
+    later_immediate([monitor, cid](Timer *) {
+        hypriso->screenshot_all(); 
+        actual_open(monitor, cid);
+    });
 }
 
 void snap_assist::close() {

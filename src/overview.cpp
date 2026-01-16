@@ -191,7 +191,7 @@ void actual_open(int monitor) {
             float alpha = 1.0;
             //if (hypriso->is_hidden(o))
                 //alpha = scalar;
-            render_drop_shadow(rid, 1, {0, 0, 0, .25}, 6 * s, 2.0, lerp(start, b, scalar));
+            render_drop_shadow(rid, 1, {0, 0, 0, .2}, 6 * s, 2.0, lerp(start, b, scalar), 4 * s);
             hypriso->draw_thumbnail(data->order[i], lerp(start, b, scalar), 6 * s, 2.0f, 0, alpha);
         }
 
