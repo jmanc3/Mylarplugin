@@ -67,8 +67,9 @@ static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000
 
 void screenshot_loop() {
     running = true;
-    later(1000.0f / 60.0f, [](Timer *t) { 
+    later(200.0f, [](Timer *t) { 
         t->keep_running = running;
+        t->delay = 1000.0f / 60.0f;
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
         int amount = 0;
@@ -156,7 +157,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     
     auto cid = *datum<int>(c, "cid");
     auto backup = c->real_bounds;
-    if (c->state.mouse_dragging) {
+    if (c->state.mouse_dragging && !c->children[0]->state.mouse_hovering) {
         c->z_index = 100;
         c->real_bounds.x += (actual_root->mouse_current_x - actual_root->mouse_initial_x) * s;
         c->real_bounds.y += (actual_root->mouse_current_y - actual_root->mouse_initial_y) * s;
@@ -177,14 +178,12 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         int titlebar_mask = 12;
         Bounds titlebar_bounds = c->real_bounds;
         bool child_hovered = false;
-        /*
         if (!c->children.empty()) {
             if (c->children[0]->state.mouse_hovering || c->children[0]->state.mouse_pressing) {
                 titlebar_bounds.w -= titlebar_h * s * .5;
                 child_hovered = true;
             }
         }
-        */
         float fadea = scalar;
         if (hypriso->has_decorations(cid)) {
             fadea = 1.0f;
@@ -193,6 +192,33 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         auto focused = color_titlebar_focused();
         focused.a = fadea;
         rect(titlebar_bounds, focused, titlebar_mask, roundingAmt * s, 2.0f, false);
+
+        if (!c->children.empty()) {
+            auto ch = c->children[0];
+            auto close_bounds = c->real_bounds;
+            auto bw = std::round(close_bounds.h * titlebar_button_ratio());
+            close_bounds.x += close_bounds.w - bw; 
+            close_bounds.w = bw;
+            if (ch->state.mouse_pressing) {
+                rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0);
+            } else if (ch->state.mouse_hovering) {
+                rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0);
+            } else if (ch->parent->state.mouse_hovering) {
+                rect(close_bounds, color_titlebar_focused(), 13, roundingAmt * s, 2.0);
+            }
+            auto icon = "\ue8bb";
+            auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+                icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h() * .9);
+
+            auto texture_info = closed;
+            if (texture_info->id != -1) {
+                clip(to_parent(root, c), s);
+                draw_texture(*texture_info, 
+                    close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
+                    close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
+                    1.0);
+            }
+        }
 
         int icon_width = 0; 
         { // load icon
@@ -422,7 +448,11 @@ void actual_open(int monitor) {
     over->custom_type = (int) TYPE::OVERVIEW;
     //consume_everything(over);
     over->when_mouse_down = nullptr;
-    over->when_clicked = nullptr;
+    over->when_clicked = paint {
+        later_immediate([](Timer *) {
+            overview::close();
+        });
+    };
     over->when_mouse_up = nullptr;
     screenshot_loop();
     auto creation_time = get_current_time_in_ms();
