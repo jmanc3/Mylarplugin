@@ -17,8 +17,8 @@ COMMON_FLAGS := -std=c++2b -fPIC --no-gnu-unique $(INCLUDE_FLAGS) $(PKG_FLAGS) \
 	-DTRACY_ENABLE -DTRACY_NO_MEMORY -DTRACY_ON_DEMAND
 
 # --- Build type flags ---
-DEBUG_FLAGS := -g -O0
-RELEASE_FLAGS := -O3 -DNDEBUG
+DEBUG_FLAGS := -g -O0 -fno-omit-frame-pointer
+RELEASE_FLAGS := -O3 -DNDEBUG -fno-omit-frame-pointer
 
 # --- Output ---
 OUTPUT = out/$(PLUGIN_NAME).so

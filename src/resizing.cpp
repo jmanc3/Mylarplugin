@@ -308,7 +308,7 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                         auto split_w = 4 * s;
                         b.x = b.x + b.w * .5 - split_w * .5;
                         b.w = split_w;
-                        rect(b, {.4, .4, .4, 1}, 0, split_w * .5, 2.0);
+                        rect(b, {.4, .4, .4, 1}, 0, split_w * .7, 2.0);
 
                         auto drawing_split = datum<bool>(c, "drawing_split");
                         auto drawing_split_time = datum<long>(c, "drawing_split_time");
@@ -317,7 +317,7 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                             *drawing_split_time = get_current_time_in_ms();
                         }                        
                     } else {
-                        rect(b, {0, 0, 0, .2});
+                        rect(b, {0, 0, 0, .8});
                     }
 
                     anyone_drew = true;
@@ -325,11 +325,9 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                     break;
                 }
                 case (int) RESIZE_TYPE::RIGHT: {
-                    b.x += b.w - resize_split_w * .5;
-                    b.w = resize_split_w;
-                    b.y = mb.y * s;
-                    b.h = mb.h * s;
-                    rect(b, {0, 0, 0, .3});
+                    notify("here");
+                    b = {0, 0, 1000, 1000};
+                    rect(b, {0, 0, 0, 1});
                     break;
                 }
             }

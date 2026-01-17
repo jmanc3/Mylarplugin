@@ -13,7 +13,6 @@
 struct OverviewData : UserData {
     std::vector<int> order;
     float scalar = 0.0;
-
     int clicked_cid = -1;
 };
 
@@ -159,13 +158,39 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     
     auto cid = *datum<int>(c, "cid");
     auto backup = c->real_bounds;
-    if (c->state.mouse_dragging && !c->children[0]->state.mouse_hovering) {
-        c->z_index = 100;
-        c->real_bounds.x += (actual_root->mouse_current_x - actual_root->mouse_initial_x) * s;
-        c->real_bounds.y += (actual_root->mouse_current_y - actual_root->mouse_initial_y) * s;
-    } else if (c->z_index != 1000) {
-        c->z_index = 0;
+
+    {
+        bool reposition_by_mouse = false;
+        float initial_x;
+        float initial_y;
+        float current_x;
+        float current_y;
+        auto snap_back_scalar = *datum<float>(c, "snap_back_scalar");
+        initial_x = *datum<float>(c, "snap_back_initial_x");
+        initial_y = *datum<float>(c, "snap_back_initial_y");
+        current_x = *datum<float>(c, "snap_back_current_x");
+        current_y = *datum<float>(c, "snap_back_current_y");
+        if (snap_back_scalar != 1.0 && snap_back_scalar != 0.0) {
+            reposition_by_mouse = true;
+            //snap_back_scalar = pull(slidetopos2, snap_back_scalar);
+        }
+        if ((c->state.mouse_dragging && !c->children[0]->state.mouse_hovering)) {
+            reposition_by_mouse = true;
+            initial_x = actual_root->mouse_initial_x;
+            initial_y = actual_root->mouse_initial_y;
+            current_x = actual_root->mouse_current_x;
+            current_y = actual_root->mouse_current_y;
+            snap_back_scalar = 1.0;
+        }
+        if (reposition_by_mouse) {
+            c->z_index = 100;
+            c->real_bounds.x += ((current_x - initial_x) * s) * (scalar * snap_back_scalar);
+            c->real_bounds.y += ((current_y - initial_y) * s) * (scalar * snap_back_scalar);
+        } else if (c->z_index != 1000) {
+            c->z_index = 0;
+        }
     }
+    
     static float roundingAmt = 8;
     render_drop_shadow(monitor, 1.0, {0, 0, 0, .1}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
     auto th = titlebar_h;
@@ -314,6 +339,11 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     *datum<int>(c, "cid") = cid;
     *datum<bool>(c, "was_hovering") = false;
     *datum<long>(c, "time_since_hovering_change") = 0;
+    *datum<float>(c, "snap_back_scalar") = 1.0;
+    *datum<float>(c, "snap_back_initial_x") = 0.0;
+    *datum<float>(c, "snap_back_initial_y") = 0.0;
+    *datum<float>(c, "snap_back_current_x") = 0.0;
+    *datum<float>(c, "snap_back_current_y") = 0.0;
     c->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
         paint_option(actual_root, c, monitor, creation_time);
     };
@@ -336,12 +366,22 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         });
     };
     c->when_drag_start = paint {
+        *datum<float>(c, "snap_back_scalar") = 1.0;
+        
+        auto overview_data = (OverviewData *) c->parent->user_data;
         consume_event(root, c);
     };
     c->when_drag = paint {
         consume_event(root, c);
     };
     c->when_drag_end = paint {
+        auto overview_data = (OverviewData *) c->parent->user_data;
+        *datum<float>(c, "snap_back_scalar") = .999f;
+        animate(datum<float>(c, "snap_back_scalar"), 0.0, 80.0f, c->lifetime); 
+        *datum<float>(c, "snap_back_initial_x") = root->mouse_initial_x;
+        *datum<float>(c, "snap_back_initial_y") = root->mouse_initial_y;
+        *datum<float>(c, "snap_back_current_x") = root->mouse_current_x;
+        *datum<float>(c, "snap_back_current_y") = root->mouse_current_y;
         consume_event(root, c);
     };
 
@@ -623,8 +663,10 @@ static void animate(float *value, float target, float time_ms, std::shared_ptr<b
             }
             auto diff = (anim->target - anim->start_value) * scalar;
             *anim->value = anim->start_value + diff;
-            if (!t->keep_running && anim->on_completion)
+            if (!t->keep_running && anim->on_completion) {
+                *anim->value = anim->target;
                 anim->on_completion(true);
+            }
         } else {
             delete anim;
             t->keep_running = false;
@@ -665,10 +707,19 @@ static void actual_overview_stop() {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             auto o_data = (OverviewData *) c->user_data;
+            auto dragged_cid = -1;
+            for (auto ch : c->children) {
+                if (ch->state.mouse_dragging) {
+                    dragged_cid = *datum<int>(ch, "cid");
+                }
+            }
             for (auto o : o_data->order) {
                 hypriso->set_hidden(o, false);
             }
-            if (o_data->clicked_cid != -1) {
+            if (dragged_cid != -1) {
+                hypriso->set_hidden(dragged_cid, false);
+                hypriso->bring_to_front(dragged_cid, true);
+            } else if (o_data->clicked_cid != -1) {
                 hypriso->set_hidden(o_data->clicked_cid, false);
                 hypriso->bring_to_front(o_data->clicked_cid, true);
             }
