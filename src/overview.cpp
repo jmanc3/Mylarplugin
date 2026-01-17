@@ -13,6 +13,8 @@
 struct OverviewData : UserData {
     std::vector<int> order;
     float scalar = 0.0;
+
+    int clicked_cid = -1;
 };
 
 struct ThumbData : UserData {
@@ -325,7 +327,9 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         if (bounds_contains(c->children[0]->real_bounds, root->mouse_current_x, root->mouse_current_y))
             return;
         auto cid = *datum<int>(c, "cid");
-        hypriso->bring_to_front(cid, true);
+        auto overview_data = (OverviewData *) c->parent->user_data;
+        overview_data->clicked_cid = cid;
+        //hypriso->bring_to_front(cid, true);
         c->z_index = 1000;
         later_immediate([](Timer *) {
             overview::close();
@@ -664,7 +668,11 @@ static void actual_overview_stop() {
             for (auto o : o_data->order) {
                 hypriso->set_hidden(o, false);
             }
-            
+            if (o_data->clicked_cid != -1) {
+                hypriso->set_hidden(o_data->clicked_cid, false);
+                hypriso->bring_to_front(o_data->clicked_cid, true);
+            }
+
             removed = true;
             delete c;
             m->children.erase(m->children.begin() + i);
@@ -689,9 +697,7 @@ void overview::close() {
                 });
             }
         }
-        return;
     }
-    actual_overview_stop();
 }
 
 void overview::click(int id, int button, int state, float x, float y) {
