@@ -12,14 +12,17 @@
 
 struct OverviewData : UserData {
     std::vector<int> order;
+    float scalar = 0.0;
 };
 
 struct ThumbData : UserData {
     int cid;
 };
 
+static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr);
+
 static bool running = false;
-static float overview_anim_time = 285.0f;
+static float overview_anim_time = 215.0f;
 
 static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
@@ -93,10 +96,8 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     if (stage != (int) STAGE::RENDER_POST_WALLPAPER || monitor != rid)
         return;
     renderfix
-    
-    auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
-    if (scalar > 1.0)
-        scalar = 1.0;
+    auto overview_data = (OverviewData *) c->user_data;
+    auto scalar = overview_data->scalar;
     scalar = pull(slidetopos2, scalar);
     
     auto m = bounds_monitor(monitor);
@@ -104,7 +105,8 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     auto rawmon = m;
     //rect(rawmon, {.14, .14, .14, 1 * scalar}, 0, 0, 2.0, false);
     hypriso->draw_wallpaper(monitor, m);
-    rect(m, {0, 0, 0, .3}, 0, 0, 2.0, true);
+    rect(m, {0, 0, 0, .4f}, 0, 0, 2.0, true);
+    //rect(m, {0, 0, 0, .5}, 0, 0, 2.0, true);
 }
 
 void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, long creation_time) {
@@ -122,9 +124,8 @@ void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, lon
     m.scale(s);
     auto rawmon = m;
 
-    auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
-    if (scalar > 1.0)
-        scalar = 1.0;
+    auto overview_data = (OverviewData *) c->user_data;
+    auto scalar = overview_data->scalar;
     scalar = pull(slidetopos2, scalar);
    
     float padamount = .17;
@@ -150,9 +151,8 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         return;
     renderfix
 
-    auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
-    if (scalar > 1.0)
-        scalar = 1.0;
+    auto overview_data = (OverviewData *) c->parent->user_data;
+    auto scalar = overview_data->scalar;
     scalar = pull(slidetopos2, scalar);
     
     auto cid = *datum<int>(c, "cid");
@@ -161,7 +161,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         c->z_index = 100;
         c->real_bounds.x += (actual_root->mouse_current_x - actual_root->mouse_initial_x) * s;
         c->real_bounds.y += (actual_root->mouse_current_y - actual_root->mouse_initial_y) * s;
-    } else {
+    } else if (c->z_index != 1000) {
         c->z_index = 0;
     }
     static float roundingAmt = 8;
@@ -180,7 +180,8 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         bool child_hovered = false;
         if (!c->children.empty()) {
             if (c->children[0]->state.mouse_hovering || c->children[0]->state.mouse_pressing) {
-                titlebar_bounds.w -= titlebar_h * s * .5;
+                titlebar_mask = 14;
+                titlebar_bounds.w -= std::round(titlebar_bounds.h * titlebar_button_ratio());
                 child_hovered = true;
             }
         }
@@ -265,11 +266,13 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             close_bounds.x += close_bounds.w - bw; 
             close_bounds.w = bw;
             if (ch->state.mouse_pressing) {
-                rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0);
+                rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0, false);
             } else if (ch->state.mouse_hovering) {
-                rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0);
+                rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0, false);
             } else {
-                rect(close_bounds, color_titlebar_focused(), 13, roundingAmt * s, 2.0);
+                auto co = color_titlebar_focused();
+                co.a = fadea;
+                rect(close_bounds, co, 13, roundingAmt * s, 2.0, false);
             }
             auto icon = "\ue8bb";
             auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
@@ -323,6 +326,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
             return;
         auto cid = *datum<int>(c, "cid");
         hypriso->bring_to_front(cid, true);
+        c->z_index = 1000;
         later_immediate([](Timer *) {
             overview::close();
         });
@@ -398,24 +402,29 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
         auto bounds = real_bounds_client(cid);
         bounds.y -= titlebar_h;
         bounds.h += titlebar_h;
-        auto scalar = ((float) (get_current_time_in_ms() - creation_time)) / overview_anim_time; 
-        if (scalar > 1.0)
-            scalar = 1.0;
+        
+        auto overview_data = (OverviewData *) c->user_data;
+        auto scalar = overview_data->scalar;
         scalar = pull(slidetopos2, scalar);
         
         auto was_hovering = datum<bool>(ch, "was_hovering");
         auto time_since_hovering_change = datum<long>(ch, "time_since_hovering_change");
         if (scalar >= 1.0) {
-            if (*was_hovering != ch->state.mouse_hovering) {
-                *was_hovering = ch->state.mouse_hovering;
+            bool hovering_state = ch->state.mouse_hovering;
+            if (ch->state.mouse_pressing && !ch->children[0]->state.mouse_hovering) {
+                hovering_state = false;
+            }
+            if (*was_hovering != hovering_state) {
+                *was_hovering = hovering_state;
                 *time_since_hovering_change = get_current_time_in_ms();
             }
+
             auto current = get_current_time_in_ms();
-            auto scalar = ((float) (current - *time_since_hovering_change)) / 100.0f;
+            auto scalar = ((float) (current - *time_since_hovering_change)) / 60.0f;
             if (scalar > 1.0)
                 scalar = 1.0;
 
-            if (ch->state.mouse_hovering) {
+            if (hovering_state) {
                 auto uu = std::round(final_bounds.w * (1.0 + (.03 * scalar)));
                 auto hh = std::round(final_bounds.h * (1.0 + (.03 * scalar)));
                 final_bounds.x -= (uu - final_bounds.w) * .5;
@@ -444,6 +453,7 @@ void actual_open(int monitor) {
     
     auto over = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
     auto overview_data = new OverviewData;
+    animate(&overview_data->scalar, 1.0, overview_anim_time, over->lifetime); 
     auto order = get_window_stacking_order();
     for (auto o : order) {
         if (hypriso->alt_tabbable(o) && get_monitor(o) == monitor && hypriso->get_active_workspace_id_client(o) == hypriso->get_active_workspace_id(monitor)) {
@@ -562,9 +572,76 @@ void actual_open(int monitor) {
     hypriso->all_lose_focus();
 }
 
+struct Anim {
+    float *value = nullptr;
+    float start_value;
+    float target;
+    long start_time;
+    float time_ms;
+    std::weak_ptr<bool> lifetime;
+    std::function<void(bool)> on_completion = nullptr;
+};
+
+static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion) {
+    static std::vector<Anim *> anims;
+    for (auto anim : anims) {
+        if (anim->value == value) {
+            anim->start_value = *value;
+            anim->target = target;
+            anim->start_time = get_current_time_in_ms();
+            anim->time_ms = time_ms;
+            anim->lifetime = lifetime;
+            anim->on_completion = on_completion;
+            return;
+        }
+    }
+    
+    auto anim = new Anim;
+    anim->value = value;
+    anim->start_value = *value;
+    anim->target = target;
+    anim->start_time = get_current_time_in_ms();
+    anim->time_ms = time_ms;
+    anim->lifetime = lifetime;
+    anim->on_completion = on_completion;
+    
+    // TODO: this creates a later per animation which is dumb, they should all be combined into one that calls over a vec of anims
+    later(1000.0f / 165.0f, [anim](Timer *t) {
+        t->keep_running = true;
+        
+        if (anim->lifetime.lock()) {
+            long delta = get_current_time_in_ms() - anim->start_time;
+            float delta_ms = (float) delta;
+            float scalar = delta_ms / anim->time_ms;
+            if (scalar > 1.0) {
+                t->keep_running = false;
+                scalar = 1.0;
+            }
+            auto diff = (anim->target - anim->start_value) * scalar;
+            *anim->value = anim->start_value + diff;
+            if (!t->keep_running && anim->on_completion)
+                anim->on_completion(true);
+        } else {
+            delete anim;
+            t->keep_running = false;
+            if (anim->on_completion)
+                anim->on_completion(false);
+        }
+    });
+}
+
 void overview::open(int monitor) {
-    if (running)
+    if (running) {
+        for (auto c: actual_root->children) {
+            if (c->custom_type == (int) TYPE::OVERVIEW) {
+                auto overview_data = (OverviewData *) c->user_data;
+                if (overview_data->scalar != 1.0) {
+                    animate(&overview_data->scalar, 1.0, overview_anim_time, c->lifetime); 
+                }
+            }
+        }
         return;
+    }
     later_immediate([monitor](Timer *) {
         screenshotting_wallpaper = true;
         hypriso->screenshot_wallpaper(monitor);
@@ -575,7 +652,7 @@ void overview::open(int monitor) {
     });
 }
 
-void overview::close() {
+static void actual_overview_stop() {
     running = false;
     hypriso->whitelist_on = false;
     auto m = actual_root;
@@ -585,9 +662,7 @@ void overview::close() {
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             auto o_data = (OverviewData *) c->user_data;
             for (auto o : o_data->order) {
-                later(20, [o](Timer *) {
-                    hypriso->set_hidden(o, false);
-                });
+                hypriso->set_hidden(o, false);
             }
             
             removed = true;
@@ -600,6 +675,23 @@ void overview::close() {
         later_immediate([](Timer *) {
             hypriso->all_gain_focus();
         });
+}
+
+void overview::close() {
+    if (running) {
+        for (auto c: actual_root->children) {
+            if (c->custom_type == (int) TYPE::OVERVIEW) {
+                auto overview_data = (OverviewData *) c->user_data;
+                animate(&overview_data->scalar, 0.0, overview_anim_time * .75, c->lifetime, [](bool normal_end) {
+                    if (normal_end) {
+                        actual_overview_stop();
+                    }
+                });
+            }
+        }
+        return;
+    }
+    actual_overview_stop();
 }
 
 void overview::click(int id, int button, int state, float x, float y) {
