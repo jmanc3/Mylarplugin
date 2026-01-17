@@ -2901,7 +2901,8 @@ float scale(int id) {
     return 1.0;
 }
 
-std::vector<int> HyprIso::get_workspaces(int monitor) {
+// TODO: this is wrong order
+std::vector<int> HyprIso::get_workspace_ids(int monitor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -2910,7 +2911,11 @@ std::vector<int> HyprIso::get_workspaces(int monitor) {
         if (hm->id == monitor) {
             for (auto e : g_pCompositor->m_workspaces) {
                 if (hm->m == e->m_monitor) {
-                    vec.push_back(e->m_id);
+                    for (auto hs : hyprspaces) {
+                        if (hs->w == e) {
+                            vec.push_back(hs->id);
+                        }
+                    }
                 }
             }
         }

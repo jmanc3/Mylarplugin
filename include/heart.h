@@ -82,6 +82,7 @@ enum struct TYPE : uint8_t {
     TEST,
     OUR_POPUP,
     OVERVIEW,
+    WORKSPACE_CHANGE_INDICATOR,
 };
 
 extern std::vector<Container *> actual_monitors;

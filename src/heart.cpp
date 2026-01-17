@@ -22,6 +22,7 @@
 #include "settings.h"
 #include "snap_assist.h"
 #include "overview.h"
+#include "workspace_indicator.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -1385,6 +1386,7 @@ void on_workspace_change(int cid) {
             popup::close(c->uuid);
         }
     }
+    workspace_indicator::on_change(cid);
 }
 
 void second::begin() {
@@ -1568,6 +1570,13 @@ void second::layout_containers() {
 
     for (auto c : backup) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+                *datum<bool>(c, "touched") = true;
+            }
+        }
+        if (c->custom_type == (int) TYPE::WORKSPACE_CHANGE_INDICATOR) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
                 c->pre_layout(actual_root, c, c->parent->real_bounds);
