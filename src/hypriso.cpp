@@ -2934,6 +2934,39 @@ std::vector<int> HyprIso::get_workspace_ids(int monitor) {
     return vecint;
 }
 
+// TODO: this is wrong order
+std::vector<int> HyprIso::get_workspaces(int monitor) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    struct Pair {
+        WORKSPACEID raw_id;
+        int id;
+    };
+    std::vector<Pair> vec;
+    for (auto hm : hyprmonitors) {
+        if (hm->id == monitor) {
+            for (auto e : g_pCompositor->m_workspaces) {
+                if (hm->m == e->m_monitor) {
+                    for (auto hs : hyprspaces) {
+                        if (hs->w == e) {
+                            vec.push_back({hs->w->m_id, hs->id});
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::sort(vec.begin(), vec.end(), [](Pair a, Pair b) {
+        return a.raw_id < b.raw_id; 
+    });
+    std::vector<int> vecint;
+    for (auto v : vec)
+        vecint.push_back(v.raw_id);
+
+    return vecint;
+}
+
 int HyprIso::get_active_workspace(int monitor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

@@ -23,13 +23,31 @@ void workspace_indicator::on_change(int cid) {
 
         float w = std::round(200 * s);
         float h = std::round(34 * s);
-        auto spaces = hypriso->get_workspace_ids(rid);
-        
+        auto spaces_raw = hypriso->get_workspaces(rid);
+        std::vector<int> spaces;
+        bool has_first = false;
+        for (auto s : spaces_raw)
+            if (s == 1)
+                has_first = true;
+        if (has_first) {
+            for (auto s : spaces_raw) {
+                if (s == 1)
+                    break;
+                spaces.push_back(s);
+            }
+            for (int i = 1; i <= spaces_raw[spaces_raw.size() - 1]; i++)
+                spaces.push_back(i);
+        } else {
+            for (auto s : spaces_raw)
+                spaces.push_back(s);
+        }
+
         if (spaces.size() == 1) {
             // This makes it so that a single dot never happens and that there is always atleast two
             spaces.push_back(12341234);
         }
-        auto active = hypriso->get_active_workspace_id(rid);
+        auto active = hypriso->get_active_workspace(rid);        
+
         int index = 0;
         for (int i = 0; i < spaces.size(); i++) {
             if (spaces[i] == active) {
@@ -71,7 +89,7 @@ void workspace_indicator::on_change(int cid) {
                   dot_w + size_boost, dot_w + size_boost}, col, 0, dot_w * .5 + size_boost * .5, 2.0, false);
             start_x += h;
         }
-        hypriso->damage_box(b);
+        hypriso->damage_box(b.scale(1.0 / s));
     };
 
     later(650.0f, [indicator](Timer *) {

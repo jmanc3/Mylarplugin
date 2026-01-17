@@ -347,6 +347,8 @@ struct HyprIso {
     SurfacePassInfo pass_info(int cid);
 
     std::vector<int> get_workspace_ids(int monitor);
+    std::vector<int> get_workspaces(int monitor);
+    
     int get_active_workspace(int monitor);
     int get_active_workspace_id(int monitor);
     int get_active_workspace_id_client(int client);
