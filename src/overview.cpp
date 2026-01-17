@@ -367,6 +367,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     };
     c->when_drag_start = paint {
         *datum<float>(c, "snap_back_scalar") = 1.0;
+        *datum<bool>(c, "started_on_close") = c->children[0]->state.mouse_hovering;
         
         auto overview_data = (OverviewData *) c->parent->user_data;
         consume_event(root, c);
@@ -376,12 +377,15 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     };
     c->when_drag_end = paint {
         auto overview_data = (OverviewData *) c->parent->user_data;
-        *datum<float>(c, "snap_back_scalar") = .999f;
-        animate(datum<float>(c, "snap_back_scalar"), 0.0, 80.0f, c->lifetime); 
-        *datum<float>(c, "snap_back_initial_x") = root->mouse_initial_x;
-        *datum<float>(c, "snap_back_initial_y") = root->mouse_initial_y;
-        *datum<float>(c, "snap_back_current_x") = root->mouse_current_x;
-        *datum<float>(c, "snap_back_current_y") = root->mouse_current_y;
+        *datum<float>(c, "snap_back_scalar") = 1.0;
+        if (!*datum<bool>(c, "started_on_close")) {
+            *datum<float>(c, "snap_back_scalar") = .999f;
+            animate(datum<float>(c, "snap_back_scalar"), 0.0, 80.0f, c->lifetime); 
+            *datum<float>(c, "snap_back_initial_x") = root->mouse_initial_x;
+            *datum<float>(c, "snap_back_initial_y") = root->mouse_initial_y;
+            *datum<float>(c, "snap_back_current_x") = root->mouse_current_x;
+            *datum<float>(c, "snap_back_current_y") = root->mouse_current_y;
+        }
         consume_event(root, c);
     };
 
@@ -428,12 +432,6 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     auto cid_copy = cid;
     close->when_clicked = [cid_copy](Container *root, Container *c) {
         close_window(cid_copy);
-        /*
-        later(10, [close_cid](Timer *) { 
-            remove_all_of_cid(close_cid);
-            possibly_close_if_none_left(); 
-        });
-        */
     };
 }
 
