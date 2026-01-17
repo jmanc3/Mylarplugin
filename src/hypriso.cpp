@@ -2906,21 +2906,32 @@ std::vector<int> HyprIso::get_workspace_ids(int monitor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    std::vector<int> vec;
+    struct Pair {
+        WORKSPACEID raw_id;
+        int id;
+    };
+    std::vector<Pair> vec;
     for (auto hm : hyprmonitors) {
         if (hm->id == monitor) {
             for (auto e : g_pCompositor->m_workspaces) {
                 if (hm->m == e->m_monitor) {
                     for (auto hs : hyprspaces) {
                         if (hs->w == e) {
-                            vec.push_back(hs->id);
+                            vec.push_back({hs->w->m_id, hs->id});
                         }
                     }
                 }
             }
         }
     }
-    return vec;
+    std::sort(vec.begin(), vec.end(), [](Pair a, Pair b) {
+        return a.raw_id < b.raw_id; 
+    });
+    std::vector<int> vecint;
+    for (auto v : vec)
+        vecint.push_back(v.id);
+
+    return vecint;
 }
 
 int HyprIso::get_active_workspace(int monitor) {
