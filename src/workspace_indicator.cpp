@@ -69,12 +69,12 @@ void workspace_indicator::on_change(int cid) {
             auto sm = larger;
             sm.shrink(1.0);
             //render_drop_shadow(rid, 1, {0, 0, 0, 0.1}, h * .5, 2.0, sm);
-            rect(larger, {0, 0, 0, 1}, 0, h * .5, 2.0, true);
+            rect(larger, {.14, .14, .14, 1}, 0, h * .5, 2.0, true);
             larger.shrink(1.0);
-            border(larger, {0, 0, 0, 1}, 1, 0, h * .5, 2.0, true);
+            border(larger, {.14, .14, .14, 1}, 1, 0, h * .5, 2.0, true);
         }
 
-        float dot_w = 4 * s;
+        float dot_w = std::round(4 * s);
         float start_x = b.x + h * .5 - dot_w * .5;
         float start_y = b.y + h * .5 - dot_w * .5;
         for (int i = 0; i < spaces.size(); i++) {
@@ -82,11 +82,14 @@ void workspace_indicator::on_change(int cid) {
             float size_boost = 0;
             if (i == index) {
                 col = RGBA(.8, .8, .8, 1);
-                size_boost = 2 * s;
+                size_boost = dot_w;
             }
             
-            rect({start_x - size_boost * .5, start_y - size_boost * .5,
-                  dot_w + size_boost, dot_w + size_boost}, col, 0, dot_w * .5 + size_boost * .5, 2.0, false);
+            rect({start_x - std::round(size_boost * .5),
+                  start_y - std::round(size_boost * .5),
+                  dot_w + size_boost, 
+                  dot_w + size_boost}, 
+                  col, 0, std::round(dot_w * .4) + std::round(size_boost * .5), 2.0, false);
             start_x += h;
         }
         hypriso->damage_box(b.scale(1.0 / s));

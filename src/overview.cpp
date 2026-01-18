@@ -161,6 +161,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
 
     auto overview_data = (OverviewData *) c->parent->user_data;
     auto scalar = overview_data->scalar;
+    auto fade_in_a = *datum<float>(c, "alpha_fade_in");
     //scalar = pull(slidetopos2, scalar);
     
     auto cid = *datum<int>(c, "cid");
@@ -201,7 +202,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     }
     
     static float roundingAmt = 8;
-    render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * scalar}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
+    render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
     auto th = titlebar_h;
     titlebar_h = std::round(titlebar_h * shrink_factor);
     defer(titlebar_h = th);
@@ -229,7 +230,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         }
         
         auto focused = color_titlebar_focused();
-        focused.a = fadea;
+        focused.a = fadea * fade_in_a;
         rect(titlebar_bounds, focused, titlebar_mask, roundingAmt * s, 2.0f, false);
 
         int icon_width = 0; 
@@ -267,7 +268,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             }
             clip(to_parent(root, c), s);
             //draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos2, fadea));
-            draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), fadea);
+            draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), fadea * fade_in_a);
         }
 
         std::string title_text = hypriso->title_name(cid);
@@ -291,10 +292,10 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                     overflow = icon_width + 16 * s;
 
                 auto clip_w = c->real_bounds.w - overflow - overflow_amount;
+                clip_w -= c->children[0]->real_bounds.w;
                 if (clip_w > 0) {
                     draw_texture(*texture_info, 
-                        //c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos2, fadea), clip_w);
-                        c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea, clip_w);
+                        c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea * fade_in_a, clip_w);
                 }
             }
         }
@@ -310,9 +311,9 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             } else if (ch->state.mouse_hovering) {
                 rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0, false);
             } else {
-                auto co = color_titlebar_focused();
-                co.a = fadea;
-                rect(close_bounds, co, 13, roundingAmt * s, 2.0, false);
+                //auto co = color_titlebar_focused();
+                //co.a = fadea;
+                //rect(close_bounds, co, 13, roundingAmt * s, 2.0, false);
             }
             auto icon = "\ue8bb";
             auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
@@ -326,7 +327,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                 draw_texture(*texture_info, 
                     close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
                     close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
-                    1.0);
+                    1.0 * fade_in_a);
             }
         }
     }
@@ -334,7 +335,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     c->real_bounds.y += std::round(titlebar_h * s);
     c->real_bounds.h -= std::round(titlebar_h * s);
     
-    hypriso->draw_thumbnail(cid, c->real_bounds, roundingAmt * s, 2.0, 3);
+    hypriso->draw_thumbnail(cid, c->real_bounds, roundingAmt * s, 2.0, 3, fade_in_a);
 
     if (c->state.mouse_hovering) {
         auto b = pre_title_backup;
@@ -357,6 +358,13 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     *datum<float>(c, "snap_back_initial_y") = 0.0;
     *datum<float>(c, "snap_back_current_x") = 0.0;
     *datum<float>(c, "snap_back_current_y") = 0.0;
+    auto overview_data = (OverviewData *) parent->user_data;
+    if (overview_data->scalar == 1.0) {
+        *datum<float>(c, "alpha_fade_in") = 0.0;
+        animate(datum<float>(c, "alpha_fade_in"), 1.0, overview_anim_time, c->lifetime);
+    } else {
+        *datum<float>(c, "alpha_fade_in") = 1.0;
+    }
     c->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
         paint_option(actual_root, c, monitor, creation_time);
     };
