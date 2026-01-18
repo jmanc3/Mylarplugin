@@ -2303,7 +2303,7 @@ void HyprIso::create_hooks() {
     overwrite_min();
     hook_render_functions();
     overwrite_defaults();
-    //interleave_floating_and_tiled_windows();
+    interleave_floating_and_tiled_windows();
     hook_maximize_minimize();
     hook_dock_change();
     hook_monitor_arrange();
@@ -3992,8 +3992,6 @@ void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF w, PHLMONITOR m,
     g_pHyprOpenGL->m_renderData.pMonitor = m;
     const auto NOW = Time::steadyNow();
 
-    notify("screenshot " + std::to_string(w->m_id) + " " + std::to_string((unsigned long long) buffer));
-
     /*
     pMonitor->m_activeWorkspace = PWORKSPACE;
     g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
@@ -4014,19 +4012,25 @@ void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF w, PHLMONITOR m,
     auto backup = m->m_activeWorkspace;
     auto visibility = w->m_visible;
     w->m_visible = true;
+    m->m_activeWorkspace = w.lock();
+    w->m_forceRendering = true;
     
     //(*(tRenderWorkspace)pRenderWorkspace)(g_pHyprRenderer.get(), m, w.lock(), NOW, CBox(0, 0, (int)m->m_pixelSize.x, (int)m->m_pixelSize.y));
     //(*(tRenderWorkspace)pRenderWorkspace)(g_pHyprRenderer.get(), m, w.lock(), NOW, CBox(0, 0, (int)m->m_pixelSize.x, (int)m->m_pixelSize.y));
-    (*(tRenderWorkspaceWindows)pRenderWorkspaceWindows)(g_pHyprRenderer.get(), m, w.lock(), NOW);
+    //if (pRenderWorkspaceWindows)
+        //(*(tRenderWorkspaceWindows)pRenderWorkspaceWindows)(g_pHyprRenderer.get(), m, w.lock(), NOW);
     
     /*
     if (auto wmon = w->m_monitor.lock()) {
         (*(tRenderWorkspace)pRenderWorkspace)(g_pHyprRenderer.get(), wmon, w.lock(), NOW, CBox(0, 0, (int)m->m_pixelSize.x, (int)m->m_pixelSize.y));
     }
 */
+    g_pHyprRenderer->renderWorkspace(m, w.lock(), Time::steadyNow(), m->logicalBox());
+
 
     w->m_visible = visibility;
     m->m_activeWorkspace = backup;
+    w->m_forceRendering = false;
     //(*(tRenderWorkspaceWindowsFullscreen)pRenderWorkspaceWindowsFullscreen)(g_pHyprRenderer.get(), m, w.lock(), NOW);
 
     
@@ -4463,42 +4467,42 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
  
     //return;
     for (auto hs : hyprspaces) {
-        if (hs->w->m_id != id)
-            continue;
-        if (!hs->buffer->isAllocated())
-            continue;
-        //notify("draw space " + std::to_string(id));
-        AnyPass::AnyData anydata([b, hs, rounding](AnyPass* pass) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
- 
-            //notify("draw");
-            auto roundingPower = 2.0f;
-            auto cornermask = 0;
-            auto tex = hs->buffer->getTexture();
-            notify(std::to_string(hs->w->m_id) + " " + std::to_string((unsigned long long) hs->buffer));
-            
-            auto box = tocbox(b);
+        if (hs->w->m_id == id) {
+            if (!hs->buffer->isAllocated())
+                continue;
+            //notify("draw space " + std::to_string(id));
+            AnyPass::AnyData anydata([b, hs, rounding](AnyPass* pass) {
+    #ifdef TRACY_ENABLE
+        ZoneScoped;
+    #endif
+     
+                //notify("draw");
+                auto roundingPower = 2.0f;
+                auto cornermask = 0;
+                auto tex = hs->buffer->getTexture();
+                //notify(std::to_string(hs->w->m_id) + " " + std::to_string((unsigned long long) hs->buffer));
+                
+                auto box = tocbox(b);
 
-            CHyprOpenGLImpl::STextureRenderData data;
-            data.allowCustomUV = true;
+                CHyprOpenGLImpl::STextureRenderData data;
+                data.allowCustomUV = true;
 
-            data.round = rounding;
-            data.noAA = true;
-            data.roundingPower = roundingPower;
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                std::min(1.0, 1.0),
-                std::min(1.0, 1.0)
-            );
-            set_rounding(cornermask);
-            g_pHyprOpenGL->renderTexture(tex, box, data);
-            set_rounding(0);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-        });
-        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+                data.round = rounding;
+                data.noAA = true;
+                data.roundingPower = roundingPower;
+                g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+                    std::min(1.0, 1.0),
+                    std::min(1.0, 1.0)
+                );
+                set_rounding(cornermask);
+                g_pHyprOpenGL->renderTexture(tex, box, data);
+                set_rounding(0);
+                g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+                g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+            });
+            g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+        }
     }
 };
 
@@ -4566,8 +4570,12 @@ void HyprIso::screenshot_space(int mon, int id) {
     for (auto hs : hyprspaces) {
         //notify("against " + std::to_string(hs->w->m_id));
         if (hs->w->m_id == id) {
+            if (!hs->buffer)
+                hs->buffer = new CFramebuffer;
+            
             //notify("screenshot " + std::to_string(id));
             screenshot_workspace(hs->buffer, hs->w, hs->w->m_monitor.lock(), false);
+            break;
         }
         // for (auto hm : hyprmonitors) {
         //     if (hs->w.lock() && hs->w->m_monitor == hm->m && mon == hm->id) {
@@ -5761,17 +5769,17 @@ void interleave_floating_and_tiled_windows() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    return;
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWorkspaceWindows");
         for (auto m : METHODS) {
-            if (m.signature.find("_ZN13CHyprRenderer22renderWorkspaceWindowsEN9Hyprutils6Memory14CSharedPointerI8CMonitorEENS2_I10CWorkspaceEERKNSt6chrono10time_pointINS7_3_V212steady_clockENS7_8durationIlSt5ratioILl1ELl1000000000EEEEEE") != std::string::npos) {
+            if (m.demangled.find("CHyprRenderer::renderWorkspaceWindows(") != std::string::npos) {
                 pRenderWorkspaceWindows = m.address;
-                g_pOnRenderWorkspaceWindows = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onRenderWorkspaceWindows);
-                g_pOnRenderWorkspaceWindows->hook();
+                //g_pOnRenderWorkspaceWindows = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onRenderWorkspaceWindows);
+                //g_pOnRenderWorkspaceWindows->hook();
             }
         }
     }
+    return;
     {
         static auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWorkspaceWindowsFullscreen");
         pRenderWorkspaceWindowsFullscreen = METHODS[0].address;

@@ -7,8 +7,11 @@
 #include "layout_thumbnails.h"
 
 #include <climits>
+#include <cmath>
 #include <math.h>
 #include <system_error>
+
+static float shrink_factor = 1.0;
 
 struct OverviewData : UserData {
     std::vector<int> order;
@@ -20,7 +23,7 @@ struct ThumbData : UserData {
     int cid;
 };
 
-static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr);
+static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr, std::function<float(float)> lerp_func = nullptr);
 
 static bool running = false;
 static float overview_anim_time = 215.0f;
@@ -69,6 +72,10 @@ static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
 
+// {"anchors":[{"x":0,"y":1},{"x":0.30000000000000004,"y":0.675},{"x":1,"y":0}],"controls":[{"x":0.20596153063651845,"y":0.9462499830457899},{"x":0.4476281973031851,"y":0.06847220526801215}]}
+std::vector<float> snapback = { 0, 0.0050000000000000044, 0.010000000000000009, 0.017000000000000015, 0.02400000000000002, 0.03300000000000003, 0.04300000000000004, 0.05400000000000005, 0.06699999999999995, 0.08099999999999996, 0.09599999999999997, 0.11399999999999999, 0.134, 0.15600000000000003, 0.18200000000000005, 0.20999999999999996, 0.243, 0.281, 0.32499999999999996, 0.387, 0.43999999999999995, 0.486, 0.527, 0.563, 0.596, 0.626, 0.654, 0.679, 0.7030000000000001, 0.725, 0.745, 0.764, 0.782, 0.798, 0.8140000000000001, 0.8280000000000001, 0.842, 0.855, 0.867, 0.878, 0.888, 0.898, 0.908, 0.917, 0.925, 0.933, 0.94, 0.947, 0.953, 0.959, 0.964, 0.969, 0.974, 0.978, 0.982, 0.986, 0.989, 0.993, 0.995, 0.998, 1 };
+
+
 void screenshot_loop() {
     running = true;
     later(200.0f, [](Timer *t) { 
@@ -99,7 +106,7 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     renderfix
     auto overview_data = (OverviewData *) c->user_data;
     auto scalar = overview_data->scalar;
-    scalar = pull(slidetopos2, scalar);
+    //scalar = pull(slidetopos2, scalar);
     
     auto m = bounds_monitor(monitor);
     m.scale(s);
@@ -127,7 +134,7 @@ void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, lon
 
     auto overview_data = (OverviewData *) c->user_data;
     auto scalar = overview_data->scalar;
-    scalar = pull(slidetopos2, scalar);
+    //scalar = pull(slidetopos2, scalar);
    
     float padamount = .17;
     float padx = m.w * padamount;
@@ -154,10 +161,11 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
 
     auto overview_data = (OverviewData *) c->parent->user_data;
     auto scalar = overview_data->scalar;
-    scalar = pull(slidetopos2, scalar);
+    //scalar = pull(slidetopos2, scalar);
     
     auto cid = *datum<int>(c, "cid");
     auto backup = c->real_bounds;
+    bool snap_back = false;
 
     {
         bool reposition_by_mouse = false;
@@ -172,6 +180,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         current_y = *datum<float>(c, "snap_back_current_y");
         if (snap_back_scalar != 1.0 && snap_back_scalar != 0.0) {
             reposition_by_mouse = true;
+            snap_back = true;
             //snap_back_scalar = pull(slidetopos2, snap_back_scalar);
         }
         if ((c->state.mouse_dragging && !c->children[0]->state.mouse_hovering)) {
@@ -192,9 +201,9 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     }
     
     static float roundingAmt = 8;
-    render_drop_shadow(monitor, 1.0, {0, 0, 0, .1}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
+    render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * scalar}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
     auto th = titlebar_h;
-    titlebar_h = ((float) titlebar_h) * (1.0 - (.2 * scalar));
+    titlebar_h = std::round(titlebar_h * shrink_factor);
     defer(titlebar_h = th);
 
     auto pre_title_backup = c->real_bounds;
@@ -202,6 +211,8 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         defer(c->real_bounds = pre_title_backup);
         
         c->real_bounds.h = std::round(titlebar_h * s);
+        if (snap_back)
+            c->real_bounds.h += std::round(1 * s);
         int titlebar_mask = 12;
         Bounds titlebar_bounds = c->real_bounds;
         bool child_hovered = false;
@@ -224,7 +235,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         int icon_width = 0; 
         { // load icon
             TextureInfo *info = datum<TextureInfo>(c, std::to_string(rid) + "_icon");
-            auto real_icon_h = std::round(titlebar_icon_h() * s * .9);
+            auto real_icon_h = std::round(titlebar_icon_h() * s * shrink_factor);
             if (info->id != -1) {
                 if (info->cached_h != real_icon_h) {
                     free_text_texture(info->id);
@@ -255,7 +266,8 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                 focus_alpha = color_titlebar_text_unfocused().a;
             }
             clip(to_parent(root, c), s);
-            draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos2, fadea));
+            //draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos2, fadea));
+            draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), fadea);
         }
 
         std::string title_text = hypriso->title_name(cid);
@@ -263,7 +275,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             TextureInfo *focused = nullptr;
             TextureInfo *unfocused = nullptr;
             auto color_titlebar_textfo = color_titlebar_text_focused();
-            auto titlebar_text = titlebar_text_h() * .9;
+            auto titlebar_text = titlebar_text_h() * shrink_factor;
             auto color_titlebar_textunfo = color_titlebar_text_unfocused();
             focused = get_cached_texture(root, c, std::to_string(rid) + "_title_focused", mylar_font, 
                 title_text, color_titlebar_textfo, titlebar_text);
@@ -281,7 +293,8 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                 auto clip_w = c->real_bounds.w - overflow - overflow_amount;
                 if (clip_w > 0) {
                     draw_texture(*texture_info, 
-                        c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos2, fadea), clip_w);
+                        //c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos2, fadea), clip_w);
+                        c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea, clip_w);
                 }
             }
         }
@@ -305,7 +318,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
             ico_color.a = fadea;
             auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
-                icon, ico_color, titlebar_button_icon_h() * .9);
+                icon, ico_color, titlebar_button_icon_h() * shrink_factor);
 
             auto texture_info = closed;
             if (texture_info->id != -1) {
@@ -361,7 +374,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         overview_data->clicked_cid = cid;
         //hypriso->bring_to_front(cid, true);
         c->z_index = 1000;
-        later_immediate([](Timer *) {
+        later(45, [](Timer *) {
             overview::close();
         });
     };
@@ -380,7 +393,8 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         *datum<float>(c, "snap_back_scalar") = 1.0;
         if (!*datum<bool>(c, "started_on_close")) {
             *datum<float>(c, "snap_back_scalar") = .999f;
-            animate(datum<float>(c, "snap_back_scalar"), 0.0, 80.0f, c->lifetime); 
+            animate(datum<float>(c, "snap_back_scalar"), 0.0, 220.0f, c->lifetime, nullptr, 
+                [](float scalar) { return pull(snapback, scalar); }); 
             *datum<float>(c, "snap_back_initial_x") = root->mouse_initial_x;
             *datum<float>(c, "snap_back_initial_y") = root->mouse_initial_y;
             *datum<float>(c, "snap_back_current_x") = root->mouse_current_x;
@@ -425,8 +439,8 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         
-        auto w = titlebar_h * .9 * titlebar_button_ratio();
-        c->wanted_bounds = {b.x + b.w - w, b.y, w, ((float) titlebar_h) * .9};
+        auto w = titlebar_h * shrink_factor * titlebar_button_ratio();
+        c->wanted_bounds = {b.x + b.w - w, b.y, w, ((float) titlebar_h) * shrink_factor};
         c->real_bounds = c->wanted_bounds;
     };
     auto cid_copy = cid;
@@ -446,8 +460,11 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
         bounds.h += titlebar_h;
         
         auto overview_data = (OverviewData *) c->user_data;
+        
         auto scalar = overview_data->scalar;
-        scalar = pull(slidetopos2, scalar);
+        //scalar = pull(slidetopos2, scalar);
+        
+        //final_bounds.y += scalar * 100 * scale(get_monitor(cid));
         
         auto was_hovering = datum<bool>(ch, "was_hovering");
         auto time_since_hovering_change = datum<long>(ch, "time_since_hovering_change");
@@ -491,6 +508,8 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
 }
 
 void actual_open(int monitor) {
+    hypriso->all_lose_focus();
+    
     hypriso->whitelist_on = true;
     
     auto over = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
@@ -524,7 +543,29 @@ void actual_open(int monitor) {
         if (stage != (int) STAGE::RENDER_POST_WINDOWS || monitor != rid)
             return;
         renderfix
+        auto overview_data = (OverviewData *) c->user_data;
+        auto bounds = bounds_monitor(rid);
+        auto r = bounds_monitor(rid);
+        
+        auto actual_w = 450 * s;
+        auto actual_h = 130 * s;
+        //auto scalar = pull(slidetopos2, overview_data->scalar);
+        auto scalar = overview_data->scalar;
+        Bounds b = {bounds.x + bounds.w * .5 * s - actual_w * .5,
+              10 * s * scalar - actual_h + actual_h * scalar,
+              actual_w,
+              actual_h};
+        //render_drop_shadow(rid, 1.0, {0, 0, 0, .2f * scalar}, 12 * s, 2.0, b);
+        //rect(b, {1, 1, 1, .1f * scalar}, 0, 12 * s, 2.0, true, 1.0 * scalar);
         hypriso->damage_entire(monitor);
+        
+        auto ids = hypriso->get_workspaces(monitor);
+        float x = 0;
+        for (auto id : ids) {
+            auto rw = (bounds.h / bounds.w) * 200 * s;
+            //hypriso->draw_workspace(rid, id, {x, 0, 1.0f * 200 * s, rw});
+            x += rw;
+        }
     };
     over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
@@ -566,6 +607,7 @@ void actual_open(int monitor) {
         }
 
         auto reserved = bounds_reserved_monitor(monitor);
+        auto overview_data = ((OverviewData *) c->user_data);
 
         ExpoLayout layout;
         auto s = scale(monitor);
@@ -611,7 +653,6 @@ void actual_open(int monitor) {
         layout_options(actual_root, c, b, creation_time, overx, overy);
     };
     hypriso->damage_entire(monitor);
-    hypriso->all_lose_focus();
 }
 
 struct Anim {
@@ -622,9 +663,10 @@ struct Anim {
     float time_ms;
     std::weak_ptr<bool> lifetime;
     std::function<void(bool)> on_completion = nullptr;
+    std::function<float(float)> lerp_func = nullptr;
 };
 
-static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion) {
+static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion, std::function<float(float)> lerp_func) {
     static std::vector<Anim *> anims;
     for (auto anim : anims) {
         if (anim->value == value) {
@@ -634,6 +676,7 @@ static void animate(float *value, float target, float time_ms, std::shared_ptr<b
             anim->time_ms = time_ms;
             anim->lifetime = lifetime;
             anim->on_completion = on_completion;
+            anim->lerp_func = lerp_func;
             return;
         }
     }
@@ -646,6 +689,7 @@ static void animate(float *value, float target, float time_ms, std::shared_ptr<b
     anim->time_ms = time_ms;
     anim->lifetime = lifetime;
     anim->on_completion = on_completion;
+    anim->lerp_func = lerp_func;
     
     // TODO: this creates a later per animation which is dumb, they should all be combined into one that calls over a vec of anims
     later(1000.0f / 165.0f, [anim](Timer *t) {
@@ -659,6 +703,9 @@ static void animate(float *value, float target, float time_ms, std::shared_ptr<b
                 t->keep_running = false;
                 scalar = 1.0;
             }
+            if (anim->lerp_func)
+                scalar = anim->lerp_func(scalar);
+            
             auto diff = (anim->target - anim->start_value) * scalar;
             *anim->value = anim->start_value + diff;
             if (!t->keep_running && anim->on_completion) {
@@ -680,7 +727,9 @@ void overview::open(int monitor) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
                 if (overview_data->scalar != 1.0) {
-                    animate(&overview_data->scalar, 1.0, overview_anim_time, c->lifetime); 
+                    animate(&overview_data->scalar, 1.0, overview_anim_time, c->lifetime, nullptr, [](float scalar) {
+                        return pull(slidetopos2, scalar);
+                    }); 
                 }
             }
         }
@@ -691,9 +740,21 @@ void overview::open(int monitor) {
         hypriso->screenshot_wallpaper(monitor);
         screenshotting_wallpaper = false;
         hypriso->screenshot_all(); 
+        auto ids = hypriso->get_workspaces(monitor);
+        for (auto id : ids)
+            hypriso->screenshot_space(monitor, id);
+    
 
         actual_open(monitor);
     });
+}
+
+void fade_in_min_max(int cid) {
+    if (auto c = get_cid_container(cid)) {
+        float *min_max = datum<float>(c, "min_max_fade");
+        *min_max = 0.0;
+        animate(min_max, 1.0, 200.0f, c->lifetime);
+    }
 }
 
 static void actual_overview_stop() {
@@ -713,16 +774,19 @@ static void actual_overview_stop() {
             }
             for (auto o : o_data->order) {
                 hypriso->set_hidden(o, false);
+                fade_in_min_max(o);
             }
             if (dragged_cid != -1) {
                 hypriso->set_hidden(dragged_cid, false);
                 hypriso->bring_to_front(dragged_cid, true);
+                fade_in_min_max(dragged_cid);
             } else if (o_data->clicked_cid != -1) {
                 hypriso->set_hidden(o_data->clicked_cid, false);
                 hypriso->bring_to_front(o_data->clicked_cid, true);
+                fade_in_min_max(o_data->clicked_cid);
+            } else {
+                removed = true;
             }
-
-            removed = true;
             delete c;
             m->children.erase(m->children.begin() + i);
         }
@@ -739,10 +803,12 @@ void overview::close() {
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
-                animate(&overview_data->scalar, 0.0, overview_anim_time * .75, c->lifetime, [](bool normal_end) {
+                animate(&overview_data->scalar, 0.0, overview_anim_time * 1.2, c->lifetime, [](bool normal_end) {
                     if (normal_end) {
                         actual_overview_stop();
                     }
+                }, [](float scalar) {
+                    return pull(slidetopos2, scalar);
                 });
             }
         }

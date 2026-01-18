@@ -303,7 +303,14 @@ void paint_button(Container *actual_root, Container *c, std::string name, std::s
         auto b = c->real_bounds;
         b.round();
         auto a = *datum<float>(client, "titlebar_alpha");
-        
+        if (name == "min" || name == "max_snapped" || name == "max_unsnapped") {
+            auto min_max_fade = *datum<float>(client, "min_max_fade");
+            if (min_max_fade != 1.0) {
+                request_damage(actual_root, c);
+                a *= min_max_fade;
+            }
+        }
+
         auto focused = get_cached_texture(root, root, name + "_focused", "Segoe Fluent Icons",
             icon, color_titlebar_text_focused(), titlebar_button_icon_h());
         auto unfocused = get_cached_texture(root, root, name + "_unfocused", "Segoe Fluent Icons", 
@@ -616,6 +623,7 @@ void titlebar::on_window_open(int id) {
         if (auto c = get_cid_container(id)) {
             create_titlebar(actual_root, c);
             *datum<float>(c, "titlebar_alpha") = 1.0;
+            *datum<float>(c, "min_max_fade") = 1.0;
         }
     } else {
         hypriso->set_corner_rendering_mask_for_window(id, 0);
@@ -693,5 +701,7 @@ void titlebar::on_activated(int id) {
         request_damage(actual_root, c);
     }
 }
+
+
 
 
