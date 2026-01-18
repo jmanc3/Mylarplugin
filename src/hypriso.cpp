@@ -224,6 +224,8 @@ struct HyprWindow {
     bool checked_resizable = false;
     bool resizable = true;
 
+    bool was_workspace_visible = false;
+
     bool is_hidden = false; // used in show/hide desktop
     bool was_hidden = false; // used in show/hide desktop
 
@@ -3975,6 +3977,15 @@ void actual_screenshot_wallpaper(CFramebuffer* buffer, PHLMONITOR m) {
     g_pHyprRenderer->endRender();
 }
 
+HyprWindow *get_window(PHLWINDOW w) {
+    for (auto hw : hyprwindows) {
+        if (hw->w == w) {
+            return hw;
+        }
+    }
+    return nullptr;
+}
+
 void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -3992,48 +4003,9 @@ void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF w, PHLMONITOR m,
     g_pHyprOpenGL->m_renderData.pMonitor = m;
     const auto NOW = Time::steadyNow();
 
-    /*
-    pMonitor->m_activeWorkspace = PWORKSPACE;
-    g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
-    PWORKSPACE->m_visible = true;
-
-    if (PWORKSPACE == startedOn)
-        pMonitor->m_activeSpecialWorkspace = openSpecial;
-
-    g_pHyprRenderer->renderWorkspace(pMonitor.lock(), PWORKSPACE, Time::steadyNow(), monbox);
-
-    PWORKSPACE->m_visible = false;
-    g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
-
-    if (PWORKSPACE == startedOn)
-        pMonitor->m_activeSpecialWorkspace.reset();
-    */
-
-    auto backup = m->m_activeWorkspace;
-    auto visibility = w->m_visible;
-    w->m_visible = true;
-    m->m_activeWorkspace = w.lock();
-    w->m_forceRendering = true;
-    
-    //(*(tRenderWorkspace)pRenderWorkspace)(g_pHyprRenderer.get(), m, w.lock(), NOW, CBox(0, 0, (int)m->m_pixelSize.x, (int)m->m_pixelSize.y));
-    //(*(tRenderWorkspace)pRenderWorkspace)(g_pHyprRenderer.get(), m, w.lock(), NOW, CBox(0, 0, (int)m->m_pixelSize.x, (int)m->m_pixelSize.y));
-    //if (pRenderWorkspaceWindows)
-        //(*(tRenderWorkspaceWindows)pRenderWorkspaceWindows)(g_pHyprRenderer.get(), m, w.lock(), NOW);
-    
-    /*
-    if (auto wmon = w->m_monitor.lock()) {
-        (*(tRenderWorkspace)pRenderWorkspace)(g_pHyprRenderer.get(), wmon, w.lock(), NOW, CBox(0, 0, (int)m->m_pixelSize.x, (int)m->m_pixelSize.y));
-    }
-*/
     g_pHyprRenderer->renderWorkspace(m, w.lock(), Time::steadyNow(), m->logicalBox());
+    //generateFrame(m, w.lock(), Time::steadyNow(), m->logicalBox());
 
-
-    w->m_visible = visibility;
-    m->m_activeWorkspace = backup;
-    w->m_forceRendering = false;
-    //(*(tRenderWorkspaceWindowsFullscreen)pRenderWorkspaceWindowsFullscreen)(g_pHyprRenderer.get(), m, w.lock(), NOW);
-
-    
     g_pHyprRenderer->endRender();
 }
 

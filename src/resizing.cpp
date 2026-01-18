@@ -260,6 +260,36 @@ void resizing::end(int cid) {
     //notify("stop resizing");
 }
 
+int index_of_cid(int cid) {
+    auto order = get_window_stacking_order();
+    for (int i = 0; i < order.size(); i++) {
+        if (order[i] == cid) {
+            return i;
+        }
+    }
+    return 10000;
+}
+
+int highest_in_group(int cid) {
+    if (auto c = get_cid_container(cid)) {
+        auto data = (ClientInfo *) c->user_data;
+        struct Pair {
+            int cid;
+            int index;
+        };
+        std::vector<Pair> all;
+        all.push_back({cid, index_of_cid(cid)});
+        for (auto g : data->grouped_with) {
+            all.push_back({g, index_of_cid(g)});
+        }
+        std::sort(all.begin(), all.end(), [](Pair a, Pair b) {
+            return a.index > b.index;
+        });
+        return all[0].cid;
+    }
+    return cid;
+}
+
 void paint_resize_edge(Container *actual_root, Container *c) {
     auto root = get_rendering_root();
     if (!root) return;
@@ -267,7 +297,7 @@ void paint_resize_edge(Container *actual_root, Container *c) {
     auto cid = *datum<int>(c, "cid");
 
     // TODO: should be after a window who is highest in grouped_with
-    if (stage == (int) STAGE::RENDER_POST_WINDOWS && c->state.concerned) {
+    if (stage == (int) STAGE::RENDER_POST_WINDOW && c->state.concerned && active_id == highest_in_group(cid)) {
         renderfix
         
         bool snapped = false;
@@ -291,6 +321,8 @@ void paint_resize_edge(Container *actual_root, Container *c) {
             bool anyone_drew = false;
             switch (resize_type) {
                 case (int) RESIZE_TYPE::LEFT: {
+                    if (snap_type != (int) SnapPosition::RIGHT)
+                        break;
                     b.x -= resize_split_w * .5;
                     b.w = resize_split_w;
                     b.y = mb.y * s;
@@ -317,7 +349,7 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                             *drawing_split_time = get_current_time_in_ms();
                         }                        
                     } else {
-                        rect(b, {0, 0, 0, .8});
+                        rect(b, {0, 0, 0, 1});
                     }
 
                     anyone_drew = true;
@@ -325,9 +357,39 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                     break;
                 }
                 case (int) RESIZE_TYPE::RIGHT: {
-                    notify("here");
-                    b = {0, 0, 1000, 1000};
-                    rect(b, {0, 0, 0, 1});
+                    if (snap_type != (int) SnapPosition::LEFT)
+                        break;
+                    b.x += b.w - resize_split_w * .5;
+                    b.w = resize_split_w;
+                    b.y = mb.y * s;
+                    b.h = mb.h * s;
+
+                    render_drop_shadow(rid, 1.0, {0, 0, 0, .1}, 0, 2.0, b);                    
+                    
+                    if (is_resizing) {
+                        rect(b, {0, 0, 0, 1});
+                        
+                        auto split_h = 30 * s;
+                        b.y = b.y + b.h * .5 - split_h * .5;
+                        b.h = split_h;
+                        
+                        auto split_w = 4 * s;
+                        b.x = b.x + b.w * .5 - split_w * .5;
+                        b.w = split_w;
+                        rect(b, {.4, .4, .4, 1}, 0, split_w * .7, 2.0);
+
+                        auto drawing_split = datum<bool>(c, "drawing_split");
+                        auto drawing_split_time = datum<long>(c, "drawing_split_time");
+                        if (!*drawing_split) {
+                            *drawing_split = true;
+                            *drawing_split_time = get_current_time_in_ms();
+                        }                        
+                    } else {
+                        rect(b, {0, 0, 0, 1});
+                    }
+
+                    anyone_drew = true;
+
                     break;
                 }
             }
@@ -372,9 +434,9 @@ int get_current_resize_type(Container *c) {
         }
     }
 
-    auto box = c->real_bounds;
+    auto box = bounds_client(cid);
     auto m = mouse();
-    box.shrink(resize_edge_size());
+    //box.shrink(resize_edge_size());
     int corner = 20;
 
     bool left = false;
