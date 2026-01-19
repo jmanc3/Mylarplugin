@@ -1515,6 +1515,9 @@ void second::begin() {
     //});
     create_rounding_shader();
     create_default_config();
+    later_immediate([](Timer *) {
+        damage_all();
+    });
 }
 
 void second::end() {

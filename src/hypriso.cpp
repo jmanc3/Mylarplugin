@@ -6211,8 +6211,8 @@ static std::string default_conf = R"(
 #
 
 general:border_size = 1
-col.active_border = rgba(880000ff)
-col.inactive_border = rgba(590000ff)
+general:col.active_border = rgba(888888ff)
+general:col.inactive_border = rgba(595959ff)
 
     
 )";
@@ -6233,4 +6233,7 @@ void HyprIso::generate_mylar_hyprland_config() {
     }
 
     g_pConfigManager->handleSource("source", "~/.config/mylar/default.conf");
+
+    for (auto w : g_pCompositor->m_windows)
+        w->updateDecorationValues();
 }
