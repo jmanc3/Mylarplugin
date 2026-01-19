@@ -212,10 +212,9 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         }
     }
     static float roundingAmt = 8;
-    //if (scalar >= 1.0 && c->state.mouse_hovering) {
-        //rect(c->real_bounds, {0, 0, 0, 0}, 0, roundingAmt * s, 2.0, true);
-        //fade_in_a = .9;
-    //}
+    if (*datum<bool>(c, "opaque")) {
+        rect(c->real_bounds, {0, 0, 0, 0}, 0, roundingAmt * s, 2.0, true);
+    }
     render_drop_shadow(monitor, 1.0, {0, 0, 0, .3f * scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 7 * s);
     auto th = titlebar_h;
     titlebar_h = std::round(titlebar_h * shrink_factor);
@@ -367,6 +366,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     *datum<int>(c, "cid") = cid;
     *datum<bool>(c, "was_hovering") = false;
+    *datum<bool>(c, "opaque") = hypriso->is_opaque(cid);
     *datum<long>(c, "time_since_hovering_change") = 0;
     *datum<float>(c, "snap_back_scalar") = 1.0;
     *datum<float>(c, "snap_back_initial_x") = 0.0;

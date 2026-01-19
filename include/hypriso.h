@@ -288,6 +288,7 @@ struct HyprIso {
     Bounds min_size(int id);
     bool is_x11(int id);
     bool is_fullscreen(int id);
+    bool is_opaque(int id);
     bool has_decorations(int id);
     void remove_decorations(int id);
     

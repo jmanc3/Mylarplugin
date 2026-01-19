@@ -4024,6 +4024,18 @@ bool HyprIso::is_x11(int id) {
     return false;
 }
 
+bool HyprIso::is_opaque(int id) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            return hw->w->opaque();
+        }
+    }
+    return true;
+}
+
 void HyprIso::send_key(uint32_t key) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
