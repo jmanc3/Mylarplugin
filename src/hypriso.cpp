@@ -2468,6 +2468,44 @@ animations {
 }
 
 
+# snap helper
+plugin:mylardesktop:snap_helper_fade_in = 170
+plugin:mylardesktop:thumb_to_position_time = 355
+
+# resize
+plugin:mylardesktop:resize_edge_size = 20
+
+# titlebar
+plugin:mylardesktop:titlebar_focused_color = rgba(000000ff)
+plugin:mylardesktop:titlebar_unfocused_color = rgba(222222ff)
+plugin:mylardesktop:titlebar_focused_text_color = rgba(ffffffff)
+plugin:mylardesktop:titlebar_unfocused_text_color = rgba(ffffffaa)
+
+plugin:mylardesktop:titlebar_button_bg_hovered_color = rgba(303030ff)
+plugin:mylardesktop:titlebar_button_bg_pressed_color = rgba(202020ff)
+
+plugin:mylardesktop:titlebar_closed_button_bg_hovered_color = rgba(dd1111ff)
+plugin:mylardesktop:titlebar_closed_button_bg_pressed_color = rgba(880000ff)
+plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed = rgba(ffffffff)
+
+plugin:mylardesktop:titlebar_button_ratio = 1.4375
+plugin:mylardesktop:titlebar_text_h = 13
+plugin:mylardesktop:titlebar_icon_h = 19
+plugin:mylardesktop:titlebar_button_icon_h = 12
+
+plugin:mylardesktop:dock = 3
+#plugin:mylardesktop:dock_color = rgba(78228877)
+plugin:mylardesktop:dock_color = rgba(00000022)
+plugin:mylardesktop:dock_sel_active_color = rgba(ffffff33)
+plugin:mylardesktop:dock_sel_hover_color = rgba(ffffff50)
+plugin:mylardesktop:dock_sel_press_color = rgba(ffffff44)
+plugin:mylardesktop:dock_sel_accent_color = rgba(ffffffff)
+
+plugin:mylardesktop:sel_color = rgba(ffffff11)
+plugin:mylardesktop:sel_border_color = rgba(ffffff11)
+
+
+
 source = ~/.config/mylar/user.conf
 
 )";
@@ -5149,7 +5187,7 @@ void HyprIso::reload() {
     g_pConfigManager->reload(); 
     for (auto w : g_pCompositor->m_windows)
         w->updateDecorationValues();
-    g_pHyprOpenGL->initShaders();
+    //g_pHyprOpenGL->initShaders();
 }
 
 void HyprIso::add_float_rule() {

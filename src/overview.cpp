@@ -212,7 +212,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         }
     }
     static float roundingAmt = 8;
-    if (*datum<bool>(c, "opaque")) {
+    if (!*datum<bool>(c, "opaque")) {
         rect(c->real_bounds, {0, 0, 0, 0}, 0, roundingAmt * s, 2.0, true);
     }
     render_drop_shadow(monitor, 1.0, {0, 0, 0, .3f * scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 7 * s);
