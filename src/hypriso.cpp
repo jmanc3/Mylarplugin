@@ -4897,6 +4897,7 @@ void HyprIso::reload() {
     ZoneScoped;
 #endif
     g_pConfigManager->reload(); 
+    g_pHyprOpenGL->initShaders();
 }
 
 void HyprIso::add_float_rule() {
