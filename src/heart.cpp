@@ -1438,7 +1438,6 @@ void create_rounding_shader() {
     }
 
     std::filesystem::path filepath = std::filesystem::path(home) / ".config/hypr/shaders/rounding.glsl";
-    notify(filepath);
     if (!std::filesystem::exists(filepath)) {
         std::filesystem::create_directories(filepath.parent_path());
         
@@ -1450,11 +1449,16 @@ void create_rounding_shader() {
     }
 }
 
+void create_default_config() {
+    later_immediate([](Timer *) {
+        hypriso->generate_mylar_hyprland_config();
+    });
+}
+
 void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    create_rounding_shader();
     hypriso->create_config_variables();
 
     on_any_container_close = any_container_closed;
@@ -1509,6 +1513,8 @@ void second::begin() {
     //later(100, [](Timer *) {
         //overview::open(hypriso->monitor_from_cursor());
     //});
+    create_rounding_shader();
+    create_default_config();
 }
 
 void second::end() {

@@ -374,6 +374,8 @@ struct HyprIso {
 
     bool clip = false;
     Bounds clipbox;
+
+    void generate_mylar_hyprland_config();
 };
 
 extern HyprIso *hypriso;
