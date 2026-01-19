@@ -4,6 +4,7 @@
 #include "defer.h"
 #include "snap_preview.h"
 #include "snap_assist.h"
+#include "drag_workspace_switcher.h"
 
 #include <string>
 #include <cmath>
@@ -17,6 +18,7 @@ struct DraggingData {
 DraggingData *data = nullptr;
 
 void drag::begin(int cid) {
+    drag_workspace_switcher::open();
     //notify(fz("wants no decorations {}", hypriso->requested_client_side_decorations(cid)));
     data = new DraggingData;
     data->cid = cid;
@@ -174,6 +176,8 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
 }
 
 void drag::end(int cid) {
+    drag_workspace_switcher::close();
+    
     //notify("end");
     delete data;
     data = nullptr;

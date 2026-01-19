@@ -1583,6 +1583,13 @@ void second::layout_containers() {
                 *datum<bool>(c, "touched") = true;
             }
         }
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+                *datum<bool>(c, "touched") = true;
+            }
+        }
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {

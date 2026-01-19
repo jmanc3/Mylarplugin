@@ -5,6 +5,7 @@
 #include "icons.h"
 #include "titlebar.h"
 #include "layout_thumbnails.h"
+#include "drag_workspace_switcher.h"
 
 #include <climits>
 #include <cmath>
@@ -78,7 +79,7 @@ std::vector<float> snapback = { 0, 0.0050000000000000044, 0.010000000000000009, 
 
 void screenshot_loop() {
     running = true;
-    later(200.0f, [](Timer *t) { 
+    later(1.0f, [](Timer *t) { 
         t->keep_running = running;
         t->delay = 1000.0f / 60.0f;
         auto order = get_window_stacking_order();
@@ -89,6 +90,16 @@ void screenshot_loop() {
                 hypriso->screenshot(o); 
                 if (amount++ > 2) {
                     break;
+                }
+            }
+        }
+        for (auto c : actual_root->children) {
+            if (c->custom_type == (int) TYPE::OVERVIEW) {
+                for (auto ch : c->children) {
+                    if (ch->state.mouse_dragging || ch->state.mouse_hovering || ch->state.mouse_pressing) {
+                        auto cid = *datum<int>(ch, "cid");
+                        hypriso->screenshot(cid);
+                    }
                 }
             }
         }
@@ -516,6 +527,7 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
 }
 
 void actual_open(int monitor) {
+    drag_workspace_switcher::open();
     hypriso->all_lose_focus();
     
     hypriso->whitelist_on = true;
@@ -808,6 +820,7 @@ static void actual_overview_stop() {
 
 void overview::close() {
     if (running) {
+        drag_workspace_switcher::close();
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
