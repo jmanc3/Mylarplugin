@@ -46,11 +46,11 @@ void drag_workspace_switcher::open() {
         // uf427
         //auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uE1F4", 
         auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uf407", 
-            {.8, .8, .8, 1}, 11 * s);
+            {.8, .8, .8, 1}, 14);
         draw_texture(*icon, c->real_bounds.x + 14 * s, center_y(c, icon->h), 1.0);
 
         auto t = get_cached_texture(root, c, "drag_text", mylar_font, "Drag a window here to move it to another workspace.", 
-            {.8, .8, .8, 1}, 10 * s);
+            {.8, .8, .8, 1}, 14);
         draw_texture(*t, c->real_bounds.x + 14 * s + 10 * s + icon->w, center_y(c, t->h), 1.0);
 
 
