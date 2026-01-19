@@ -931,7 +931,7 @@ static void on_render(int id, int stage) {
     
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
         for (auto c : actual_root->children) {
-            if (c->custom_type == (int)TYPE::CLIENT) {
+            if (c->custom_type == (int)TYPE::CLIENT && !overview::is_showing()) {
                 // TODO: should be interleaved where window WAS, not LAST_MOMENT
                 auto cid = *datum<int>(c, "cid");
                 auto mon_id = get_monitor(cid);
@@ -1444,6 +1444,7 @@ void create_rounding_shader() {
         std::ofstream out(filepath, std::ios::trunc);
         out << rounding_shader << std::endl;
         later_immediate([](Timer *) {
+            hypriso->generate_mylar_hyprland_config();
             hypriso->reload();
         });
     }
@@ -1452,6 +1453,7 @@ void create_rounding_shader() {
 void create_default_config() {
     later_immediate([](Timer *) {
         hypriso->generate_mylar_hyprland_config();
+        hypriso->reload();
     });
 }
 
