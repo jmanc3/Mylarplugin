@@ -2469,7 +2469,7 @@ animations {
 
 
 # snap helper
-plugin:mylardesktop:snap_helper_fade_in = 170
+plugin:mylardesktop:snap_helper_fade_in = 173
 plugin:mylardesktop:thumb_to_position_time = 355
 
 # resize
@@ -2786,6 +2786,17 @@ bool HyprIso::alt_tabbable(int id) {
     return false; 
 }
 
+void change_root_config_path(std::string path, bool force = true) {
+    return_default_config = true;
+    auto default_path = g_pConfigManager->getMainConfigPath();
+    return_default_config = false;
+    if (!force) {
+        if (default_path.find("/mylar/default.conf") != std::string::npos) {
+            return;
+        }
+    }
+    g_pConfigManager->m_config->changeRootPath(path.c_str());
+}
 
 void HyprIso::end() {
 #ifdef TRACY_ENABLE
@@ -2798,7 +2809,7 @@ void HyprIso::end() {
     remove_request_listeners(); 
     // reset to default config
     return_default_config = true;
-    g_pConfigManager->m_config->changeRootPath(g_pConfigManager->getMainConfigPath().c_str());
+    change_root_config_path(g_pConfigManager->getMainConfigPath());
     g_pConfigManager->reload();
 }
 
@@ -5181,7 +5192,7 @@ void HyprIso::reload() {
     const char* home = std::getenv("HOME");
     if (home) {
         std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/default.conf";
-        g_pConfigManager->m_config->changeRootPath(filepath.string().c_str());
+        change_root_config_path(filepath, false);
     }
     
     g_pConfigManager->reload(); 
