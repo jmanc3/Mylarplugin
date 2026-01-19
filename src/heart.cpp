@@ -1444,6 +1444,9 @@ void create_rounding_shader() {
         
         std::ofstream out(filepath, std::ios::trunc);
         out << rounding_shader << std::endl;
+        later_immediate([](Timer *) {
+            hypriso->reload();
+        });
     }
 }
 
