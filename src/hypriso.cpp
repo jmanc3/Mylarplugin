@@ -6222,6 +6222,7 @@ ecosystem:no_update_news = true
 ecosystem:no_donation_nag = true
 
 cursor:zoom_detached_camera = 1
+cursor:zoom_disable_aa = true
 
 decoration:blur:enabled = true
 decoration:blur:size = 3

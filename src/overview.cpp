@@ -211,9 +211,12 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             c->z_index = 0;
         }
     }
-    
     static float roundingAmt = 8;
-    render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 3 * s);
+    //if (scalar >= 1.0 && c->state.mouse_hovering) {
+        //rect(c->real_bounds, {0, 0, 0, 0}, 0, roundingAmt * s, 2.0, true);
+        //fade_in_a = .9;
+    //}
+    render_drop_shadow(monitor, 1.0, {0, 0, 0, .3f * scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 7 * s);
     auto th = titlebar_h;
     titlebar_h = std::round(titlebar_h * shrink_factor);
     defer(titlebar_h = th);
@@ -350,6 +353,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
 
     if (c->state.mouse_hovering) {
         auto b = pre_title_backup;
+
         //b.shrink(std::round(2.0 * s));
         //border(b, {1, 1, 1, .5}, std::round(2.0 * s), 0, roundingAmt * s, 2.0, false);
         //rect(b, {1, 1, 1, .1}, 0, roundingAmt * s, 2.0, false);
@@ -369,6 +373,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     *datum<float>(c, "snap_back_initial_y") = 0.0;
     *datum<float>(c, "snap_back_current_x") = 0.0;
     *datum<float>(c, "snap_back_current_y") = 0.0;
+    *datum<Bounds>(c, "previous_bounds") = Bounds(-1, -1, -1, -1);
     auto overview_data = (OverviewData *) parent->user_data;
     if (overview_data->scalar == 1.0) {
         *datum<float>(c, "alpha_fade_in") = 0.0;
@@ -478,13 +483,57 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
         bounds.y -= titlebar_h;
         bounds.h += titlebar_h;
         
+        // Animate to new positions when another window is added or removed
+        {
+            auto animating_final = datum<bool>(ch, "animating_final");
+            auto final_animation_scalar = datum<float>(ch, "final_animation_scalar");
+            auto final_animation_start = datum<Bounds>(ch, "final_animation_start");
+
+            // if previous final_bounds.x and final_bounds.y diff, animate to next pos
+            auto previous_final = datum<Bounds>(ch, "previous_bounds");
+            if (previous_final->w == -1 && previous_final->h == -1) {
+                //notify(fz("{}", hypriso->title_name(cid)));
+                // first frame should not animate
+                *previous_final = final_bounds;
+                //notify(fz("{} {} {} {} {} {} {} {}", previous_final->x, previous_final->y, previous_final->w, previous_final->h, final_bounds.x, final_bounds.y, final_bounds.w, final_bounds.h));
+                
+            }
+            auto fade = *datum<float>(ch, "alpha_fade_in");
+            if ((std::abs(previous_final->x - final_bounds.x) > 3 || std::abs(previous_final->y - final_bounds.y) > 3) && fade >= 1.0) {
+                if (!*animating_final) {
+                    // this detected a change in final bounds
+                    // start an animation from previous to final
+                    *animating_final = true;
+                    *final_animation_scalar = 0.0;
+                    // todo final_animation_start should actually be generated if was in the middle of animation actually
+                    *final_animation_start = *previous_final;
+                    animate(final_animation_scalar, 1.0, 200, ch->lifetime, [ch](bool normal_end) {
+                        if (normal_end) {
+                            auto animating_final = datum<bool>(ch, "animating_final");
+                            *animating_final = false;
+                        }
+                    }, [](float scalar) {
+                        return pull(snapback, scalar);
+                    });
+                }
+            }
+            *previous_final = final_bounds;
+            if (*animating_final) {
+                auto diffx = (final_bounds.x - final_animation_start->x);
+                auto diffy = (final_bounds.y - final_animation_start->y);
+                auto diffw = (final_bounds.w - final_animation_start->w);
+                auto diffh = (final_bounds.h - final_animation_start->h);
+                //notify(fz("{} {} {} {} {}", hypriso->title_name(cid), diffx, diffy, diffw, diffh));
+                final_bounds.x -= diffx - (diffx * *final_animation_scalar);
+                final_bounds.y -= diffy - (diffy * *final_animation_scalar);
+                final_bounds.w -= diffw - (diffw * *final_animation_scalar);
+                final_bounds.h -= diffh - (diffh * *final_animation_scalar);
+            }
+        }
+
         auto overview_data = (OverviewData *) c->user_data;
-        
         auto scalar = overview_data->scalar;
-        //scalar = pull(slidetopos2, scalar);
-        
-        //final_bounds.y += scalar * 100 * scale(get_monitor(cid));
-        
+
         auto was_hovering = datum<bool>(ch, "was_hovering");
         auto time_since_hovering_change = datum<long>(ch, "time_since_hovering_change");
         if (scalar >= 1.0) {
