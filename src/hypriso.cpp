@@ -6214,6 +6214,21 @@ general:border_size = 1
 general:col.active_border = rgba(888888ff)
 general:col.inactive_border = rgba(595959ff)
 
+input:follow_mouse = 2
+
+cursor:no_warps = true
+
+ecosystem:no_update_news = true
+ecosystem:no_donation_nag = true
+
+cursor:zoom_detached_camera = 1
+
+decoration:blur:enabled = true
+decoration:blur:size = 3
+decoration:blur:passes = 5
+decoration:blur:noise = .05
+decoration:blur:vibrancy = 0.4696
+
     
 )";
 
