@@ -9,7 +9,9 @@
 #include "hypriso.h"
 #include "heart.h"
 
+#include <cairo.h>
 #include <fstream>
+#include <glib.h>
 #include <iostream>
 #include <bits/types/idtype_t.h>
 #include <cmath>
@@ -1879,6 +1881,7 @@ void hook_monitor_arrange() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    return;
     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "arrangeMonitors");
     for (auto m : METHODS) {
         if (m.signature.find("CCompositor") != std::string::npos) {
@@ -1911,8 +1914,8 @@ void hook_dock_change() {
         if (m.signature.find("CHyprRenderer") != std::string::npos) {
             //notify(m.demangled);
             //notify(m.demangled);
-            g_pOnArrangeLayers = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onArrangeLayers);
-            g_pOnArrangeLayers->hook();
+            //g_pOnArrangeLayers = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onArrangeLayers);
+            //g_pOnArrangeLayers->hook();
             return;
         }
     }
@@ -6265,6 +6268,57 @@ void drawShadowInternal(const CBox& box, int round, float roundingPower, int ran
         g_pHyprOpenGL->renderRect(box, color, {.round = round, .roundingPower = roundingPower});
     else
         g_pHyprOpenGL->renderRoundedShadow(box, round, roundingPower, range, color, 1.F);
+}
+
+void testDraw() {
+    AnyPass::AnyData anydata([](AnyPass* pass) {
+        static bool once = true;
+        static CFramebuffer *otherFB = nullptr;
+        PHLMONITOR m;
+        auto mid = hypriso->monitor_from_cursor();
+        for (auto s : hyprmonitors) {
+            if (s->id == mid) {
+                m = s->m;
+            }
+        }
+        if (!m)
+            return;
+        if (!otherFB) {
+            otherFB = new CFramebuffer;
+            otherFB->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+        }
+        if (once) {
+            once = false;
+            auto* LASTFB = g_pHyprOpenGL->m_renderData.currentFB;
+            otherFB->bind();
+
+            for (auto h : hyprwindows) {
+                if (hypriso->alt_tabbable(h->id)) {
+                    g_pHyprRenderer->renderWindow(h->w, h->w->m_monitor.lock(), Time::steadyNow(), false, eRenderPassMode::RENDER_PASS_ALL);
+                    break;
+                }
+            }
+
+            //g_pHyprRenderer->renderWorkspace(m, m->m_activeWorkspace, Time::steadyNow(), m->logicalBox());
+
+            //g_pHyprOpenGL->renderRect({0, 0, 200, 200}, CHyprColor(0, 1, 0, 1), {.round = 0});
+            //g_pHyprOpenGL->renderRect({0, 0, 100, 50}, CHyprColor(1, 1, 0, 1), {.round = 0});
+            
+            LASTFB->bind();
+        }
+
+        CHyprOpenGLImpl::STextureRenderData data;
+
+        CRegion saveDamage = g_pHyprOpenGL->m_renderData.damage;
+        g_pHyprOpenGL->m_renderData.damage = {0, 0, m->m_pixelSize.x, m->m_pixelSize.y};
+        CRegion texDamage{g_pHyprOpenGL->m_renderData.damage};
+        data.damage = &texDamage;
+        g_pHyprOpenGL->renderTextureInternal(otherFB->getTexture(), {0, 0, m->m_pixelSize.x, m->m_pixelSize.y}, data);
+        g_pHyprOpenGL->m_renderData.damage = saveDamage;
+        //g_pHyprOpenGL->renderTextureMatte(alphaSwapFB.getTexture(), monbox, alphaFB);
+    });
+    //g_pHyprOpenGL->m_renderData.damage;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROUNDINGBASE, float ROUNDINGPOWER, CBox fullBox, int range, bool sharp) {

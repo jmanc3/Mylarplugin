@@ -360,10 +360,23 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
 }
 
 static void create_option(int cid, Container *parent, int monitor, long creation_time) {
+    auto overview_data = (OverviewData *) parent->user_data;
+
     later_immediate([cid](Timer *) {
         hypriso->set_hidden(cid, true);
     });
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
+    // Windows added after overview open, put at front so when overview closes, they wont be on top
+    if (overview_data->scalar >= 1.0) {
+        for (int i = 0; parent->children.size(); i++) {
+            auto ch = parent->children[i];
+            if (ch == c) {
+                parent->children.erase(parent->children.begin() + i);
+                parent->children.insert(parent->children.begin(), c);
+                break;
+            }
+        }
+    }
     *datum<int>(c, "cid") = cid;
     *datum<bool>(c, "was_hovering") = false;
     *datum<bool>(c, "opaque") = hypriso->is_opaque(cid);
@@ -374,7 +387,6 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     *datum<float>(c, "snap_back_current_x") = 0.0;
     *datum<float>(c, "snap_back_current_y") = 0.0;
     *datum<Bounds>(c, "previous_bounds") = Bounds(-1, -1, -1, -1);
-    auto overview_data = (OverviewData *) parent->user_data;
     if (overview_data->scalar == 1.0) {
         *datum<float>(c, "alpha_fade_in") = 0.0;
         animate(datum<float>(c, "alpha_fade_in"), 1.0, overview_anim_time, c->lifetime);
@@ -635,6 +647,8 @@ void actual_open(int monitor) {
             //hypriso->draw_workspace(rid, id, {x, 0, 1.0f * 200 * s, rw});
             x += rw;
         }
+
+        //testDraw();
     };
     over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
