@@ -116,7 +116,7 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
             auto pud = (PopupUserData *) c->user_data;
             auto b = c->real_bounds;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .07}, 7 * s, 2.0f, b);
-            rect(b, {1, 1, 1, .75}, 0, 7 * s);
+            rect(b, {1, 1, 1, .75}, 0, 7 * s, 2.0, true);
         }
     };
     p->after_paint = [](Container *actual_root, Container *c) {

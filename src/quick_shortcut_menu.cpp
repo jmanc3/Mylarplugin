@@ -255,7 +255,7 @@ void open_quick_shortcut_menu() {
             renderfix
             auto b = c->real_bounds;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .07}, 7 * s, 2.0f, b);
-            rect(b, {1, 1, 1, .95}, 0, 7 * s);
+            rect(b, {1, 1, 1, .95}, 0, 7 * s, 2.0, true);
         }
     };
     p->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
