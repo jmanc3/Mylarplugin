@@ -5125,6 +5125,18 @@ void HyprIso::move_to_workspace(int workspace) {
     g_pKeybindManager->changeworkspace(std::to_string(workspace));
 }
 
+void HyprIso::move_to_workspace_id(int workspace) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto s : hyprspaces) {
+        if (s->id == workspace) {
+            g_pKeybindManager->changeworkspace(std::to_string(s->w->m_id));
+        }
+    }
+}
+
+
 void HyprIso::move_to_workspace(int id, int workspace) {
 #ifdef FORK_WARN
     static_assert(false, "[Function Body] Make sure our `CSurfacePassElement::getTexBox()` and Hyprland's are synced!");

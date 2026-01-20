@@ -16,6 +16,57 @@ static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000
 // {"anchors":[{"x":0,"y":1},{"x":0.30000000000000004,"y":0.675},{"x":1,"y":0}],"controls":[{"x":0.20596153063651845,"y":0.9462499830457899},{"x":0.4476281973031851,"y":0.06847220526801215}]}
 static std::vector<float> snapback = { 0, 0.0050000000000000044, 0.010000000000000009, 0.017000000000000015, 0.02400000000000002, 0.03300000000000003, 0.04300000000000004, 0.05400000000000005, 0.06699999999999995, 0.08099999999999996, 0.09599999999999997, 0.11399999999999999, 0.134, 0.15600000000000003, 0.18200000000000005, 0.20999999999999996, 0.243, 0.281, 0.32499999999999996, 0.387, 0.43999999999999995, 0.486, 0.527, 0.563, 0.596, 0.626, 0.654, 0.679, 0.7030000000000001, 0.725, 0.745, 0.764, 0.782, 0.798, 0.8140000000000001, 0.8280000000000001, 0.842, 0.855, 0.867, 0.878, 0.888, 0.898, 0.908, 0.917, 0.925, 0.933, 0.94, 0.947, 0.953, 0.959, 0.964, 0.969, 0.974, 0.978, 0.982, 0.986, 0.989, 0.993, 0.995, 0.998, 1 };
 
+template<class T>
+void merge_create(Container *parent, std::vector<T> to_be_represented, std::function<T (Container *)> converter, std::function<void (Container *, T)> creator) {
+    // Get rid of containers that no longer are represented
+    for (int i = parent->children.size() - 1; i >= 0; i--) {
+        auto ch = parent->children[i];
+        bool found = false;
+        T ct = converter(ch);
+        for (auto t : to_be_represented)
+            if (t == ct)
+                found = true;
+        if (!found) {
+            delete ch;
+            parent->children.erase(parent->children.begin() + i);
+        }
+    }
+
+    // Create container if doesn't exist yet
+    for (auto t : to_be_represented) {
+        bool found = false;
+        for (auto c : parent->children) {
+            if (t == converter(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            creator(parent, t);
+        }
+    }
+}
+
+void layout_spaces(Container *actual_root, Container *parent, int monitor) {
+    auto openess = *datum<float>(parent, "openess");
+    auto b = parent->real_bounds;
+    int spacing = 13;
+    if (openess != 0.0) {
+        b.shrink(30);
+    }
+    int pen_x = b.x + spacing;
+    int pen_y = b.y + spacing;
+    auto thumb_h = b.h - 50;
+    auto monb = bounds_monitor(monitor);
+    auto thumb_w = thumb_h * (monb.w / monb.h);
+    for (int i = 0; i < parent->children.size(); i++) {
+        auto ch = parent->children[i];
+        ch->wanted_bounds = Bounds(pen_x, pen_y, thumb_w, thumb_h);
+        ch->real_bounds = ch->wanted_bounds;
+        pen_x += thumb_w + spacing;
+    }
+}
+
 void drag_switcher_actual_open() {
     hold_open = false;
     auto monitor = hypriso->monitor_from_cursor();
@@ -47,8 +98,43 @@ void drag_switcher_actual_open() {
             b.grow(new_h);
         }
 
+        merge_create<int>(c, hypriso->get_workspace_ids(monitor), [](Container *c) {
+            return *datum<int>(c, "workspace");
+        }, [monitor](Container *parent, int space) {
+            auto c = parent->child(FILL_SPACE, FILL_SPACE);
+            *datum<int>(c, "workspace") = space;
+            c->when_paint = [monitor](Container *actual_root, Container *c) {
+                auto root = get_rendering_root();
+                if (!root) return;
+                auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+                if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
+                    return;
+                renderfix
+
+                render_drop_shadow(monitor, 1.0, {0, 0, 0, .1}, 8 * s, 2.0, c->real_bounds);
+                hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s);
+                
+                auto b = c->real_bounds;
+                b.shrink(2.0);
+                b.round();
+                if (c->state.mouse_hovering) {
+                    border(b, {1, 1, 1, .2}, 1.0, 0, 8 * s, 2.0, false); 
+                } else {
+                    border(b, {1, 1, 1, .04}, 1.0, 0, 8 * s, 2.0, false); 
+                }
+            };
+            c->when_clicked = paint {
+                auto space = *datum<int>(c, "workspace");
+                hypriso->move_to_workspace_id(space);
+                notify("hello");
+
+            };
+        });
+
         c->wanted_bounds = b;
         c->real_bounds = c->wanted_bounds;
+
+        layout_spaces(actual_root, c, monitor);
     };
     c->when_paint = [monitor](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
@@ -71,12 +157,12 @@ void drag_switcher_actual_open() {
         auto b = c->real_bounds;
         render_drop_shadow(monitor, 1.0, {0, 0, 0, .27f * peaking_amount}, 8 * s, 2.0, b);
         if (openess == 0.0) {
-            rect(b, col, 3, 8 * s * (1 - openess), 2.0, true); 
+            rect(b, col, 3, 8 * s * (1 - openess), 2.0, true, 1.0); 
         } else {
-            rect(b, col, 0, 8 * s * openess, 2.0, true); 
+            rect(b, col, 0, 8 * s * openess, 2.0, true, 1.0); 
         }
         b.shrink(1.0); 
-        border(b, {.3, .3, .3, 1 * peaking_amount}, 1.0f, 3, 8 * s, 2.0, true); 
+        border(b, {.3, .3, .3, 1 * peaking_amount}, 1.0f, 3, 8 * s, 2.0, false); 
 
         auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uf407", {.8, .8, .8, 1}, 13);
         draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, peaking_amount);
