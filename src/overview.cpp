@@ -24,7 +24,6 @@ struct ThumbData : UserData {
     int cid;
 };
 
-static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr, std::function<float(float)> lerp_func = nullptr);
 
 static bool running = false;
 static float overview_anim_time = 215.0f;
@@ -736,72 +735,6 @@ void actual_open(int monitor) {
         layout_options(actual_root, c, b, creation_time, overx, overy);
     };
     hypriso->damage_entire(monitor);
-}
-
-struct Anim {
-    float *value = nullptr;
-    float start_value;
-    float target;
-    long start_time;
-    float time_ms;
-    std::weak_ptr<bool> lifetime;
-    std::function<void(bool)> on_completion = nullptr;
-    std::function<float(float)> lerp_func = nullptr;
-};
-
-static void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion, std::function<float(float)> lerp_func) {
-    static std::vector<Anim *> anims;
-    for (auto anim : anims) {
-        if (anim->value == value) {
-            anim->start_value = *value;
-            anim->target = target;
-            anim->start_time = get_current_time_in_ms();
-            anim->time_ms = time_ms;
-            anim->lifetime = lifetime;
-            anim->on_completion = on_completion;
-            anim->lerp_func = lerp_func;
-            return;
-        }
-    }
-    
-    auto anim = new Anim;
-    anim->value = value;
-    anim->start_value = *value;
-    anim->target = target;
-    anim->start_time = get_current_time_in_ms();
-    anim->time_ms = time_ms;
-    anim->lifetime = lifetime;
-    anim->on_completion = on_completion;
-    anim->lerp_func = lerp_func;
-    
-    // TODO: this creates a later per animation which is dumb, they should all be combined into one that calls over a vec of anims
-    later(1000.0f / 165.0f, [anim](Timer *t) {
-        t->keep_running = true;
-        
-        if (anim->lifetime.lock()) {
-            long delta = get_current_time_in_ms() - anim->start_time;
-            float delta_ms = (float) delta;
-            float scalar = delta_ms / anim->time_ms;
-            if (scalar > 1.0) {
-                t->keep_running = false;
-                scalar = 1.0;
-            }
-            if (anim->lerp_func)
-                scalar = anim->lerp_func(scalar);
-            
-            auto diff = (anim->target - anim->start_value) * scalar;
-            *anim->value = anim->start_value + diff;
-            if (!t->keep_running && anim->on_completion) {
-                *anim->value = anim->target;
-                anim->on_completion(true);
-            }
-        } else {
-            delete anim;
-            t->keep_running = false;
-            if (anim->on_completion)
-                anim->on_completion(false);
-        }
-    });
 }
 
 void overview::open(int monitor) {

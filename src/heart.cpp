@@ -23,6 +23,7 @@
 #include "snap_assist.h"
 #include "overview.h"
 #include "workspace_indicator.h"
+#include "drag_workspace_switcher.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -82,6 +83,7 @@ static bool on_mouse_move(int id, float x, float y) {
     x = mou.x;
     y = mou.y;
     snap_preview::on_mouse_move(x, y); 
+    drag_workspace_switcher::on_mouse_move(x, y); 
 
     if (drag::dragging()) {
         drag::motion(drag::drag_window());
@@ -91,7 +93,7 @@ static bool on_mouse_move(int id, float x, float y) {
         resizing::motion(resizing::resizing_window());
         return true;
     }
-    
+
     //notify(fz("{} {}", x, y));
     int active_mon = hypriso->monitor_from_cursor();
     {
@@ -176,6 +178,7 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
 
     snap_assist::click(id, button, state, x, y);
     overview::click(id, button, state, x, y);
+    drag_workspace_switcher::click(id, button, state, x, y); 
     
     bool consumed = false;
     if (drag::dragging() && !state) {
@@ -1656,13 +1659,6 @@ void second::layout_containers() {
                 *datum<bool>(c, "touched") = true;
             }
         }
-        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
-            c->parent->children.insert(c->parent->children.begin(), c);
-            if (c->pre_layout) {
-                c->pre_layout(actual_root, c, c->parent->real_bounds);
-                *datum<bool>(c, "touched") = true;
-            }
-        }
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
@@ -1704,7 +1700,13 @@ void second::layout_containers() {
             }
             *datum<bool>(c, "touched") = true;
         }
-
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+                *datum<bool>(c, "touched") = true;
+            }
+        }
         if (c->custom_type == (int) TYPE::SNAP_HELPER) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
