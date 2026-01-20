@@ -213,9 +213,7 @@ void drag_workspace_switcher::close() {
             auto openess = datum<float>(c, "openess");
             animate(openess, 0.0, 200.0, c->lifetime,
                 [](bool normal_end) {
-                    if (normal_end) {
-                        actual_drag_workspace_switcher_close();
-                    }
+                    actual_drag_workspace_switcher_close();
                 }, [](float a) {
                     return pull(snapback, a);
                 });
@@ -224,7 +222,6 @@ void drag_workspace_switcher::close() {
             });
         }
     }
-
 }
 
 

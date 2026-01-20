@@ -3448,15 +3448,33 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                 }
             }
             */
-            if (instant) {
-                c->w->m_realPosition->setValueAndWarp({x, y});
-                c->w->m_realSize->setValueAndWarp({w, h});
-            } else {
-                *c->w->m_realPosition = {x, y};
-                *c->w->m_realSize = {w, h};
+            {
+                if (instant) {
+                    #ifdef TRACY_ENABLE
+                        ZoneScopedN("Move warp");
+                    #endif
+                    c->w->m_realPosition->setValueAndWarp({x, y});
+                    c->w->m_realSize->setValueAndWarp({w, h});
+                } else {
+                    #ifdef TRACY_ENABLE
+                        ZoneScopedN("Move regular");
+                    #endif
+                    *c->w->m_realPosition = {x, y};
+                    *c->w->m_realSize = {w, h};
+                }
             }
-            c->w->sendWindowSize(true);
-            c->w->updateWindowDecos();
+            {
+                #ifdef TRACY_ENABLE
+                    ZoneScopedN("Move regular");
+                #endif
+                c->w->sendWindowSize(false);
+            }
+            {
+                #ifdef TRACY_ENABLE
+                    ZoneScopedN("Update decos");
+                #endif
+                c->w->updateWindowDecos();
+            }
         }
     }
 }
