@@ -217,6 +217,21 @@ typedef enum
     OB_CLIENT_FUNC_UNDECORATE = 1 << 9  /*!< Allow to be undecorated */
 } ObFunctions;
 
+
+struct Anim {
+    float *value = nullptr;
+    float start_value;
+    float target;
+    long start_time;
+    float time_ms;
+    std::weak_ptr<bool> lifetime;
+    std::function<void(bool)> on_completion = nullptr;
+    std::function<float(float)> lerp_func = nullptr;
+};
+
+static std::vector<Anim *> anims;
+
+
 struct HyprWindow {
     int id;  
     PHLWINDOW w;
@@ -2814,6 +2829,9 @@ void HyprIso::end() {
     return_default_config = true;
     change_root_config_path(g_pConfigManager->getMainConfigPath());
     g_pConfigManager->reload();
+    for (auto a : anims)
+        delete a;
+    anims.clear();
 }
 
 CBox tocbox(Bounds b) {
@@ -6600,19 +6618,7 @@ void HyprIso::generate_mylar_hyprland_config() {
     //g_pConfigManager->handleSource("source", "~/.config/mylar/default.conf");
 }
 
-struct Anim {
-    float *value = nullptr;
-    float start_value;
-    float target;
-    long start_time;
-    float time_ms;
-    std::weak_ptr<bool> lifetime;
-    std::function<void(bool)> on_completion = nullptr;
-    std::function<float(float)> lerp_func = nullptr;
-};
-
 void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion, std::function<float(float)> lerp_func) {
-    static std::vector<Anim *> anims;
     
     for (auto anim : anims) {
         if (anim->value == value) {
@@ -6680,6 +6686,20 @@ void animate(float *value, float target, float time_ms, std::shared_ptr<bool> li
                 anim->on_completion(false);
         }
     });
+}
+
+bool is_being_animating(float *value) {
+    for (auto a : anims)
+        if (value == a->value)
+            return true;
+    return false;
+}
+
+bool is_being_animating_to(float *value, float target) {
+    for (auto a : anims)
+        if (value == a->value && a->target == target)
+            return true;
+    return false;
 }
 
 
