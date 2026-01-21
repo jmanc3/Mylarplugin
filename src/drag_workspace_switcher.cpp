@@ -123,10 +123,10 @@ void drag_switcher_actual_open() {
                 
                 auto b = c->real_bounds;
                 if (c->state.mouse_pressing) {
-                    rect(b, {0, 0, 0, .5f * openess}, 0, 8 * s, 2.0, false);
+                    //rect(b, {0, 0, 0, .5f * openess}, 0, 8 * s, 2.0, false);
                 } else if (c->state.mouse_hovering) {
                     //border(b, {1, 1, 1, .2f * openess}, 1.0, 0, 8 * s, 2.0, false);
-                    rect(b, {0, 0, 0, .3f * openess}, 0, 8 * s, 2.0, false);
+                    //rect(b, {0, 0, 0, .3f * openess}, 0, 8 * s, 2.0, false);
                 } else {
                     b.shrink(2.0);
                     b.round();
@@ -210,6 +210,28 @@ void drag_switcher_actual_open() {
             c->real_bounds.y + c->real_bounds.h - t->h * 1.30, 
             peaking_amount);
     };
+    c->after_paint = [monitor](Container *actual_root, Container *c) {
+        auto root = get_rendering_root();
+        if (!root) return;
+        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
+            return;
+        auto openess = *datum<float>(c, "openess");
+        auto peaking_amount = *datum<float>(c, "peaking_amount");
+        auto backup = c->real_bounds;
+        defer(c->real_bounds = backup);
+        auto new_h = 30;
+        if (openess != 0.0) {
+            c->real_bounds.shrink(new_h); 
+        }
+        //renderfix;
+        
+        
+        auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
+        auto mou = mouse();
+        //clip(c->real_bounds, s);
+        draw_texture(info, mou.x * s - info.w * .5, mou.y * s - info.h * .5);
+    };
     c->when_mouse_motion = paint {
         request_damage(root, c);
     };
@@ -225,6 +247,10 @@ void drag_workspace_switcher::open() {
     later_immediate([](Timer *) {
         auto mon = hypriso->monitor_from_cursor();
         hypriso->screenshot_wallpaper(mon);
+        int size = 400 * scale(mon);
+        RGBA center = {1, 1, 1, .1};
+        RGBA edge = {1, 1, 1, 0};
+        *datum<TextureInfo>(actual_root, "drag_gradient") = gen_gradient_texture(center, edge, size);
         drag_switcher_actual_open();
     });
 }
@@ -234,6 +260,8 @@ static void actual_drag_workspace_switcher_close() {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
+            free_text_texture(info.id);
             delete c;
             actual_root->children.erase(actual_root->children.begin() + i);
         }

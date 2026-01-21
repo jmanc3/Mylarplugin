@@ -3837,6 +3837,67 @@ TextureInfo gen_texture(std::string path, float h) {
     return {};
 }
 
+TextureInfo gen_gradient_texture(RGBA center, RGBA edge, float wh) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+
+    const int size = static_cast<int>(wh);
+    if (size <= 0)
+        return {};
+
+    // Create Cairo surface
+    cairo_surface_t* surface =
+        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    cairo_t* cr = cairo_create(surface);
+
+    // Clear surface
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+    // Create radial gradient
+    cairo_pattern_t* pattern = cairo_pattern_create_radial(
+        size / 2.0, size / 2.0, 0.0,
+        size / 2.0, size / 2.0, size / 2.0);
+
+    cairo_pattern_add_color_stop_rgba(
+        pattern, 0.0,
+        center.r, center.g, center.b, center.a);
+
+    cairo_pattern_add_color_stop_rgba(
+        pattern, 1.0,
+        edge.r, edge.g, edge.b, edge.a);
+
+    // Draw gradient
+    cairo_set_source(cr, pattern);
+    cairo_arc(cr, size / 2.0, size / 2.0, size / 2.0, 0, 2 * M_PI);
+    cairo_fill(cr);
+
+    cairo_pattern_destroy(pattern);
+    cairo_destroy(cr);
+
+    // Upload to OpenGL
+    auto tex = g_pHyprOpenGL->texFromCairo(surface);
+    cairo_surface_destroy(surface);
+
+    if (!tex.get())
+        return {};
+
+    auto t = new Texture;
+    t->texture = tex;
+
+    TextureInfo info;
+    info.id = unique_id++;
+    info.w = t->texture->m_size.x;
+    info.h = t->texture->m_size.y;
+
+    t->info = info;
+    hyprtextures.push_back(t);
+
+    return info;
+}
+
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

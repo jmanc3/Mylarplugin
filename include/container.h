@@ -317,7 +317,7 @@ struct Container {
     
 
     // Called after all children painted
-    void (*after_paint)(Container* root, Container* self) = nullptr;
+    std::function<void (Container* root, Container* self)> after_paint = nullptr;
 
     // Called once when the mouse enters the container for the first time
     std::function <void (Container* root, Container* self)> when_mouse_enters_container = nullptr;

@@ -463,5 +463,7 @@ float pull(std::vector<float>& fls, float scalar);
 void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr, std::function<float(float)> lerp_func = nullptr);
 bool is_being_animating(float *value);
 bool is_being_animating_to(float *value, float target);
+
+TextureInfo gen_gradient_texture(RGBA center, RGBA edge, float wh);
  
 #endif // hypriso_h_INCLUDED
