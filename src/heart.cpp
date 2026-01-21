@@ -1335,6 +1335,18 @@ void add_hyprctl_dispatchers() {
         dock::toggle_dock_merge();
         return true;
     });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:desktop_hide", [](std::string in) {
+        hypriso->whitelist_on = true;
+        damage_all();
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:desktop_show", [](std::string in) {
+        hypriso->whitelist_on = false;
+        damage_all();
+        return true;
+    });
+
+
 
     hypriso->add_hyprctl_dispatcher("plugin:mylar:right_click_active", [](std::string in) {
         for (auto m : actual_root->children) {

@@ -99,8 +99,9 @@ void drag_switcher_actual_open() {
         if (openess != 0.0) {
             b.grow(new_h);
         }
-
-        merge_create<int>(c, hypriso->get_workspace_ids(monitor), [](Container *c) {
+        auto ids = hypriso->get_workspace_ids(monitor);
+        ids.push_back(-1);
+        merge_create<int>(c, ids, [](Container *c) {
             return *datum<int>(c, "workspace");
         }, [monitor](Container *parent, int space) {
             auto c = parent->child(FILL_SPACE, FILL_SPACE);
@@ -112,10 +113,13 @@ void drag_switcher_actual_open() {
                 if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
                     return;
                 renderfix
+                auto space = *datum<int>(c, "workspace");
 
                 auto openess = *datum<float>(c->parent, "openess");
                 render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
-                hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
+                if (space != -1) {
+                    hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
+                }
                 
                 auto b = c->real_bounds;
                 if (c->state.mouse_pressing) {
@@ -128,14 +132,40 @@ void drag_switcher_actual_open() {
                     b.round();
                     border(b, {1, 1, 1, .04f * openess}, 1.0, 0, 8 * s, 2.0, false); 
                 }
+                if (space == -1) {
+                    auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uF8AA", {1, 1, 1, .8}, 20);
+                    draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
+                }
             };
-            c->when_clicked = paint {
+            c->when_clicked = [monitor](Container *root, Container *c) {
                 auto space = *datum<int>(c, "workspace");
                 overview::instant_close();
-                hypriso->move_to_workspace_id(space);
+                if (space != -1) {
+                    hypriso->move_to_workspace_id(space);
+                } else {
+                    auto spaces = hypriso->get_workspaces(monitor);
+                    int last = 1;
+                    if (!spaces.empty()) {
+                        last = spaces[spaces.size() - 1];
+                    }
+                    hypriso->move_to_workspace(last + 1);
+                }
                 drag_workspace_switcher::close();
             };
         });
+
+        Container *last = nullptr;
+        for (int i = c->children.size() - 1; i >= 0; i--) {
+            auto ch = c->children[i];
+            auto space = *datum<int>(ch, "workspace");
+            if (space == -1) {
+                last = ch;
+                c->children.erase(c->children.begin() + i);
+                break;
+            }
+        }
+        if (last)
+            c->children.push_back(last);
 
         c->wanted_bounds = b;
         c->real_bounds = c->wanted_bounds;
@@ -243,7 +273,8 @@ void drag_workspace_switcher::on_mouse_move(int x, int y) {
             if (bounds_contains(c->real_bounds, x, y) || hold_open) {
                 if (!c->state.mouse_hovering) {
                     auto openess = datum<float>(c, "openess");
-                    animate(openess, 1.0, 180.0, c->lifetime, nullptr, [](float a) {
+                    animate(openess, 1.0, 180.0, c->lifetime, 
+                    nullptr, [](float a) {
                         return pull(slidetopos2, a);
                     });
                 }
