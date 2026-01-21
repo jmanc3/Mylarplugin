@@ -1782,6 +1782,29 @@ static void fill_root(Container *root) {
             c->wanted_bounds.w = bounds.w + 20;
         };
     }
+
+    {
+        auto show_desktop = root->child(6, FILL_SPACE);
+        show_desktop->when_paint = paint {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto cr = mylar->raw_window->cr;
+            paint_button_bg(root, c);
+        };
+        show_desktop->when_clicked = [](Container *root, Container *c) {
+            main_thread([]() {
+                hypriso->whitelist_on = !hypriso->whitelist_on;
+                damage_all();
+            });
+        };
+        show_desktop->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto cr = mylar->raw_window->cr;
+            c->wanted_bounds.w = 4 * mylar->raw_window->dpi;
+        };
+    }
+    
 };
 
 static int current_alignment = 3;
