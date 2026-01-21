@@ -1790,6 +1790,9 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto cr = mylar->raw_window->cr;
             paint_button_bg(root, c);
+            set_argb(cr, {1, 1, 1, .3});
+            set_rect(cr, {c->real_bounds.x, c->real_bounds.y, 1, c->real_bounds.h});
+            cairo_fill(cr);
         };
         show_desktop->when_clicked = [](Container *root, Container *c) {
             main_thread([]() {

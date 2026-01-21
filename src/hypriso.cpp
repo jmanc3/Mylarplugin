@@ -12,6 +12,7 @@
 #include <cairo.h>
 #include <fstream>
 #include <glib.h>
+#include <hyprutils/math/Box.hpp>
 #include <iostream>
 #include <bits/types/idtype_t.h>
 #include <cmath>
@@ -6380,10 +6381,98 @@ void drawShadowInternal(const CBox& box, int round, float roundingPower, int ran
         g_pHyprOpenGL->renderRoundedShadow(box, round, roundingPower, range, color, 1.F);
 }
 
+void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha) {
+    AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass* pass) {
+        static CFramebuffer matteFB;
+        static CFramebuffer alphaFB;
+
+        const int w = info.w;
+        const int h = info.h;
+
+        // TODO a matte should be passed in instead because if multiple people use this function the size is bound to be different
+        matteFB.alloc(w, h, DRM_FORMAT_ABGR8888);
+        alphaFB.alloc(w, h, DRM_FORMAT_ABGR8888);
+
+        // Save current FB
+        auto* LASTFB = g_pHyprOpenGL->m_renderData.currentFB;
+
+        // 1. Render matte
+        matteFB.bind();
+        g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // transparent
+
+        for (const auto& cmd : commands) {
+            CBox box = {
+                cmd.bounds.x - x,
+                cmd.bounds.y - y,
+                cmd.bounds.w,
+                cmd.bounds.h
+            };
+
+            if (cmd.type == 1) {
+                CHyprOpenGLImpl::SBorderRenderData opts;
+                opts.round = cmd.roundness;
+                opts.borderSize = cmd.thickness;
+                // border
+                g_pHyprOpenGL->renderBorder(
+                    box,
+                    CHyprColor(1, 1, 1, 1),
+                    opts
+                );
+            } else if (cmd.type == 2) {
+                CHyprOpenGLImpl::SRectRenderData opts;
+                opts.round = cmd.roundness;
+                // rect
+                g_pHyprOpenGL->renderRect(
+                    box,
+                    CHyprColor(1, 1, 1, 1),
+                    opts
+                );
+            }
+        }
+
+        alphaFB.bind();
+
+        CRegion texDamage{g_pHyprOpenGL->m_renderData.damage};
+        CHyprOpenGLImpl::STextureRenderData data;
+        data.damage = &texDamage;
+
+        SP<CTexture> tex;
+        for (auto t : hyprtextures) {
+            if (t->info.id == info.id) {
+                tex = t->texture;
+                break;
+            }
+        }
+
+        // 2. Render texture using matte
+        CBox outbox = CBox(0, 0, w, h);
+        g_pHyprOpenGL->renderTextureMatte(
+            tex,
+            outbox,
+            matteFB
+        );
+
+        // Restore previous FB
+        LASTFB->bind();
+
+        outbox = CBox(x, y, w, h);
+        data.a = alpha;
+        g_pHyprOpenGL->renderTexture(
+            alphaFB.getTexture(),
+            outbox,
+            data
+        );
+    });
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    
+}
+
 void testDraw() {
+    //return;
     AnyPass::AnyData anydata([](AnyPass* pass) {
         static bool once = true;
-        static CFramebuffer *otherFB = nullptr;
+        static CFramebuffer otherFB;
+        static CFramebuffer matte;
         PHLMONITOR m;
         auto mid = hypriso->monitor_from_cursor();
         for (auto s : hyprmonitors) {
@@ -6393,39 +6482,33 @@ void testDraw() {
         }
         if (!m)
             return;
-        if (!otherFB) {
-            otherFB = new CFramebuffer;
-            otherFB->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+        if (!otherFB.isAllocated()) {
+            //otherFB = new CFramebuffer;
+            otherFB.alloc(200, 200, DRM_FORMAT_ABGR8888);
+
+            //matte = new CFramebuffer;
+            matte.alloc(200, 200, DRM_FORMAT_ABGR8888);
         }
         if (once) {
             once = false;
             auto* LASTFB = g_pHyprOpenGL->m_renderData.currentFB;
-            otherFB->bind();
-
-            for (auto h : hyprwindows) {
-                if (hypriso->alt_tabbable(h->id)) {
-                    g_pHyprRenderer->renderWindow(h->w, h->w->m_monitor.lock(), Time::steadyNow(), false, eRenderPassMode::RENDER_PASS_ALL);
-                    break;
-                }
-            }
-
-            //g_pHyprRenderer->renderWorkspace(m, m->m_activeWorkspace, Time::steadyNow(), m->logicalBox());
-
-            //g_pHyprOpenGL->renderRect({0, 0, 200, 200}, CHyprColor(0, 1, 0, 1), {.round = 0});
-            //g_pHyprOpenGL->renderRect({0, 0, 100, 50}, CHyprColor(1, 1, 0, 1), {.round = 0});
             
+            otherFB.bind();
+            g_pHyprOpenGL->renderRect({0, 0, 50, 50}, CHyprColor(0, 1, 1, 1), {.round = 0});
+            
+            matte.bind();
+            g_pHyprOpenGL->renderBorder({10, 10, 30, 30}, CHyprColor(1, 1, 1, 1), {.round = 10 });
+
             LASTFB->bind();
         }
 
         CHyprOpenGLImpl::STextureRenderData data;
-
-        CRegion saveDamage = g_pHyprOpenGL->m_renderData.damage;
-        g_pHyprOpenGL->m_renderData.damage = {0, 0, m->m_pixelSize.x, m->m_pixelSize.y};
         CRegion texDamage{g_pHyprOpenGL->m_renderData.damage};
         data.damage = &texDamage;
-        g_pHyprOpenGL->renderTextureInternal(otherFB->getTexture(), {0, 0, m->m_pixelSize.x, m->m_pixelSize.y}, data);
-        g_pHyprOpenGL->m_renderData.damage = saveDamage;
-        //g_pHyprOpenGL->renderTextureMatte(alphaSwapFB.getTexture(), monbox, alphaFB);
+
+        //CBox outbox = {0, 0, m->m_pixelSize.x, m->m_pixelSize.y};
+        CBox outbox = {0, 0, 200, 200};
+        g_pHyprOpenGL->renderTextureMatte(otherFB.getTexture(), outbox, matte);
     });
     //g_pHyprOpenGL->m_renderData.damage;
     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));

@@ -66,6 +66,19 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
         ch->wanted_bounds = Bounds(pen_x, pen_y, thumb_w, thumb_h);
         ch->real_bounds = ch->wanted_bounds;
         pen_x += thumb_w + spacing;
+
+        bool *was_active = datum<bool>(ch, "was_active");
+        float *active = datum<float>(ch, "active_amount");
+        
+        bool is_active = ch->state.mouse_hovering || ch->state.mouse_pressing;
+        if (is_active != *was_active) {
+            *was_active = is_active;
+            if (is_active) {
+                animate(active, 1.0, 100, ch->lifetime); 
+            } else {
+                animate(active, 0.0, 200, ch->lifetime); 
+            }
+        }
     }
 }
 
@@ -106,6 +119,8 @@ void drag_switcher_actual_open() {
         }, [monitor](Container *parent, int space) {
             auto c = parent->child(FILL_SPACE, FILL_SPACE);
             *datum<int>(c, "workspace") = space;
+            *datum<bool>(c, "was_active") = false;
+            *datum<float>(c, "active_amount") = 0.0;
             c->when_paint = [monitor](Container *actual_root, Container *c) {
                 auto root = get_rendering_root();
                 if (!root) return;
@@ -123,15 +138,17 @@ void drag_switcher_actual_open() {
                 
                 auto b = c->real_bounds;
                 if (c->state.mouse_pressing) {
-                    //rect(b, {0, 0, 0, .5f * openess}, 0, 8 * s, 2.0, false);
+                    rect(b, {0, 0, 0, .3f * openess}, 0, 8 * s, 2.0, false);
                 } else if (c->state.mouse_hovering) {
                     //border(b, {1, 1, 1, .2f * openess}, 1.0, 0, 8 * s, 2.0, false);
-                    //rect(b, {0, 0, 0, .3f * openess}, 0, 8 * s, 2.0, false);
+                    rect(b, {0, 0, 0, .1f * openess}, 0, 8 * s, 2.0, false);
                 } else {
-                    b.shrink(2.0);
-                    b.round();
-                    border(b, {1, 1, 1, .04f * openess}, 1.0, 0, 8 * s, 2.0, false); 
+
                 }
+                b.shrink(2.0);
+                b.round();
+                border(b, {1, 1, 1, .1f * openess}, 1.0, 0, 8 * s, 2.0, false); 
+                
                 if (space == -1) {
                     auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uF8AA", {1, 1, 1, .8}, 20);
                     draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
@@ -191,7 +208,7 @@ void drag_switcher_actual_open() {
 
         RGBA col = {.18, .18, .18, .9f * peaking_amount};
         auto b = c->real_bounds;
-        render_drop_shadow(monitor, 1.0, {0, 0, 0, .27f * peaking_amount}, 8 * s, 2.0, b);
+        render_drop_shadow(monitor, 1.0, {0, 0, 0, .37f * peaking_amount}, 8 * s, 2.0, b);
         if (openess == 0.0) {
             rect(b, col, 3, 8 * s * (1 - openess), 2.0, true, 1.0); 
         } else {
@@ -224,13 +241,62 @@ void drag_switcher_actual_open() {
         if (openess != 0.0) {
             c->real_bounds.shrink(new_h); 
         }
-        //renderfix;
-        
-        
-        auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
-        auto mou = mouse();
-        //clip(c->real_bounds, s);
-        draw_texture(info, mou.x * s - info.w * .5, mou.y * s - info.h * .5);
+        renderfix;
+
+        {
+            auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
+            auto mou = mouse();
+            std::vector<MatteCommands> commands;
+            MatteCommands command;
+            command.bounds = c->real_bounds;
+            command.bounds.shrink(1.0);
+            command.bounds.round();
+            command.thickness = 1.0;
+            command.type = 1;
+            command.roundness = 8 * s;
+            commands.push_back(command);
+
+            draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands);
+        }
+        {
+            auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner");
+            auto mou = mouse();
+            std::vector<MatteCommands> commands;
+            MatteCommands command;
+            for (auto ch : c->children) {
+                auto b = ch->real_bounds;
+                command.bounds = b.scale(s);
+                command.bounds.shrink(1.0);
+                command.bounds.round();
+                command.thickness = 1.0;
+                command.type = 1;
+                command.roundness = 8 * s;
+                commands.push_back(command);
+            }
+            draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands);
+        }
+        if (false) {
+            auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect");
+            auto mou = mouse();
+            std::vector<MatteCommands> commands;
+            MatteCommands command;
+            for (auto ch : c->children) {
+                float alpha = *datum<float>(ch, "active_amount");
+                if (alpha != 0.0) {
+                    commands.clear();
+                    auto b = ch->real_bounds;
+                    command.bounds = b.scale(s);
+                    command.bounds.round();
+                    command.type = 2;
+                    command.roundness = 8 * s;
+                    commands.push_back(command);
+                    draw_texture_matted(info, 
+                        std::round(b.x + b.w * .5 - info.w * .5), 
+                        std::round(b.y + b.h * .76 - info.h * .5), 
+                        commands, alpha);
+                }
+            }
+        }
     };
     c->when_mouse_motion = paint {
         request_damage(root, c);
@@ -247,10 +313,12 @@ void drag_workspace_switcher::open() {
     later_immediate([](Timer *) {
         auto mon = hypriso->monitor_from_cursor();
         hypriso->screenshot_wallpaper(mon);
-        int size = 400 * scale(mon);
-        RGBA center = {1, 1, 1, .1};
+        int size = 550 * scale(mon);
+        RGBA center = {1, 1, 1, .2};
         RGBA edge = {1, 1, 1, 0};
         *datum<TextureInfo>(actual_root, "drag_gradient") = gen_gradient_texture(center, edge, size);
+        *datum<TextureInfo>(actual_root, "drag_gradient_inner") = gen_gradient_texture(center, edge, size * .4);
+        *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .12}, edge, size * .8);
         drag_switcher_actual_open();
     });
 }
@@ -260,8 +328,18 @@ static void actual_drag_workspace_switcher_close() {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
-            auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
-            free_text_texture(info.id);
+            {
+                auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
+                free_text_texture(info.id);
+            }
+            {
+                auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner");
+                free_text_texture(info.id);
+            }
+            {
+                auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect");
+                free_text_texture(info.id);
+            }
             delete c;
             actual_root->children.erase(actual_root->children.begin() + i);
         }

@@ -465,5 +465,14 @@ bool is_being_animating(float *value);
 bool is_being_animating_to(float *value, float target);
 
 TextureInfo gen_gradient_texture(RGBA center, RGBA edge, float wh);
+
+struct MatteCommands {
+    int type = 0; // 1 border, 2 rect
+    Bounds bounds;
+    float roundness = 0.0;
+    int thickness = 1.0;
+};
+
+void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha = 1.0);
  
 #endif // hypriso_h_INCLUDED
