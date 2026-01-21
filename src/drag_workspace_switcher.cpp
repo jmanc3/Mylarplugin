@@ -4,6 +4,8 @@
 #include "container.h"
 #include "titlebar.h"
 #include "hypriso.h"
+#include "overview.h"
+
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -50,13 +52,13 @@ void merge_create(Container *parent, std::vector<T> to_be_represented, std::func
 void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     auto openess = *datum<float>(parent, "openess");
     auto b = parent->real_bounds;
-    int spacing = 13;
+    int spacing = 12;
     if (openess != 0.0) {
         b.shrink(30);
     }
     int pen_x = b.x + spacing;
     int pen_y = b.y + spacing;
-    auto thumb_h = b.h - 50;
+    auto thumb_h = b.h - 44;
     auto monb = bounds_monitor(monitor);
     auto thumb_w = thumb_h * (monb.w / monb.h);
     for (int i = 0; i < parent->children.size(); i++) {
@@ -111,23 +113,27 @@ void drag_switcher_actual_open() {
                     return;
                 renderfix
 
-                render_drop_shadow(monitor, 1.0, {0, 0, 0, .1}, 8 * s, 2.0, c->real_bounds);
-                hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s);
+                auto openess = *datum<float>(c->parent, "openess");
+                render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
+                hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
                 
                 auto b = c->real_bounds;
-                b.shrink(2.0);
-                b.round();
-                if (c->state.mouse_hovering) {
-                    border(b, {1, 1, 1, .2}, 1.0, 0, 8 * s, 2.0, false); 
+                if (c->state.mouse_pressing) {
+                    rect(b, {0, 0, 0, .5f * openess}, 0, 8 * s, 2.0, false);
+                } else if (c->state.mouse_hovering) {
+                    //border(b, {1, 1, 1, .2f * openess}, 1.0, 0, 8 * s, 2.0, false);
+                    rect(b, {0, 0, 0, .3f * openess}, 0, 8 * s, 2.0, false);
                 } else {
-                    border(b, {1, 1, 1, .04}, 1.0, 0, 8 * s, 2.0, false); 
+                    b.shrink(2.0);
+                    b.round();
+                    border(b, {1, 1, 1, .04f * openess}, 1.0, 0, 8 * s, 2.0, false); 
                 }
             };
             c->when_clicked = paint {
                 auto space = *datum<int>(c, "workspace");
+                overview::instant_close();
                 hypriso->move_to_workspace_id(space);
-                notify("hello");
-
+                drag_workspace_switcher::close();
             };
         });
 
@@ -206,6 +212,7 @@ static void actual_drag_workspace_switcher_close() {
 }
 
 void drag_workspace_switcher::close() {
+    hold_open = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {

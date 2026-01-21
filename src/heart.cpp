@@ -1700,13 +1700,6 @@ void second::layout_containers() {
             }
             *datum<bool>(c, "touched") = true;
         }
-        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
-            c->parent->children.insert(c->parent->children.begin(), c);
-            if (c->pre_layout) {
-                c->pre_layout(actual_root, c, c->parent->real_bounds);
-                *datum<bool>(c, "touched") = true;
-            }
-        }
         if (c->custom_type == (int) TYPE::SNAP_HELPER) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
@@ -1724,6 +1717,15 @@ void second::layout_containers() {
             c->real_bounds = b;
 
             *datum<bool>(c, "touched") = true;
+        }
+    }
+    for (auto c : backup) {
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+                *datum<bool>(c, "touched") = true;
+            }
         }
     }
 

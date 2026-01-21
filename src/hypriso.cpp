@@ -4810,7 +4810,7 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
     }
 };
 
-void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding) {
+void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4821,7 +4821,7 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding) {
             continue;
         if (!hm->wallfb)
             continue;
-        AnyPass::AnyData anydata([hm, mon, b, rounding](AnyPass* pass) {
+        AnyPass::AnyData anydata([hm, mon, b, rounding, alpha](AnyPass* pass) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4836,6 +4836,7 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding) {
 
             data.round = rounding;
             data.roundingPower = roundingPower;
+            data.a = alpha;
             g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
             g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
                 std::min(1.0, 1.0),

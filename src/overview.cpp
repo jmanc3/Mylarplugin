@@ -775,7 +775,7 @@ void fade_in_min_max(int cid) {
     }
 }
 
-static void actual_overview_stop() {
+static void actual_overview_stop(bool focus) {
     running = false;
     hypriso->whitelist_on = false;
     auto m = actual_root;
@@ -796,11 +796,13 @@ static void actual_overview_stop() {
             }
             if (dragged_cid != -1) {
                 hypriso->set_hidden(dragged_cid, false);
-                hypriso->bring_to_front(dragged_cid, true);
+                if (focus)
+                    hypriso->bring_to_front(dragged_cid, true);
                 fade_in_min_max(dragged_cid);
             } else if (o_data->clicked_cid != -1) {
                 hypriso->set_hidden(o_data->clicked_cid, false);
-                hypriso->bring_to_front(o_data->clicked_cid, true);
+                if (focus)
+                    hypriso->bring_to_front(o_data->clicked_cid, true);
                 fade_in_min_max(o_data->clicked_cid);
             } else {
                 removed = true;
@@ -810,21 +812,25 @@ static void actual_overview_stop() {
         }
     }
     damage_all();
-    if (removed)
+    if (removed && focus)
         later_immediate([](Timer *) {
             hypriso->all_gain_focus();
         });
 }
 
-void overview::close() {
+void overview::instant_close() {
+    actual_overview_stop(false);
+}
+
+void overview::close(bool focus) {
     if (running) {
         drag_workspace_switcher::close();
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
-                animate(&overview_data->scalar, 0.0, overview_anim_time * 1.2, c->lifetime, [](bool normal_end) {
+                animate(&overview_data->scalar, 0.0, overview_anim_time * 1.2, c->lifetime, [focus](bool normal_end) {
                     if (normal_end) {
-                        actual_overview_stop();
+                        actual_overview_stop(focus);
                     }
                 }, [](float scalar) {
                     return pull(slidetopos2, scalar);
