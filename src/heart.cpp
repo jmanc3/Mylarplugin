@@ -93,7 +93,7 @@ static bool on_mouse_move(int id, float x, float y) {
         resizing::motion(resizing::resizing_window());
         return true;
     }
-
+    
     //notify(fz("{} {}", x, y));
     int active_mon = hypriso->monitor_from_cursor();
     {
@@ -161,6 +161,7 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
     auto mou = mouse();
     x = mou.x;
     y = mou.y;
+    
     auto pierced = pierced_containers(actual_root, x, y);
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
@@ -178,7 +179,6 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
 
     snap_assist::click(id, button, state, x, y);
     overview::click(id, button, state, x, y);
-    drag_workspace_switcher::click(id, button, state, x, y); 
     
     bool consumed = false;
     if (drag::dragging() && !state) {
@@ -1705,13 +1705,6 @@ void second::layout_containers() {
             *datum<bool>(c, "touched") = true;
         }
         
-        if (c->custom_type == (int) TYPE::OUR_POPUP) {
-            c->parent->children.insert(c->parent->children.begin(), c);
-            if (c->pre_layout) {
-                c->pre_layout(actual_root, c, c->parent->real_bounds);
-            }
-            *datum<bool>(c, "touched") = true;
-        }
         if (c->custom_type == (int) TYPE::SNAP_HELPER) {
             c->parent->children.insert(c->parent->children.begin(), c);
             if (c->pre_layout) {
@@ -1740,6 +1733,16 @@ void second::layout_containers() {
             }
         }
     }
+    for (auto c : backup) {
+        if (c->custom_type == (int) TYPE::OUR_POPUP) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+            }
+            *datum<bool>(c, "touched") = true;
+        }
+    }
+    
 
     snap_assist::fix_order();
     

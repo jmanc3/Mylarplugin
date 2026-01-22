@@ -6,6 +6,7 @@
 #include "drag.h"
 #include "resizing.h"
 #include "overview.h"
+#include "drag_workspace_switcher.h"
 
 #include <linux/input-event-codes.h>
 
@@ -98,6 +99,12 @@ void monitor_hotspot(Container *m, int x, int y, int monitor_id) {
             }
         } else if (y_off < 50) {
             do_overview(monitor_id);
+        }
+    }
+    if (y_off < 1) {
+        auto center_x = m->real_bounds.w * .5;
+        if (x_off >= center_x - 200 && x_off <= center_x + 200) {
+            //drag_workspace_switcher::open();
         }
     }
 }

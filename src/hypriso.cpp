@@ -6413,18 +6413,24 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
                 opts.round = cmd.roundness;
                 opts.borderSize = cmd.thickness;
                 // border
+                auto col = CHyprColor(1, 1, 1, 1);
+                if (cmd.invert)
+                    col = CHyprColor(0, 0, 0, 1);
                 g_pHyprOpenGL->renderBorder(
                     box,
-                    CHyprColor(1, 1, 1, 1),
+                    col,
                     opts
                 );
             } else if (cmd.type == 2) {
                 CHyprOpenGLImpl::SRectRenderData opts;
                 opts.round = cmd.roundness;
                 // rect
+                auto col = CHyprColor(1, 1, 1, 1);
+                if (cmd.invert)
+                    col = CHyprColor(0, 0, 0, 1);
                 g_pHyprOpenGL->renderRect(
                     box,
-                    CHyprColor(1, 1, 1, 1),
+                    col,
                     opts
                 );
             }

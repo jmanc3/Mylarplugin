@@ -471,6 +471,7 @@ struct MatteCommands {
     Bounds bounds;
     float roundness = 0.0;
     int thickness = 1.0;
+    bool invert = false;
 };
 
 void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha = 1.0);

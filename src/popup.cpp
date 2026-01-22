@@ -52,6 +52,7 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
         }
     }
     auto p = actual_root->child(::vbox, 277, height);
+    p->z_index = 100;
     consume_everything(p);
     p->receive_events_even_if_obstructed = true;
     p->custom_type = (int) TYPE::OUR_POPUP;

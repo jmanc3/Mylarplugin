@@ -5,6 +5,7 @@
 #include "titlebar.h"
 #include "hypriso.h"
 #include "overview.h"
+#include "events.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -61,24 +62,15 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     auto thumb_h = b.h - 44;
     auto monb = bounds_monitor(monitor);
     auto thumb_w = thumb_h * (monb.w / monb.h);
+    auto s = scale(monitor);
     for (int i = 0; i < parent->children.size(); i++) {
         auto ch = parent->children[i];
         ch->wanted_bounds = Bounds(pen_x, pen_y, thumb_w, thumb_h);
         ch->real_bounds = ch->wanted_bounds;
         pen_x += thumb_w + spacing;
-
-        bool *was_active = datum<bool>(ch, "was_active");
-        float *active = datum<float>(ch, "active_amount");
-        
-        bool is_active = ch->state.mouse_hovering || ch->state.mouse_pressing;
-        if (is_active != *was_active) {
-            *was_active = is_active;
-            if (is_active) {
-                animate(active, 1.0, 100, ch->lifetime); 
-            } else {
-                animate(active, 0.0, 200, ch->lifetime); 
-            }
-        }
+        auto pressed_amount = datum<float>(ch, "pressed_amount"); 
+        auto active_amount = datum<float>(ch, "active_amount"); 
+        ch->real_bounds.grow(1.4 * s * (*active_amount - (*pressed_amount * 2)));
     }
 }
 
@@ -94,6 +86,8 @@ void drag_switcher_actual_open() {
     });
     c->custom_type = (int) TYPE::WORKSPACE_SWITCHER;
     c->pre_layout = [monitor](Container *actual_root, Container *c, const Bounds &bounds) {
+        request_damage(actual_root, c);
+        
         auto openess = *datum<float>(c, "openess");
         auto peaking_amount = *datum<float>(c, "peaking_amount");
         
@@ -121,13 +115,46 @@ void drag_switcher_actual_open() {
             *datum<int>(c, "workspace") = space;
             *datum<bool>(c, "was_active") = false;
             *datum<float>(c, "active_amount") = 0.0;
+            *datum<bool>(c, "was_pressed") = false;
+            *datum<float>(c, "pressed_amount") = 0.0; 
             c->when_paint = [monitor](Container *actual_root, Container *c) {
                 auto root = get_rendering_root();
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
                 if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
                     return;
+
+                float active_amount = 0.0;
+                {
+                    bool *was_active = datum<bool>(c, "was_active");
+                    float *active = datum<float>(c, "active_amount");
+                    bool is_active = c->state.mouse_hovering || c->state.mouse_pressing;
+                    if (is_active != *was_active) {
+                        *was_active = is_active;
+                        if (is_active) {
+                            animate(active, 1.0, 130, c->lifetime, nullptr, [](float a) { return pull(slidetopos2, a); } ); 
+                        } else {
+                            animate(active, 0.0, 130, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
+                        }
+                    }
+                    active_amount = *active;
+                }
+                {
+                    bool *was_pressed = datum<bool>(c, "was_pressed");
+                    float *pressed = datum<float>(c, "pressed_amount");
+                    bool is_pressed = c->state.mouse_pressing;
+                    if (is_pressed != *was_pressed) {
+                        *was_pressed = is_pressed;
+                        if (is_pressed) {
+                            animate(pressed, 1.0, 60, c->lifetime, nullptr, [](float a) { return pull(slidetopos2, a); } ); 
+                        } else {
+                            animate(pressed, 0.0, 80, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
+                        }
+                    }
+                }
+
                 renderfix
+
                 auto space = *datum<int>(c, "workspace");
 
                 auto openess = *datum<float>(c->parent, "openess");
@@ -138,13 +165,16 @@ void drag_switcher_actual_open() {
                 
                 auto b = c->real_bounds;
                 if (c->state.mouse_pressing) {
-                    rect(b, {0, 0, 0, .3f * openess}, 0, 8 * s, 2.0, false);
+                    //rect(b, {0, 0, 0, .1f * openess}, 0, 8 * s, 2.0, false);
                 } else if (c->state.mouse_hovering) {
                     //border(b, {1, 1, 1, .2f * openess}, 1.0, 0, 8 * s, 2.0, false);
-                    rect(b, {0, 0, 0, .1f * openess}, 0, 8 * s, 2.0, false);
+                    //rect(b, {1, 1, 1, .1f * openess}, 0, 8 * s, 2.0, false);
                 } else {
 
                 }
+                if (active_amount >= 0.0)
+                    rect(b, {1, 1, 1, .1f * active_amount}, 0, 8 * s, 2.0, false);
+
                 b.shrink(2.0);
                 b.round();
                 border(b, {1, 1, 1, .1f * openess}, 1.0, 0, 8 * s, 2.0, false); 
@@ -156,7 +186,11 @@ void drag_switcher_actual_open() {
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
                 auto space = *datum<int>(c, "workspace");
-                overview::instant_close();
+                later_immediate([](Timer *) {
+                    overview::instant_close();
+                    drag_workspace_switcher::close();
+                });
+                /*
                 if (space != -1) {
                     hypriso->move_to_workspace_id(space);
                 } else {
@@ -167,7 +201,7 @@ void drag_switcher_actual_open() {
                     }
                     hypriso->move_to_workspace(last + 1);
                 }
-                drag_workspace_switcher::close();
+                */
             };
         });
 
@@ -198,7 +232,6 @@ void drag_switcher_actual_open() {
         auto openess = *datum<float>(c, "openess");
         auto peaking_amount = *datum<float>(c, "peaking_amount");
         auto backup = c->real_bounds;
-        request_damage(actual_root, c);
         defer(c->real_bounds = backup);
         auto new_h = 30;
         if (openess != 0.0) {
@@ -226,7 +259,25 @@ void drag_switcher_actual_open() {
             c->real_bounds.x + 14 * s + 10 * s + icon->w, 
             c->real_bounds.y + c->real_bounds.h - t->h * 1.30, 
             peaking_amount);
+
+        if (c->state.mouse_hovering || hold_open) {
+            auto openess = datum<float>(c, "openess");
+            if (*openess != 1.0 && !is_being_animating_to(openess, 1.0)) {
+                animate(openess, 1.0, 180.0, c->lifetime, 
+                nullptr, [](float a) {
+                    return pull(slidetopos2, a);
+                });
+            }
+        } else {
+            auto openess = datum<float>(c, "openess");
+            if (*openess != 0.0 && !is_being_animating_to(openess, 0.0)) {
+                animate(openess, 0.0, 200.0, c->lifetime, nullptr, [](float a) {
+                    return pull(snapback, a);
+                });
+            }
+        }
     };
+    c->receive_events_even_if_obstructed_by_one = true;
     c->after_paint = [monitor](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
@@ -256,6 +307,10 @@ void drag_switcher_actual_open() {
             command.roundness = 8 * s;
             commands.push_back(command);
 
+            command.invert = true;
+            command.type = 2;
+            commands.push_back(command);
+
             draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands);
         }
         {
@@ -278,12 +333,11 @@ void drag_switcher_actual_open() {
         if (false) {
             auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect");
             auto mou = mouse();
-            std::vector<MatteCommands> commands;
-            MatteCommands command;
             for (auto ch : c->children) {
                 float alpha = *datum<float>(ch, "active_amount");
                 if (alpha != 0.0) {
-                    commands.clear();
+                    std::vector<MatteCommands> commands;
+                    MatteCommands command;
                     auto b = ch->real_bounds;
                     command.bounds = b.scale(s);
                     command.bounds.round();
@@ -306,15 +360,16 @@ void drag_switcher_actual_open() {
 
 // TODO: technically we have to open one per monitor
 void drag_workspace_switcher::open() {
-    if (switcher_showing) 
+    if (switcher_showing) {
         return;
+    }
     switcher_showing = true;
 
     later_immediate([](Timer *) {
         auto mon = hypriso->monitor_from_cursor();
         hypriso->screenshot_wallpaper(mon);
         int size = 550 * scale(mon);
-        RGBA center = {1, 1, 1, .2};
+        RGBA center = {1, 1, 1, .3};
         RGBA edge = {1, 1, 1, 0};
         *datum<TextureInfo>(actual_root, "drag_gradient") = gen_gradient_texture(center, edge, size);
         *datum<TextureInfo>(actual_root, "drag_gradient_inner") = gen_gradient_texture(center, edge, size * .4);
@@ -349,6 +404,9 @@ static void actual_drag_workspace_switcher_close() {
 
 void drag_workspace_switcher::close() {
     hold_open = false;
+    actual_drag_workspace_switcher_close();
+    return;
+    
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
@@ -363,38 +421,22 @@ void drag_workspace_switcher::close() {
             animate(peaking_amount, 0.0, 200.0, c->lifetime, nullptr, [](float a) {
                 return pull(snapback, a);
             });
+            
         }
     }
 }
 
 
 void drag_workspace_switcher::click(int id, int button, int state, float x, float y) {
-
+    
 }
 
 void drag_workspace_switcher::on_mouse_move(int x, int y) {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
-            if (bounds_contains(c->real_bounds, x, y) || hold_open) {
-                if (!c->state.mouse_hovering) {
-                    auto openess = datum<float>(c, "openess");
-                    animate(openess, 1.0, 180.0, c->lifetime, 
-                    nullptr, [](float a) {
-                        return pull(slidetopos2, a);
-                    });
-                }
-                c->state.mouse_hovering = true;
-            } else {
-                if (c->state.mouse_hovering) {
-                    auto openess = datum<float>(c, "openess");
-                    animate(openess, 0.0, 200.0, c->lifetime, nullptr, [](float a) {
-                        return pull(snapback, a);
-                    });
-                }
-                c->state.mouse_hovering = false;
-            }
-            request_damage(actual_root, c);
+            Event event(x, y);
+            move_event(c, event);
         }
     }
 }
