@@ -86,8 +86,6 @@ void drag_switcher_actual_open() {
     });
     c->custom_type = (int) TYPE::WORKSPACE_SWITCHER;
     c->pre_layout = [monitor](Container *actual_root, Container *c, const Bounds &bounds) {
-        request_damage(actual_root, c);
-        
         auto openess = *datum<float>(c, "openess");
         auto peaking_amount = *datum<float>(c, "peaking_amount");
         
@@ -134,7 +132,7 @@ void drag_switcher_actual_open() {
                         if (is_active) {
                             animate(active, 1.0, 130, c->lifetime, nullptr, [](float a) { return pull(slidetopos2, a); } ); 
                         } else {
-                            animate(active, 0.0, 130, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
+                            animate(active, 0.0, 130, c->lifetime, nullptr, [](float a) { return a; } ); 
                         }
                     }
                     active_amount = *active;
@@ -173,7 +171,7 @@ void drag_switcher_actual_open() {
 
                 }
                 if (active_amount >= 0.0)
-                    rect(b, {1, 1, 1, .1f * active_amount}, 0, 8 * s, 2.0, false);
+                    rect(b, {1, 1, 1, .05f * active_amount}, 0, 8 * s, 2.0, false);
 
                 b.shrink(2.0);
                 b.round();
@@ -238,6 +236,7 @@ void drag_switcher_actual_open() {
             c->real_bounds.shrink(new_h); 
         }
         renderfix;
+        damage_all();    
 
         RGBA col = {.18, .18, .18, .9f * peaking_amount};
         auto b = c->real_bounds;
@@ -318,7 +317,11 @@ void drag_switcher_actual_open() {
             auto mou = mouse();
             std::vector<MatteCommands> commands;
             MatteCommands command;
+            bool hovered = false;
             for (auto ch : c->children) {
+                if (ch->state.mouse_hovering) {
+                    hovered = true;
+                }
                 auto b = ch->real_bounds;
                 command.bounds = b.scale(s);
                 command.bounds.shrink(1.0);
@@ -328,9 +331,12 @@ void drag_switcher_actual_open() {
                 command.roundness = 8 * s;
                 commands.push_back(command);
             }
-            draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands);
+            if (hovered)
+                draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands, 1.0);
+            else
+                draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands, .5);
         }
-        if (false) {
+        if (true) {
             auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect");
             auto mou = mouse();
             for (auto ch : c->children) {
@@ -345,8 +351,10 @@ void drag_switcher_actual_open() {
                     command.roundness = 8 * s;
                     commands.push_back(command);
                     draw_texture_matted(info, 
-                        std::round(b.x + b.w * .5 - info.w * .5), 
-                        std::round(b.y + b.h * .76 - info.h * .5), 
+                        std::round(mou.x * s - info.w * .5), 
+                        std::round(mou.y * s - info.h * .5), 
+                        //std::round(b.x + b.w * .5 - info.w * .5), 
+                        //std::round(b.y + b.h * .76 - info.h * .5), 
                         commands, alpha);
                 }
             }
@@ -372,8 +380,8 @@ void drag_workspace_switcher::open() {
         RGBA center = {1, 1, 1, .3};
         RGBA edge = {1, 1, 1, 0};
         *datum<TextureInfo>(actual_root, "drag_gradient") = gen_gradient_texture(center, edge, size);
-        *datum<TextureInfo>(actual_root, "drag_gradient_inner") = gen_gradient_texture(center, edge, size * .4);
-        *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .12}, edge, size * .8);
+        *datum<TextureInfo>(actual_root, "drag_gradient_inner") = gen_gradient_texture({1, 1, 1, .6}, edge, size * .4);
+        *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .22}, edge, size * .8);
         drag_switcher_actual_open();
     });
 }
