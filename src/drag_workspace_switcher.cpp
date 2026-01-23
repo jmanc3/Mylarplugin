@@ -193,23 +193,24 @@ void drag_switcher_actual_open() {
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
                 auto space = *datum<int>(c, "workspace");
-                if (space != hypriso->get_active_workspace_id(monitor))
-                    later(220, [](Timer *) {
+                if (space == -1) {
+                    // next avaialable
+                    auto spaces = hypriso->get_workspaces(monitor);
+                    int next = 1;
+                    if (!spaces.empty())
+                        next = spaces[spaces.size() - 1] + 1;
+                    later_immediate([next](Timer *) {
                         overview::instant_close();
                         drag_workspace_switcher::close();
+                        hypriso->move_to_workspace(next);
                     });
-                /*
-                if (space != -1) {
-                    hypriso->move_to_workspace_id(space);
                 } else {
-                    auto spaces = hypriso->get_workspaces(monitor);
-                    int last = 1;
-                    if (!spaces.empty()) {
-                        last = spaces[spaces.size() - 1];
-                    }
-                    hypriso->move_to_workspace(last + 1);
+                    later_immediate([space](Timer *) {
+                        overview::instant_close();
+                        drag_workspace_switcher::close();
+                        hypriso->move_to_workspace(hypriso->space_id_to_raw(space));
+                    });
                 }
-                */
             };
         });
 
