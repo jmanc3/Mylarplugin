@@ -9,6 +9,7 @@
 
 #include <climits>
 #include <cmath>
+#include <linux/input-event-codes.h>
 #include <math.h>
 #include <system_error>
 
@@ -405,6 +406,12 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         if (bounds_contains(c->children[0]->real_bounds, root->mouse_current_x, root->mouse_current_y))
             return;
         auto cid = *datum<int>(c, "cid");
+
+        if (c->state.mouse_button_pressed == BTN_RIGHT) {
+            titlebar::titlebar_right_click(cid);
+            return;
+        }
+        
         auto overview_data = (OverviewData *) c->parent->user_data;
         overview_data->clicked_cid = cid;
         //hypriso->bring_to_front(cid, true);

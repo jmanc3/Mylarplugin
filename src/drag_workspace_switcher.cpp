@@ -238,7 +238,7 @@ void drag_switcher_actual_open() {
         renderfix;
         damage_all();    
 
-        RGBA col = {.18, .18, .18, .9f * peaking_amount};
+        RGBA col = {.18, .18, .18, .9f * peaking_amount - .1f * openess};
         auto b = c->real_bounds;
         render_drop_shadow(monitor, 1.0, {0, 0, 0, .37f * peaking_amount}, 8 * s, 2.0, b);
         if (openess == 0.0) {
