@@ -431,7 +431,37 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     c->when_drag = paint {
         consume_event(root, c);
     };
-    c->when_drag_end = paint {
+    c->when_drag_end = [monitor](Container *root, Container *c) {
+        auto cid = *datum<int>(c, "cid");
+        for (auto c : actual_root->children) {
+            if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+                for (auto ch : c->children) {
+                    if (bounds_contains(ch->real_bounds, actual_root->mouse_current_x, actual_root->mouse_current_y)) {
+                        auto space = *datum<int>(ch, "workspace");
+                        if (space == -1) {
+                            // next avaialable
+                            auto spaces = hypriso->get_workspaces(monitor);
+                            int next = 1;
+                            if (!spaces.empty())
+                                next = spaces[spaces.size() - 1] + 1;
+                            later_immediate([cid, next](Timer *) {
+                                overview::instant_close();
+                                hypriso->move_to_workspace(cid, next);
+                                hypriso->bring_to_front(cid);
+                            });
+                        } else {
+                            later_immediate([cid, space](Timer *) {
+                                overview::instant_close();
+                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space));
+                                hypriso->bring_to_front(cid);
+                            });
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         auto overview_data = (OverviewData *) c->parent->user_data;
         *datum<float>(c, "snap_back_scalar") = 1.0;
         if (!*datum<bool>(c, "started_on_close")) {

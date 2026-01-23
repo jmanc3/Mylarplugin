@@ -5533,6 +5533,14 @@ void HyprIso::move_to_workspace_id(int workspace) {
     }
 }
 
+int HyprIso::space_id_to_raw(int space_id) {
+    for (auto s : hyprspaces) {
+        if (s->id == space_id) {
+            return s->w->m_id;
+        }
+    }
+    return 0;
+}
 
 void HyprIso::move_to_workspace(int id, int workspace) {
 #ifdef FORK_WARN

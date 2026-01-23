@@ -176,7 +176,36 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
 }
 
 void drag::end(int cid) {
-    drag_workspace_switcher::close();
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            auto mou = mouse();
+            for (auto ch : c->children) {
+                if (bounds_contains(ch->real_bounds, mou.x, mou.y)) {
+                    auto space = *datum<int>(ch, "workspace");
+                    if (space == -1) {
+                        // next avaialable
+                        auto spaces = hypriso->get_workspaces(hypriso->monitor_from_cursor());
+                        int next = 1;
+                        if (!spaces.empty())
+                            next = spaces[spaces.size() - 1] + 1;
+                        later_immediate([cid, next](Timer *) {
+                            hypriso->move_to_workspace(cid, next);
+                            hypriso->bring_to_front(cid);
+                        });
+                    } else {
+                        later_immediate([cid, space](Timer *) {
+                            hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space));
+                            hypriso->bring_to_front(cid);
+                        });
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    later(200, [](Timer *) {
+        drag_workspace_switcher::close();
+    });
     
     //notify("end");
     delete data;
