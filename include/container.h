@@ -41,6 +41,7 @@ struct Bounds {
     void grow(double amount);
 
     Bounds scale(double amount);
+    Bounds scale_from_center(double amount);
     
     Bounds round();
     

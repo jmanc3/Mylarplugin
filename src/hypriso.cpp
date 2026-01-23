@@ -22,6 +22,7 @@
 //#include <hyprland/src/desktop/Popup.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
+
 #include <unordered_map>
 #include <wlr-layer-shell-unstable-v1.hpp>
 
@@ -66,20 +67,25 @@
 #include <hyprland/src/protocols/LayerShell.hpp>
 
 #define private public
+#include <hyprland/src/protocols/ColorManagement.hpp>
+#include <hyprland/src/managers/XWaylandManager.hpp>
+#include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/render/decorations/CHyprDropShadowDecoration.hpp>
 #include <hyprland/src/protocols/ServerDecorationKDE.hpp>
 #include <hyprland/src/protocols/XDGDecoration.hpp>
 #include <hyprland/src/protocols/XDGShell.hpp>
-#include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprland/src/managers/KeybindManager.hpp>
+
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/xwayland/XWM.hpp>
-#include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
 #undef private
+
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 
 #include <hyprland/src/xwayland/XWayland.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -3944,19 +3950,15 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
     return {};
 }
 
-void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
+void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
- 
-    //return;
     for (auto t : hyprtextures) {
-        
        if (t->info.id == info.id) {
             CTexPassElement::SRenderData data;
             data.tex = t->texture;
-            data.box = {(float) x, (float) y, data.tex->m_size.x, data.tex->m_size.y};
-            data.box.x = x;
+            data.box = tocbox(b);
             data.box.round();
             auto inter = data.box;
             if (hypriso->clip) {
@@ -3974,6 +3976,19 @@ void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
             data.a = 1.0 * a;
             g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
             
+       }
+    }
+    
+}
+
+void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto t : hyprtextures) {
+       if (t->info.id == info.id) {
+           draw_texture(info, {(float) x, (float) y, t->texture->m_size.x, t->texture->m_size.y}, a, clip_w);
+           return;
        }
     }
 }
@@ -4848,6 +4863,266 @@ void HyprIso::screenshot(int id) {
         }
     }
 }
+
+void ourRenderTexture(SP<CTexture> tex, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+    RASSERT(g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
+    RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
+
+    TRACY_GPU_ZONE("RenderTextureInternalWithDamage");
+
+    float alpha = std::clamp(data.a, 0.f, 1.f);
+
+    if (data.damage->empty())
+        return;
+
+    CBox newBox = box;
+    g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
+
+    static const auto PDT            = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
+    static const auto PPASS          = CConfigValue<Hyprlang::INT>("render:cm_fs_passthrough");
+    static const auto PENABLECM      = CConfigValue<Hyprlang::INT>("render:cm_enabled");
+    static const auto PCURSORTIMEOUT = CConfigValue<Hyprlang::FLOAT>("cursor:inactive_timeout");
+
+    // get the needed transform for this texture
+    const auto                  MONITOR_INVERTED = Math::wlTransformToHyprutils(Math::invertTransform(g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
+    Hyprutils::Math::eTransform TRANSFORM        = tex->m_transform;
+
+    if (g_pHyprOpenGL->m_monitorTransformEnabled)
+        TRANSFORM = Math::composeTransform(MONITOR_INVERTED, TRANSFORM);
+
+    Mat3x3     matrix   = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
+    Mat3x3     glMatrix = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
+
+    SShader*   shader = nullptr;
+
+    bool       usingFinalShader = false;
+
+    const bool CRASHING = g_pHyprOpenGL->m_applyFinalShader && g_pHyprRenderer->m_crashingInProgress;
+
+    auto       texType = tex->m_type;
+
+    if (CRASHING) {
+        shader           = &g_pHyprOpenGL->m_shaders->m_shGLITCH;
+        usingFinalShader = true;
+    } else if (g_pHyprOpenGL->m_applyFinalShader && g_pHyprOpenGL->m_finalScreenShader.program) {
+        shader           = &g_pHyprOpenGL->m_finalScreenShader;
+        usingFinalShader = true;
+    } else {
+        if (g_pHyprOpenGL->m_applyFinalShader) {
+            shader           = &g_pHyprOpenGL->m_shaders->m_shPASSTHRURGBA;
+            usingFinalShader = true;
+        } else {
+            switch (tex->m_type) {
+                case TEXTURE_RGBA: shader = &g_pHyprOpenGL->m_shaders->m_shRGBA; break;
+                case TEXTURE_RGBX: shader = &g_pHyprOpenGL->m_shaders->m_shRGBX; break;
+
+                case TEXTURE_EXTERNAL: shader = &g_pHyprOpenGL->m_shaders->m_shEXT; break; // might be unused
+                default: RASSERT(false, "tex->m_iTarget unsupported!");
+            }
+        }
+    }
+
+    if (g_pHyprOpenGL->m_renderData.currentWindow && g_pHyprOpenGL->m_renderData.currentWindow->m_ruleApplicator->RGBX().valueOrDefault()) {
+        shader  = &g_pHyprOpenGL->m_shaders->m_shRGBX;
+        texType = TEXTURE_RGBX;
+    }
+
+    glActiveTexture(GL_TEXTURE0);
+    tex->bind();
+
+    tex->setTexParameter(GL_TEXTURE_WRAP_S, data.wrapX);
+    tex->setTexParameter(GL_TEXTURE_WRAP_T, data.wrapY);
+
+    if (g_pHyprOpenGL->m_renderData.useNearestNeighbor) {
+        tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    } else {
+        tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    }
+
+        const bool isHDRSurface      = g_pHyprOpenGL->m_renderData.surface.valid() && g_pHyprOpenGL->m_renderData.surface->m_colorManagement.valid() ? g_pHyprOpenGL->m_renderData.surface->m_colorManagement->isHDR() : false;
+        const bool canPassHDRSurface = isHDRSurface && !g_pHyprOpenGL->m_renderData.surface->m_colorManagement->isWindowsScRGB(); // windows scRGB requires CM shader
+
+        const auto imageDescription = g_pHyprOpenGL->m_renderData.surface.valid() && g_pHyprOpenGL->m_renderData.surface->m_colorManagement.valid() ?
+        NColorManagement::CImageDescription::from(g_pHyprOpenGL->m_renderData.surface->m_colorManagement->imageDescription()) :
+        (data.cmBackToSRGB ? data.cmBackToSRGBSource->m_imageDescription : NColorManagement::DEFAULT_IMAGE_DESCRIPTION);
+
+    const bool skipCM = !*PENABLECM || !g_pHyprOpenGL->m_cmSupported                                                        /* CM unsupported or disabled */
+        || g_pHyprOpenGL->m_renderData.pMonitor->doesNoShaderCM()                                                           /* no shader needed */
+        || (imageDescription->id() == g_pHyprOpenGL->m_renderData.pMonitor->m_imageDescription->id() && !data.cmBackToSRGB) /* Source and target have the same image description */
+        || (((*PPASS && canPassHDRSurface) ||
+             (*PPASS == 1 && !isHDRSurface && g_pHyprOpenGL->m_renderData.pMonitor->m_cmType != NCMType::CM_HDR && g_pHyprOpenGL->m_renderData.pMonitor->m_cmType != NCMType::CM_HDR_EDID)) &&
+            g_pHyprOpenGL->m_renderData.pMonitor->inFullscreenMode()) /* Fullscreen window with pass cm enabled */;
+
+    if (!skipCM && !usingFinalShader && (texType == TEXTURE_RGBA || texType == TEXTURE_RGBX))
+        shader = &g_pHyprOpenGL->m_shaders->m_shCM;
+
+    g_pHyprOpenGL->useProgram(shader->program);
+
+    if (shader == &g_pHyprOpenGL->m_shaders->m_shCM) {
+        shader->setUniformInt(SHADER_TEX_TYPE, texType);
+        if (data.cmBackToSRGB) {
+            static auto PSDREOTF      = CConfigValue<Hyprlang::INT>("render:cm_sdr_eotf");
+            auto        chosenSdrEotf = *PSDREOTF != 3 ? NColorManagement::CM_TRANSFER_FUNCTION_GAMMA22 : NColorManagement::CM_TRANSFER_FUNCTION_SRGB;
+            g_pHyprOpenGL->passCMUniforms(*shader, imageDescription, NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{.transferFunction = chosenSdrEotf}), true, -1, -1);
+        } else
+            g_pHyprOpenGL->passCMUniforms(*shader, imageDescription);
+    }
+
+    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
+    shader->setUniformInt(SHADER_TEX, 0);
+
+    if ((usingFinalShader && *PDT == 0) || CRASHING)
+        shader->setUniformFloat(SHADER_TIME, g_pHyprOpenGL->m_globalTimer.getSeconds() - shader->initialTime);
+    else if (usingFinalShader)
+        shader->setUniformFloat(SHADER_TIME, 0.f);
+
+    if (usingFinalShader) {
+        shader->setUniformInt(SHADER_WL_OUTPUT, g_pHyprOpenGL->m_renderData.pMonitor->m_id);
+        shader->setUniformFloat2(SHADER_FULL_SIZE, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.x, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.y);
+        shader->setUniformFloat(SHADER_POINTER_INACTIVE_TIMEOUT, *PCURSORTIMEOUT);
+        shader->setUniformInt(SHADER_POINTER_HIDDEN, g_pHyprRenderer->m_cursorHiddenByCondition);
+        shader->setUniformInt(SHADER_POINTER_KILLING, g_pInputManager->getClickMode() == CLICKMODE_KILL);
+        shader->setUniformInt(SHADER_POINTER_SHAPE, g_pHyprRenderer->m_lastCursorData.shape);
+        shader->setUniformInt(SHADER_POINTER_SHAPE_PREVIOUS, g_pHyprRenderer->m_lastCursorData.shapePrevious);
+//float CCursorManager::getScaledSize() const {
+    //return m_size * m_cursorScale;
+//}
+        //shader->setUniformFloat(SHADER_POINTER_SIZE, g_pCursorManager->getScaledSize());
+    }
+
+    if (usingFinalShader && *PDT == 0) {
+        PHLMONITORREF pMonitor = g_pHyprOpenGL->m_renderData.pMonitor;
+        Vector2D      p        = ((g_pInputManager->getMouseCoordsInternal() - pMonitor->m_position) * pMonitor->m_scale);
+        p                      = p.transform(Math::wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_pixelSize);
+        shader->setUniformFloat2(SHADER_POINTER, p.x / pMonitor->m_pixelSize.x, p.y / pMonitor->m_pixelSize.y);
+
+        std::vector<float> pressedPos = g_pHyprOpenGL->m_pressedHistoryPositions | std::views::transform([&](const Vector2D& vec) {
+                                            Vector2D pPressed = ((vec - pMonitor->m_position) * pMonitor->m_scale);
+                                            pPressed          = pPressed.transform(Math::wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_pixelSize);
+                                            return std::array<float, 2>{(float) (pPressed.x / pMonitor->m_pixelSize.x), (float) (pPressed.y / pMonitor->m_pixelSize.y)};
+                                        }) |
+            std::views::join | std::ranges::to<std::vector<float>>();
+
+        shader->setUniform2fv(SHADER_POINTER_PRESSED_POSITIONS, pressedPos.size(), pressedPos);
+
+        std::vector<float> pressedTime =
+            g_pHyprOpenGL->m_pressedHistoryTimers | std::views::transform([](const CTimer& timer) { return timer.getSeconds(); }) | std::ranges::to<std::vector<float>>();
+
+        shader->setUniform1fv(SHADER_POINTER_PRESSED_TIMES, pressedTime.size(), pressedTime);
+
+        shader->setUniformInt(SHADER_POINTER_PRESSED_KILLED, g_pHyprOpenGL->m_pressedHistoryKilled);
+        shader->setUniformInt(SHADER_POINTER_PRESSED_TOUCHED, g_pHyprOpenGL->m_pressedHistoryTouched);
+
+        shader->setUniformFloat(SHADER_POINTER_LAST_ACTIVE, g_pInputManager->m_lastCursorMovement.getSeconds());
+        shader->setUniformFloat(SHADER_POINTER_SWITCH_TIME, g_pHyprRenderer->m_lastCursorData.switchedTimer.getSeconds());
+
+    } else if (usingFinalShader) {
+        shader->setUniformFloat2(SHADER_POINTER, 0.f, 0.f);
+
+        static const std::vector<float> pressedPosDefault(POINTER_PRESSED_HISTORY_LENGTH * 2uz, 0.f);
+        static const std::vector<float> pressedTimeDefault(POINTER_PRESSED_HISTORY_LENGTH, 0.f);
+
+        shader->setUniform2fv(SHADER_POINTER_PRESSED_POSITIONS, pressedPosDefault.size(), pressedPosDefault);
+        shader->setUniform1fv(SHADER_POINTER_PRESSED_TIMES, pressedTimeDefault.size(), pressedTimeDefault);
+        shader->setUniformInt(SHADER_POINTER_PRESSED_KILLED, 0);
+
+        shader->setUniformFloat(SHADER_POINTER_LAST_ACTIVE, 0.f);
+        shader->setUniformFloat(SHADER_POINTER_SWITCH_TIME, 0.f);
+    }
+
+    if (CRASHING) {
+        shader->setUniformFloat(SHADER_DISTORT, g_pHyprRenderer->m_crashingDistort);
+        shader->setUniformFloat2(SHADER_FULL_SIZE, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.x, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.y);
+    }
+
+    if (!usingFinalShader) {
+        shader->setUniformFloat(SHADER_ALPHA, alpha);
+
+        if (data.discardActive) {
+            shader->setUniformInt(SHADER_DISCARD_OPAQUE, !!(g_pHyprOpenGL->m_renderData.discardMode & DISCARD_OPAQUE));
+            shader->setUniformInt(SHADER_DISCARD_ALPHA, !!(g_pHyprOpenGL->m_renderData.discardMode & DISCARD_ALPHA));
+            shader->setUniformFloat(SHADER_DISCARD_ALPHA_VALUE, g_pHyprOpenGL->m_renderData.discardOpacity);
+        } else {
+            shader->setUniformInt(SHADER_DISCARD_OPAQUE, 0);
+            shader->setUniformInt(SHADER_DISCARD_ALPHA, 0);
+        }
+    }
+
+    CBox transformedBox = newBox;
+    transformedBox.transform(Math::wlTransformToHyprutils(Math::invertTransform(g_pHyprOpenGL->m_renderData.pMonitor->m_transform)), g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.x,
+                             g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.y);
+
+    const auto TOPLEFT  = Vector2D(transformedBox.x, transformedBox.y);
+    const auto FULLSIZE = Vector2D(transformedBox.width, transformedBox.height);
+
+    if (!usingFinalShader) {
+        // Rounded corners
+        shader->setUniformFloat2(SHADER_TOP_LEFT, TOPLEFT.x, TOPLEFT.y);
+        shader->setUniformFloat2(SHADER_FULL_SIZE, FULLSIZE.x, FULLSIZE.y);
+        shader->setUniformFloat(SHADER_RADIUS, data.round);
+        shader->setUniformFloat(SHADER_ROUNDING_POWER, data.roundingPower);
+
+        if (data.allowDim && g_pHyprOpenGL->m_renderData.currentWindow) {
+            if (g_pHyprOpenGL->m_renderData.currentWindow->m_notRespondingTint->value() > 0) {
+                const auto DIM = g_pHyprOpenGL->m_renderData.currentWindow->m_notRespondingTint->value();
+                shader->setUniformInt(SHADER_APPLY_TINT, 1);
+                shader->setUniformFloat3(SHADER_TINT, 1.f - DIM, 1.f - DIM, 1.f - DIM);
+            } else if (g_pHyprOpenGL->m_renderData.currentWindow->m_dimPercent->value() > 0) {
+                shader->setUniformInt(SHADER_APPLY_TINT, 1);
+                const auto DIM = g_pHyprOpenGL->m_renderData.currentWindow->m_dimPercent->value();
+                shader->setUniformFloat3(SHADER_TINT, 1.f - DIM, 1.f - DIM, 1.f - DIM);
+            } else
+                shader->setUniformInt(SHADER_APPLY_TINT, 0);
+        } else
+            shader->setUniformInt(SHADER_APPLY_TINT, 0);
+    }
+
+    glBindVertexArray(shader->uniformLocations[SHADER_SHADER_VAO]);
+    if (data.allowCustomUV && g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft != Vector2D(-1, -1)) {
+        const float customUVs[] = {
+            (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.x, (float) (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.y,     (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.x,
+            (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.y,     (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.x, (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.y,
+            (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.x,     (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.y,
+        };
+
+        glBindBuffer(GL_ARRAY_BUFFER, shader->uniformLocations[SHADER_SHADER_VBO_UV]);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(customUVs), customUVs);
+    } else {
+        glBindBuffer(GL_ARRAY_BUFFER, shader->uniformLocations[SHADER_SHADER_VBO_UV]);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(fullVerts), fullVerts);
+    }
+
+    if (!g_pHyprOpenGL->m_renderData.clipBox.empty() || !g_pHyprOpenGL->m_renderData.clipRegion.empty()) {
+        CRegion damageClip = g_pHyprOpenGL->m_renderData.clipBox;
+
+        if (!g_pHyprOpenGL->m_renderData.clipRegion.empty()) {
+            if (g_pHyprOpenGL->m_renderData.clipBox.empty())
+                damageClip = g_pHyprOpenGL->m_renderData.clipRegion;
+            else
+                damageClip.intersect(g_pHyprOpenGL->m_renderData.clipRegion);
+        }
+
+        if (!damageClip.empty()) {
+            damageClip.forEachRect([](const auto& RECT) {
+                g_pHyprOpenGL->scissor(&RECT);
+                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            });
+        }
+    } else {
+        data.damage->forEachRect([](const auto& RECT) {
+            g_pHyprOpenGL->scissor(&RECT);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        });
+    }
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    tex->unbind();
+}
+
+
 
 void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
 #ifdef TRACY_ENABLE
@@ -6437,25 +6712,65 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
                 opts.borderSize = cmd.thickness;
                 // border
                 auto col = CHyprColor(1, 1, 1, 1);
-                if (cmd.invert)
-                    col = CHyprColor(0, 0, 0, 1);
+                GLint prevSrcRGB, prevDstRGB;
+                GLint prevSrcAlpha, prevDstAlpha;
+                GLboolean prevBlendEnabled;
+                if (cmd.invert) {
+                    col = CHyprColor(0, 0, 0, 0);
+
+                    glGetBooleanv(GL_BLEND, &prevBlendEnabled);
+
+                    glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
+                    glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
+                    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
+                    glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
+                    glBlendFunc(GL_ONE, GL_ZERO);
+                }
                 g_pHyprOpenGL->renderBorder(
                     box,
                     col,
                     opts
                 );
+                if (cmd.invert) {
+                    glBlendFuncSeparate(
+                        prevSrcRGB,
+                        prevDstRGB,
+                        prevSrcAlpha,
+                        prevDstAlpha
+                    );
+                }
             } else if (cmd.type == 2) {
                 CHyprOpenGLImpl::SRectRenderData opts;
                 opts.round = cmd.roundness;
                 // rect
                 auto col = CHyprColor(1, 1, 1, 1);
-                if (cmd.invert)
-                    col = CHyprColor(0, 0, 0, 1);
+                GLint prevSrcRGB, prevDstRGB;
+                GLint prevSrcAlpha, prevDstAlpha;
+                GLboolean prevBlendEnabled;
+                if (cmd.invert) {
+                    col = CHyprColor(0, 0, 0, 0);
+
+                    glGetBooleanv(GL_BLEND, &prevBlendEnabled);
+
+                    glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
+                    glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
+                    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
+                    glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
+                    glBlendFunc(GL_ONE, GL_ZERO);
+                }
                 g_pHyprOpenGL->renderRect(
                     box,
                     col,
                     opts
                 );
+                if (cmd.invert) {
+                    glBlendFuncSeparate(
+                        prevSrcRGB,
+                        prevDstRGB,
+                        prevSrcAlpha,
+                        prevDstAlpha
+                    );
+                }
             }
         }
 
@@ -6634,6 +6949,14 @@ void HyprIso::logout() {
        g_pKeybindManager->m_dispatchers["exit"]("");
     } else {
         notify("dispatch `exit` no longer exists, report this issue if encountered");
+    }
+}
+
+void HyprIso::dispatch(std::string command, std::string args) {
+    if (g_pKeybindManager->m_dispatchers.contains(command)) {
+       g_pKeybindManager->m_dispatchers[command](args);
+    } else {
+        notify(fz("dispatch {} no longer exists, report this issue if encountered", command));
     }
 }
 

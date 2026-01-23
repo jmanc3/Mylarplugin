@@ -941,6 +941,18 @@ Bounds Bounds::scale(double amount) {
     return *this;
 }
 
+Bounds Bounds::scale_from_center(double scale) {
+    double oldW = w, oldH = h;
+
+    w *= scale;
+    h *= scale;
+
+    x -= (w - oldW) * .5;
+    y -= (h - oldH) * .5;
+
+    return *this;
+}
+
 Bounds Bounds::round() {
     double roundedX = std::round(x);
     double roundedY = std::round(y);

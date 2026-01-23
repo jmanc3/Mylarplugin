@@ -70,7 +70,9 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
         pen_x += thumb_w + spacing;
         auto pressed_amount = datum<float>(ch, "pressed_amount"); 
         auto active_amount = datum<float>(ch, "active_amount"); 
-        ch->real_bounds.grow(1.4 * s * (*active_amount - (*pressed_amount * 2)));
+        //ch->real_bounds.grow(1.4 * s * (*active_amount));
+        ch->real_bounds.scale_from_center(1.0 + (.05 * *active_amount));
+        ch->real_bounds.scale_from_center(1.0 - (.16 * *pressed_amount));
     }
 }
 
@@ -144,9 +146,9 @@ void drag_switcher_actual_open() {
                     if (is_pressed != *was_pressed) {
                         *was_pressed = is_pressed;
                         if (is_pressed) {
-                            animate(pressed, 1.0, 60, c->lifetime, nullptr, [](float a) { return pull(slidetopos2, a); } ); 
+                            animate(pressed, 1.0, 200, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
                         } else {
-                            animate(pressed, 0.0, 80, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
+                            animate(pressed, 0.0, 120, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
                         }
                     }
                 }
@@ -154,6 +156,7 @@ void drag_switcher_actual_open() {
                 renderfix
 
                 auto space = *datum<int>(c, "workspace");
+                float pressed_amount = *datum<float>(c, "pressed_amount");
 
                 auto openess = *datum<float>(c->parent, "openess");
                 render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
@@ -178,16 +181,23 @@ void drag_switcher_actual_open() {
                 border(b, {1, 1, 1, .1f * openess}, 1.0, 0, 8 * s, 2.0, false); 
                 
                 if (space == -1) {
-                    auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uF8AA", {1, 1, 1, .8}, 20);
-                    draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
+                    //auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uF8AA", {1, 1, 1, .8}, 20);
+                    auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uEA48", {1, 1, 1, .8}, 20);
+                    //draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
+                    Bounds tb = {center_x(c, info->w), center_y(c, info->h), (float) info->w, (float) info->h};
+                    tb.scale_from_center(1.0f + (.08f * active_amount));
+                    
+                    tb.scale_from_center(1.0f - (.15f * pressed_amount));
+                    draw_texture(*info, tb, 1.0 * openess);
                 }
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
                 auto space = *datum<int>(c, "workspace");
-                later_immediate([](Timer *) {
-                    overview::instant_close();
-                    drag_workspace_switcher::close();
-                });
+                if (space != hypriso->get_active_workspace_id(monitor))
+                    later(220, [](Timer *) {
+                        overview::instant_close();
+                        drag_workspace_switcher::close();
+                    });
                 /*
                 if (space != -1) {
                     hypriso->move_to_workspace_id(space);
@@ -305,11 +315,7 @@ void drag_switcher_actual_open() {
             command.type = 1;
             command.roundness = 8 * s;
             commands.push_back(command);
-
-            command.invert = true;
-            command.type = 2;
-            commands.push_back(command);
-
+            
             draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands);
         }
         {

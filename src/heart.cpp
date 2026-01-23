@@ -137,7 +137,15 @@ static void create_root_popup() {
         };
         root.push_back(pop);
     }
- 
+    {
+        PopOption pop;
+        pop.text = "Refresh Compositor...";   
+        pop.on_clicked = []() {
+            hypriso->dispatch("forcerendererreload", "");
+        };
+        root.push_back(pop);
+    }
+  
     PopOption pop;
     pop.seperator = true;
     root.push_back(pop);        

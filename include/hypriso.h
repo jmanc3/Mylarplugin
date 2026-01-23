@@ -334,6 +334,7 @@ struct HyprIso {
     int parent(int id);
 
     void logout();
+    void dispatch(std::string command, std::string args);
 
     void show_desktop();
     void hide_desktop();
@@ -433,6 +434,7 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
 TextureInfo gen_texture(std::string path, float h);
 
 void draw_texture(TextureInfo info, int x, int y, float a = 1.0, float clip_w = 0.0);
+void draw_texture(TextureInfo info, Bounds b, float a = 1.0, float clip_w = 0.0);
 
 void setCursorImageUntilUnset(std::string cursor);
 void unsetCursorImage(bool force = false);
