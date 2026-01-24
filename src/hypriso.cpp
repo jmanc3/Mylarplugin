@@ -2925,18 +2925,34 @@ void border(Bounds box, RGBA color, float size, int cornermask, float round, flo
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
- 
     if (box.h <= 0 || box.w <= 0)
         return;
-    CBorderPassElement::SBorderData rectdata;
-    rectdata.grad1         = CHyprColor(color.r, color.g, color.b, color.a);
-    rectdata.grad2         = CHyprColor(color.r, color.g, color.b, color.a);
-    rectdata.box           = tocbox(box);
-    rectdata.round         = round;
-    rectdata.outerRound    = round;
-    rectdata.borderSize    = size;
-    rectdata.roundingPower = roundingPower;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(rectdata));
+    bool clip = hypriso->clip;
+    Bounds clipbox = hypriso->clipbox;
+    if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
+        return; 
+    }
+    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox, size](AnyPass* pass) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+        CHyprOpenGLImpl::SBorderRenderData rectdata;
+        rectdata.round         = round;
+        rectdata.outerRound    = round;
+        rectdata.borderSize    = size;
+        rectdata.roundingPower = roundingPower;
+
+        if (clip)
+            g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+        
+        set_rounding(cornermask); // only top side
+        g_pHyprOpenGL->renderBorder(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
+        set_rounding(0);
+        if (clip)
+            g_pHyprOpenGL->m_renderData.clipBox = CBox();
+    });
+    anydata.box = tocbox(box);
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float size) {
@@ -5181,7 +5197,12 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
             continue;
         if (!hm->wallfb)
             continue;
-        AnyPass::AnyData anydata([hm, mon, b, rounding, alpha](AnyPass* pass) {
+        bool clip = hypriso->clip;
+        Bounds clipbox = hypriso->clipbox;
+        if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+            return; 
+        }
+        AnyPass::AnyData anydata([hm, mon, b, rounding, alpha, clip, clipbox](AnyPass* pass) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -5197,16 +5218,21 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
             data.round = rounding;
             data.roundingPower = roundingPower;
             data.a = alpha;
+
             g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
             g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
                 std::min(1.0, 1.0),
                 std::min(1.0, 1.0)
             );
             set_rounding(cornermask);
+            if (clip)
+                g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
             g_pHyprOpenGL->renderTexture(tex, box, data);
             set_rounding(0);
             g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
             g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+            if (clip)
+                g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
         });
         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     }

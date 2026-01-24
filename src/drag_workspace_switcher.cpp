@@ -63,9 +63,11 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     auto monb = bounds_monitor(monitor);
     auto thumb_w = thumb_h * (monb.w / monb.h);
     auto s = scale(monitor);
+    
     for (int i = 0; i < parent->children.size(); i++) {
         auto ch = parent->children[i];
-        ch->wanted_bounds = Bounds(pen_x, pen_y, thumb_w, thumb_h);
+        auto slide_in_amount = *datum<float>(ch, "slide_in_amount"); 
+        ch->wanted_bounds = Bounds(pen_x, pen_y - thumb_h * (1.0 - slide_in_amount), thumb_w, thumb_h);
         ch->real_bounds = ch->wanted_bounds;
         pen_x += thumb_w + spacing;
         auto pressed_amount = datum<float>(ch, "pressed_amount"); 
@@ -117,6 +119,15 @@ void drag_switcher_actual_open() {
             *datum<float>(c, "active_amount") = 0.0;
             *datum<bool>(c, "was_pressed") = false;
             *datum<float>(c, "pressed_amount") = 0.0; 
+            auto slide_in_amount = datum<float>(c, "slide_in_amount");
+            *slide_in_amount = 1.0;
+            auto openess = *datum<float>(parent, "openess");
+            if (openess == 1.0) {
+                *slide_in_amount = 0.0;
+                animate(slide_in_amount, 1.0, 200, c->lifetime,  nullptr, [](float a) {
+                    return pull(slidetopos2, a);
+                });
+            }
             c->when_paint = [monitor](Container *actual_root, Container *c) {
                 auto root = get_rendering_root();
                 if (!root) return;
@@ -141,6 +152,12 @@ void drag_switcher_actual_open() {
                 }
 
                 renderfix
+                float slide_in_amount = *datum<float>(c, "slide_in_amount");
+                auto bb = c->real_bounds;
+                hypriso->clip = true;
+                defer(hypriso->clip = false);
+                hypriso->clipbox = bb;
+                hypriso->clipbox.y += hypriso->clipbox.h * (1.0 - slide_in_amount);
 
                 auto space = *datum<int>(c, "workspace");
                 float pressed_amount = *datum<float>(c, "pressed_amount");
