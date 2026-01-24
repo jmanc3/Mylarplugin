@@ -165,7 +165,8 @@ void drag_switcher_actual_open() {
                 auto openess = *datum<float>(c->parent, "openess");
                 render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
                 if (space != -1) {
-                    hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
+                    //hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
+                    hypriso->draw_workspace(monitor, space, c->real_bounds, 8 * s);
                 }
                 
                 auto b = c->real_bounds;
@@ -393,6 +394,9 @@ void drag_workspace_switcher::open() {
 
     later_immediate([](Timer *) {
         auto mon = hypriso->monitor_from_cursor();
+        auto ids = hypriso->get_workspace_ids(mon);
+        for (auto id : ids)
+            hypriso->screenshot_space(mon, id);
         hypriso->screenshot_wallpaper(mon);
         int size = 550 * scale(mon);
         RGBA center = {1, 1, 1, .3};

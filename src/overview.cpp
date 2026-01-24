@@ -698,7 +698,7 @@ void actual_open(int monitor) {
         float x = 0;
         for (auto id : ids) {
             auto rw = (bounds.h / bounds.w) * 200 * s;
-            hypriso->draw_workspace(rid, id, {x, 0, 1.0f * 200 * s, rw});
+            //hypriso->draw_workspace(rid, id, {x, 0, 1.0f * 200 * s, rw});
             x += rw;
         }
 
@@ -836,9 +836,6 @@ void overview::open(int monitor) {
         hypriso->screenshot_wallpaper(monitor);
         screenshotting_wallpaper = false;
         hypriso->screenshot_all(); 
-        auto ids = hypriso->get_workspaces(monitor);
-        for (auto id : ids)
-            hypriso->screenshot_space(monitor, id);
         int size = scale(monitor) * bounds_monitor(monitor).w * .35;
         RGBA center = {1, 1, 1, .3};
         RGBA edge = {1, 1, 1, 0};

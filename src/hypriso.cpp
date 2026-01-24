@@ -5183,18 +5183,23 @@ void ourRenderTexture(SP<CTexture> tex, const CBox& box, const CHyprOpenGLImpl::
 
 
 
-void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
+void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alpha) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
  
     //return;
     for (auto hs : hyprspaces) {
-        if (hs->w->m_id == id) {
+        if (hs->id == id) {
             if (!hs->buffer->isAllocated())
                 continue;
             //notify("draw space " + std::to_string(id));
-            AnyPass::AnyData anydata([b, hs, rounding](AnyPass* pass) {
+            bool clip = hypriso->clip;
+            Bounds clipbox = hypriso->clipbox;
+            if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+                return; 
+            }
+            AnyPass::AnyData anydata([b, hs, rounding, alpha, clip, clipbox](AnyPass* pass) {
     #ifdef TRACY_ENABLE
         ZoneScoped;
     #endif
@@ -5211,6 +5216,7 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
                 data.allowCustomUV = true;
 
                 data.round = rounding;
+                data.a = alpha;
                 data.noAA = true;
                 data.roundingPower = roundingPower;
                 g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
@@ -5219,8 +5225,15 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding) {
                     std::min(1.0, 1.0)
                 );
                 set_rounding(cornermask);
+                if (clip)
+                    g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+         
                 g_pHyprOpenGL->renderTexture(tex, box, data);
+                
+                if (clip)
+                    g_pHyprOpenGL->m_renderData.clipBox = CBox();
                 set_rounding(0);
+                
                 g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
                 g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
             });
@@ -5311,7 +5324,7 @@ void HyprIso::screenshot_space(int mon, int id) {
         return;
     
     for (auto hs : hyprspaces) {
-        if (hs->w->m_id == id) {
+        if (hs->id == id) {
             if (!hs->buffer)
                 hs->buffer = new CFramebuffer;
             
