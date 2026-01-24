@@ -22,6 +22,7 @@
 //#include <hyprland/src/desktop/Popup.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
 
 #include <unordered_map>
 #include <wlr-layer-shell-unstable-v1.hpp>
@@ -4434,27 +4435,69 @@ HyprWindow *get_window(PHLWINDOW w) {
     return nullptr;
 }
 
-void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
+//
+// Holy moly this function was hard to write. For some reason windows would be missing from the screenshot
+// Looking at hyprexpo and copying their function it worked.
+// The main difference being these functions 'g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);'
+// Don't know why they're required to make this work but oh well, it works now
+//
+void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF startedOn, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //return;
-    if (!buffer || pRenderWorkspace == nullptr)
+    auto pMonitor = m;
+    if (!pMonitor)
         return;
-    if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-        return;
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+
     g_pHyprRenderer->makeEGLCurrent();
-    buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-    g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
-    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-    g_pHyprOpenGL->m_renderData.pMonitor = m;
-    const auto NOW = Time::steadyNow();
 
-    g_pHyprRenderer->renderWorkspace(m, w.lock(), Time::steadyNow(), m->logicalBox());
-    //generateFrame(m, w.lock(), Time::steadyNow(), m->logicalBox());
+    CBox monbox = {{0, 0}, pMonitor->m_pixelSize};
 
+    auto image = buffer;
+
+    if (image->m_size != monbox.size()) {
+        image->release();
+        image->alloc(monbox.w, monbox.h, pMonitor->m_output->state->state().drmFormat);
+    }
+
+    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+    g_pHyprRenderer->beginRender(pMonitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, image);
+
+    g_pHyprOpenGL->clear(CHyprColor{0, 0, 0, 1.0});
+
+    const auto   PWORKSPACE = w.lock();
+
+    PHLWORKSPACE openSpecial = pMonitor->m_activeSpecialWorkspace;
+    if (openSpecial)
+        pMonitor->m_activeSpecialWorkspace.reset();
+
+    startedOn->m_visible = false;
+
+    if (PWORKSPACE) {
+        pMonitor->m_activeWorkspace = PWORKSPACE;
+        g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+        PWORKSPACE->m_visible = true;
+
+        if (PWORKSPACE == startedOn)
+            pMonitor->m_activeSpecialWorkspace = openSpecial;
+
+        g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+
+        PWORKSPACE->m_visible = false;
+        g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
+
+        if (PWORKSPACE == startedOn)
+            pMonitor->m_activeSpecialWorkspace.reset();
+    } else
+        g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+
+    g_pHyprOpenGL->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
+
+    pMonitor->m_activeSpecialWorkspace = openSpecial;
+    pMonitor->m_activeWorkspace        = startedOn.lock();
+    startedOn->m_visible               = true;
+    g_pDesktopAnimationManager->startAnimation(startedOn.lock(), CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
 }
 
 void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
@@ -5257,25 +5300,24 @@ void HyprIso::screenshot_space(int mon, int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //notify("attempt screenshot " + std::to_string(id));
+    PHLWORKSPACEREF startedOn;
     for (auto hs : hyprspaces) {
-        //notify("against " + std::to_string(hs->w->m_id));
+        if (hs->id == hypriso->get_active_workspace_id(mon)) {
+            startedOn = hs->w;
+            break;
+        }
+    }
+    if (!startedOn)
+        return;
+    
+    for (auto hs : hyprspaces) {
         if (hs->w->m_id == id) {
             if (!hs->buffer)
                 hs->buffer = new CFramebuffer;
             
-            //notify("screenshot " + std::to_string(id));
-            screenshot_workspace(hs->buffer, hs->w, hs->w->m_monitor.lock(), false);
+            screenshot_workspace(hs->buffer, startedOn, hs->w, hs->w->m_monitor.lock(), false);
             break;
         }
-        // for (auto hm : hyprmonitors) {
-        //     if (hs->w.lock() && hs->w->m_monitor == hm->m && mon == hm->id) {
-        //         if (hs->w->m_id == id) {
-        //             screenshot_workspace(hs->buffer, hs->w, hm->m, false);
-        //             return;
-        //         }
-        //     }
-        // }
     }
 }
 

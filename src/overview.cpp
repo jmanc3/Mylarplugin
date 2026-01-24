@@ -698,7 +698,7 @@ void actual_open(int monitor) {
         float x = 0;
         for (auto id : ids) {
             auto rw = (bounds.h / bounds.w) * 200 * s;
-            //hypriso->draw_workspace(rid, id, {x, 0, 1.0f * 200 * s, rw});
+            hypriso->draw_workspace(rid, id, {x, 0, 1.0f * 200 * s, rw});
             x += rw;
         }
 
