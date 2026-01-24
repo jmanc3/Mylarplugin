@@ -4856,6 +4856,10 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
         hw->w_decos_size = tobounds(w->getFullWindowBoundingBox());
         hw->w_decos_size.scale(m->m_scale);
         hw->w_deco_raw = tobounds(w->getFullWindowBoundingBox());
+        auto tex = hw->deco_fb->getTexture();
+        glActiveTexture(GL_TEXTURE0);
+        tex->bind();
+        glGenerateMipmap(tex->m_target);
 
         w->m_hidden = h;
 
@@ -4878,6 +4882,10 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
 
     hw->w_size = Bounds(0, 0, (w->m_realSize->value().x * m->m_scale), (w->m_realSize->value().y * m->m_scale));
     hw->w_bounds_raw = Bounds(0, 0, (w->m_realSize->value().x), (w->m_realSize->value().y));
+    auto tex = hw->fb->getTexture();
+    glActiveTexture(GL_TEXTURE0);
+    tex->bind();
+    glGenerateMipmap(tex->m_target);
 }
 
 void HyprIso::screenshot_all() {
@@ -5232,9 +5240,6 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 auto before = g_pHyprOpenGL->m_renderData.useNearestNeighbor;
                 g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
                 g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
-                glActiveTexture(GL_TEXTURE0);
-                tex->bind();
-                glGenerateMipmap(tex->m_target);
                 
                 
                 g_pHyprOpenGL->renderTexture(tex, box, data);
@@ -5340,6 +5345,10 @@ void HyprIso::screenshot_space(int mon, int id) {
                 hs->buffer = new CFramebuffer;
             
             screenshot_workspace(hs->buffer, startedOn.lock(), hs->w, hs->w->m_monitor.lock(), false);
+            auto tex = hs->buffer->getTexture();
+            glActiveTexture(GL_TEXTURE0);
+            tex->bind();
+            glGenerateMipmap(tex->m_target);
             break;
         }
     }
@@ -5355,6 +5364,10 @@ void HyprIso::screenshot_deco(int id) {
                 if (!hw->deco_fb)
                     hw->deco_fb = new CFramebuffer;
                 screenshot_window(hw, w, true);
+                auto tex = hw->deco_fb->getTexture();
+                glActiveTexture(GL_TEXTURE0);
+                tex->bind();
+                glGenerateMipmap(tex->m_target);
             }
         }
     }
@@ -5403,10 +5416,7 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                         g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
                     g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
                     g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
-                    glActiveTexture(GL_TEXTURE0);
-                    tex->bind();
-                    glGenerateMipmap(tex->m_target);
-                     
+
                     g_pHyprOpenGL->renderTexture(tex, box, data);
                     g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR;
 
