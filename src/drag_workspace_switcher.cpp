@@ -139,19 +139,6 @@ void drag_switcher_actual_open() {
                     }
                     active_amount = *active;
                 }
-                {
-                    bool *was_pressed = datum<bool>(c, "was_pressed");
-                    float *pressed = datum<float>(c, "pressed_amount");
-                    bool is_pressed = c->state.mouse_pressing;
-                    if (is_pressed != *was_pressed) {
-                        *was_pressed = is_pressed;
-                        if (is_pressed) {
-                            animate(pressed, 1.0, 200, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
-                        } else {
-                            animate(pressed, 0.0, 120, c->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
-                        }
-                    }
-                }
 
                 renderfix
 
@@ -192,6 +179,7 @@ void drag_switcher_actual_open() {
                 }
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
+                drag_workspace_switcher::press(c->uuid);
                 auto space = *datum<int>(c, "workspace");
                 if (space == -1) {
                     // next avaialable
@@ -201,14 +189,20 @@ void drag_switcher_actual_open() {
                         next = spaces[spaces.size() - 1] + 1;
                     later_immediate([next](Timer *) {
                         overview::instant_close();
-                        drag_workspace_switcher::close();
-                        hypriso->move_to_workspace(next);
+                        hypriso->move_to_workspace(next, false);
+                        drag_workspace_switcher::close_visually();
+                        later(300, [](Timer *) {
+                            drag_workspace_switcher::close();
+                        });
                     });
                 } else {
                     later_immediate([space](Timer *) {
                         overview::instant_close();
-                        drag_workspace_switcher::close();
-                        hypriso->move_to_workspace(hypriso->space_id_to_raw(space));
+                        drag_workspace_switcher::close_visually();
+                        later(300, [](Timer *) {
+                            drag_workspace_switcher::close();
+                        });
+                        hypriso->move_to_workspace(hypriso->space_id_to_raw(space), false);
                     });
                 }
             };
@@ -417,28 +411,28 @@ static void actual_drag_workspace_switcher_close() {
     damage_all();    
 }
 
-void drag_workspace_switcher::close() {
-    hold_open = false;
-    actual_drag_workspace_switcher_close();
+void drag_workspace_switcher::close_visually() {
     return;
-    
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
             auto peaking_amount = datum<float>(c, "peaking_amount");
             auto openess = datum<float>(c, "openess");
             animate(openess, 0.0, 200.0, c->lifetime,
-                [](bool normal_end) {
-                    actual_drag_workspace_switcher_close();
-                }, [](float a) {
+                nullptr, [](float a) {
                     return pull(snapback, a);
                 });
             animate(peaking_amount, 0.0, 200.0, c->lifetime, nullptr, [](float a) {
                 return pull(snapback, a);
             });
-            
         }
     }
+}
+
+void drag_workspace_switcher::close() {
+    hold_open = false;
+    actual_drag_workspace_switcher_close();
+    return;
 }
 
 
@@ -460,4 +454,29 @@ void drag_workspace_switcher::force_hold_open(bool state) {
     hold_open = state;
     auto m = mouse();
     drag_workspace_switcher::on_mouse_move(m.x, m.y);
+}
+
+void press_to(std::string uuid, float value, float time) {
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            for (auto ch : c->children) {
+                if (ch->uuid == uuid) {
+                    float *pressed = datum<float>(ch, "pressed_amount");
+                    animate(pressed, value, time, ch->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
+                }
+            }
+        }
+    }
+}
+
+void drag_workspace_switcher::press(std::string uuid) {
+    static int latest = 0;
+    latest++;
+    press_to(uuid, 1.0, 130);
+    auto latest_copy = latest;
+    later(130, [latest_copy, uuid](Timer *) {
+        if (latest_copy != latest)
+            return;
+        press_to(uuid, 0.0, 120);
+    });
 }

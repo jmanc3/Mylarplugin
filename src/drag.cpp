@@ -203,7 +203,7 @@ void drag::end(int cid) {
             }
         }
     }
-    later(200, [](Timer *) {
+    later(300, [](Timer *) {
         drag_workspace_switcher::close();
     });
     

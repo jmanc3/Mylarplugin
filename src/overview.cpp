@@ -176,7 +176,6 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     //scalar = pull(slidetopos2, scalar);
     
     auto cid = *datum<int>(c, "cid");
-    auto backup = c->real_bounds;
     bool snap_back = false;
 
     {
@@ -345,6 +344,23 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         }
     }
 
+    if (false) {
+        auto b = c->real_bounds;
+        b.round();
+        auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
+        auto mou = mouse();
+        std::vector<MatteCommands> commands;
+        MatteCommands command;
+        command.bounds = b;
+        command.type = 1;
+        command.roundness = 8 * s;
+        commands.push_back(command);
+        draw_texture_matted(info,
+            std::round(mou.x * s - info.w * .5),
+            std::round(mou.y * s - info.h * .5),
+            commands, scalar);
+    }
+
     c->real_bounds.y += std::round(titlebar_h * s);
     c->real_bounds.h -= std::round(titlebar_h * s);
     
@@ -446,14 +462,14 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                                 next = spaces[spaces.size() - 1] + 1;
                             later_immediate([cid, next](Timer *) {
                                 overview::instant_close();
-                                hypriso->move_to_workspace(cid, next);
-                                hypriso->bring_to_front(cid);
+                                hypriso->move_to_workspace(cid, next, false);
+                                //hypriso->bring_to_front(cid);
                             });
                         } else {
                             later_immediate([cid, space](Timer *) {
                                 overview::instant_close();
-                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space));
-                                hypriso->bring_to_front(cid);
+                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
+                                //hypriso->bring_to_front(cid);
                             });
                         }
                         break;
@@ -688,6 +704,31 @@ void actual_open(int monitor) {
 
         //testDraw();
     };
+    over->after_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+        auto root = get_rendering_root();
+        if (!root) return;
+        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        if (stage != (int) STAGE::RENDER_POST_WINDOWS || monitor != rid)
+            return;
+        renderfix
+        auto overview_data = (OverviewData *) c->user_data;
+        /*for (auto ch : c->children) {
+            auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
+            auto mou = mouse();
+            std::vector<MatteCommands> commands;
+            MatteCommands command;
+            auto b = ch->real_bounds;
+            command.bounds = b.scale(s);
+            command.bounds.round();
+            command.type = 1;
+            command.roundness = 8 * s;
+            commands.push_back(command);
+            draw_texture_matted(info, 
+                std::round(mou.x * s - info.w * .5), 
+                std::round(mou.y * s - info.h * .5), 
+                commands, 1.0);
+        }*/
+    };
     over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
 
@@ -798,7 +839,10 @@ void overview::open(int monitor) {
         auto ids = hypriso->get_workspaces(monitor);
         for (auto id : ids)
             hypriso->screenshot_space(monitor, id);
-    
+        int size = scale(monitor) * bounds_monitor(monitor).w * .35;
+        RGBA center = {1, 1, 1, .3};
+        RGBA edge = {1, 1, 1, 0};
+        //*datum<TextureInfo>(actual_root, "overview_gradient") = gen_gradient_texture(center, edge, size);
 
         actual_open(monitor);
     });
@@ -817,6 +861,8 @@ static void actual_overview_stop(bool focus) {
     hypriso->whitelist_on = false;
     auto m = actual_root;
     bool removed = false;
+    //auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
+    //free_text_texture(info.id);
     for (int i = m->children.size() - 1; i >= 0; i--) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {

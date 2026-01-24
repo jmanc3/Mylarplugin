@@ -5515,7 +5515,7 @@ static void updateRelativeCursorCoords() {
         Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->m_position;
 }
 
-void HyprIso::move_to_workspace(int workspace) {
+void HyprIso::move_to_workspace(int workspace, bool follow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -5542,7 +5542,7 @@ int HyprIso::space_id_to_raw(int space_id) {
     return 0;
 }
 
-void HyprIso::move_to_workspace(int id, int workspace) {
+void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
 #ifdef FORK_WARN
     static_assert(false, "[Function Body] Make sure our `CSurfacePassElement::getTexBox()` and Hyprland's are synced!");
 #endif
@@ -5559,50 +5559,53 @@ void HyprIso::move_to_workspace(int id, int workspace) {
 
     if (!PWINDOW)
         return;
-    std::string args = std::to_string(workspace);
+    
+    if (true) {
+        std::string args = std::to_string(workspace);
 
-    const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
-    if (WORKSPACEID == WORKSPACE_INVALID) {
-        Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
-        return;
+        const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
+        if (WORKSPACEID == WORKSPACE_INVALID) {
+            Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
+            return;
+        }
+
+        if (WORKSPACEID == PWINDOW->workspaceID()) {
+            Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
+            return;
+        }
+
+        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+        PHLMONITOR pMonitor   = nullptr;
+        const auto POLDWS     = PWINDOW->m_workspace;
+
+        updateRelativeCursorCoords();
+
+        g_pHyprRenderer->damageWindow(PWINDOW);
+
+        if (pWorkspace) {
+            const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
+            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+            pMonitor = pWorkspace->m_monitor.lock();
+            Desktop::focusState()->rawMonitorFocus(pMonitor);
+            g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
+        } else {
+            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+            pMonitor   = pWorkspace->m_monitor.lock();
+            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+        }
+
+        POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
+
+        if (pWorkspace->m_isSpecialWorkspace)
+            pMonitor->setSpecialWorkspace(pWorkspace);
+        else if (POLDWS->m_isSpecialWorkspace)
+            POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
+
+        pMonitor->changeWorkspace(pWorkspace);
+
+        Desktop::focusState()->fullWindowFocus(PWINDOW);
+        PWINDOW->warpCursor();
     }
-
-    if (WORKSPACEID == PWINDOW->workspaceID()) {
-        Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
-        return;
-    }
-
-    auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
-    PHLMONITOR pMonitor   = nullptr;
-    const auto POLDWS     = PWINDOW->m_workspace;
-
-    updateRelativeCursorCoords();
-
-    g_pHyprRenderer->damageWindow(PWINDOW);
-
-    if (pWorkspace) {
-        const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
-        g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-        pMonitor = pWorkspace->m_monitor.lock();
-        Desktop::focusState()->rawMonitorFocus(pMonitor);
-        g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
-    } else {
-        pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
-        pMonitor   = pWorkspace->m_monitor.lock();
-        g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-    }
-
-    POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
-
-    if (pWorkspace->m_isSpecialWorkspace)
-        pMonitor->setSpecialWorkspace(pWorkspace);
-    else if (POLDWS->m_isSpecialWorkspace)
-        POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
-
-    pMonitor->changeWorkspace(pWorkspace);
-
-    Desktop::focusState()->fullWindowFocus(PWINDOW);
-    PWINDOW->warpCursor();
 }
 
 void HyprIso::reload() {
@@ -6688,6 +6691,10 @@ void drawShadowInternal(const CBox& box, int round, float roundingPower, int ran
 }
 
 void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha) {
+    for (const auto& cmd : commands)
+        if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
+            return;
+
     AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass* pass) {
         static CFramebuffer matteFB;
         static CFramebuffer alphaFB;
@@ -6713,6 +6720,8 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
                 cmd.bounds.w,
                 cmd.bounds.h
             };
+            if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
+                continue;
 
             if (cmd.type == 1) {
                 CHyprOpenGLImpl::SBorderRenderData opts;
