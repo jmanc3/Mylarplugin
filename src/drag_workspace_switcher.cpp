@@ -207,20 +207,34 @@ void drag_switcher_actual_open() {
                         next = spaces[spaces.size() - 1] + 1;
                     later_immediate([next](Timer *) {
                         overview::instant_close();
+
+                        auto mon = hypriso->monitor_from_cursor();
+                        auto before = hypriso->get_active_workspace_id(mon);
+
                         hypriso->move_to_workspace(next, false);
                         drag_workspace_switcher::close_visually();
                         later(300, [](Timer *) {
                             drag_workspace_switcher::close();
                         });
+
+                        hypriso->screenshot_space(mon, before);
+                        hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
                     });
                 } else {
                     later_immediate([space](Timer *) {
                         overview::instant_close();
+
+                        auto mon = hypriso->monitor_from_cursor();
+                        auto before = hypriso->get_active_workspace_id(mon);
+
                         drag_workspace_switcher::close_visually();
                         later(300, [](Timer *) {
                             drag_workspace_switcher::close();
                         });
                         hypriso->move_to_workspace(hypriso->space_id_to_raw(space), false);
+
+                        hypriso->screenshot_space(mon, before);
+                        hypriso->screenshot_space(mon, space);
                     });
                 }
             };

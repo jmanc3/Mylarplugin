@@ -460,16 +460,30 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                             int next = 1;
                             if (!spaces.empty())
                                 next = spaces[spaces.size() - 1] + 1;
-                            later_immediate([cid, next](Timer *) {
+                            later_immediate([cid, next](Timer *) {                                
                                 overview::instant_close();
-                                hypriso->move_to_workspace(cid, next, false);
-                                //hypriso->bring_to_front(cid);
+                                
+                                auto mon = hypriso->monitor_from_cursor();
+                                auto before = hypriso->get_active_workspace_id(mon);
+                                
+                                hypriso->move_to_workspace(cid, next);
+                                hypriso->bring_to_front(cid);
+                                
+                                hypriso->screenshot_space(mon, before);
+                                hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
                             });
                         } else {
                             later_immediate([cid, space](Timer *) {
                                 overview::instant_close();
-                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
-                                //hypriso->bring_to_front(cid);
+                                
+                                auto mon = hypriso->monitor_from_cursor();
+                                auto before = hypriso->get_active_workspace_id(mon);
+                                
+                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space));
+                                hypriso->bring_to_front(cid);
+                                
+                                hypriso->screenshot_space(mon, before);
+                                hypriso->screenshot_space(mon, space);
                             });
                         }
                         break;
@@ -642,7 +656,6 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
 }
 
 void actual_open(int monitor) {
-    drag_workspace_switcher::open();
     hypriso->all_lose_focus();
     
     hypriso->whitelist_on = true;
@@ -831,6 +844,8 @@ void overview::open(int monitor) {
         }
         return;
     }
+    drag_workspace_switcher::open();
+    
     later_immediate([monitor](Timer *) {
         screenshotting_wallpaper = true;
         hypriso->screenshot_wallpaper(monitor);

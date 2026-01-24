@@ -677,7 +677,21 @@ void apply_restore_info(int id) {
     }
 }
 
+static void possibly_update_workspace_previews() {
+    for (auto c : actual_root->children)
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            later_immediate([](Timer *) {
+                auto mon = hypriso->monitor_from_cursor();
+                auto spaces = hypriso->get_workspace_ids(mon); 
+                for (auto s : spaces)
+                    hypriso->screenshot_space(mon, s);
+            });
+            break;
+        }
+}
+
 static void on_window_open(int id) {    
+    possibly_update_workspace_previews();
     // We make the client on the first monitor we fine, because we move the container later based on actual monitor location
     {
         auto m = actual_root; 
@@ -734,6 +748,8 @@ static void on_window_open(int id) {
 }
 
 static void on_window_closed(int id) {
+    possibly_update_workspace_previews();
+    
     hypriso->set_corner_rendering_mask_for_window(id, 0);
     clear_snap_groups(id);
     

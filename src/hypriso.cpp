@@ -4441,7 +4441,7 @@ HyprWindow *get_window(PHLWINDOW w) {
 // The main difference being these functions 'g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);'
 // Don't know why they're required to make this work but oh well, it works now
 //
-void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF startedOn, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
+void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACE startedOn, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4495,9 +4495,9 @@ void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACEREF startedOn, PHLWO
     g_pHyprRenderer->endRender();
 
     pMonitor->m_activeSpecialWorkspace = openSpecial;
-    pMonitor->m_activeWorkspace        = startedOn.lock();
+    pMonitor->m_activeWorkspace        = startedOn;
     startedOn->m_visible               = true;
-    g_pDesktopAnimationManager->startAnimation(startedOn.lock(), CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+    g_pDesktopAnimationManager->startAnimation(startedOn, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
 }
 
 void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
@@ -5320,7 +5320,7 @@ void HyprIso::screenshot_space(int mon, int id) {
             break;
         }
     }
-    if (!startedOn)
+    if (!startedOn.lock())
         return;
     
     for (auto hs : hyprspaces) {
@@ -5328,7 +5328,7 @@ void HyprIso::screenshot_space(int mon, int id) {
             if (!hs->buffer)
                 hs->buffer = new CFramebuffer;
             
-            screenshot_workspace(hs->buffer, startedOn, hs->w, hs->w->m_monitor.lock(), false);
+            screenshot_workspace(hs->buffer, startedOn.lock(), hs->w, hs->w->m_monitor.lock(), false);
             break;
         }
     }
