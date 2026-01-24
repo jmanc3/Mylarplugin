@@ -187,7 +187,7 @@ void drag_switcher_actual_open() {
                 
                 if (space == -1) {
                     //auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uF8AA", {1, 1, 1, .8}, 20);
-                    auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uEA48", {1, 1, 1, .8}, 20);
+                    auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uE710", {1, 1, 1, .8}, 20);
                     //draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
                     Bounds tb = {center_x(c, info->w), center_y(c, info->h), (float) info->w, (float) info->h};
                     tb.scale_from_center(1.0f + (.08f * active_amount));
@@ -212,10 +212,7 @@ void drag_switcher_actual_open() {
                         auto before = hypriso->get_active_workspace_id(mon);
 
                         hypriso->move_to_workspace(next, false);
-                        drag_workspace_switcher::close_visually();
-                        later(300, [](Timer *) {
-                            drag_workspace_switcher::close();
-                        });
+                        drag_workspace_switcher::close();
 
                         hypriso->screenshot_space(mon, before);
                         hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
@@ -227,10 +224,7 @@ void drag_switcher_actual_open() {
                         auto mon = hypriso->monitor_from_cursor();
                         auto before = hypriso->get_active_workspace_id(mon);
 
-                        drag_workspace_switcher::close_visually();
-                        later(300, [](Timer *) {
-                            drag_workspace_switcher::close();
-                        });
+                        drag_workspace_switcher::close();
                         hypriso->move_to_workspace(hypriso->space_id_to_raw(space), false);
 
                         hypriso->screenshot_space(mon, before);
@@ -418,7 +412,7 @@ void drag_workspace_switcher::open() {
         RGBA edge = {1, 1, 1, 0};
         *datum<TextureInfo>(actual_root, "drag_gradient") = gen_gradient_texture(center, edge, size);
         *datum<TextureInfo>(actual_root, "drag_gradient_inner") = gen_gradient_texture({1, 1, 1, .6}, edge, size * .4);
-        *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .22}, edge, size * .8);
+        *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .12}, edge, size * .8);
         drag_switcher_actual_open();
     });
 }

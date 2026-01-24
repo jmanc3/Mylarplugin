@@ -9,6 +9,7 @@
 #include "hypriso.h"
 #include "heart.h"
 
+#include <GLES3/gl32.h>
 #include <cairo.h>
 #include <fstream>
 #include <glib.h>
@@ -5227,8 +5228,18 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 set_rounding(cornermask);
                 if (clip)
                     g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-         
+                
+                auto before = g_pHyprOpenGL->m_renderData.useNearestNeighbor;
+                g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+                g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
+                glActiveTexture(GL_TEXTURE0);
+                tex->bind();
+                glGenerateMipmap(tex->m_target);
+                
+                
                 g_pHyprOpenGL->renderTexture(tex, box, data);
+                g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR;
+                g_pHyprOpenGL->m_renderData.useNearestNeighbor = before;
                 
                 if (clip)
                     g_pHyprOpenGL->m_renderData.clipBox = CBox();
@@ -5390,7 +5401,15 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                     set_rounding(cornermask);
                     if (clip)
                         g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+                    g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+                    g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
+                    glActiveTexture(GL_TEXTURE0);
+                    tex->bind();
+                    glGenerateMipmap(tex->m_target);
+                     
                     g_pHyprOpenGL->renderTexture(tex, box, data);
+                    g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR;
+
                     set_rounding(0);
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);

@@ -226,6 +226,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         c->real_bounds.h = std::round(titlebar_h * s);
         if (snap_back)
             c->real_bounds.h += std::round(1 * s);
+        c->real_bounds.round();;
         int titlebar_mask = 12;
         Bounds titlebar_bounds = c->real_bounds;
         bool child_hovered = false;
@@ -364,7 +365,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     c->real_bounds.y += std::round(titlebar_h * s);
     c->real_bounds.h -= std::round(titlebar_h * s);
     
-    hypriso->draw_thumbnail(cid, c->real_bounds, roundingAmt * s, 2.0, 3, fade_in_a);
+    hypriso->draw_thumbnail(cid, c->real_bounds.round(), roundingAmt * s, 2.0, 3, fade_in_a);
 
     if (c->state.mouse_hovering) {
         auto b = pre_title_backup;
