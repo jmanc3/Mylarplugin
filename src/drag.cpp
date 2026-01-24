@@ -189,13 +189,21 @@ void drag::end(int cid) {
                         if (!spaces.empty())
                             next = spaces[spaces.size() - 1] + 1;
                         later_immediate([cid, next](Timer *) {
+                            auto mon = hypriso->monitor_from_cursor();
+                            auto before = hypriso->get_active_workspace_id(mon);
                             hypriso->move_to_workspace(cid, next);
                             hypriso->bring_to_front(cid);
+                            hypriso->screenshot_space(mon, before);
+                            hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
                         });
                     } else {
                         later_immediate([cid, space](Timer *) {
+                            auto mon = hypriso->monitor_from_cursor();
+                            auto before = hypriso->get_active_workspace_id(mon);
                             hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space));
                             hypriso->bring_to_front(cid);
+                            hypriso->screenshot_space(mon, before);
+                            hypriso->screenshot_space(mon, space);
                         });
                     }
                     break;

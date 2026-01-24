@@ -378,6 +378,7 @@ void drag_switcher_actual_open() {
                 }
             }
         }
+
     };
     c->when_mouse_motion = paint {
         request_damage(root, c);
