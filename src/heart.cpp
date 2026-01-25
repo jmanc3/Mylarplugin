@@ -1500,6 +1500,7 @@ void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+later_immediate([](Timer*) {
     hypriso->create_config_variables();
 
     on_any_container_close = any_container_closed;
@@ -1559,6 +1560,8 @@ void second::begin() {
     later_immediate([](Timer *) {
         damage_all();
     });
+});
+    
 }
 
 void second::end() {

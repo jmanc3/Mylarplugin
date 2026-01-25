@@ -136,30 +136,23 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
         hypriso->should_round(cid, true);
         clear_snap_groups(cid);
     } else {
+        auto p = snap_position_to_bounds(snap_mon, (SnapPosition) pos);
+
         // perform snap
         *snapped = true; 
         *datum<Bounds>(c, "pre_snap_bounds") = bounds_client(cid);
         *datum<int>(c, "snap_type") = pos;
-
-        auto p = snap_position_to_bounds(snap_mon, (SnapPosition) pos);
-        if (pos != (int) SnapPosition::MAX) {
-            //p.shrink(1 * scale(snap_mon));
-        }
+        
         if (hypriso->has_decorations(cid)) {
             hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
         } else {
-            if (pos == (int) SnapPosition::BOTTOM_LEFT || pos == (int) SnapPosition::BOTTOM_RIGHT || 
-                pos == (int) SnapPosition::LEFT || pos == (int) SnapPosition::RIGHT || pos == (int) SnapPosition::MAX) {
-                hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
-            } else {
-                hypriso->move_resize(cid, p.x, p.y, p.w, p.h + titlebar_h, false);
-            }
+            hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
         }
         hypriso->should_round(cid, false); 
     }
     hypriso->damage_entire(snap_mon);
 
-    // This sends
+    // This is so that windows that are being moved get unhovered my mouse
     later(new int(0), 10, [](Timer *t) {
         t->keep_running = true;
         int *times = (int *) t->data; 
@@ -215,7 +208,6 @@ void drag::end(int cid) {
         drag_workspace_switcher::close();
     });
     
-    //notify("end");
     delete data;
     data = nullptr;
 
@@ -232,6 +224,7 @@ void drag::end(int cid) {
         if (!(is_snapped)) {
             update_restore_info_for(cid);
         } else {
+            //return;
             bool create_snap_helper = true;
             // attempt to merge
             // find first top to bottom snapped client that is not self
@@ -261,73 +254,9 @@ void drag::end(int cid) {
                 }
             }
 
-            auto client = c;
-            {
-                float left_perc = .5;
-                float middle_perc = .5;
-                float right_perc = .5;
-                Bounds reserved = bounds_reserved_monitor(get_monitor(cid));
-
-                //auto gs = thin_groups(c->id);
-                auto info = (ClientInfo*)client->user_data;
-                for (auto g : info->grouped_with) {
-                    auto b = bounds_client(g);
-                    auto g_snap_type = *datum<int>(get_cid_container(g), "snap_type");
-                    if (g_snap_type == (int)SnapPosition::TOP_LEFT) {
-                        left_perc = (b.h + titlebar_h) / reserved.h;
-                        middle_perc = (b.w) / reserved.w;
-                    } else if (g_snap_type == (int)SnapPosition::TOP_RIGHT) {
-                        right_perc = (b.h + titlebar_h) / reserved.h;
-                        middle_perc = 1.0 - ((b.w) / reserved.w);
-                    } else if (g_snap_type == (int)SnapPosition::BOTTOM_LEFT) {
-                        left_perc = (b.y - titlebar_h) / reserved.h;
-                        middle_perc = (b.w) / reserved.w;
-                    } else if (g_snap_type == (int)SnapPosition::BOTTOM_RIGHT) {
-                        right_perc = (b.y - titlebar_h) / reserved.h;
-                        middle_perc = 1.0 - ((b.w) / reserved.w);
-                    } else if (g_snap_type == (int)SnapPosition::LEFT) {
-                        middle_perc = (b.w) / reserved.w;
-                    } else if (g_snap_type == (int)SnapPosition::RIGHT) {
-                        middle_perc = 1.0 - ((b.w) / reserved.w);
-                    }
-                }
-                if (left_perc == .5 && right_perc != .5) {
-                    left_perc = right_perc;
-                }
-                if (right_perc == .5 && left_perc != .5) {
-                    right_perc = left_perc;
-                }
-                auto r = reserved;
-                Bounds lt = Bounds(r.x, r.y, r.w * middle_perc, r.h * left_perc);
-                Bounds lb = Bounds(r.x, r.y + r.h * left_perc, r.w * middle_perc, r.h * (1 - left_perc));
-                Bounds rt = Bounds(r.x + r.w * middle_perc, r.y, r.w * (1 - middle_perc), r.h * right_perc);
-                Bounds rb = Bounds(r.x + r.w * middle_perc, r.y + r.h * right_perc, r.w * (1 - middle_perc), r.h * (1 - right_perc));
-
-                auto c_snap_type = pos;
-
-                if (hypriso->has_decorations(cid)){
-                    if (c_snap_type == SnapPosition::LEFT) {
-                        hypriso->move_resize(cid, reserved.x, reserved.y + titlebar_h, reserved.w * middle_perc, reserved.h - titlebar_h, false);
-                    } else if (c_snap_type == SnapPosition::RIGHT) {
-                        hypriso->move_resize(cid, reserved.x + reserved.w * middle_perc, reserved.y + titlebar_h, reserved.w * (1 - middle_perc), reserved.h - titlebar_h, false);
-                    } else if (c_snap_type == SnapPosition::TOP_LEFT) {
-                        hypriso->move_resize(cid, lt.x, lt.y + titlebar_h, lt.w, lt.h, false);
-                    } else if (c_snap_type == SnapPosition::BOTTOM_LEFT) {
-                        hypriso->move_resize(cid, lb.x, lb.y, lb.w, lb.h, false);
-                    } else if (c_snap_type == SnapPosition::TOP_RIGHT) {
-                        hypriso->move_resize(cid, rt.x, rt.y + titlebar_h, rt.w, rt.h, false);
-                    } else if (c_snap_type == SnapPosition::BOTTOM_RIGHT) {
-                        hypriso->move_resize(cid, rb.x, rb.y, rb.w, rb.h, false);
-                    }
-                }
-            }
-
             snap_assist::open(get_monitor(cid), cid);
         }
     }
-    //if (hypriso->on_activated) {
-        //later(500, [cid](Timer *) { hypriso->on_activated(cid); });
-    //}
 }
 
 bool drag::dragging() {
