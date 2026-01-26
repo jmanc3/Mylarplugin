@@ -5240,11 +5240,9 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 
                 auto before = g_pHyprOpenGL->m_renderData.useNearestNeighbor;
                 g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-                g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
-                
-                
+                tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+
                 g_pHyprOpenGL->renderTexture(tex, box, data);
-                g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR;
                 g_pHyprOpenGL->m_renderData.useNearestNeighbor = before;
                 
                 if (clip)
@@ -5416,10 +5414,9 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                     if (clip)
                         g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
                     g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-                    g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
+                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
                     g_pHyprOpenGL->renderTexture(tex, box, data);
-                    g_pHyprOpenGL->m_renderData.textureMinFilter = GL_LINEAR;
 
                     set_rounding(0);
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
@@ -5648,6 +5645,15 @@ int HyprIso::space_id_to_raw(int space_id) {
     for (auto s : hyprspaces) {
         if (s->id == space_id) {
             return s->w->m_id;
+        }
+    }
+    return 0;
+}
+
+int HyprIso::space_raw_to_id(int space_raw) {
+    for (auto s : hyprspaces) {
+        if (s->w->m_id == space_raw) {
+            return s->id;
         }
     }
     return 0;

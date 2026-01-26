@@ -339,6 +339,7 @@ struct HyprIso {
     void show_desktop();
     void hide_desktop();
     int space_id_to_raw(int space_id);
+    int space_raw_to_id(int space_raw);
     void move_to_workspace(int id, int workspace, bool follow = true);
     void move_to_workspace(int workspace, bool follow = true);
     void move_to_workspace_id(int workspace_id);

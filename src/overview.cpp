@@ -449,8 +449,11 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         consume_event(root, c);
     };
     c->when_drag_end = [monitor](Container *root, Container *c) {
+        //return;
         auto cid = *datum<int>(c, "cid");
-        for (auto c : actual_root->children) {
+        //for (auto c : actual_root->children) {
+        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+            auto c = actual_root->children[i];
             if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
                 for (auto ch : c->children) {
                     if (bounds_contains(ch->real_bounds, actual_root->mouse_current_x, actual_root->mouse_current_y)) {
@@ -461,38 +464,31 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                             int next = 1;
                             if (!spaces.empty())
                                 next = spaces[spaces.size() - 1] + 1;
-                            later_immediate([cid, next](Timer *) {                                
-                                //overview::instant_close();
-                                
-                                auto mon = hypriso->monitor_from_cursor();
-                                auto before = hypriso->get_active_workspace_id(mon);
-                                
+                            later_immediate([monitor, cid, next](Timer *) {                                
                                 hypriso->set_hidden(cid, false);
-                                hypriso->bring_to_front(cid);
                                 hypriso->move_to_workspace(cid, next, false);
-                                
-                                hypriso->screenshot_space(mon, before);
-                                hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
+                                hypriso->bring_to_front(cid, false);
+
+                                for (auto o : hypriso->get_workspace_ids(monitor))
+                                    hypriso->screenshot_space(monitor, o);
                             });
                         } else {
-                            later_immediate([cid, space](Timer *) {
-                                //overview::instant_close();
-                                
-                                auto mon = hypriso->monitor_from_cursor();
-                                auto before = hypriso->get_active_workspace_id(mon);
-                                hypriso->set_hidden(cid, false);
-                                hypriso->bring_to_front(cid);
+                            later_immediate([monitor, cid, space](Timer *) {
+                                auto before = hypriso->get_active_workspace_id(monitor);
+                                hypriso->bring_to_front(cid, false);
                                 hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
                                 
-                                hypriso->screenshot_space(mon, before);
-                                hypriso->screenshot_space(mon, space);
+                                for (auto o : hypriso->get_workspace_ids(monitor))
+                                    hypriso->screenshot_space(monitor, o);
                             });
                         }
-                        break;
+
+                        return;
                     }
                 }
             }
         }
+
 
         auto overview_data = (OverviewData *) c->parent->user_data;
         *datum<float>(c, "snap_back_scalar") = 1.0;
@@ -506,7 +502,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
             *datum<float>(c, "snap_back_current_y") = root->mouse_current_y;
         }
         consume_event(root, c);
-        drag_workspace_switcher::force_hold_open(false);
+        //drag_workspace_switcher::force_hold_open(false);
     };
 
     auto close = c->child(FILL_SPACE, FILL_SPACE);
@@ -747,14 +743,17 @@ void actual_open(int monitor) {
     over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
 
+        auto workspace_monitor = hypriso->get_active_workspace_id(monitor);
+        
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
+        // TODO needs to check active id
         for (int i = c->children.size() - 1; i >= 0; i--) {
             auto child = c->children[i];
             auto cid = *datum<int>(child, "cid");
             bool found = false;
             for (auto option : order) {
-                if (option == cid)
+                if (option == cid && hypriso->get_active_workspace_id_client(option) == workspace_monitor)
                     found = true;
             }
             if (!found) {
@@ -763,8 +762,6 @@ void actual_open(int monitor) {
                 request_damage(actual_root, c);
             }
         }
-
-        auto workspace_monitor = hypriso->get_active_workspace_id(monitor);
 
         // add if doesn't exist yet
         for (int i = order.size() - 1; i >= 0; i--) {

@@ -197,6 +197,7 @@ void drag_switcher_actual_open() {
                 }
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
+                return;
                 drag_workspace_switcher::press(c->uuid);
                 auto space = *datum<int>(c, "workspace");
                 if (space == -1) {
@@ -206,7 +207,7 @@ void drag_switcher_actual_open() {
                     if (!spaces.empty())
                         next = spaces[spaces.size() - 1] + 1;
                     later_immediate([next](Timer *) {
-                        overview::instant_close();
+                        //overview::instant_close();
 
                         auto mon = hypriso->monitor_from_cursor();
                         auto before = hypriso->get_active_workspace_id(mon);
@@ -219,7 +220,7 @@ void drag_switcher_actual_open() {
                     });
                 } else {
                     later_immediate([space](Timer *) {
-                        overview::instant_close();
+                        //overview::instant_close();
 
                         auto mon = hypriso->monitor_from_cursor();
                         auto before = hypriso->get_active_workspace_id(mon);
