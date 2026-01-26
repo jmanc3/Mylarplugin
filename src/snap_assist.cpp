@@ -649,19 +649,23 @@ void actual_open(int monitor, int cid) {
     
     if (type == SnapPosition::LEFT || type == SnapPosition::RIGHT) {
         if (type == SnapPosition::LEFT) {
-            if (groupable(SnapPosition::RIGHT, ids)) {
+            auto top_open = groupable(SnapPosition::TOP_RIGHT, ids);
+            auto bottom_open = groupable(SnapPosition::BOTTOM_RIGHT, ids);
+            if (groupable(SnapPosition::RIGHT, ids) && (top_open && bottom_open)) {
                 open_slots.push_back(SnapPosition::RIGHT);
-            } else if (groupable(SnapPosition::TOP_RIGHT, ids)) {
+            } else if (top_open) {
                 open_slots.push_back(SnapPosition::TOP_RIGHT);
-            } else if (groupable(SnapPosition::BOTTOM_RIGHT, ids)) {
+            } else if (bottom_open) {
                 open_slots.push_back(SnapPosition::BOTTOM_RIGHT);
             }
         } else {
-            if (groupable(SnapPosition::LEFT, ids)) {
+            auto top_open = groupable(SnapPosition::TOP_LEFT, ids);
+            auto bottom_open = groupable(SnapPosition::BOTTOM_LEFT, ids);
+            if (groupable(SnapPosition::LEFT, ids) && (top_open && bottom_open)) {
                 open_slots.push_back(SnapPosition::LEFT);
-            } else if (groupable(SnapPosition::TOP_LEFT, ids)) {
+            } else if (top_open) {
                 open_slots.push_back(SnapPosition::TOP_LEFT);
-            } else if (groupable(SnapPosition::BOTTOM_LEFT, ids)) {
+            } else if (bottom_open) {
                 open_slots.push_back(SnapPosition::BOTTOM_LEFT);
             }            
         }
