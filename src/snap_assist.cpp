@@ -862,51 +862,32 @@ void snap_assist::fix_order() {
     struct TempLocation {
         Container* c;
         int target_index;
+        bool set = false;
     };
 
-    auto& children = actual_root->children;
-    std::vector<TempLocation> helpers;
+    TempLocation current;
+    TempLocation last;
 
     // Collect helpers
-    for (int i = 0; i < (int)children.size(); ++i) {
-        Container* child = children[i];
+    for (int i = 0; i < (int)actual_root->children.size(); i++) {
+        Container* child = actual_root->children[i];
         if (child->custom_type == (int)TYPE::SNAP_HELPER) {
             auto* helper_data = (HelperData*)child->user_data;
-            helpers.push_back({
-                child,
-                helper_data->index
-            });
+            last.set = true;
+            last.c = child;
+            last.target_index = i;
+            if (helper_data->showing) {
+                current.set = true;
+                current.c = child;
+                current.target_index = i;
+            }
         }
     }
 
-    if (helpers.empty())
-        return;
-
-    // Sort by desired target index
-    std::sort(helpers.begin(), helpers.end(),
-        [](const TempLocation& a, const TempLocation& b) {
-            return a.target_index > b.target_index;
+    if (last.set && current.set) {
+        if (last.target_index != current.target_index) {
+            std::swap(last.c, current.c);
         }
-    );
-
-    // Perform swaps
-    for (const auto& h : helpers) {
-        int target = std::clamp(h.target_index, 0, (int)children.size() - 1);
-
-        // Find current index of this container
-        int current = -1;
-        for (int i = 0; i < (int)children.size(); ++i) {
-            if (children[i] == h.c) {
-                current = i;
-                break;
-            }
-        }
-
-        if (current == -1 || current == target)
-            continue;
-
-        // Swap directly into place
-        std::swap(children[current], children[target]);
     }
 }
 

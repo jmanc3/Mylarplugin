@@ -14,6 +14,7 @@
 #include <system_error>
 
 static float shrink_factor = 1.0;
+static bool should_paint_overview = true;
 
 struct OverviewData : UserData {
     std::vector<int> order;
@@ -411,6 +412,9 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         *datum<float>(c, "alpha_fade_in") = 1.0;
     }
     c->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+        if (!should_paint_overview)
+            return;
+        
         paint_option(actual_root, c, monitor, creation_time);
     };
     c->receive_events_even_if_obstructed_by_one = true;
@@ -469,8 +473,13 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                                 hypriso->move_to_workspace(cid, next, false);
                                 hypriso->bring_to_front(cid, false);
 
-                                for (auto o : hypriso->get_workspace_ids(monitor))
+                                int active = hypriso->get_active_workspace_id(monitor);
+                                for (auto o : hypriso->get_workspace_ids(monitor)) {
+                                    if (active != o)
+                                        should_paint_overview = false;
                                     hypriso->screenshot_space(monitor, o);
+                                    should_paint_overview = true;
+                                }
                             });
                         } else {
                             later_immediate([monitor, cid, space](Timer *) {
@@ -478,8 +487,13 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                                 hypriso->bring_to_front(cid, false);
                                 hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
                                 
-                                for (auto o : hypriso->get_workspace_ids(monitor))
+                                int active = hypriso->get_active_workspace_id(monitor);
+                                for (auto o : hypriso->get_workspace_ids(monitor)) {
+                                    if (active != o)
+                                        should_paint_overview = false;
                                     hypriso->screenshot_space(monitor, o);
+                                    should_paint_overview = true;
+                                }
                             });
                         }
 
@@ -682,6 +696,8 @@ void actual_open(int monitor) {
     auto creation_time = get_current_time_in_ms();
     
     over->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+        if (!should_paint_overview)
+            return;
         paint_over_wallpaper(actual_root, c, monitor, creation_time);
         auto root = get_rendering_root();
         if (!root) return;

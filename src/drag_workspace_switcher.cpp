@@ -6,6 +6,7 @@
 #include "hypriso.h"
 #include "overview.h"
 #include "events.h"
+#include "drag.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -475,6 +476,11 @@ void drag_workspace_switcher::on_mouse_move(int x, int y) {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            if (!bounds_contains(c->real_bounds, x, y)) {
+                if (!drag::dragging() && overview::is_showing()) {
+                    //drag_workspace_switcher::close();
+                }
+            }
             Event event(x, y);
             move_event(c, event);
         }

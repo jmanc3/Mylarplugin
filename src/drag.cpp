@@ -169,6 +169,9 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
 }
 
 void drag::end(int cid) {
+    later_immediate([](Timer *) {
+        drag_workspace_switcher::close();
+    });
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
             auto mou = mouse();
@@ -202,11 +205,8 @@ void drag::end(int cid) {
                     break;
                 }
             }
-        }
+        }    
     }
-    later(300, [](Timer *) {
-        drag_workspace_switcher::close();
-    });
     
     delete data;
     data = nullptr;
