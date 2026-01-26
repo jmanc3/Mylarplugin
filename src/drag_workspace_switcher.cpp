@@ -20,37 +20,6 @@ static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000
 // {"anchors":[{"x":0,"y":1},{"x":0.30000000000000004,"y":0.675},{"x":1,"y":0}],"controls":[{"x":0.20596153063651845,"y":0.9462499830457899},{"x":0.4476281973031851,"y":0.06847220526801215}]}
 static std::vector<float> snapback = { 0, 0.0050000000000000044, 0.010000000000000009, 0.017000000000000015, 0.02400000000000002, 0.03300000000000003, 0.04300000000000004, 0.05400000000000005, 0.06699999999999995, 0.08099999999999996, 0.09599999999999997, 0.11399999999999999, 0.134, 0.15600000000000003, 0.18200000000000005, 0.20999999999999996, 0.243, 0.281, 0.32499999999999996, 0.387, 0.43999999999999995, 0.486, 0.527, 0.563, 0.596, 0.626, 0.654, 0.679, 0.7030000000000001, 0.725, 0.745, 0.764, 0.782, 0.798, 0.8140000000000001, 0.8280000000000001, 0.842, 0.855, 0.867, 0.878, 0.888, 0.898, 0.908, 0.917, 0.925, 0.933, 0.94, 0.947, 0.953, 0.959, 0.964, 0.969, 0.974, 0.978, 0.982, 0.986, 0.989, 0.993, 0.995, 0.998, 1 };
 
-template<class T>
-void merge_create(Container *parent, std::vector<T> to_be_represented, std::function<T (Container *)> converter, std::function<void (Container *, T)> creator) {
-    // Get rid of containers that no longer are represented
-    for (int i = parent->children.size() - 1; i >= 0; i--) {
-        auto ch = parent->children[i];
-        bool found = false;
-        T ct = converter(ch);
-        for (auto t : to_be_represented)
-            if (t == ct)
-                found = true;
-        if (!found) {
-            delete ch;
-            parent->children.erase(parent->children.begin() + i);
-        }
-    }
-
-    // Create container if doesn't exist yet
-    for (auto t : to_be_represented) {
-        bool found = false;
-        for (auto c : parent->children) {
-            if (t == converter(c)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            creator(parent, t);
-        }
-    }
-}
-
 void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     auto openess = *datum<float>(parent, "openess");
     auto b = parent->real_bounds;

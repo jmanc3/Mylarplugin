@@ -488,4 +488,37 @@ void       clamp_scroll(ScrollContainer* scrollpane);
 
 void       modify_all(Container* container, double x_change, double y_change);
 
+// create and destroy the children of a `Container *parent` based on a `std::vector<T>` you provide
+template<class T>
+void merge_create(Container *parent, std::vector<T> to_be_represented, std::function<T (Container *)> converter, std::function<void (Container *, T)> creator) {
+    // Get rid of containers that no longer are represented
+    for (int i = parent->children.size() - 1; i >= 0; i--) {
+        auto ch = parent->children[i];
+        bool found = false;
+        T ct = converter(ch);
+        for (auto t : to_be_represented)
+            if (t == ct)
+                found = true;
+        if (!found) {
+            delete ch;
+            parent->children.erase(parent->children.begin() + i);
+        }
+    }
+
+    // Create container if doesn't exist yet
+    for (auto t : to_be_represented) {
+        bool found = false;
+        for (auto c : parent->children) {
+            if (t == converter(c)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            creator(parent, t);
+        }
+    }
+}
+
+
 #endif

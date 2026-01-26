@@ -763,38 +763,18 @@ void actual_open(int monitor) {
         
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
-        // TODO needs to check active id
-        for (int i = c->children.size() - 1; i >= 0; i--) {
-            auto child = c->children[i];
-            auto cid = *datum<int>(child, "cid");
-            bool found = false;
-            for (auto option : order) {
-                if (option == cid && hypriso->get_active_workspace_id_client(option) == workspace_monitor)
-                    found = true;
-            }
-            if (!found) {
-                delete child;
-                c->children.erase(c->children.begin() + i);
-                request_damage(actual_root, c);
+        std::vector<int> actual_order;
+        for (auto o : order) {
+            if (hypriso->alt_tabbable(o) && hypriso->get_active_workspace_id_client(o) == workspace_monitor) {
+                actual_order.push_back(o);
             }
         }
 
-        // add if doesn't exist yet
-        for (int i = order.size() - 1; i >= 0; i--) {
-            auto option = order[i];
-            if (hypriso->alt_tabbable(option) && hypriso->get_active_workspace_id_client(option) == workspace_monitor) {
-                bool found = false;
-                for (auto child : c->children) {
-                    if (option == *datum<int>(child, "cid")) {
-                        found = true;
-                    }
-                }
-                if (!found) {
-                    create_option(option, c, monitor, creation_time);
-                    request_damage(actual_root, c);
-                }
-            }
-        }
+        merge_create<int>(c, actual_order, [](Container *c) {
+            return *datum<int>(c, "cid");
+        }, [monitor, creation_time](Container *parent, int data) {
+            create_option(data, parent, monitor, creation_time);
+        });
 
         auto reserved = bounds_reserved_monitor(monitor);
         auto overview_data = ((OverviewData *) c->user_data);
