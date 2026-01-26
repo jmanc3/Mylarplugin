@@ -14,18 +14,20 @@ void do_alt_tab() {
     static long last_time = 0;
     auto current = get_current_time_in_ms();
     if (current - last_time > 300) {
-        auto order = get_window_stacking_order();
-        std::reverse(order.begin(), order.end());
-        bool first = true;
-        for (auto o : order) {
-            if (hypriso->alt_tabbable(o)) {
-                if (!first) {
-                    hypriso->bring_to_front(o, true);
-                    break;
+        later_immediate([](Timer *) { 
+            auto order = get_window_stacking_order();
+            std::reverse(order.begin(), order.end());
+            bool first = true;
+            for (auto o : order) {
+                if (hypriso->alt_tabbable(o)) {
+                    if (!first) {
+                        hypriso->bring_to_front(o, true);
+                        break;
+                    }
+                    first = false;
                 }
-                first = false;
             }
-        }
+        });
         last_time = current;
     }
 }

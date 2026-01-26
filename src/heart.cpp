@@ -1931,18 +1931,21 @@ void clear_snap_groups(int id) {
 
 bool groupable_types(SnapPosition a, SnapPosition b) {
     if (a == b)
-        return false;
+        return false; // never self
     if (a == SnapPosition::MAX || b == SnapPosition::MAX)
-        return false;
+        return false; // never on max
     bool a_on_left = a == SnapPosition::LEFT || a == SnapPosition::TOP_LEFT || a == SnapPosition::BOTTOM_LEFT;
     bool b_on_left = b == SnapPosition::LEFT || b == SnapPosition::TOP_LEFT || b == SnapPosition::BOTTOM_LEFT;
     if (a_on_left != b_on_left) {
+        // opposite sides yes
         return true;
     } else {
+        // same sides
         bool a_on_top = a == SnapPosition::TOP_LEFT || a == SnapPosition::TOP_RIGHT;
         bool b_on_top = b == SnapPosition::TOP_LEFT || b == SnapPosition::TOP_RIGHT;
+        // if on same side and take up entire place return false
         if (a == SnapPosition::LEFT || b == SnapPosition::RIGHT)
-            return false;
+            return false; 
         if (a_on_top != b_on_top) {
             return true;
         }
