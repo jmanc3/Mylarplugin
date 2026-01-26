@@ -4165,8 +4165,9 @@ void HyprIso::bring_to_front(int id, bool focus) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            g_pKeybindManager->switchToWindow(hw->w, true);
             g_pCompositor->changeWindowZOrder(hw->w, true);
+            if (focus)
+                g_pKeybindManager->switchToWindow(hw->w, true);
         }
     }
 }
