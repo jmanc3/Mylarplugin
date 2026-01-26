@@ -462,26 +462,27 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                             if (!spaces.empty())
                                 next = spaces[spaces.size() - 1] + 1;
                             later_immediate([cid, next](Timer *) {                                
-                                overview::instant_close();
+                                //overview::instant_close();
                                 
                                 auto mon = hypriso->monitor_from_cursor();
                                 auto before = hypriso->get_active_workspace_id(mon);
                                 
-                                hypriso->move_to_workspace(cid, next);
+                                hypriso->set_hidden(cid, false);
                                 hypriso->bring_to_front(cid);
+                                hypriso->move_to_workspace(cid, next, false);
                                 
                                 hypriso->screenshot_space(mon, before);
                                 hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
                             });
                         } else {
                             later_immediate([cid, space](Timer *) {
-                                overview::instant_close();
+                                //overview::instant_close();
                                 
                                 auto mon = hypriso->monitor_from_cursor();
                                 auto before = hypriso->get_active_workspace_id(mon);
-                                
-                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space));
+                                hypriso->set_hidden(cid, false);
                                 hypriso->bring_to_front(cid);
+                                hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
                                 
                                 hypriso->screenshot_space(mon, before);
                                 hypriso->screenshot_space(mon, space);

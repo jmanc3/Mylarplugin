@@ -1500,9 +1500,8 @@ void second::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-later_immediate([](Timer*) {
     hypriso->create_config_variables();
-
+later_immediate([](Timer*) {
     on_any_container_close = any_container_closed;
     create_actual_root();
     add_hyprctl_dispatchers();
@@ -1769,7 +1768,6 @@ void second::layout_containers() {
             *datum<bool>(c, "touched") = true;
         }
     }
-    
 
     snap_assist::fix_order();
     

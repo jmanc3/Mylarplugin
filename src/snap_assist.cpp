@@ -881,7 +881,7 @@ void snap_assist::fix_order() {
     // Sort by desired target index
     std::sort(helpers.begin(), helpers.end(),
         [](const TempLocation& a, const TempLocation& b) {
-            return a.target_index < b.target_index;
+            return a.target_index > b.target_index;
         }
     );
 
