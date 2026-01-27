@@ -9,6 +9,8 @@
 #include "hypriso.h"
 #include "heart.h"
 
+#include <hyprland/src/render/Shader.hpp>
+
 #include <GLES3/gl32.h>
 #include <cairo.h>
 #include <fstream>
@@ -2606,6 +2608,121 @@ void hook_default_config() {
     }
 }
 
+static SP<SShader> test_shader;
+
+static const char* RECT_VERT_SHADER = R"GLSL(
+#version 330 core
+
+layout (location = 0) in vec2 aPos;
+
+uniform vec2 uPos;   // bottom-left corner in NDC
+uniform vec2 uSize;  // width/height in NDC
+
+void main() {
+    vec2 pos = uPos + aPos * uSize;
+    gl_Position = vec4(pos, 0.0, 1.0);
+}
+)GLSL";
+
+static const char* RECT_FRAG_SHADER = R"GLSL(
+#version 330 core
+
+out vec4 FragColor;
+
+uniform vec4 uColor;
+
+void main() {
+    FragColor = uColor;
+}
+)GLSL";
+
+static void create_custom_shaders() {
+    test_shader = makeShared<SShader>();
+
+    GLuint prog = g_pHyprOpenGL->createProgram(
+        RECT_VERT_SHADER,
+        RECT_FRAG_SHADER,
+        true,
+        true
+    );
+
+    test_shader->program = prog;
+}
+
+static GLuint quadVAO = 0;
+static GLuint quadVBO = 0;
+
+static void init_rect_quad() {
+    if (quadVAO)
+        return;
+
+    float vertices[] = {
+        // aPos (0..1)
+        0.f, 0.f,
+        1.f, 0.f,
+        1.f, 1.f,
+
+        0.f, 0.f,
+        1.f, 1.f,
+        0.f, 1.f
+    };
+
+    glGenVertexArrays(1, &quadVAO);
+    glGenBuffers(1, &quadVBO);
+
+    glBindVertexArray(quadVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(
+        0, 2, GL_FLOAT, GL_FALSE,
+        2 * sizeof(float),
+        (void*)0
+    );
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
+void draw_colored_rect(
+    float x, float y,     // NDC position
+    float w, float h,     // NDC size
+    float r, float g, float b, float a
+) {
+    AnyPass::AnyData anydata([x, y, w, h, r, g, b, a](AnyPass* pass) {
+        if (!test_shader || !test_shader->program)
+            return;
+
+        init_rect_quad();
+
+        glUseProgram(test_shader->program);
+
+        glUniform2f(
+            glGetUniformLocation(test_shader->program, "uPos"),
+            x, y
+        );
+
+        glUniform2f(
+            glGetUniformLocation(test_shader->program, "uSize"),
+            w, h
+        );
+
+        glUniform4f(
+            glGetUniformLocation(test_shader->program, "uColor"),
+            r, g, b, a
+        );
+
+        glBindVertexArray(quadVAO);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindVertexArray(0);
+
+        glUseProgram(0);
+    });
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2628,6 +2745,7 @@ void HyprIso::create_hooks() {
     hook_monitor_render();
     hook_hidden_state_change();
     hook_default_config();
+    create_custom_shaders();
 }
 
 bool xcb_get_transient_for(xcb_connection_t* conn, xcb_window_t window, xcb_window_t* out) {

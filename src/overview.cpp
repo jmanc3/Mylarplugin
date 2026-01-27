@@ -729,6 +729,8 @@ void actual_open(int monitor) {
             x += rw;
         }
 
+
+
         //testDraw();
     };
     over->after_paint = [monitor, creation_time](Container *actual_root, Container *c) {
@@ -739,6 +741,13 @@ void actual_open(int monitor) {
             return;
         renderfix
         auto overview_data = (OverviewData *) c->user_data;
+        draw_colored_rect(
+             -1.0, -1.0,   // position
+             .1,  .1,   // size
+             1.0f,  0.2f, 0.2f, 1.0f // color
+        );
+        // every frame
+
         /*for (auto ch : c->children) {
             auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
             auto mou = mouse();
