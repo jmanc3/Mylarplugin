@@ -16,6 +16,7 @@
 #include <fstream>
 #include <glib.h>
 #include <hyprutils/math/Box.hpp>
+#include <hyprutils/math/Misc.hpp>
 #include <iostream>
 #include <bits/types/idtype_t.h>
 #include <cmath>
@@ -2618,36 +2619,11 @@ layout (location = 0) in vec2 aPos;
 uniform vec2 uPos;
 uniform vec2 uSize;
 uniform float uAngle;
-uniform float uPerspective; // NEW (suggest ~2.0)
+uniform float uPerspective;
+uniform mat3 uProj;          // NEW
 
 void main() {
-    // Center quad
-    vec2 centered = aPos - vec2(0.5);
-    vec3 pos3 = vec3(centered, 0.0);
-
-    // Rotate around Y axis
-    float c = cos(uAngle);
-    float s = sin(uAngle);
-
-    mat3 rotY = mat3(
-         c, 0.0,  s,
-        0.0, 1.0, 0.0,
-        -s, 0.0,  c
-    );
-
-    pos3 = rotY * pos3;
-
-    // --- Perspective ---
-    float depth = uPerspective / (uPerspective - pos3.z);
-    vec2 projected = pos3.xy * depth;
-
-    // Back to quad space
-    vec2 rotated2D = projected + vec2(0.5);
-
-    // Apply size + position
-    vec2 finalPos = uPos + rotated2D * uSize;
-
-    gl_Position = vec4(finalPos, 0.0, 1.0);
+    gl_Position = vec4(uProj * vec3(aPos, 1.0), 1.0);
 }
 )GLSL";
 
@@ -2732,6 +2708,24 @@ void draw_colored_rect(
             glGetUniformLocation(test_shader->program, "uPerspective"),
             2.0f   // tweak: 1.5–3.0 range feels good
         );
+
+        float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
+        float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
+
+        auto newBox = CBox(x, y, w, h);
+        g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
+        {
+            // get transform
+            const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
+            Mat3x3     matrix    = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
+            Mat3x3     glMatrix  = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
+            glUniformMatrix3fv(
+                glGetUniformLocation(test_shader->program, "uProj"),
+                1,
+                GL_TRUE,
+                glMatrix.getMatrix().data()
+            );
+        }
 
         glUniform1f(
             glGetUniformLocation(test_shader->program, "uAngle"),
