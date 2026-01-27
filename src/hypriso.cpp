@@ -2616,10 +2616,6 @@ static const char* RECT_VERT_SHADER = R"GLSL(
 
 layout (location = 0) in vec2 aPos;
 
-uniform vec2 uPos;
-uniform vec2 uSize;
-uniform float uAngle;
-uniform float uPerspective;
 uniform mat3 uProj;          // NEW
 
 void main() {
@@ -2699,16 +2695,6 @@ void draw_colored_rect(
 
         glUseProgram(test_shader->program);
 
-        glUniform2f(
-            glGetUniformLocation(test_shader->program, "uPos"),
-            x, y
-        );
-
-        glUniform1f(
-            glGetUniformLocation(test_shader->program, "uPerspective"),
-            2.0f   // tweak: 1.5–3.0 range feels good
-        );
-
         float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
         float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
 
@@ -2726,16 +2712,6 @@ void draw_colored_rect(
                 glMatrix.getMatrix().data()
             );
         }
-
-        glUniform1f(
-            glGetUniformLocation(test_shader->program, "uAngle"),
-            angle
-        );
-
-        glUniform2f(
-            glGetUniformLocation(test_shader->program, "uSize"),
-            w, h
-        );
 
         glUniform4f(
             glGetUniformLocation(test_shader->program, "uColor"),
