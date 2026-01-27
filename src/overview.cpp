@@ -763,7 +763,8 @@ void actual_open(int monitor) {
         
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
-        std::vector<int> actual_order;
+        static std::vector<int> actual_order;
+        actual_order.clear();
         for (auto o : order) {
             if (hypriso->alt_tabbable(o) && hypriso->get_active_workspace_id_client(o) == workspace_monitor) {
                 actual_order.push_back(o);

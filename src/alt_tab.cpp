@@ -383,38 +383,18 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
     Bounds thumb_bounds;
     {  // Populate 
         auto order = get_window_stacking_order();
-        // remove if no longer exists
-        for (int i = c->children.size() - 1; i >= 0; i--) {
-            auto child = c->children[i];
-            auto cid = *datum<int>(child, "cid");
-            bool found = false;
-            for (auto option : order) {
-                if (option == cid)
-                    found = true;
-            }
-            if (!found) {
-                delete child;
-                c->children.erase(c->children.begin() + i);
-                request_damage(actual_root, c);
+        static std::vector<int> actual_order;
+        actual_order.clear();
+        for (auto o : order) {
+            if (hypriso->alt_tabbable(o)) {
+                actual_order.push_back(o);
             }
         }
-
-        // add if doesn't exist yet
-        for (int i = order.size() - 1; i >= 0; i--) {
-            auto option = order[i];
-            if (hypriso->alt_tabbable(option)) {
-                bool found = false;
-                for (auto child : c->children) {
-                    if (option == *datum<int>(child, "cid")) {
-                        found = true;
-                    }
-                }
-                if (!found) {
-                    create_tab_option(option, c);
-                    request_damage(actual_root, c);
-                }
-            }
-        }
+        merge_create<int>(c, actual_order, [](Container *c) {
+            return *datum<int>(c, "cid");
+        }, [](Container *parent, int cid) {
+            create_tab_option(cid, parent);
+        });
 
         for (int index = 0; index < order.size(); index++) {
             for (int i = c->children.size() - 1; i >= 0; i--) {
