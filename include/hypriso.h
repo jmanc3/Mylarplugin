@@ -483,7 +483,7 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
 void draw_colored_rect(
     float x, float y,     // NDC position
     float w, float h,     // NDC size
-    float r, float g, float b, float a
+    float r, float g, float b, float a, float angle
 );
 
 #endif // hypriso_h_INCLUDED

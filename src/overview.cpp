@@ -741,10 +741,13 @@ void actual_open(int monitor) {
             return;
         renderfix
         auto overview_data = (OverviewData *) c->user_data;
+        static float angle = 0.0;
+        angle += .016;
+        
         draw_colored_rect(
              -1.0, -1.0,   // position
              .1,  .1,   // size
-             1.0f,  0.2f, 0.2f, 1.0f // color
+             1.0f,  0.2f, 0.2f, 1.0f, angle
         );
         // every frame
 

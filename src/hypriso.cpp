@@ -2615,20 +2615,45 @@ static const char* RECT_VERT_SHADER = R"GLSL(
 
 layout (location = 0) in vec2 aPos;
 
-uniform vec2 uPos;   // bottom-left corner in NDC
-uniform vec2 uSize;  // width/height in NDC
+uniform vec2 uPos;
+uniform vec2 uSize;
+uniform float uAngle;
+uniform float uPerspective; // NEW (suggest ~2.0)
 
 void main() {
-    vec2 pos = uPos + aPos * uSize;
-    gl_Position = vec4(pos, 0.0, 1.0);
+    // Center quad
+    vec2 centered = aPos - vec2(0.5);
+    vec3 pos3 = vec3(centered, 0.0);
+
+    // Rotate around Y axis
+    float c = cos(uAngle);
+    float s = sin(uAngle);
+
+    mat3 rotY = mat3(
+         c, 0.0,  s,
+        0.0, 1.0, 0.0,
+        -s, 0.0,  c
+    );
+
+    pos3 = rotY * pos3;
+
+    // --- Perspective ---
+    float depth = uPerspective / (uPerspective - pos3.z);
+    vec2 projected = pos3.xy * depth;
+
+    // Back to quad space
+    vec2 rotated2D = projected + vec2(0.5);
+
+    // Apply size + position
+    vec2 finalPos = uPos + rotated2D * uSize;
+
+    gl_Position = vec4(finalPos, 0.0, 1.0);
 }
 )GLSL";
 
 static const char* RECT_FRAG_SHADER = R"GLSL(
 #version 330 core
-
 out vec4 FragColor;
-
 uniform vec4 uColor;
 
 void main() {
@@ -2688,9 +2713,9 @@ static void init_rect_quad() {
 void draw_colored_rect(
     float x, float y,     // NDC position
     float w, float h,     // NDC size
-    float r, float g, float b, float a
+    float r, float g, float b, float a, float angle
 ) {
-    AnyPass::AnyData anydata([x, y, w, h, r, g, b, a](AnyPass* pass) {
+    AnyPass::AnyData anydata([x, y, w, h, r, g, b, a, angle](AnyPass* pass) {
         if (!test_shader || !test_shader->program)
             return;
 
@@ -2701,6 +2726,16 @@ void draw_colored_rect(
         glUniform2f(
             glGetUniformLocation(test_shader->program, "uPos"),
             x, y
+        );
+
+        glUniform1f(
+            glGetUniformLocation(test_shader->program, "uPerspective"),
+            2.0f   // tweak: 1.5–3.0 range feels good
+        );
+
+        glUniform1f(
+            glGetUniformLocation(test_shader->program, "uAngle"),
+            angle
         );
 
         glUniform2f(
@@ -2720,7 +2755,6 @@ void draw_colored_rect(
         glUseProgram(0);
     });
     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    
 }
 
 void HyprIso::create_hooks() {
