@@ -673,6 +673,9 @@ void actual_open(int monitor) {
     hypriso->whitelist_on = true;
     
     auto over = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
+    auto hotconer_tl = datum<float>(over, "hotconer_tl");
+    *hotconer_tl = 0.0;
+    animate(hotconer_tl, 1.0, 530, over->lifetime); 
     auto overview_data = new OverviewData;
     animate(&overview_data->scalar, 1.0, overview_anim_time, over->lifetime); 
     auto order = get_window_stacking_order();
@@ -730,7 +733,6 @@ void actual_open(int monitor) {
         }
 
 
-
         //testDraw();
     };
     over->after_paint = [monitor, creation_time](Container *actual_root, Container *c) {
@@ -741,31 +743,12 @@ void actual_open(int monitor) {
             return;
         renderfix
         auto overview_data = (OverviewData *) c->user_data;
-        static float angle = 0.0;
-        angle += .016;
-        
-        draw_colored_circ(
-             300, 300,   // position
-             100,
-             RGBA(1.0f,  0.2f, 0.7f, 0.4f)
-        );
+        auto scalar = *datum<float>(c, "hotconer_tl");
 
-        /*for (auto ch : c->children) {
-            auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
-            auto mou = mouse();
-            std::vector<MatteCommands> commands;
-            MatteCommands command;
-            auto b = ch->real_bounds;
-            command.bounds = b.scale(s);
-            command.bounds.round();
-            command.type = 1;
-            command.roundness = 8 * s;
-            commands.push_back(command);
-            draw_texture_matted(info, 
-                std::round(mou.x * s - info.w * .5), 
-                std::round(mou.y * s - info.h * .5), 
-                commands, 1.0);
-        }*/
+        float a = 1.0 - scalar;
+        RGBA col = {1.0f, 1.0f, 1.0f, 0.1f};
+        draw_colored_circ(0, 0, 65 * s * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
+
     };
     over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);

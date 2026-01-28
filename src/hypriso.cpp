@@ -2631,16 +2631,22 @@ static const char* RECT_FRAG_SHADER = R"GLSL(
 
 out vec4 FragColor;
 uniform vec4 uColor;
+uniform float uEdge;
+uniform float uFill;
 
 in vec2 vPos;
 
 void main() {
     vec2 uv = vPos * 2.0 - 1.0;
 
+    float thickness = uFill;
+    thickness += uEdge;
+    
     float distance = 1.0 - length(uv);
-    distance = smoothstep(0.0, 0.012, distance);
+    vec4 col = vec4(smoothstep(0.0, uEdge, distance));
+    col *= vec4(smoothstep(thickness, thickness - uEdge, distance));
 
-    FragColor = uColor * distance;
+    FragColor = col * uColor;
 }
 )GLSL";
 
@@ -2693,12 +2699,8 @@ static void init_rect_quad() {
     glBindVertexArray(0);
 }
 
-void draw_colored_circ(
-    float x, float y,
-    float r,
-    RGBA col
-) {
-    AnyPass::AnyData anydata([x, y, r, col](AnyPass* pass) {
+void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill) {
+    AnyPass::AnyData anydata([x, y, r, col, edge, fill](AnyPass* pass) {
         if (!test_shader || !test_shader->program)
             return;
 
@@ -2729,6 +2731,16 @@ void draw_colored_circ(
             col.r, col.g, col.b, col.a
         );
 
+        glUniform1f(
+            glGetUniformLocation(test_shader->program, "uEdge"),
+            edge
+        );
+
+        glUniform1f(
+            glGetUniformLocation(test_shader->program, "uFill"),
+            fill
+        );
+        
         glBindVertexArray(quadVAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         glBindVertexArray(0);

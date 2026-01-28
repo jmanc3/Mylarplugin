@@ -480,10 +480,6 @@ struct MatteCommands {
 
 void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha = 1.0);
 
-void draw_colored_circ(
-    float x, float y,
-    float r,
-    RGBA col
-);
+void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill = 1.0);
 
 #endif // hypriso_h_INCLUDED

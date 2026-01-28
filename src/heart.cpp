@@ -957,6 +957,23 @@ static void on_render(int id, int stage) {
     }
     
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
+        auto snap_edge_animation = *datum<float>(actual_root, "snap_edge_animation");
+        if (snap_edge_animation != 0.0 && snap_edge_animation != 1.0) {
+           int mon = *datum<int>(actual_root, "snap_edge_animation_mon");
+           if (mon == current_monitor) {
+               auto seax = *datum<float>(actual_root, "snap_edge_animation_x");
+               auto seay = *datum<float>(actual_root, "snap_edge_animation_y");
+               auto s = scale(mon);
+               hypriso->damage_box(Bounds(seax - 80 * s, seay - 80 * s, 160 * s, 160 * s));
+
+               auto scalar = snap_edge_animation;
+               float a = 1.0 - scalar;
+               RGBA col = {1.0f, 1.0f, 1.0f, 0.1f};
+               draw_colored_circ(seax * s, seay * s, 70 * s  * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
+           }
+        }
+
+        
         for (auto c : actual_root->children) {
             if (c->custom_type == (int)TYPE::CLIENT && !overview::is_showing()) {
                 // TODO: should be interleaved where window WAS, not LAST_MOMENT

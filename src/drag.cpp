@@ -215,6 +215,14 @@ void drag::end(int cid) {
     auto m = mouse();
     auto pos = mouse_to_snap_position(mon, m.x, m.y);
     snap_preview::on_drag_end(cid, m.x, m.y, (int) pos);
+    if (pos != SnapPosition::NONE) {
+        auto snap_edge_animation = datum<float>(actual_root, "snap_edge_animation");
+        *snap_edge_animation = 0.0;
+        animate(snap_edge_animation, 1.0, 600, actual_root->lifetime);
+        *datum<int>(actual_root, "snap_edge_animation_mon") = mon;
+        *datum<float>(actual_root, "snap_edge_animation_x") = m.x;
+        *datum<float>(actual_root, "snap_edge_animation_y") = m.y;
+    }
     snap_window(mon, cid, (int) pos);
     *datum<long>(actual_root, "drag_end_time") = get_current_time_in_ms();
 

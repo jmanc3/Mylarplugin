@@ -68,28 +68,28 @@ void workspace_indicator::on_change(int cid) {
             larger.w += 8 * s;
             auto sm = larger;
             sm.shrink(1.0);
-            //render_drop_shadow(rid, 1, {0, 0, 0, 0.1}, h * .5, 2.0, sm);
-            rect(larger, {.14, .14, .14, 1}, 0, h * .5, 2.0, true);
-            larger.shrink(1.0);
-            border(larger, {.14, .14, .14, 1}, 1, 0, h * .5, 2.0, true);
+            larger.round();
+            //render_drop_shadow(rid, 1, {0, 0, 0, 0.5}, h * .5, 2.0, sm);
+
+            rect(larger, {.14, .14, .14, 1}, 0, 0.0, 2.0, true);
+            draw_colored_circ(larger.x + larger.h * .1, std::round(larger.y + larger.h * .5) - .5, std::round(larger.h * .5) + .5, {.14, .14, .14, 1}, .07);
+            draw_colored_circ(larger.x + larger.w -  larger.h * .1, std::round(larger.y + larger.h * .5) - .5, std::round(larger.h * .5) + .5, {.14, .14, .14, 1}, .07);
         }
 
         float dot_w = std::round(4 * s);
-        float start_x = b.x + h * .5 - dot_w * .5;
-        float start_y = b.y + h * .5 - dot_w * .5;
+        float start_x = b.x + h * .5;
+        float start_y = b.y + h * .5;
         for (int i = 0; i < spaces.size(); i++) {
             auto col = RGBA(.5, .5, .5, 1);
             float size_boost = 0;
             if (i == index) {
                 col = RGBA(.8, .8, .8, 1);
-                size_boost = dot_w;
+                size_boost = dot_w * .4;
             }
+
+            auto final_r = 4;
+            draw_colored_circ(start_x, start_y, final_r + size_boost, col, .3);
             
-            rect({start_x - std::round(size_boost * .5),
-                  start_y - std::round(size_boost * .5),
-                  dot_w + size_boost, 
-                  dot_w + size_boost}, 
-                  col, 0, std::round(dot_w * .4) + std::round(size_boost * .5), 2.0, false);
             start_x += h;
         }
         hypriso->damage_box(b.scale(1.0 / s));
