@@ -2616,20 +2616,31 @@ static const char* RECT_VERT_SHADER = R"GLSL(
 
 layout (location = 0) in vec2 aPos;
 
-uniform mat3 uProj;          // NEW
+uniform mat3 uProj;
+
+out vec2 vPos;
 
 void main() {
+    vPos = aPos;
     gl_Position = vec4(uProj * vec3(aPos, 1.0), 1.0);
 }
 )GLSL";
 
 static const char* RECT_FRAG_SHADER = R"GLSL(
 #version 330 core
+
 out vec4 FragColor;
 uniform vec4 uColor;
 
+in vec2 vPos;
+
 void main() {
-    FragColor = uColor;
+    vec2 uv = vPos * 2.0 - 1.0;
+
+    float distance = 1.0 - length(uv);
+    distance = smoothstep(0.0, 0.012, distance);
+
+    FragColor = uColor * distance;
 }
 )GLSL";
 
@@ -2682,12 +2693,12 @@ static void init_rect_quad() {
     glBindVertexArray(0);
 }
 
-void draw_colored_rect(
-    float x, float y,     // NDC position
-    float w, float h,     // NDC size
-    float r, float g, float b, float a, float angle
+void draw_colored_circ(
+    float x, float y,
+    float r,
+    RGBA col
 ) {
-    AnyPass::AnyData anydata([x, y, w, h, r, g, b, a, angle](AnyPass* pass) {
+    AnyPass::AnyData anydata([x, y, r, col](AnyPass* pass) {
         if (!test_shader || !test_shader->program)
             return;
 
@@ -2697,8 +2708,8 @@ void draw_colored_rect(
 
         float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
         float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
-
-        auto newBox = CBox(x, y, w, h);
+        
+        auto newBox = CBox(x - r, y - r, r * 2, r * 2);
         g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
         {
             // get transform
@@ -2715,7 +2726,7 @@ void draw_colored_rect(
 
         glUniform4f(
             glGetUniformLocation(test_shader->program, "uColor"),
-            r, g, b, a
+            col.r, col.g, col.b, col.a
         );
 
         glBindVertexArray(quadVAO);

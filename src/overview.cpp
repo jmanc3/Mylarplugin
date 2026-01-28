@@ -744,17 +744,11 @@ void actual_open(int monitor) {
         static float angle = 0.0;
         angle += .016;
         
-        draw_colored_rect(
-             200, 200,   // position
-             200,  200,   // size
-             1.0f,  0.2f, 0.2f, 1.0f, angle
+        draw_colored_circ(
+             300, 300,   // position
+             100,
+             RGBA(1.0f,  0.2f, 0.7f, 0.4f)
         );
-//         draw_colored_rect(
-//      -1.0, -1.0,   // position
-//      .1,  .1,   // size
-//      1.0f,  0.2f, 0.2f, 1.0f, angle
-// );
-        // every frame
 
         /*for (auto ch : c->children) {
             auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
