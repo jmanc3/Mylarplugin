@@ -28,7 +28,7 @@ struct ThumbData : UserData {
 
 
 static bool running = false;
-static float overview_anim_time = 215.0f;
+static float overview_anim_time = 365.0f;
 
 static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
@@ -747,7 +747,7 @@ void actual_open(int monitor) {
 
         float a = 1.0 - scalar;
         RGBA col = {1.0f, 1.0f, 1.0f, 0.1f};
-        draw_colored_circ(0, 0, 65 * s * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
+        draw_colored_circ(0, 0, 75 * s * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
 
     };
     over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
@@ -756,7 +756,7 @@ void actual_open(int monitor) {
         auto workspace_monitor = hypriso->get_active_workspace_id(monitor);
         
         auto order = get_window_stacking_order();
-        std::reverse(order.begin(), order.end());
+        //std::reverse(order.begin(), order.end());
         static std::vector<int> actual_order;
         actual_order.clear();
         for (auto o : order) {
@@ -913,7 +913,7 @@ void overview::close(bool focus) {
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
-                animate(&overview_data->scalar, 0.0, overview_anim_time * 1.2, c->lifetime, [focus](bool normal_end) {
+                animate(&overview_data->scalar, 0.0, overview_anim_time * 0.7, c->lifetime, [focus](bool normal_end) {
                     if (normal_end) {
                         actual_overview_stop(focus);
                     }
