@@ -23,13 +23,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
     
     globals->api = handle;
 
-    second::begin();
+    heart::begin();
 
     return {"Mylardesktop", "Mylar is a smooth and beautiful wayland desktop, written on Hyprland", "jmanc3", "1.0"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-   second::end(); 
+   heart::end(); 
    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 

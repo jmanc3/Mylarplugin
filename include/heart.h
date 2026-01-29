@@ -350,7 +350,7 @@ struct SnapLimits {
 SnapLimits get_snap_limits(int monitor);
 Bounds snap_position_to_bounds_limited(int mon, SnapPosition pos, SnapLimits limits);
 
-namespace second {    
+namespace heart {    
     void begin();
     void end();
     void layout_containers();

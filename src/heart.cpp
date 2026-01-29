@@ -78,7 +78,7 @@ static void set_exists(Container *c, bool state) {
 }
 
 static bool on_mouse_move(int id, float x, float y) {
-    second::layout_containers();
+    heart::layout_containers();
     auto mou = mouse();
     x = mou.x;
     y = mou.y;
@@ -164,7 +164,7 @@ static void create_root_popup() {
 
 static bool on_mouse_press(int id, int button, int state, float x, float y) {
     mouse_down = state;
-    second::layout_containers();
+    heart::layout_containers();
     
     auto mou = mouse();
     x = mou.x;
@@ -238,7 +238,7 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
     event.delta = delta;
     event.descrete = discrete;
     event.from_mouse = from_mouse;
-    second::layout_containers();
+    heart::layout_containers();
     {
         auto m = actual_root;
         auto cid = *datum<int>(m, "cid");
@@ -736,7 +736,7 @@ static void on_window_open(int id) {
     titlebar::on_window_open(id);
     alt_tab::on_window_open(id);
     resizing::on_window_open(id);
-    second::layout_containers();
+    heart::layout_containers();
     dock::add_window(id);
 
     if (hypriso->has_decorations(id)) {
@@ -769,7 +769,7 @@ static void on_window_closed(int id) {
             }
         } 
     }
-    second::layout_containers();
+    heart::layout_containers();
 }
 
 static void on_layer_open(int id) {    
@@ -804,7 +804,7 @@ static void on_layer_closed(int id) {
         }
     } 
 
-    second::layout_containers();
+    heart::layout_containers();
 }
 
 static void on_layer_change() {
@@ -874,7 +874,7 @@ static void on_monitor_open(int id) {
     actual_monitors.push_back(c);
     auto cid = datum<int>(c, "cid");
     *cid = id;
-    second::layout_containers();
+    heart::layout_containers();
     dock::start(hypriso->monitor_name(id));
 }
 
@@ -885,7 +885,7 @@ static void on_monitor_closed(int id) {
             actual_monitors.erase(actual_monitors.begin() + i);
         }
     }
-    second::layout_containers();
+    heart::layout_containers();
     dock::stop(hypriso->monitor_name(id));
 }
 
@@ -931,7 +931,7 @@ static bool is_snapped(int id) {
 
 static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_BEGIN) {
-        second::layout_containers();
+        heart::layout_containers();
         for (auto c : actual_root->children) {
             if (c->custom_type == (int) TYPE::CLIENT) {
                 auto cid = *datum<int>(c, "cid");
@@ -1513,7 +1513,7 @@ void create_default_config() {
     });
 }
 
-void second::begin() {
+void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -1580,7 +1580,7 @@ later_immediate([](Timer*) {
     
 }
 
-void second::end() {
+void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -1605,7 +1605,7 @@ void second::end() {
 //#endif
 }
 
-void second::layout_containers() {
+void heart::layout_containers() {
     if (actual_monitors.empty())
         return;
 
