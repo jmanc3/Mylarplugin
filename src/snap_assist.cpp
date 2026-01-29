@@ -109,12 +109,7 @@ void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
     if (hypriso->has_decorations(cid)) {
         hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
     } else {
-        if (pos == (int) SnapPosition::BOTTOM_LEFT || pos == (int) SnapPosition::BOTTOM_RIGHT ||
-            pos == (int) SnapPosition::LEFT || pos == (int) SnapPosition::RIGHT || pos == (int) SnapPosition::MAX) {
-            hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
-        } else {
-            hypriso->move_resize(cid, p.x, p.y, p.w, p.h + titlebar_h, false);
-        }
+        hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
     }
     hypriso->should_round(cid, false);
     skip_close = true;
@@ -251,6 +246,14 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 b.h -= titlebar_h * s;
                 skip_close = true;
                 do_snap(parent_data->monitor, data->cid, (int) parent_data->pos, b);
+                auto snap_edge_animation = datum<float>(actual_root, "snap_edge_animation");
+                *snap_edge_animation = 0.0;
+                animate(snap_edge_animation, 1.0, 450, actual_root->lifetime);
+                *datum<int>(actual_root, "snap_edge_animation_mon") = get_monitor(data->cid);
+                auto mou = mouse();
+                *datum<float>(actual_root, "snap_edge_animation_x") = mou.x;
+                *datum<float>(actual_root, "snap_edge_animation_y") = mou.y;
+                
                 auto other_cdata = (ClientInfo *) get_cid_container(parent_data->cid)->user_data;
                 add_to_snap_group(data->cid, parent_data->cid, other_cdata->grouped_with);
 

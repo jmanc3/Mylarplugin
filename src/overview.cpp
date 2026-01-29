@@ -28,7 +28,7 @@ struct ThumbData : UserData {
 
 
 static bool running = false;
-static float overview_anim_time = 365.0f;
+static float overview_anim_time = 220.0f;
 
 static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
@@ -913,7 +913,7 @@ void overview::close(bool focus) {
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
-                animate(&overview_data->scalar, 0.0, overview_anim_time * 0.7, c->lifetime, [focus](bool normal_end) {
+                animate(&overview_data->scalar, 0.0, overview_anim_time * 0.9, c->lifetime, [focus](bool normal_end) {
                     if (normal_end) {
                         actual_overview_stop(focus);
                     }
