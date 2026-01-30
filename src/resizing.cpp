@@ -2,6 +2,7 @@
 #include "resizing.h"
 
 #include "heart.h"
+#include <experimental/filesystem>
 
 static bool is_resizing = false;
 static int window_resizing = -1;
@@ -64,6 +65,104 @@ void resizing::begin(int cid, int type) {
     initial_y = m.y;
     active_resize_type = type;
     //notify("resizing");
+}
+
+bool grouped_with(Container *client, int snap_type) {
+    auto data = (ClientInfo *) client->user_data;
+    for (auto cid : data->grouped_with) {
+        if (auto container = get_cid_container(cid)) {
+            auto type = *datum<int>(container, "snap_type");
+            if (type == snap_type)
+                return true;
+        }
+    }
+    return false;
+}
+
+void update_resize_edge_preview_bar(int cid) {
+    Container *c = get_cid_container(cid);
+    if (!c) return;
+    auto snapped = *datum<bool>(c, "snapped");
+    auto snap_type = *datum<int>(c, "snap_type");
+    Container *cr = nullptr;
+    for (auto ch : actual_root->children) {
+        if (ch->custom_type == (int) TYPE::CLIENT_RESIZE) {
+            auto ch_cid = *datum<int>(ch, "cid");
+            if (ch_cid == cid) {
+                cr = ch;
+                break;
+            }
+        }
+    }
+
+    auto current_vertical = datum<int>(cr, "vertical_bar_position");
+    auto current_horizontal = *datum<int>(cr, "horizontal_bar_position");
+    auto current_resize_type = get_current_resize_type(cr);
+
+    RESIZE_TYPE new_vertical_type = RESIZE_TYPE::NONE;
+    if (snap_type == (int) SnapPosition::LEFT) {
+        if (current_resize_type == (int) RESIZE_TYPE::RIGHT) {
+            if (grouped_with(c, (int) SnapPosition::RIGHT) ||
+                grouped_with(c, (int) SnapPosition::TOP_RIGHT) ||
+                grouped_with(c, (int) SnapPosition::BOTTOM_RIGHT)) {
+                if (cr->state.concerned)
+                    new_vertical_type = RESIZE_TYPE::RIGHT;
+            }
+        }
+    } else if (snap_type == (int) SnapPosition::RIGHT) {
+        if (current_resize_type == (int) RESIZE_TYPE::LEFT) {
+            if (grouped_with(c, (int) SnapPosition::LEFT) ||
+                grouped_with(c, (int) SnapPosition::TOP_LEFT) ||
+                grouped_with(c, (int) SnapPosition::BOTTOM_LEFT)) {
+                if (cr->state.concerned)
+                    new_vertical_type = RESIZE_TYPE::LEFT;
+            }
+        }
+    } else if (snap_type == (int) SnapPosition::TOP_RIGHT) {
+        if (current_resize_type == (int) RESIZE_TYPE::LEFT) {
+            if (grouped_with(c, (int) SnapPosition::LEFT) || (grouped_with(c, (int) SnapPosition::TOP_LEFT) && grouped_with(c, (int) SnapPosition::BOTTOM_LEFT))) {
+               if (cr->state.concerned)
+                    new_vertical_type = RESIZE_TYPE::LEFT;
+            }
+        }
+    } else if (snap_type == (int) SnapPosition::TOP_LEFT) {
+        if (current_resize_type == (int) RESIZE_TYPE::RIGHT) {
+            if (grouped_with(c, (int) SnapPosition::RIGHT) || (grouped_with(c, (int) SnapPosition::TOP_RIGHT) && grouped_with(c, (int) SnapPosition::BOTTOM_RIGHT))) {
+               if (cr->state.concerned)
+                    new_vertical_type = RESIZE_TYPE::RIGHT;
+            }
+        }
+    } else if (snap_type == (int) SnapPosition::BOTTOM_LEFT) {
+        if (current_resize_type == (int) RESIZE_TYPE::RIGHT) {
+            if (grouped_with(c, (int) SnapPosition::RIGHT) || (grouped_with(c, (int) SnapPosition::TOP_RIGHT) && grouped_with(c, (int) SnapPosition::BOTTOM_RIGHT))) {
+               if (cr->state.concerned)
+                    new_vertical_type = RESIZE_TYPE::RIGHT;
+            }
+        }
+    } else if (snap_type == (int) SnapPosition::BOTTOM_RIGHT) {
+        if (current_resize_type == (int) RESIZE_TYPE::LEFT) {
+            if (grouped_with(c, (int) SnapPosition::LEFT) || (grouped_with(c, (int) SnapPosition::TOP_LEFT) && grouped_with(c, (int) SnapPosition::BOTTOM_LEFT))) {
+               if (cr->state.concerned)
+                    new_vertical_type = RESIZE_TYPE::LEFT;
+            }
+        }
+    }
+
+    auto vert_amount = datum<float>(cr, "vertical_bar_amount_shown");
+    if (new_vertical_type == RESIZE_TYPE::NONE) {
+        if (*vert_amount != 0.0) {
+            if (!is_being_animating_to(vert_amount, 0.0))  {
+                animate(vert_amount, 0.0, 100.0f, c->lifetime);
+            }
+        }
+    } else {
+        if (*vert_amount != 1.0) {
+            *current_vertical = (int) new_vertical_type;
+            if (!is_being_animating_to(vert_amount, 1.0))  {
+                animate(vert_amount, 1.0, 100.0f, c->lifetime);
+            }
+        }
+    }
 }
 
 void resize_client(int cid, int resize_type) {
@@ -303,105 +402,27 @@ void paint_resize_edge(Container *actual_root, Container *c) {
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
     auto cid = *datum<int>(c, "cid");
 
-    // TODO: should be after a window who is highest in grouped_with
-    if (stage == (int) STAGE::RENDER_POST_WINDOW && c->state.concerned && active_id == highest_in_group(cid)) {
+    if (stage == (int) STAGE::RENDER_POST_WINDOW && active_id == highest_in_group(cid)) {
         renderfix
-        
-        bool snapped = false;
-        int snap_type = (int) SnapPosition::NONE;
-        if (auto container = get_cid_container(cid)) {
-            if (*datum<bool>(container, "snapped")) {
-                snapped = true;
-                snap_type = *datum<int>(container, "snap_type");
-            }
-        }
         
         auto b = c->real_bounds;
         b.shrink(resize_edge_size() * s);
+        update_resize_edge_preview_bar(cid);
 
-        auto resize_split_w = 10 * s;
-
-        if (snapped) {
-            auto resize_type = get_current_resize_type(c); 
-            //notify(fz("{}", resize_type));
-            auto mb = bounds_reserved_monitor(rid);
-            bool anyone_drew = false;
-            switch (resize_type) {
-                case (int) RESIZE_TYPE::LEFT: {
-                    if (snap_type != (int) SnapPosition::RIGHT)
-                        break;
-                    b.x -= resize_split_w * .5;
-                    b.w = resize_split_w;
-                    b.y = mb.y * s;
-                    b.h = mb.h * s;
-
-                    render_drop_shadow(rid, 1.0, {0, 0, 0, .1}, 0, 2.0, b);                    
-                    
-                    if (is_resizing) {
-                        rect(b, {0, 0, 0, 1});
-                        
-                        auto split_h = 30 * s;
-                        b.y = b.y + b.h * .5 - split_h * .5;
-                        b.h = split_h;
-                        
-                        auto split_w = 4 * s;
-                        b.x = b.x + b.w * .5 - split_w * .5;
-                        b.w = split_w;
-                        rect(b, {.4, .4, .4, 1}, 0, split_w * .7, 2.0);
-
-                        auto drawing_split = datum<bool>(c, "drawing_split");
-                        auto drawing_split_time = datum<long>(c, "drawing_split_time");
-                        if (!*drawing_split) {
-                            *drawing_split = true;
-                            *drawing_split_time = get_current_time_in_ms();
-                        }                        
-                    } else {
-                        rect(b, {0, 0, 0, 1});
-                    }
-
-                    anyone_drew = true;
-
-                    break;
-                }
-                case (int) RESIZE_TYPE::RIGHT: {
-                    if (snap_type != (int) SnapPosition::LEFT)
-                        break;
-                    b.x += b.w - resize_split_w * .5;
-                    b.w = resize_split_w;
-                    b.y = mb.y * s;
-                    b.h = mb.h * s;
-
-                    render_drop_shadow(rid, 1.0, {0, 0, 0, .1}, 0, 2.0, b);                    
-                    
-                    if (is_resizing) {
-                        rect(b, {0, 0, 0, 1});
-                        
-                        auto split_h = 30 * s;
-                        b.y = b.y + b.h * .5 - split_h * .5;
-                        b.h = split_h;
-                        
-                        auto split_w = 4 * s;
-                        b.x = b.x + b.w * .5 - split_w * .5;
-                        b.w = split_w;
-                        rect(b, {.4, .4, .4, 1}, 0, split_w * .7, 2.0);
-
-                        auto drawing_split = datum<bool>(c, "drawing_split");
-                        auto drawing_split_time = datum<long>(c, "drawing_split_time");
-                        if (!*drawing_split) {
-                            *drawing_split = true;
-                            *drawing_split_time = get_current_time_in_ms();
-                        }                        
-                    } else {
-                        rect(b, {0, 0, 0, 1});
-                    }
-
-                    anyone_drew = true;
-
-                    break;
-                }
+        auto vert_amount = *datum<float>(c, "vertical_bar_amount_shown");
+        if (vert_amount != 0.0) {
+            auto pos = *datum<int>(c, "vertical_bar_position");
+            auto bb = c->real_bounds;
+            bb.shrink(resize_edge_size() * s);
+            bb.w = 6 * s;
+            bb.x -= bb.w * .5;
+            if (pos == (int) RESIZE_TYPE::RIGHT) {
+                bb.x += b.w;
             }
+            rect(bb, {0, 0, 0, vert_amount});
+            auto cc = bb;
+            damage_all();
         }
-        //border(b, {1, 0, 1, 1}, 4);
     }
 }
 
@@ -538,8 +559,14 @@ void create_resize_container_for_window(int id) {
     *datum<int>(c, "cid") = id;
     *datum<int>(c, "resize_type") = (int) RESIZE_TYPE::NONE;
     *datum<bool>(c, "setting_cursor") = false;
-    *datum<bool>(c, "drawing_split") = false;
-    *datum<long>(c, "drawing_split_time") = 0;
+
+    *datum<int>(c, "vertical_bar_position") = (int) RESIZE_TYPE::NONE;
+    *datum<float>(c, "vertical_bar_amount_shown") = 0.0;
+    *datum<float>(c, "vertical_bar_dot_amount_shown") = 0.0;
+    *datum<int>(c, "horizontal_bar_position") = (int) RESIZE_TYPE::NONE;
+    *datum<float>(c, "horizontal_bar_amount_shown") = 0.0;
+    *datum<float>(c, "horizontal_bar_dot_amount_shown") = 0.0;
+
     c->when_paint = paint_resize_edge; 
     c->when_mouse_down = paint {
         hypriso->bring_to_front(*datum<int>(c, "cid"));  

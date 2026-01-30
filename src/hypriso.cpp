@@ -4008,6 +4008,20 @@ void free_text_texture(int id) {
     }
 }
 
+TextureInfo create_texture(int w, int h) {
+    TextureInfo result;
+
+    return result;
+}
+
+void draw_to_texture(TextureInfo info, std::function<void()> func) {
+    for (int i = 0; i < hyprtextures.size(); i++) {
+        auto h = hyprtextures[i];
+        if (h->info.id == info.id) {
+        }
+    }
+}
+
 TextureInfo gen_texture(std::string path, float h) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
