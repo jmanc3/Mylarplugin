@@ -64,6 +64,17 @@ void resizing::begin(int cid, int type) {
     initial_x = m.x;
     initial_y = m.y;
     active_resize_type = type;
+    for (auto ch : actual_root->children) {
+        if (ch->custom_type == (int) TYPE::CLIENT_RESIZE) {
+            if (*datum<int>(ch, "cid") == cid) {
+                auto vertical_bar_dot_amount_shown = datum<float>(ch, "vertical_bar_dot_amount_shown");
+                animate(vertical_bar_dot_amount_shown, 1.0, 130, ch->lifetime);
+                auto horizontal_bar_dot_amount_shown = datum<float>(ch, "horizontal_bar_dot_amount_shown");
+                animate(horizontal_bar_dot_amount_shown, 1.0, 130, ch->lifetime);
+            }
+        }
+    }
+
     //notify("resizing");
 }
 
@@ -363,6 +374,16 @@ void resizing::end(int cid) {
     window_resizing = -1;
     update_cursor((int) RESIZE_TYPE::NONE);
     update_restore_info_for(cid);
+    for (auto ch : actual_root->children) {
+        if (ch->custom_type == (int) TYPE::CLIENT_RESIZE) {
+            if (*datum<int>(ch, "cid") == cid) {
+                auto vertical_bar_dot_amount_shown = datum<float>(ch, "vertical_bar_dot_amount_shown");
+                animate(vertical_bar_dot_amount_shown, 0.0, 130, ch->lifetime);
+                auto horizontal_bar_dot_amount_shown = datum<float>(ch, "horizontal_bar_dot_amount_shown");
+                animate(horizontal_bar_dot_amount_shown, 0.0, 130, ch->lifetime);
+            }
+        }
+    }
     //notify("stop resizing");
 }
 
@@ -408,20 +429,34 @@ void paint_resize_edge(Container *actual_root, Container *c) {
         auto b = c->real_bounds;
         b.shrink(resize_edge_size() * s);
         update_resize_edge_preview_bar(cid);
+        
+        auto vert_dot_amount = *datum<float>(c, "vertical_bar_dot_amount_shown");
 
         auto vert_amount = *datum<float>(c, "vertical_bar_amount_shown");
+        auto rm = bounds_reserved_monitor(rid);
         if (vert_amount != 0.0) {
             auto pos = *datum<int>(c, "vertical_bar_position");
             auto bb = c->real_bounds;
             bb.shrink(resize_edge_size() * s);
-            bb.w = 6 * s;
+            bb.w = 8 * s;
             bb.x -= bb.w * .5;
+            bb.y = rm.y * s;
+            bb.h = rm.h * s;
             if (pos == (int) RESIZE_TYPE::RIGHT) {
                 bb.x += b.w;
             }
             rect(bb, {0, 0, 0, vert_amount});
             auto cc = bb;
-            damage_all();
+            hypriso->damage_entire(rid);
+
+            float h = 45 * s;
+            float wa = .4;
+            bb.x += bb.w * .5 - (bb.w * wa * .5);
+            bb.w = bb.w * wa;
+            bb.y += bb.h * .5;
+            bb.y -= h * .5;
+            bb.h = h;
+            rect(bb, {.5, .5, .5, vert_amount * vert_dot_amount}, 0, 0.0, 2.0);
         }
     }
 }
@@ -627,7 +662,7 @@ void create_resize_container_for_window(int id) {
     c->when_drag_start = paint {
         int type = *datum<int>(c, "resize_type");
         int cid = *datum<int>(c, "cid");
-        
+
         resizing::begin(cid, type);
     };
 }
