@@ -107,10 +107,11 @@ void update_resize_edge_preview_bar(int cid) {
     }
 
     auto current_vertical = datum<int>(cr, "vertical_bar_position");
-    auto current_horizontal = *datum<int>(cr, "horizontal_bar_position");
+    auto current_horizontal = datum<int>(cr, "horizontal_bar_position");
     auto current_resize_type = get_current_resize_type(cr);
 
     RESIZE_TYPE new_vertical_type = RESIZE_TYPE::NONE;
+    RESIZE_TYPE new_horizontal_type = RESIZE_TYPE::NONE;
     if (snap_type == (int) SnapPosition::LEFT) {
         if (current_resize_type == (int) RESIZE_TYPE::RIGHT) {
             if (grouped_with(c, (int) SnapPosition::RIGHT) ||
@@ -130,47 +131,90 @@ void update_resize_edge_preview_bar(int cid) {
             }
         }
     } else if (snap_type == (int) SnapPosition::TOP_RIGHT) {
-        if (current_resize_type == (int) RESIZE_TYPE::LEFT) {
+        if ((current_resize_type == (int) RESIZE_TYPE::LEFT) || (current_resize_type == (int) RESIZE_TYPE::BOTTOM_LEFT)) {
             if (grouped_with(c, (int) SnapPosition::LEFT) || (grouped_with(c, (int) SnapPosition::TOP_LEFT) && grouped_with(c, (int) SnapPosition::BOTTOM_LEFT))) {
                if (cr->state.concerned)
                     new_vertical_type = RESIZE_TYPE::LEFT;
+            }
+        }
+        if (current_resize_type == (int) RESIZE_TYPE::BOTTOM || current_resize_type == (int) RESIZE_TYPE::BOTTOM_LEFT) {
+            if (grouped_with(c, (int) SnapPosition::BOTTOM_RIGHT)) {
+                if (cr->state.concerned)
+                    new_horizontal_type = RESIZE_TYPE::BOTTOM;
             }
         }
     } else if (snap_type == (int) SnapPosition::TOP_LEFT) {
-        if (current_resize_type == (int) RESIZE_TYPE::RIGHT) {
+        if (current_resize_type == (int) RESIZE_TYPE::RIGHT || current_resize_type == (int) RESIZE_TYPE::BOTTOM_RIGHT) {
             if (grouped_with(c, (int) SnapPosition::RIGHT) || (grouped_with(c, (int) SnapPosition::TOP_RIGHT) && grouped_with(c, (int) SnapPosition::BOTTOM_RIGHT))) {
                if (cr->state.concerned)
                     new_vertical_type = RESIZE_TYPE::RIGHT;
+            }
+        }
+        if (current_resize_type == (int) RESIZE_TYPE::BOTTOM || current_resize_type == (int) RESIZE_TYPE::BOTTOM_RIGHT) {
+            if (grouped_with(c, (int) SnapPosition::BOTTOM_LEFT)) {
+                if (cr->state.concerned)
+                    new_horizontal_type = RESIZE_TYPE::BOTTOM;
             }
         }
     } else if (snap_type == (int) SnapPosition::BOTTOM_LEFT) {
-        if (current_resize_type == (int) RESIZE_TYPE::RIGHT) {
+        if (current_resize_type == (int) RESIZE_TYPE::RIGHT || current_resize_type == (int) RESIZE_TYPE::TOP_RIGHT) {
             if (grouped_with(c, (int) SnapPosition::RIGHT) || (grouped_with(c, (int) SnapPosition::TOP_RIGHT) && grouped_with(c, (int) SnapPosition::BOTTOM_RIGHT))) {
                if (cr->state.concerned)
                     new_vertical_type = RESIZE_TYPE::RIGHT;
             }
         }
+       if (current_resize_type == (int) RESIZE_TYPE::TOP || current_resize_type == (int) RESIZE_TYPE::TOP_RIGHT) {
+            if (grouped_with(c, (int) SnapPosition::TOP_LEFT)) {
+                if (cr->state.concerned)
+                    new_horizontal_type = RESIZE_TYPE::TOP;
+            }
+        } 
     } else if (snap_type == (int) SnapPosition::BOTTOM_RIGHT) {
-        if (current_resize_type == (int) RESIZE_TYPE::LEFT) {
+        if (current_resize_type == (int) RESIZE_TYPE::LEFT || current_resize_type == (int) RESIZE_TYPE::TOP_LEFT) {
             if (grouped_with(c, (int) SnapPosition::LEFT) || (grouped_with(c, (int) SnapPosition::TOP_LEFT) && grouped_with(c, (int) SnapPosition::BOTTOM_LEFT))) {
                if (cr->state.concerned)
                     new_vertical_type = RESIZE_TYPE::LEFT;
             }
         }
+        if (current_resize_type == (int) RESIZE_TYPE::TOP || current_resize_type == (int) RESIZE_TYPE::TOP_LEFT) {
+            if (grouped_with(c, (int) SnapPosition::TOP_RIGHT)) {
+                if (cr->state.concerned)
+                    new_horizontal_type = RESIZE_TYPE::TOP;
+            }
+        }  
     }
 
-    auto vert_amount = datum<float>(cr, "vertical_bar_amount_shown");
-    if (new_vertical_type == RESIZE_TYPE::NONE) {
-        if (*vert_amount != 0.0) {
-            if (!is_being_animating_to(vert_amount, 0.0))  {
-                animate(vert_amount, 0.0, 100.0f, c->lifetime);
+    {
+        auto vert_amount = datum<float>(cr, "vertical_bar_amount_shown");
+        if (new_vertical_type == RESIZE_TYPE::NONE) {
+            if (*vert_amount != 0.0) {
+                if (!is_being_animating_to(vert_amount, 0.0))  {
+                    animate(vert_amount, 0.0, 100.0f, c->lifetime);
+                }
+            }
+        } else {
+            if (*vert_amount != 1.0) {
+                *current_vertical = (int) new_vertical_type;
+                if (!is_being_animating_to(vert_amount, 1.0))  {
+                    animate(vert_amount, 1.0, 100.0f, c->lifetime);
+                }
             }
         }
-    } else {
-        if (*vert_amount != 1.0) {
-            *current_vertical = (int) new_vertical_type;
-            if (!is_being_animating_to(vert_amount, 1.0))  {
-                animate(vert_amount, 1.0, 100.0f, c->lifetime);
+    }
+    {
+        auto horizontal_amount = datum<float>(cr, "horizontal_bar_amount_shown");
+        if (new_horizontal_type == RESIZE_TYPE::NONE) {
+            if (*horizontal_amount != 0.0) {
+                if (!is_being_animating_to(horizontal_amount, 0.0))  {
+                    animate(horizontal_amount, 0.0, 100.0f, c->lifetime);
+                }
+            }
+        } else {
+            if (*horizontal_amount != 1.0) {
+                *current_horizontal = (int) new_horizontal_type;
+                if (!is_being_animating_to(horizontal_amount, 1.0))  {
+                    animate(horizontal_amount, 1.0, 100.0f, c->lifetime);
+                }
             }
         }
     }
@@ -429,34 +473,62 @@ void paint_resize_edge(Container *actual_root, Container *c) {
         auto b = c->real_bounds;
         b.shrink(resize_edge_size() * s);
         update_resize_edge_preview_bar(cid);
-        
-        auto vert_dot_amount = *datum<float>(c, "vertical_bar_dot_amount_shown");
 
-        auto vert_amount = *datum<float>(c, "vertical_bar_amount_shown");
-        auto rm = bounds_reserved_monitor(rid);
-        if (vert_amount != 0.0) {
-            auto pos = *datum<int>(c, "vertical_bar_position");
-            auto bb = c->real_bounds;
-            bb.shrink(resize_edge_size() * s);
-            bb.w = 8 * s;
-            bb.x -= bb.w * .5;
-            bb.y = rm.y * s;
-            bb.h = rm.h * s;
-            if (pos == (int) RESIZE_TYPE::RIGHT) {
-                bb.x += b.w;
+        {
+            auto vert_dot_amount = *datum<float>(c, "vertical_bar_dot_amount_shown");
+            auto vert_amount = *datum<float>(c, "vertical_bar_amount_shown");
+            auto rm = bounds_reserved_monitor(rid);
+            if (vert_amount != 0.0) {
+                auto pos = *datum<int>(c, "vertical_bar_position");
+                auto bb = c->real_bounds;
+                bb.shrink(resize_edge_size() * s);
+                bb.w = 8 * s;
+                bb.x -= bb.w * .5;
+                bb.y = rm.y * s;
+                bb.h = rm.h * s;
+                if (pos == (int) RESIZE_TYPE::RIGHT) {
+                    bb.x += b.w;
+                }
+                rect(bb, {0, 0, 0, vert_amount});
+                auto cc = bb;
+                hypriso->damage_entire(rid);
+
+                float h = 45 * s;
+                float wa = .4;
+                bb.x += bb.w * .5 - (bb.w * wa * .5);
+                bb.w = bb.w * wa;
+                bb.y += bb.h * .5;
+                bb.y -= h * .5;
+                bb.h = h;
+                rect(bb, {.5, .5, .5, vert_amount * vert_dot_amount}, 0, 0.0, 2.0);
             }
-            rect(bb, {0, 0, 0, vert_amount});
-            auto cc = bb;
-            hypriso->damage_entire(rid);
+        }
+        {
+            auto vert_dot_amount = *datum<float>(c, "horizontal_bar_dot_amount_shown");
+            auto vert_amount = *datum<float>(c, "horizontal_bar_amount_shown");
+            auto rm = bounds_reserved_monitor(rid);
+            if (vert_amount != 0.0) {
+                auto pos = *datum<int>(c, "horizontal_bar_position");
+                auto bb = c->real_bounds;
+                bb.shrink(resize_edge_size() * s);
+                bb.h = 8 * s;
+                bb.y -= bb.h * .5;
+                if (pos == (int) RESIZE_TYPE::BOTTOM) {
+                    bb.y += b.h;
+                }
+                rect(bb, {0, 0, 0, vert_amount});
+                auto cc = bb;
+                hypriso->damage_entire(rid);
 
-            float h = 45 * s;
-            float wa = .4;
-            bb.x += bb.w * .5 - (bb.w * wa * .5);
-            bb.w = bb.w * wa;
-            bb.y += bb.h * .5;
-            bb.y -= h * .5;
-            bb.h = h;
-            rect(bb, {.5, .5, .5, vert_amount * vert_dot_amount}, 0, 0.0, 2.0);
+                float w = 45 * s;
+                float wa = .4;
+                bb.y += bb.h * .5 - (bb.h * wa * .5);
+                bb.h = bb.h * wa;
+                bb.x += bb.w * .5;
+                bb.x -= w * .5;
+                bb.w = w;
+                rect(bb, {.5, .5, .5, vert_amount * vert_dot_amount}, 0, 0.0, 2.0);
+            }
         }
     }
 }
