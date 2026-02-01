@@ -20,7 +20,9 @@ struct HelperData : UserData {
     SnapPosition pos;
     long time_mouse_in = 0;
     long time_mouse_out = 0;
-    long creation_time = 0;
+
+    bool closing = false; // is closing
+    float visibility = 1.0;
 
     float scroll_amount = 0;
 
@@ -303,9 +305,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 if (parent_data->pos != SnapPosition::LEFT && parent_data->pos != SnapPosition::RIGHT) {
                     ratioscalar *= 1.15;
                 }
-                float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
-                if (alpha > 1.0)
-                    alpha = 1.0;
+                //float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
+                float alpha = parent_data->visibility;
                 float fadea = alpha;
                 if (hypriso->has_decorations(cid))
                     fadea = 1.0;
@@ -315,7 +316,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         fadea = 1.0;
                     fadea = pull(slidetopos2fade, fadea);
                 }
-
+                if (parent_data->closing)
+                    fadea * alpha;
+                
                 auto size = hypriso->thumbnail_size(data->cid).scale(s);
                 auto pos = bounds_client(data->cid);
                 size.x = pos.x * s;
@@ -725,7 +728,8 @@ void actual_open(int monitor, int cid) {
         } else {
             snap_helper->interactable = false;
         }
-        helper_data->creation_time = get_current_time_in_ms();
+        helper_data->visibility = 0.0;
+        animate(&helper_data->visibility, 1.0, fade_in_time(), snap_helper->lifetime);
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         snap_helper->receive_events_even_if_obstructed = true;
@@ -787,9 +791,7 @@ void actual_open(int monitor, int cid) {
                 c->automatically_paint_children = true;
             renderfix
 
-            float alpha = ((float) (get_current_time_in_ms() - data->creation_time)) / fade_in_time();
-            if (alpha > 1.0)
-                alpha = 1.0;
+            float alpha = data->visibility;
 
             auto sha = c->real_bounds;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, std::round(8 * s), 2.0, sha);
@@ -828,9 +830,7 @@ void snap_assist::open(int monitor, int cid) {
     });
 }
 
-void snap_assist::close() {
-    if (skip_close)
-        return;
+void actual_close() {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
@@ -845,6 +845,30 @@ void snap_assist::close() {
     hypriso->render_whitelist.clear();
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
+}
+
+void snap_assist::close() {
+    if (skip_close)
+        return;
+    bool first = true;
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+       auto child = actual_root->children[i];
+       if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           auto helper_data = (HelperData *) child->user_data;
+           helper_data->closing = true;
+           helper_data->should_slide = false;
+           if (first) {
+               first = false;
+               animate(&helper_data->visibility, 0.0, fade_in_time(), child->lifetime, [](bool normal_end) {
+                   if (normal_end) {
+                       later_immediate([](Timer *) { actual_close(); });
+                   }
+               });
+           } else {
+               animate(&helper_data->visibility, 0.0, fade_in_time(), child->lifetime);
+           }
+       }
+    }
 }
 
 void snap_assist::click(int id, int button, int state, float x, float y) {
