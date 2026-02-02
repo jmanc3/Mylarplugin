@@ -27,9 +27,7 @@ void popup::close(std::string uuid) {
                break;
            }
         }
-        for (auto m : actual_monitors) {
-            hypriso->damage_entire(*datum<int>(m, "cid"));
-        }
+        damage_all();
     });    
 }
 

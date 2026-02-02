@@ -171,6 +171,7 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
     y = mou.y;
     
     auto pierced = pierced_containers(actual_root, x, y);
+    bool any_closed = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::OUR_POPUP) {
@@ -181,9 +182,12 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
            if (!was_pierced) {
                delete child;
                actual_root->children.erase(actual_root->children.begin() + i);
+               any_closed = true;
            }
        }
     }
+    if (any_closed)
+        damage_all();
 
     snap_assist::click(id, button, state, x, y);
     overview::click(id, button, state, x, y);

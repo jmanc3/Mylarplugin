@@ -4144,15 +4144,16 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
     }
 
     for (auto t : hyprtextures) {
-       if (t->info.id == info.id) {
-            AnyPass::AnyData anydata([t, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
+       if (t->info.id == info.id && t->texture) {
+            auto tex = t->texture;
+            AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
                 //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
                 CHyprOpenGLImpl::STextureRenderData data;
                 data.a = a;
                 if (clip)
                     g_pHyprOpenGL->m_renderData.clipBox = cb.intersection(clipbox);
                     //g_pHyprOpenGL->m_renderData.clipBox = clipbox.intersection(cb);
-                g_pHyprOpenGL->renderTexture(t->texture, tocbox(b), data);
+                g_pHyprOpenGL->renderTexture(tex, tocbox(b), data);
                 if (clip)
                     g_pHyprOpenGL->m_renderData.clipBox = CBox();
             });
