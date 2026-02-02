@@ -308,6 +308,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                 auto clip_w = c->real_bounds.w - overflow - overflow_amount;
                 clip_w -= c->children[0]->real_bounds.w;
                 if (clip_w > 0) {
+                    clip(to_parent(root, c), s);
                     draw_texture(*texture_info, 
                         c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea * fade_in_a, clip_w);
                 }
