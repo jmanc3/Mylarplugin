@@ -9,6 +9,10 @@
 #include "hypriso.h"
 #include "heart.h"
 
+#define private public
+#include <hyprland/src/render/OpenGL.hpp>
+#undef private
+
 #include <hyprland/src/render/Shader.hpp>
 
 #include <GLES3/gl32.h>
@@ -52,9 +56,6 @@
 #include <librsvg/rsvg.h>
 #include <any>
 
-#define private public
-#include <hyprland/src/render/OpenGL.hpp>
-#undef private
 
 #include <hyprland/src/helpers/Color.hpp>
 #include <kde-server-decoration.hpp>
@@ -4131,31 +4132,34 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    bool clip = hypriso->clip;
+    CBox clipbox = tocbox(hypriso->clipbox);
+    CBox cb = tocbox(b);
+    if (clip_w != 0.0) {
+        cb.w = clip_w;
+        //clipbox.w = (cb.x - clipbox.x) + clip_w;
+    }
+    if (clip && !clipbox.overlaps(cb)) {
+        return; 
+    }
+
     for (auto t : hyprtextures) {
        if (t->info.id == info.id) {
-            CTexPassElement::SRenderData data;
-            data.tex = t->texture;
-            data.box = tocbox(b);
-            data.box.round();
-            auto inter = data.box;
-            if (hypriso->clip) {
-                inter = tocbox(hypriso->clipbox);
-                //.intersection(data.box)
-                if (data.box.inside(inter)) {
-                    inter = tocbox(hypriso->clipbox).intersection(data.box);
-                }
-            }
-            
-            data.clipBox = inter;
-            if (clip_w != 0.0) {
-                data.clipBox.w = clip_w;
-            }
-            data.a = 1.0 * a;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(std::move(data)));
-            
+            AnyPass::AnyData anydata([t, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
+                //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
+                CHyprOpenGLImpl::STextureRenderData data;
+                data.a = a;
+                if (clip)
+                    g_pHyprOpenGL->m_renderData.clipBox = cb.intersection(clipbox);
+                    //g_pHyprOpenGL->m_renderData.clipBox = clipbox.intersection(cb);
+                g_pHyprOpenGL->renderTexture(t->texture, tocbox(b), data);
+                if (clip)
+                    g_pHyprOpenGL->m_renderData.clipBox = CBox();
+            });
+            g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+            break;
        }
     }
-    
 }
 
 void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
@@ -7185,8 +7189,65 @@ void testDraw() {
     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
+void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, bool clip = false, CBox clipbox = CBox()) {
+    RASSERT(g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
+    RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
+
+    TRACY_GPU_ZONE("RenderTextureMatte");
+
+    if (g_pHyprOpenGL->m_renderData.damage.empty())
+        return;
+
+    CBox newBox = box;
+    g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
+
+    // get transform
+    const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
+    Mat3x3     matrix    = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
+    Mat3x3     glMatrix  = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
+
+    SShader*   shader = &g_pHyprOpenGL->m_shaders->m_shMATTE;
+
+    g_pHyprOpenGL->useProgram(shader->program);
+    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
+    shader->setUniformInt(SHADER_TEX, 0);
+    shader->setUniformInt(SHADER_ALPHA_MATTE, 1);
+
+    glActiveTexture(GL_TEXTURE0);
+    tex->bind();
+
+    glActiveTexture(GL_TEXTURE0 + 1);
+    auto matteTex = matte.getTexture();
+    matteTex->bind();
+
+    glBindVertexArray(shader->uniformLocations[SHADER_SHADER_VAO]);
+
+    if (clip) {
+        g_pHyprOpenGL->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {
+            auto rect = CBox(RECT.x1, RECT.y1, RECT.x2 - RECT.x1, RECT.y2 - RECT.y1);
+            rect = rect.intersection(clipbox);
+            g_pHyprOpenGL->scissor(rect);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        });
+    } else {
+        g_pHyprOpenGL->m_renderData.damage.forEachRect([](const auto& RECT) {
+            g_pHyprOpenGL->scissor(&RECT);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        });
+    }
+
+    g_pHyprOpenGL->scissor(nullptr);
+    glBindVertexArray(0);
+    tex->unbind();
+}
+
 void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROUNDINGBASE, float ROUNDINGPOWER, CBox fullBox, int range, bool sharp) {
-    AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp](AnyPass* pass) {
+    bool clip = hypriso->clip;
+    Bounds clipbox = hypriso->clipbox;
+    if (clip && !tocbox(clipbox).overlaps(fullBox)) {
+        return; 
+    }
+    AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp, clip, clipbox](AnyPass* pass) {
         CHyprColor m_realShadowColor = CHyprColor(b.r, b.g, b.b, b.a);
         if (g_pCompositor->m_windows.empty())
             return;
@@ -7239,7 +7300,9 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
 
         g_pHyprOpenGL->pushMonitorTransformEnabled(true);
         g_pHyprOpenGL->setRenderModifEnabled(false);
-        g_pHyprOpenGL->renderTextureMatte(alphaSwapFB.getTexture(), monbox, alphaFB);
+        
+        renderTextureMatte(alphaSwapFB.getTexture(), monbox, alphaFB, clip, tocbox(clipbox));
+
         g_pHyprOpenGL->setRenderModifEnabled(true);
         g_pHyprOpenGL->popMonitorTransformEnabled();
 

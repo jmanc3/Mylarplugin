@@ -406,6 +406,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 full.y -= titlebar_h * s;
                 full.h += titlebar_h * s;
                 {
+                    clip(to_parent(root, c), s);
                     render_drop_shadow(rid, 1.0, {0, 0, 0, .15f * fadea}, 10 * s, 2.0, full);
                 }
                 
@@ -429,11 +430,17 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     if (c->state.mouse_hovering || child_hovered) {
                         auto focused = color_titlebar_focused();
                         focused.a = fadea;
-                        rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                        {
+                            clip(to_parent(root, c), s);
+                            rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                        }
                     } else {
                         auto unfocused = color_titlebar_unfocused();
                         unfocused.a = fadea;
-                        rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                        {
+                            clip(to_parent(root, c), s);
+                            rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                        }
                     }
                 }
 
@@ -496,6 +503,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
                         auto clip_w = c->real_bounds.w - overflow - overflow_amount;
                         if (clip_w > 0) {
+                            clip(to_parent(root, c), s);
                             draw_texture(*texture_info, 
                                 c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
                         }
@@ -527,6 +535,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
                 renderfix
+                clip(to_parent(root, c->parent), s);
 
                 c->real_bounds.h += 1;
                 c->real_bounds.round();
@@ -546,7 +555,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 if (c->state.mouse_pressing || c->state.mouse_hovering || c->parent->state.mouse_hovering) {
                     auto texture_info = closed;
                     if (texture_info->id != -1) {
-                        clip(to_parent(root, c), s);
+                        clip(to_parent(root, c->parent), s);
                         draw_texture(*texture_info, center_x(c, texture_info->w), center_y(c, texture_info->h), 1.0);
                     }
                 }
@@ -598,8 +607,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
     auto result = layoutAltTabThumbnails(params, items);
     auto scroll_amount = helper_data->scroll_amount;
-    auto overy = (result.bounds.h - c->real_bounds.h + 19 * s);
-    if (overy > 0) {
+    auto overy = (result.bounds.h - c->real_bounds.h + 20 * s);
+    if (overy > 10 * s) {
         if (scroll_amount < -overy) {
             scroll_amount = -overy;
             helper_data->scroll_amount = -overy;
