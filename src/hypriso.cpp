@@ -7225,7 +7225,7 @@ void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, 
 
     if (clip) {
         g_pHyprOpenGL->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {
-            auto rect = CBox(RECT.x1, RECT.y1, RECT.x2 - RECT.x1, RECT.y2 - RECT.y1);
+            auto rect = CBox(RECT.x1, RECT.y1, RECT.x2 - RECT.x1, RECT.y2 - RECT.y1).round();
             rect = rect.intersection(clipbox);
             g_pHyprOpenGL->scissor(rect);
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);

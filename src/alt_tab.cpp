@@ -186,6 +186,7 @@ static void paint_tab_option(Container *actual_root, Container *c) {
 
             auto clip_w = c->real_bounds.w - overflow - overflow_amount;
             if (clip_w > 0) {
+                clip(to_parent(root, c), s);
                 draw_texture(*texture_info, 
                     above.x + overflow, above.y + above.h * .5 - texture_info->h * .5, 1.0, clip_w);
             }
