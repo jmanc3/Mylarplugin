@@ -598,11 +598,20 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
     auto result = layoutAltTabThumbnails(params, items);
     auto scroll_amount = helper_data->scroll_amount;
-    if (scroll_amount < 0)
+    auto overy = (result.bounds.h - c->real_bounds.h + 19 * s);
+    if (overy > 0) {
+        if (scroll_amount < -overy) {
+            scroll_amount = -overy;
+            helper_data->scroll_amount = -overy;
+        }
+        if (scroll_amount > 0) {
+            scroll_amount = 0;
+            helper_data->scroll_amount = 0;
+        }
+    } else {
         scroll_amount = 0;
-    if (scroll_amount > result.bounds.h) {
-        scroll_amount = result.bounds.h;
     }
+    
 
     for (int i = 0; i < c->children.size(); i++) {
         auto ch = c->children[i];
