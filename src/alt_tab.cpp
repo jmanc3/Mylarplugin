@@ -536,9 +536,11 @@ void alt_tab::close(bool focus) {
                 if (focus) {
                     if (!c->children.empty()) {
                         int real_active_index = active_index % c->children.size();
-                        auto cid = *datum<int>(c->children[real_active_index], "cid"); 
-                        hypriso->set_hidden(cid, false);
-                        hypriso->bring_to_front(cid);
+                        auto cid = *datum<int>(c->children[real_active_index], "cid");
+                        later_immediate([cid](Timer *) {
+                            hypriso->set_hidden(cid, false);
+                            hypriso->bring_to_front(cid);
+                        });
                     }
                 }
                 request_damage(actual_root, c);
@@ -550,6 +552,8 @@ void alt_tab::close(bool focus) {
 }
 
 void alt_tab::move(int dir) {
+    if (!showing())
+        return;
     active_index += dir; 
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
