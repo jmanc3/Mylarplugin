@@ -2351,7 +2351,7 @@ dwindle {
 }
 
 master {
-    new_status = master
+    new_status = slave
     mfact = .55
 }
 

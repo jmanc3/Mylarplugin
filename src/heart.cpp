@@ -745,7 +745,9 @@ static void on_window_open(int id) {
 
     if (hypriso->has_decorations(id)) {
         later(50, [id](Timer *) {
-            hypriso->set_float_state(id, true);
+            auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
+            auto tiling = hypriso->is_space_tiling(s);
+            hypriso->set_float_state(id, !tiling);
             //apply_restore_info(id);
         });
     }
@@ -894,6 +896,23 @@ static void on_monitor_closed(int id) {
 }
 
 static void on_activated(int id) {
+    Container *c = get_cid_container(id);
+    if (!c) return;
+    static bool leave = false;
+    if (leave)
+        return;
+        
+    auto info = ((ClientInfo *)c->user_data);
+    if (!info->grouped_with.empty()) {
+        later_immediate([info](Timer *) {
+            leave = true;
+            for (auto g : info->grouped_with) {
+                hypriso->bring_to_front(g, false);
+            }
+            leave = false;
+        });
+    }
+
     titlebar::on_activated(id);
     alt_tab::on_activated(id);
     dock::on_activated(id);
