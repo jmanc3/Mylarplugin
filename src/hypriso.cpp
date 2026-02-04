@@ -2103,6 +2103,7 @@ static std::vector<float> zoomin = { 0, 0.05600000000000005, 0.10899999999999999
 
 
 bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
+    return false;
     if (previously_seen_instance_signature == g_pCompositor->m_instanceSignature)
         return false;
     for (auto h : hyprmonitors) {
@@ -7607,12 +7608,12 @@ bool is_being_animating(float *value) {
     return false;
 }
 
-
 bool is_being_animating_to(float *value, float target) {
     for (auto a : anims)
         if (value == a->value && a->target == target)
             return true;
     return false;
 }
+
 
 

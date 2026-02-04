@@ -637,6 +637,64 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     hypriso->damage_entire(monitor);
 }
 
+void paint_snap_helper_actual(Container *actual_root, Container *c) {
+    auto data = (HelperData *) c->user_data;
+    auto root = get_rendering_root();
+    if (!root) return;
+    auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+
+    renderfix
+
+    float alpha = data->visibility;
+
+    auto sha = c->real_bounds;
+    render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, std::round(8 * s), 2.0, sha);
+    rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, std::round(8 * s), 2.0, true, 1.0 * alpha);
+    if (c->state.mouse_hovering || c->state.mouse_pressing) {
+        float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_in)) / fade_in_time();
+        if (alpha2 > 1.0)
+            alpha2 = 1.0;
+        //rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, std::round(8 * s), 2.0, false, 1.0);
+    } else {
+        float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_out)) / fade_in_time();
+        if (alpha2 > 1.0)
+            alpha2 = 1.0;
+        //rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
+    }
+    auto b = c->real_bounds;
+    b.shrink(1.0f);
+    border(b, {0.6, 0.6, 0.6, 0.5f * alpha}, 1.0f, 0, 8 * s, 2.0f, false, 1.0);
+}
+
+
+// TODO: this should be called by pre window pass
+void paint_snap_helper(Container *actual_root, Container *c) {
+    auto data = (HelperData *) c->user_data;
+    auto root = get_rendering_root();
+    if (!root) return;
+    auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+    if (rid != data->monitor)
+        return;
+    if (stage != (int) STAGE::RENDER_PRE_WINDOW)
+        return;
+    if (active_id != data->lowest_group_cid)
+        return;
+    if (data->showing)
+        c->automatically_paint_children = true;
+    else
+        return;
+
+    for (auto ch : actual_root->children) {
+        if (ch->custom_type == (int) TYPE::SNAP_HELPER) {
+            auto ch_data = (HelperData *) ch->user_data;
+            if (!ch_data->showing)
+                paint_snap_helper_actual(actual_root, ch);
+        }
+    }
+    
+    paint_snap_helper_actual(actual_root, c);
+}
+
 void actual_open(int monitor, int cid) {
         auto c = get_cid_container(cid);
     if (!c)
@@ -795,39 +853,7 @@ void actual_open(int monitor, int cid) {
         };
 
         snap_helper->when_paint = [](Container *actual_root, Container *c) {
-            auto data = (HelperData *) c->user_data;
-            auto root = get_rendering_root();
-            if (!root) return;
-            auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-            if (rid != data->monitor)
-                return;
-            if (stage != (int) STAGE::RENDER_PRE_WINDOW)
-                return;
-            if (active_id != data->lowest_group_cid)
-                return;
-            if (data->showing)
-                c->automatically_paint_children = true;
-            renderfix
-
-            float alpha = data->visibility;
-
-            auto sha = c->real_bounds;
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, std::round(8 * s), 2.0, sha);
-            rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, std::round(8 * s), 2.0, true, 1.0 * alpha);
-            if (c->state.mouse_hovering || c->state.mouse_pressing) {
-                float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_in)) / fade_in_time();
-                if (alpha2 > 1.0)
-                    alpha2 = 1.0;
-                //rect(c->real_bounds, {1, 1, 1, .3f * alpha2}, 0, std::round(8 * s), 2.0, false, 1.0);
-            } else {
-                float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_out)) / fade_in_time();
-                if (alpha2 > 1.0)
-                    alpha2 = 1.0;
-                //rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
-            }
-            auto b = c->real_bounds;
-            b.shrink(1.0f);
-            border(b, {0.6, 0.6, 0.6, 0.5f * alpha}, 1.0f, 0, 8 * s, 2.0f, false, 1.0);
+            paint_snap_helper(actual_root, c);
         };
         snap_helper->after_paint = paint {
             c->automatically_paint_children = false;

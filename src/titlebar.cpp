@@ -423,6 +423,7 @@ void paint_titlebar(Container *actual_root, Container *c) {
 
                 auto clip_w = c->real_bounds.w - overflow;
                 if (clip_w > 0) {
+                    clip(to_parent(root, c), s);
                     draw_texture(*texture_info, 
                         c->real_bounds.x + overflow, center_y(c, texture_info->h), a, clip_w);
                 }
@@ -701,7 +702,5 @@ void titlebar::on_activated(int id) {
         request_damage(actual_root, c);
     }
 }
-
-
 
 

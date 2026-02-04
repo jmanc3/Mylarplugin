@@ -690,6 +690,7 @@ void actual_open(int monitor) {
     over->custom_type = (int) TYPE::OVERVIEW;
     //consume_everything(over);
     over->when_mouse_down = nullptr;
+    over->when_drag_end_is_click = false;
     over->when_clicked = paint {
         later_immediate([](Timer *) {
             overview::close();
