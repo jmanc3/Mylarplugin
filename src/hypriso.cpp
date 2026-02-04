@@ -4138,6 +4138,10 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
     CBox cb = tocbox(b);
     if (clip_w != 0.0) {
         cb.w = clip_w;
+        if (!clip) {
+            clip = true;
+            clipbox = cb;
+        }
         //clipbox.w = (cb.x - clipbox.x) + clip_w;
     }
     if (clip && !clipbox.overlaps(cb)) {

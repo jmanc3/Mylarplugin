@@ -406,8 +406,12 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 full.y -= titlebar_h * s;
                 full.h += titlebar_h * s;
                 {
-                    clip(to_parent(root, c), s);
-                    render_drop_shadow(rid, 1.0, {0, 0, 0, .15f * fadea}, 10 * s, 2.0, full);
+                    if (parent_data->visibility == 1.0) {
+                        clip(to_parent(root, c), s);
+                        render_drop_shadow(rid, 1.0, {0, 0, 0, .15f * fadea}, 10 * s, 2.0, full);
+                    } else {
+                        render_drop_shadow(rid, 1.0, {0, 0, 0, .15f * fadea}, 10 * s, 2.0, full);
+                    }
                 }
                 
                 auto backup = c->real_bounds;
@@ -431,15 +435,24 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         auto focused = color_titlebar_focused();
                         focused.a = fadea;
                         {
-                            clip(to_parent(root, c), s);
-                            rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                            if (parent_data->visibility == 1.0) {
+                                clip(to_parent(root, c), s);
+                                rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                            } else {
+                                rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                            }
+                            
                         }
                     } else {
                         auto unfocused = color_titlebar_unfocused();
                         unfocused.a = fadea;
                         {
-                            clip(to_parent(root, c), s);
-                            rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                            if (parent_data->visibility == 1.0) {
+                                clip(to_parent(root, c), s);
+                                rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                            } else {
+                                rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                            }
                         }
                     }
                 }
@@ -477,8 +490,12 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     } else {
                         focus_alpha = color_titlebar_text_unfocused().a;
                     }
-                    clip(to_parent(root, c), s);
-                    draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
+                    if (parent_data->visibility == 1.0) {
+                        clip(to_parent(root, c), s);
+                        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
+                    } else {
+                        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
+                    }
                 }
                 
                 std::string title_text = hypriso->title_name(cid);
@@ -503,9 +520,12 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
                         auto clip_w = c->real_bounds.w - overflow - overflow_amount;
                         if (clip_w > 0) {
-                            clip(to_parent(root, c), s);
-                            draw_texture(*texture_info, 
-                                c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
+                            if (parent_data->visibility == 1.0) {
+                                clip(to_parent(root, c), s);
+                                draw_texture(*texture_info, c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
+                            } else {
+                                draw_texture(*texture_info, c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
+                            }
                         }
                     }
                 }
