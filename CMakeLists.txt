@@ -45,6 +45,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     wayland-cursor
     xkbcommon
     cairo
+    dbus-1
 )
 
 target_link_libraries(Mylardesktop PRIVATE rt PkgConfig::deps)
