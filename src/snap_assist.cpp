@@ -529,8 +529,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         }
                     }
                 }
-
-                if (alpha >= 1.0) {
+                if (alpha >= 0.75 && !parent_data->closing) {
                     hypriso->clip = true;
                     auto clipbox = c->parent->real_bounds;
                     clipbox.scale(s);

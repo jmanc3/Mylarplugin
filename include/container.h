@@ -15,6 +15,8 @@
 
 #include <functional>
 
+constexpr double EPSILON = 1e-9;
+
 static int FILL_SPACE     = -1;
 static int USE_CHILD_SIZE = -2;
 static int DYNAMIC        = -3;
@@ -47,7 +49,23 @@ struct Bounds {
     
     double right() const { return x + w; }
     double bottom() const { return y + h; }
-    bool empty() const { return w <= 0 || h <= 0; }
+    bool empty() const { return std::abs(w) <= EPSILON || std::abs(h) <= EPSILON; }
+
+    Bounds intersection(const Bounds& other) const {
+        const double newX      = std::max(x, other.x);
+        const double newY      = std::max(y, other.y);
+        const double newBottom = std::min(y + h, other.y + other.h);
+        const double newRight  = std::min(x + w, other.x + other.w);
+        double       newW      = newRight - newX;
+        double       newH      = newBottom - newY;
+
+        if (newW <= EPSILON || newH <= EPSILON) {
+            newW = 0;
+            newH = 0;
+        }
+
+        return {newX, newY, newW, newH};
+    }
 
     void subtract(const Bounds& other) {
         // Compute intersection
