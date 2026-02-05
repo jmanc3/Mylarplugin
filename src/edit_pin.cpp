@@ -138,6 +138,7 @@ static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double
     double degrees = M_PI / 180.0;
     
     cairo_new_sub_path(cr);
+    
     cairo_arc(cr, x + width - radius, y + radius, radius, -90 * degrees, 0 * degrees);
     cairo_arc(cr, x + width - radius, y + height - radius, radius, 0 * degrees, 90 * degrees);
     cairo_arc(cr, x + radius, y + height - radius, radius, 90 * degrees, 180 * degrees);

@@ -510,11 +510,11 @@ Bounds snap_position_to_bounds_limited(int mon, SnapPosition pos, SnapLimits lim
     } else if (pos == SnapPosition::LEFT) {
         return {x, y, w * limits.middle_middle, h};
     } else if (pos == SnapPosition::RIGHT) {
-        return {x + w * limits.middle_middle, y, w - (w * limits.middle_middle), h};
+        return {x + w * limits.middle_middle, y, w - (w * limits.middle_middle) + 1, h};
     } else if (pos == SnapPosition::TOP_LEFT) {
         return {x, y, w * limits.middle_middle, h * limits.left_middle};
     } else if (pos == SnapPosition::TOP_RIGHT) {
-        return {x + w * limits.middle_middle, y, w - w * limits.middle_middle, h * limits.right_middle};
+        return {x + w * limits.middle_middle, y, w - w * limits.middle_middle + 1, h * limits.right_middle};
     } else if (pos == SnapPosition::BOTTOM_LEFT) {
         return {x, y + h * limits.left_middle, w * limits.middle_middle, h - h * limits.left_middle};
     } else if (pos == SnapPosition::BOTTOM_RIGHT) {
