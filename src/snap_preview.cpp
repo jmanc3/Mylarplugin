@@ -129,15 +129,23 @@ void snap_preview::on_drag_start(int cid, int x, int y) {
     }
 }
 
+Bounds bounds_client_fixed_for_titlebar(int cid) {
+    auto b = bounds_client(cid);
+    if (hypriso->has_decorations(cid)) {
+        b.y -= titlebar_h;
+        b.h += titlebar_h;
+    }
+    return b;
+}
+
 void snap_preview::on_drag(int cid, int x, int y) {
     preview->cid = cid;
     auto monitor_cursor_on = hypriso->monitor_from_cursor();
     auto pos = mouse_to_snap_position(monitor_cursor_on, x, y);
     //defer();
     long current = get_current_time_in_ms();
-    auto client_bounds = bounds_client(cid);
-    client_bounds.y -= titlebar_h;
-    client_bounds.h += titlebar_h;
+    auto client_bounds = bounds_client_fixed_for_titlebar(cid);
+
     preview->show = true;
     if (pos != preview->previous_snap_type)  {
         // fixes snap preview opening when dragging titlebar from a region that would otherwise start a preview
@@ -298,9 +306,7 @@ void snap_preview::draw(Container* actual_root, Container* c) {
         if (preview->end_drag_time != 0) {
             if (preview->previous_snap_type == SnapPosition::NONE) {
                 fade_amount = 1.0f;
-                auto client_bounds = bounds_client(preview->cid);
-                client_bounds.y -= titlebar_h;
-                client_bounds.h += titlebar_h;
+                auto client_bounds = bounds_client_fixed_for_titlebar(preview->cid);
                 preview->end = client_bounds;
                 calculate_current();
             }
@@ -310,7 +316,7 @@ void snap_preview::draw(Container* actual_root, Container* c) {
             fade_amount = 0.0;
             b = snap_position_to_bounds(hypriso->monitor_from_cursor(), preview->end_snap_type);
         }
-        auto cb = bounds_client(preview->cid);
+        auto cb = bounds_client_fixed_for_titlebar(preview->cid);
         auto r = calculate_overlap_percentage(b.x, b.y, b.w, b.h, cb.x, cb.y, cb.w, cb.h);
         if (r < 93) {
             b.x -= root->real_bounds.x;
