@@ -283,6 +283,8 @@ void snap_preview::draw(Container* actual_root, Container* c) {
 
     if (!(active_id == cid && stage == (int)STAGE::RENDER_PRE_WINDOW))
         return;
+    if (cid != preview->cid)
+        return;
     renderfix
     
     auto current = get_current_time_in_ms();
