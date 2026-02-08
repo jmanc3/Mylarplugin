@@ -207,51 +207,6 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     cairo_set_line_width(cr, stroke_width);
 }
 
-static Container *button_group(Container *parent, const std::vector<std::string> &options) {
-    auto button_group_parent = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
-    
-    {
-        static float button_font_size = 12; 
-        static float button_text_pad = 6; 
-        static float button_pad = 4; 
-        static float button_spacing = 4; 
-        button_group_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            auto mylar = (MylarWindow*)root->user_data;
-            auto dpi = mylar->raw_window->dpi;
-            auto cr = mylar->raw_window->cr;
-            float w = 0;
-            for (auto ch : c->children) {
-                ch->pre_layout(root, c, b);
-                w += ch->wanted_bounds.w;
-            }
-            c->real_bounds.w = w;
-        };
-        for (auto o : options) {
-            auto option = button_group_parent->child(FILL_SPACE, FILL_SPACE);
-            option->pre_layout = [o](Container *root, Container *c, const Bounds &b) {
-                auto mylar = (MylarWindow*)root->user_data;
-                auto dpi = mylar->raw_window->dpi;
-                auto cr = mylar->raw_window->cr;
-                auto bo = draw_text(cr, 0, 0, o, button_font_size * dpi, false, mylar_font, -1, 0, {}); 
-                c->wanted_bounds.w = bo.w + button_text_pad * 2;
-                c->wanted_bounds.h = bo.h + button_text_pad * 2;
-            };
-            option->when_paint = [o](Container *root, Container *c) {
-                auto mylar = (MylarWindow*)root->user_data;
-                auto dpi = mylar->raw_window->dpi;
-                auto cr = mylar->raw_window->cr;
-                auto b = draw_text(cr, 0, 0, o, button_font_size * dpi, false, mylar_font, -1, 0, {}); 
-                draw_text(cr, 
-                    c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
-                    c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, 
-                    o, button_font_size * dpi, true, mylar_font, -1, 0.0, {0, 0, 0, 1});
-            };
-        }
-    }    
-    
-    return button_group_parent;
-}
-
 // Creates a container that sizes itself based on children size
 // It takes full width of parent
 // It lays out right child first and then left with remainder of space
@@ -309,10 +264,8 @@ static Container *make_self_height_sized_parent(Container *parent) {
     return c;
 }
 
-static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected) {
-    auto p = make_self_height_sized_parent(parent);
-
-    auto left = p->child(FILL_SPACE, FILL_SPACE);
+static void make_label_like(Container *parent, std::string title, std::string description) {
+    auto left = parent->child(FILL_SPACE, FILL_SPACE);
     static float button_text_pad = 8; 
     left->when_paint = [title, description](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -348,6 +301,13 @@ static void make_button_group(Container *parent, std::string title, std::string 
         auto bo2 = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, b.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
         c->real_bounds.h = bo1.h + bo2.h + button_text_pad * dpi * 2;
     };
+}
+
+static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected) {
+    auto p = make_self_height_sized_parent(parent);
+    
+    make_label_like(p, title, description);
+    
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
