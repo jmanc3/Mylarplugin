@@ -14,6 +14,11 @@
 
 static RawApp *settings_app = nullptr;
 
+static RGBA left_color = RGBA(.93, .93, .93, 1);
+static RGBA right_color = RGBA(.89, .89, .89, 1);
+static RGBA option_color = RGBA(.87, .87, .87, 1);
+static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
+
 struct CachedFont {
     std::string name;
     int size;
@@ -116,9 +121,10 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, b
         pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
     } else {
         pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
-        pango_layout_set_width(layout, wrap);
+        pango_layout_set_width(layout, wrap * PANGO_SCALE);
         pango_layout_set_height(layout, h);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
+        if (h != -1)
+            pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
     set_argb(cr, color);
     PangoRectangle ink;
@@ -201,6 +207,261 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     cairo_set_line_width(cr, stroke_width);
 }
 
+static Container *button_group(Container *parent, const std::vector<std::string> &options) {
+    auto button_group_parent = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
+    
+    {
+        static float button_font_size = 12; 
+        static float button_text_pad = 6; 
+        static float button_pad = 4; 
+        static float button_spacing = 4; 
+        button_group_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto dpi = mylar->raw_window->dpi;
+            auto cr = mylar->raw_window->cr;
+            float w = 0;
+            for (auto ch : c->children) {
+                ch->pre_layout(root, c, b);
+                w += ch->wanted_bounds.w;
+            }
+            c->real_bounds.w = w;
+        };
+        for (auto o : options) {
+            auto option = button_group_parent->child(FILL_SPACE, FILL_SPACE);
+            option->pre_layout = [o](Container *root, Container *c, const Bounds &b) {
+                auto mylar = (MylarWindow*)root->user_data;
+                auto dpi = mylar->raw_window->dpi;
+                auto cr = mylar->raw_window->cr;
+                auto bo = draw_text(cr, 0, 0, o, button_font_size * dpi, false, mylar_font, -1, 0, {}); 
+                c->wanted_bounds.w = bo.w + button_text_pad * 2;
+                c->wanted_bounds.h = bo.h + button_text_pad * 2;
+            };
+            option->when_paint = [o](Container *root, Container *c) {
+                auto mylar = (MylarWindow*)root->user_data;
+                auto dpi = mylar->raw_window->dpi;
+                auto cr = mylar->raw_window->cr;
+                auto b = draw_text(cr, 0, 0, o, button_font_size * dpi, false, mylar_font, -1, 0, {}); 
+                draw_text(cr, 
+                    c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
+                    c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, 
+                    o, button_font_size * dpi, true, mylar_font, -1, 0.0, {0, 0, 0, 1});
+            };
+        }
+    }    
+    
+    return button_group_parent;
+}
+
+// Creates a container that sizes itself based on children size
+// It takes full width of parent
+// It lays out right child first and then left with remainder of space
+static Container *make_self_height_sized_parent(Container *parent) {
+    auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
+    static float button_text_pad = 8; 
+    c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+
+        auto left = c->children[0];
+        auto right = c->children[1];
+
+        assert(left->pre_layout && right->pre_layout);
+
+        right->real_bounds = b;
+        right->pre_layout(root, right, b);
+        auto space = std::max(b.w - right->real_bounds.w, 0.0);
+        right->real_bounds.x += space;
+
+        left->real_bounds = b;
+        left->real_bounds.w = space - button_text_pad * dpi;
+        left->pre_layout(root, left, left->real_bounds);
+
+        float tallest = right->real_bounds.h;
+        bool right_taller = true;
+        if (tallest < left->real_bounds.h) {
+            tallest = left->real_bounds.h;
+            right_taller = false;
+        }
+
+        auto bcopy = b;
+        bcopy.h = tallest;
+
+        layout(root, right, right->real_bounds);
+        modify_all(right, -button_text_pad * dpi, 0);
+        if (!right_taller)
+            modify_all(right, 0, tallest * .5 - right->real_bounds.h * .5);
+        
+        layout(root, left, left->real_bounds);
+
+        c->real_bounds = bcopy;
+    };
+    c->when_paint = paint {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
+        set_argb(cr, option_color);
+        cairo_fill(cr);
+    };
+
+    return c;
+}
+
+static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected) {
+    auto p = make_self_height_sized_parent(parent);
+
+    auto left = p->child(FILL_SPACE, FILL_SPACE);
+    static float button_text_pad = 8; 
+    left->when_paint = [title, description](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto size_title = 12 * dpi;
+        auto size_desc = 11 * dpi;
+
+        auto b = c->real_bounds;
+        float yoff = button_text_pad * dpi;
+        {
+            auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, .5});
+            draw_text(cr,
+                c->real_bounds.x + button_text_pad * dpi, 
+                c->real_bounds.y + yoff, title, size_title, true, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
+            yoff += bo.h;
+        }
+        {
+            auto bo = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
+            draw_text(cr,
+                c->real_bounds.x + button_text_pad * dpi, 
+                c->real_bounds.y + yoff, description, size_desc, true, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, .5});
+        }
+    };
+    left->pre_layout = [title, description](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto size_title = 12 * dpi;
+        auto size_desc = 11 * dpi;
+ 
+        auto bo1 = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
+        auto bo2 = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, b.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
+        c->real_bounds.h = bo1.h + bo2.h + button_text_pad * dpi * 2;
+    };
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    right->when_paint = paint {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
+        set_argb(cr, option_widget_bg_color);
+        cairo_fill(cr);
+    };
+    right->pre_layout = [options](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto size = 12 * dpi;
+
+        float w = 0;
+        float h = 10;
+        std::vector<float> ow;
+        for (auto o : options) {
+            auto bo1 = draw_text(cr, 0, 0, o, size, false, mylar_font, -1, -1, {0, 0, 0, 1});
+            ow.push_back(bo1.w);
+            w += bo1.w;
+            h = bo1.h;
+        }
+        for (int i = 0; i < ow.size(); i++)
+            ow[i] = ow[i] / w;
+
+        h += ((6 + 4) * 2) * dpi;
+        // out pad, spacing, per button text pad
+        w += (4 * 2 + 4 * (options.size() - 1) + (6 * (options.size() + 2) * 2))  * dpi;
+
+        for (int i = 0; i < ow.size(); i++)
+            c->children[i]->wanted_bounds.w = ow[i] * w;
+
+        c->real_bounds.w = w;
+        c->real_bounds.h = h;
+    };
+    for (int i = 0; i < options.size(); i++) {
+        auto o = options[i];
+        auto option = right->child(FILL_SPACE, FILL_SPACE);
+        struct OptionData {
+            bool selected = false;
+        };
+        auto option_data = new OptionData;
+        if (i == 0)
+            option_data->selected = true;
+        option->user_data = option_data;
+        option->when_paint = [i, o, options](Container *root, Container *c) {
+            auto data = (OptionData *) c->user_data;
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            auto dpi = mylar->raw_window->dpi;
+            auto size = 12 * dpi;
+            auto backup = c->real_bounds;
+            defer(c->real_bounds = backup);
+            if (i == 0) {
+                c->real_bounds.shrink(4 * dpi);
+                c->real_bounds.w += 4 * dpi;
+            } else if (i == options.size() - 1) {
+                c->real_bounds.shrink(4 * dpi);
+                c->real_bounds.x -= 4 * dpi;
+                c->real_bounds.w += 4 * dpi;
+            } else {
+                c->real_bounds.shrink(4 * dpi);
+            }
+
+            if (data->selected) {
+                set_argb(cr, {1, 1, 1, 1});
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 8 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+
+            auto bo = draw_text(cr, 0, 0, o, size, false, mylar_font, -1, -1, {0, 0, 0, .5});
+            draw_text(cr,
+                c->real_bounds.x + c->real_bounds.w * .5 - bo.w * .5, 
+                c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, o, size, true, mylar_font, -1, -1, {0, 0, 0, 1});
+        };
+        option->when_clicked = [](Container *root, Container *c) {
+            for (auto ch : c->parent->children) {
+                auto data = (OptionData *) ch->user_data;
+                data->selected = false;
+            }
+            auto data = (OptionData *) c->user_data;
+            data->selected = true;
+        };
+    }
+}
+
+static void fill_mouse_settings(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    
+    make_button_group(padded_right, 
+        "Touchpad acceleration", 
+        "Acceleration makes precision clicks easier by understanding that if the movement is slower, the mouse should travel less distance, and if it’s faster, it should travel a further distance.",
+        {"Custom", "Adaptive", "Flat"}, 
+        [](std::string selected) {
+            notify(fz("selected: {}\n", selected));
+        });
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -227,12 +488,19 @@ void create_tab_option(Container *parent, std::string label) {
         }
         paint_label(root, c, label);
     };
+    c->when_clicked = [label](Container *root, Container *c) {
+        if (label == "Mouse & Touchpad") {
+            fill_mouse_settings(root, c);
+        }
+    };
 }
 
 void fill_left(Container *left) {
     create_tab_option(left, "Search");
     create_tab_option(left, "Display");
-    create_tab_option(left, "Mouse");
+    create_tab_option(left, "Mouse & Touchpad");
+    create_tab_option(left, "Keyboard");
+    create_tab_option(left, "Time & Date");
     create_tab_option(left, "Audio");
     create_tab_option(left, "Wifi");
 }
@@ -248,17 +516,18 @@ void fill_root(Container *root) {
     left->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
-        set_argb(cr, {0.92, 0.92, 0.92, 1});
+        set_argb(cr, left_color);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
     };
     fill_left(left);
     
     auto right = left_right->child(::vbox, FILL_SPACE, FILL_SPACE);
+    right->name = "settings_right";
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
-        set_argb(cr, {0.98, 0.98, 0.98, 1});
+        set_argb(cr, right_color);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
     };
