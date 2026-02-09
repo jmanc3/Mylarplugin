@@ -22,7 +22,9 @@ static std::string mylar_font = "Segoe UI Variable";
 static long minimize_anim_time = 100;
 
 struct ConfigSettings {
+    int version = 1;
     std::string touchpad_acceleration_curve = "Custom";
+    std::string primary_mouse_button = "Left";
 };
 
 extern ConfigSettings *set;

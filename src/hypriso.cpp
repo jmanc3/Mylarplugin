@@ -2549,6 +2549,12 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:accel_profile = flat";
         
     }
+    
+    if (set->primary_mouse_button == "Left") {
+        base += "input:left_handed = false";
+    } else {
+        base += "input:left_handed = true";
+    }
 
 #ifdef NDEBUG
 base += "source = ~/.config/mylar/user.conf\n\n";
