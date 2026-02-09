@@ -21,6 +21,12 @@ static int titlebar_h = 28;
 static std::string mylar_font = "Segoe UI Variable";
 static long minimize_anim_time = 100;
 
+struct ConfigSettings {
+    std::string touchpad_acceleration_curve = "Custom";
+};
+
+extern ConfigSettings *set;
+
 struct SurfacePassInfo {
     double pos_x;
     double pos_y;

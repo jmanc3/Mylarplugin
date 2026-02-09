@@ -121,6 +121,7 @@ static int unique_id = 0;
 
 static bool next_check = false;
 static std::string previously_seen_instance_signature = "";
+ConfigSettings *set = new ConfigSettings;
 
 void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
@@ -2538,6 +2539,16 @@ plugin:mylardesktop:sel_color = rgba(ffffff11)
 plugin:mylardesktop:sel_border_color = rgba(ffffff11)
 
 )";
+
+    if (set->touchpad_acceleration_curve == "Custom") {
+        base += "input:accel_profile = custom 0.5351446139 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 13.786 18.360 27.935 33.123\n\n";
+        base += "input:scroll_points = 1.4491918267 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 9.786 10.360 10.935 12.123\n\n";
+    } else if (set->touchpad_acceleration_curve == "Adaptive") {
+        base += "input:accel_profile = adaptive";
+    } else if (set->touchpad_acceleration_curve == "Flat") {
+        base += "input:accel_profile = flat";
+        
+    }
 
 #ifdef NDEBUG
 base += "source = ~/.config/mylar/user.conf\n\n";
@@ -7444,12 +7455,6 @@ bool HyprIso::is_floating(int cid) {
             return hw->w->m_isFloating;
     return false;
 }
-
-
-// hook notify mfact
-// SDispatchResult CKeybindManager::layoutmsg(std::string msg) {
-// it's valid to only care about layoutmsg mfact and not config change because we are basically treating it as a snap window resizer
-
 
 void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func) {
     HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {

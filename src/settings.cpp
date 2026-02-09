@@ -2,6 +2,7 @@
 #include "settings.h"
 
 #include "heart.h"
+#include "hypriso.h"
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 
@@ -353,7 +354,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
             bool selected = false;
         };
         auto option_data = new OptionData;
-        if (i == 0)
+        if (o == set->touchpad_acceleration_curve)
             option_data->selected = true;
         option->user_data = option_data;
         option->when_paint = [i, o, options](Container *root, Container *c) {
@@ -386,13 +387,15 @@ static void make_button_group(Container *parent, std::string title, std::string 
                 c->real_bounds.x + c->real_bounds.w * .5 - bo.w * .5, 
                 c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, o, size, true, mylar_font, -1, -1, {0, 0, 0, 1});
         };
-        option->when_clicked = [](Container *root, Container *c) {
+        option->when_clicked = [o, on_selected](Container *root, Container *c) {
             for (auto ch : c->parent->children) {
                 auto data = (OptionData *) ch->user_data;
                 data->selected = false;
             }
             auto data = (OptionData *) c->user_data;
             data->selected = true;
+            if (on_selected)
+                on_selected(o);
         };
     }
 }
@@ -418,7 +421,10 @@ static void fill_mouse_settings(Container *root, Container *c) {
         "Acceleration makes precision clicks easier by understanding that if the movement is slower, the mouse should travel less distance, and if it’s faster, it should travel a further distance.",
         {"Custom", "Adaptive", "Flat"}, 
         [](std::string selected) {
-            notify(fz("selected: {}\n", selected));
+            set->touchpad_acceleration_curve = selected;
+            main_thread([]() {
+                hypriso->generate_mylar_hyprland_config();
+            });
         });
 }
 
