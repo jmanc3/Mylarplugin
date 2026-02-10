@@ -284,7 +284,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
             if (description.empty()) {
                 draw_text(cr,
                     c->real_bounds.x + button_text_pad * dpi, 
-                    c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, title, size_title, true, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
+                    c->real_bounds.y + c->real_bounds.h * .5 - bo.y * .5, title, size_title, true, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
             } else {
                 draw_text(cr,
                     c->real_bounds.x + button_text_pad * dpi, 
@@ -386,6 +386,11 @@ static void make_slider(Container *parent, std::string title, std::string descri
         auto dpi = mylar->raw_window->dpi;
         c->real_bounds.w = 350 * dpi;
         c->real_bounds.h = 20 * dpi;
+    };
+    right->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+        auto data = ((SliderInfo *) c->user_data);
+        data->value += (((float) scroll_y) * .00001);
+        data->value = std::max(0.0f, std::min(1.0f, data->value));
     };
  
 }

@@ -2544,16 +2544,16 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:accel_profile = custom 0.5351446139 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 13.786 18.360 27.935 33.123\n\n";
         base += "input:scroll_points = 1.4491918267 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 9.786 10.360 10.935 12.123\n\n";
     } else if (set->touchpad_acceleration_curve == "Adaptive") {
-        base += "input:accel_profile = adaptive";
+        base += "input:accel_profile = adaptive\n\n";
     } else if (set->touchpad_acceleration_curve == "Flat") {
-        base += "input:accel_profile = flat";
+        base += "input:accel_profile = flat\n\n";
         
     }
     
     if (set->primary_mouse_button == "Left") {
-        base += "input:left_handed = false";
+        base += "input:left_handed = false\n\n";
     } else {
-        base += "input:left_handed = true";
+        base += "input:left_handed = true\n\n";
     }
 
 #ifdef NDEBUG
