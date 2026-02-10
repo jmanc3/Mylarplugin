@@ -19,6 +19,8 @@ static RGBA left_color = RGBA(.93, .93, .93, 1);
 static RGBA right_color = RGBA(.89, .89, .89, 1);
 static RGBA option_color = RGBA(.87, .87, .87, 1);
 static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
+static RGBA slider_bg = RGBA(.77, .77, .77, 1);
+static RGBA accent = RGBA(.0, .52, .9, 1);
 
 struct CachedFont {
     std::string name;
@@ -315,26 +317,74 @@ static void make_label_like(Container *parent, std::string title, std::string de
     };
 }
 
-static void make_slider(Container *parent, std::string title, std::string description) {
+static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change) {
     auto p = make_self_height_sized_parent(parent);
     
     make_label_like(p, title, description);
-    
+
+    struct SliderInfo {
+        float value = .5;
+    };
+
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    auto slider_info = new SliderInfo;
+    slider_info->value = initial_value;
+    right->user_data = slider_info;
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        set_rect(cr, c->real_bounds);
-        set_argb(cr, option_widget_bg_color);
-        cairo_fill(cr);
-    };
 
+        {
+            auto b = c->real_bounds;
+            float h = 8.5 * dpi;
+            b.y += b.h * .5 - h * .5;
+            b.h = h;
+
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, h * .5, 1.0);
+            set_argb(cr, slider_bg);
+            cairo_fill(cr);
+        }
+        
+        {
+            auto data = (SliderInfo *) c->user_data;
+            auto b = c->real_bounds;
+            b.w = b.h;
+            b.x += c->real_bounds.w * data->value - b.h * .5;
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
+            set_argb(cr, {1, 1, 1, 1});
+            cairo_fill(cr);
+
+            b.shrink(5 * dpi);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
+            set_argb(cr, accent);
+            cairo_fill(cr);
+        }
+
+    };
+    right->when_mouse_down = [on_change](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto b = c->real_bounds;
+        auto scalar = (root->mouse_current_x - b.x) / b.w;
+        if (scalar < 0)
+            scalar = 0;
+        if (scalar > 1)
+            scalar = 1;
+        ((SliderInfo *) c->user_data)->value = scalar;
+        if (on_change)
+            on_change(scalar);
+    };
+    right->when_mouse_up = right->when_mouse_down;
+    right->when_drag = right->when_mouse_down;
+    right->when_drag_end = right->when_mouse_down;
+    
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        c->real_bounds.w = 150 * dpi;
+        c->real_bounds.w = 350 * dpi;
         c->real_bounds.h = 20 * dpi;
     };
  
@@ -475,7 +525,12 @@ static void fill_mouse_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 8); 
     
-    make_slider(padded_right, "Cursor speed", "");
+    make_slider(padded_right, "Cursor speed", "", set->cursor_speed, [](float value) {
+        set->cursor_speed = value;
+        //main_thread([]() {
+            //hypriso->generate_mylar_hyprland_config();
+        //});
+    });
 
     make_vert_space(padded_right, 8); 
 
