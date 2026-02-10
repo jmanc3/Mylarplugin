@@ -323,7 +323,7 @@ static void make_bool(Container *parent, std::string title, std::string descript
 
     make_label_like(p, title, description);
 
-    struct BoolInfo {
+    struct BoolInfo : UserData {
         bool on = false;
     };
 
@@ -380,7 +380,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
     
     make_label_like(p, title, description);
 
-    struct SliderInfo {
+    struct SliderInfo : UserData {
         float value = .5;
     };
 
@@ -499,7 +499,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
     for (int i = 0; i < options.size(); i++) {
         auto o = options[i];
         auto option = right->child(FILL_SPACE, FILL_SPACE);
-        struct OptionData {
+        struct OptionData : UserData {
             bool selected = false;
         };
         auto option_data = new OptionData;

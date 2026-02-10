@@ -73,9 +73,10 @@ void do_spotify_toggle() {
 
 bool any_fullscreen(int monitor) {
     auto order = get_window_stacking_order();
+    auto active = hypriso->get_active_workspace_id(monitor);
     for (auto o : order) {
         if (get_monitor(o) == monitor) {
-            if (hypriso->is_fullscreen(o)) {
+            if (hypriso->is_fullscreen(o) && active == hypriso->get_active_workspace_id_client(o)) {
                 return true;
             }
         }
