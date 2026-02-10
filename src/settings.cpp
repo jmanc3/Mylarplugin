@@ -20,6 +20,7 @@ static RGBA right_color = RGBA(.89, .89, .89, 1);
 static RGBA option_color = RGBA(.87, .87, .87, 1);
 static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
 static RGBA slider_bg = RGBA(.77, .77, .77, 1);
+static RGBA bool_border = RGBA(.47, .47, .47, 1);
 static RGBA accent = RGBA(.0, .52, .9, 1);
 
 struct CachedFont {
@@ -284,7 +285,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
             if (description.empty()) {
                 draw_text(cr,
                     c->real_bounds.x + button_text_pad * dpi, 
-                    c->real_bounds.y + c->real_bounds.h * .5 - bo.y * .5, title, size_title, true, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
+                    c->real_bounds.y + (c->real_bounds.h - bo.h) * .5, title, size_title, true, mylar_font, c->real_bounds.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
             } else {
                 draw_text(cr,
                     c->real_bounds.x + button_text_pad * dpi, 
@@ -314,6 +315,63 @@ static void make_label_like(Container *parent, std::string title, std::string de
             auto bo2 = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, b.w - button_text_pad * dpi * 2, -1, {0, 0, 0, 1});
             c->real_bounds.h = bo1.h + bo2.h + button_text_pad * dpi * 2;
         }
+    };
+}
+
+static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change) {
+    auto p = make_self_height_sized_parent(parent);
+
+    make_label_like(p, title, description);
+
+    struct BoolInfo {
+        bool on = false;
+    };
+
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    auto bool_info = new BoolInfo;
+    bool_info->on = initial_value;
+    right->user_data = bool_info;
+    right->when_paint = paint {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto b = c->real_bounds;
+        auto data = (BoolInfo *) c->user_data;
+        auto half_amount = .46f;
+        auto half = std::round(b.h * half_amount);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, half, std::floor(1.0 * dpi));
+        if (data->on) {
+            set_argb(cr, accent);
+            cairo_fill(cr);
+        } else {
+            set_argb(cr, bool_border);
+            cairo_stroke(cr);
+        }
+
+        b.shrink(4.5 * dpi);
+        half = std::round(b.h * half_amount);
+        if (data->on) {
+            drawRoundedRect(cr, b.x + b.w - b.h, b.y, b.h, b.h, half, std::floor(1.0 * dpi));
+            set_argb(cr, {1, 1, 1, 1});
+            cairo_fill(cr);
+        } else {
+            drawRoundedRect(cr, b.x, b.y, b.h, b.h, half, std::floor(1.0 * dpi));
+            set_argb(cr, bool_border);
+            cairo_fill(cr);
+        }
+    };
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 45 * dpi;
+        c->real_bounds.h = 26 * dpi;
+    };
+    right->when_clicked = [on_change](Container *root, Container *c) {
+        auto data = (BoolInfo *) c->user_data;
+        data->on = !data->on;
+        if (on_change)
+            on_change(data->on);
     };
 }
 
@@ -535,6 +593,12 @@ static void fill_mouse_settings(Container *root, Container *c) {
         //main_thread([]() {
             //hypriso->generate_mylar_hyprland_config();
         //});
+    });
+
+    make_vert_space(padded_right, 8); 
+    
+    make_bool(padded_right, "Show cursor", "", true, [](bool value) {
+        //set->show_cursor = value;
     });
 
     make_vert_space(padded_right, 8); 
