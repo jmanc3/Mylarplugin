@@ -1448,6 +1448,8 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     auto current = get_current_time_in_ms();
     static long previous = current;
     auto delta = current - previous;
+    if (delta > 16)
+        delta = 16;
     previous = current;
 
     // Queue spring animations

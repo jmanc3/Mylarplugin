@@ -26,7 +26,9 @@ struct ConfigSettings {
     std::string touchpad_acceleration_curve = "Custom";
     std::string primary_mouse_button = "Left";
     float cursor_speed = .5;
-    bool natural_scrolling = false;
+    bool natural_scrolling_mouse = false;
+    bool natural_scrolling_touchpad = false;
+    bool touchpad_disable_while_typing = true;
 };
 
 extern ConfigSettings *set;

@@ -2550,13 +2550,32 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:accel_profile = flat\n\n";
         
     }
-    
+
+    base += fz("input:sensitivity = {}\n\n", std::max((set->cursor_speed * 2.0f) - 1.0f, -0.7f));
+
     if (set->primary_mouse_button == "Left") {
         base += "input:left_handed = false\n\n";
     } else {
         base += "input:left_handed = true\n\n";
     }
 
+    if (set->natural_scrolling_mouse) {
+        base += "input:natural_scroll = true\n\n";
+    } else {
+        base += "input:natural_scroll = false\n\n";
+    }
+    
+    if (set->natural_scrolling_touchpad) {
+        base += "input:touchpad:natural_scroll = true\n\n";
+    } else {
+        base += "input:touchpad:natural_scroll = false\n\n";
+    }
+
+    if (set->touchpad_disable_while_typing) {
+        base += "input:touchpad:disable_while_typing = true\n\n";
+    } else {
+        base += "input:touchpad:disable_while_typing = false\n\n";
+    }
 #ifdef NDEBUG
 base += "source = ~/.config/mylar/user.conf\n\n";
 #else
