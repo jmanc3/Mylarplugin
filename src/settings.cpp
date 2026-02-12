@@ -7,6 +7,8 @@
 #include "client/windowing.h"
 
 #include <thread>
+#include <fstream>
+#include <filesystem>
 #include <pango/pango-font.h>
 #include <cairo.h>
 #include <pango/pango-layout.h>
@@ -36,6 +38,21 @@ struct CachedFont {
 };
 
 static std::vector<CachedFont *> cached_fonts;
+
+static void load_save_settings(bool saving, ConfigSettings *settings) {
+    const char* home = std::getenv("HOME");
+    if (!home) return;
+
+    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/mylar_settings.txt";
+    std::filesystem::create_directories(filepath.parent_path());
+    if (saving) {
+        std::ofstream out(filepath, std::ios::trunc);
+        if (!out) return;
+        out << "#version 1" << "\n\n";
+    } else {
+
+    }
+}
 
 static PangoLayout *
 get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeight weight, bool italic) {
@@ -318,6 +335,28 @@ static void make_label_like(Container *parent, std::string title, std::string de
     };
 }
 
+static void make_section_title(Container *parent, std::string title) {
+    auto section_title = parent->child(FILL_SPACE, FILL_SPACE);
+    section_title->pre_layout = [title](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto size_title = 12 * dpi;
+        auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w, -1, {0, 0, 0, 1});
+        c->wanted_bounds.h = bo.h;
+        c->real_bounds.h = bo.h;
+    };
+    section_title->when_paint = [title](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto size_title = 12 * dpi;
+        draw_text(cr,
+            c->real_bounds.x, 
+            c->real_bounds.y, title, size_title, true, mylar_font, c->real_bounds.w, -1, {0, 0, 0, 1});
+    };
+}
+
 static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change) {
     auto p = make_self_height_sized_parent(parent);
 
@@ -574,6 +613,10 @@ static void fill_mouse_settings(Container *root, Container *c) {
         c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
     };
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    
+    make_section_title(padded_right, "Mouse");
+    
+    make_vert_space(padded_right, 8); 
 
     make_button_group(padded_right, 
         "Primary mouse button", 
@@ -597,8 +640,12 @@ static void fill_mouse_settings(Container *root, Container *c) {
 
     make_vert_space(padded_right, 8); 
     
-    make_bool(padded_right, "Show cursor", "", true, [](bool value) {
-        //set->show_cursor = value;
+    make_section_title(padded_right, "Touchpad");
+
+    make_vert_space(padded_right, 8); 
+    
+    make_bool(padded_right, "Natural scrolling", "", false, [](bool value) {
+        set->natural_scrolling = value;
     });
 
     make_vert_space(padded_right, 8); 

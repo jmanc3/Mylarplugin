@@ -2390,6 +2390,7 @@ ecosystem:no_donation_nag = true
 
 cursor:zoom_detached_camera = 1
 cursor:zoom_disable_aa = true
+input:float_switch_override_focus = false
 
 windowrule = match:class .*, float on
 
