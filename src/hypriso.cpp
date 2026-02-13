@@ -2582,6 +2582,9 @@ base += "source = ~/.config/mylar/user.conf\n\n";
 base += "source = ~/.config/mylar/debug_user.conf\n\n";
 #endif
 
+    if (hypriso->on_config_generated)
+        hypriso->on_config_generated();
+
     return base;
 };
 

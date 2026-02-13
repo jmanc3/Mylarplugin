@@ -1536,6 +1536,10 @@ void create_default_config() {
     });
 }
 
+void on_config_generated() {
+    settings::load_save_settings(true, set);
+}
+
 void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1566,6 +1570,7 @@ later_immediate([](Timer*) {
     hypriso->on_drag_or_resize_cancel_requested = on_drag_or_resize_cancel_requested;
     hypriso->on_config_reload = on_config_reload;
     hypriso->on_activated = on_activated;
+    hypriso->on_config_generated = on_config_generated;
     hypriso->on_requests_max_or_min = on_requests_max_or_min;
     hypriso->on_workspace_change = on_workspace_change;
 

@@ -247,7 +247,9 @@ struct HyprIso {
     std::function<void(int id)> on_popup_closed = nullptr;
      
     std::function<void(int id)> on_activated = nullptr;
-    
+
+    std::function<void()> on_config_generated = nullptr;
+
     std::function<void(std::string name, int monitor, int w, float a)> on_draw_decos = nullptr;
     
     std::function<void(int id, int stage)> on_render = nullptr;

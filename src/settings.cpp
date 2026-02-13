@@ -43,19 +43,132 @@ struct CachedFont {
 
 static std::vector<CachedFont *> cached_fonts;
 
-static void load_save_settings(bool saving, ConfigSettings *settings) {
+#include <sstream>
+#include <algorithm>
+
+static std::string trim(std::string s) {
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
+        [](unsigned char c){ return !std::isspace(c); }));
+    s.erase(std::find_if(s.rbegin(), s.rend(),
+        [](unsigned char c){ return !std::isspace(c); }).base(), s.end());
+    return s;
+}
+
+// TODO: bad memory churn
+template<typename T>
+void parse(const std::vector<std::string>& lines,
+           const std::string& name,
+           T* ptr,
+           ConfigSettings*)
+{
+    for (const auto& line_raw : lines) {
+        std::string line = trim(line_raw);
+
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        auto pos = line.find('=');
+        if (pos == std::string::npos)
+            continue;
+
+        std::string key = trim(line.substr(0, pos));
+        if (key != name)
+            continue;
+
+        std::string value = trim(line.substr(pos + 1));
+
+        if constexpr (std::is_same_v<T, float>) {
+            *ptr = std::stof(value);
+        }
+        else if constexpr (std::is_same_v<T, std::string>) {
+            *ptr = value;
+        }
+        else if constexpr (std::is_same_v<T, bool>) {
+            std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+            *ptr = (value == "true" || value == "1" || value == "yes");
+        }
+        else if constexpr (std::is_integral_v<T>) {
+            *ptr = static_cast<T>(std::stoll(value));
+        }
+        else {
+            static_assert(sizeof(T) == 0, "Unsupported config type");
+        }
+
+        return; // stop after match
+    }
+}
+
+void settings::load_save_settings(bool save, ConfigSettings* settings) {
     const char* home = std::getenv("HOME");
     if (!home) return;
 
-    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/mylar_settings.txt";
-    std::filesystem::create_directories(filepath.parent_path());
-    if (saving) {
-        std::ofstream out(filepath, std::ios::trunc);
-        if (!out) return;
-        out << "#version 1" << "\n\n";
-    } else {
+#ifdef NDEBUG
+    std::filesystem::path filepath =
+        std::filesystem::path(home) / ".config/mylar/mylar_settings.txt";
+#else
+    std::filesystem::path filepath =
+        std::filesystem::path(home) / ".config/mylar/debug_mylar_settings.txt";
+#endif
 
+    std::filesystem::create_directories(filepath.parent_path());
+
+    std::ofstream out;
+    std::vector<std::string> lines;
+
+    int file_version = 1;
+
+    if (save) {
+        out.open(filepath, std::ios::trunc);
+        if (!out) return;
+        out << "#version 1\n\n";
+    } else {
+        std::ifstream in(filepath);
+        if (!in) return;
+
+        std::string line;
+        while (std::getline(in, line)) {
+            lines.push_back(line);
+        }
+
+        for (const std::string& line : lines) {
+            size_t i = 0;
+            while (i < line.size() && std::isspace((unsigned char)line[i]))
+                ++i;
+            const char* tag = "#version";
+            size_t tag_len = 8;
+            if (line.compare(i, tag_len, tag) != 0)
+                continue;
+            i += tag_len;
+            while (i < line.size() &&
+                   (std::isspace((unsigned char)line[i]) || line[i] == '='))
+                ++i;
+            if (i < line.size())
+                file_version = std::strtol(line.c_str() + i, nullptr, 10);
+            break;
+        }
     }
+
+    if (!save && settings->version != file_version) {
+        // ...
+    }
+
+    #define bind(name, ptr, type) \
+    do { \
+        if (save) { \
+            out << name << " = " << *ptr << "\n"; \
+        } else { \
+            parse<type>(lines, name, ptr, settings); \
+        } \
+    } while(0)
+        
+    bind("touchpad_acceleration_curve", &settings->touchpad_acceleration_curve, std::string);
+    bind("primary_mouse_button", &settings->primary_mouse_button, std::string);
+    bind("cursor_speed", &settings->cursor_speed, float);
+    bind("natural_scrolling_mouse", &settings->natural_scrolling_mouse, bool);
+    bind("natural_scrolling_touchpad", &settings->natural_scrolling_touchpad, bool);
+    bind("touchpad_disable_while_typing", &settings->touchpad_disable_while_typing, bool);
+    
+    #undef bind
 }
 
 static PangoLayout *
