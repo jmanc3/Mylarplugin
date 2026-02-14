@@ -143,6 +143,8 @@ enum layout_type {
     editable_label = 1 << 13,
 
     absolute = 1 << 14,
+
+    fullycustom = 1 << 20,
 };
 
 enum container_alignment {
@@ -506,6 +508,8 @@ void       clamp_scroll(ScrollContainer* scrollpane);
 
 void       modify_all(Container* container, double x_change, double y_change);
 
+Container  *make_scroll_like(Container *parent, const ScrollPaneSettings &settings);
+
 // create and destroy the children of a `Container *parent` based on a `std::vector<T>` you provide
 template<class T>
 void merge_create(Container *parent, std::vector<T> to_be_represented, std::function<T (Container *)> converter, std::function<void (Container *, T)> creator) {
@@ -538,5 +542,6 @@ void merge_create(Container *parent, std::vector<T> to_be_represented, std::func
     }
 }
 
+void layout_vbox(Container* root, Container* container, const Bounds& bounds);
 
 #endif

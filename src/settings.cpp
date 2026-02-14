@@ -17,8 +17,8 @@
 
 static RawApp *settings_app = nullptr;
 
-static RGBA left_color = RGBA(.93, .93, .93, 1);
-static RGBA right_color = RGBA(.89, .89, .89, 1);
+static RGBA left_color = RGBA(.941, .957, .976, 1);
+static RGBA right_color = RGBA(.941, .957, .976, 1);
 static RGBA option_color = RGBA(.87, .87, .87, 1);
 static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
 static RGBA slider_bg = RGBA(.77, .77, .77, 1);
@@ -28,6 +28,10 @@ static RGBA accent = RGBA(.0, .52, .9, 1);
 static float optiontopbottompad = 15;
 static float optionleftpad = 14;
 static float optionrighttpad = 14;
+
+struct RightData : UserData {
+    float scroll = 0.0;
+};
 
 struct CachedFont {
     std::string name;
@@ -77,24 +81,30 @@ void parse(const std::vector<std::string>& lines,
 
         std::string value = trim(line.substr(pos + 1));
 
-        if constexpr (std::is_same_v<T, float>) {
-            *ptr = std::stof(value);
+        try {
+            if constexpr (std::is_same_v<T, float>) {
+                *ptr = std::stof(value);
+            }
+            else if constexpr (std::is_same_v<T, std::string>) {
+                *ptr = value;
+            }
+            else if constexpr (std::is_same_v<T, bool>) {
+                std::string lower_value = value;
+                std::transform(lower_value.begin(), lower_value.end(), lower_value.begin(), ::tolower);
+                *ptr = (lower_value == "true" || lower_value == "1" || lower_value == "yes");
+            }
+            else if constexpr (std::is_integral_v<T>) {
+                *ptr = static_cast<T>(std::stoll(value));
+            }
+            else {
+                static_assert(sizeof(T) == 0, "Unsupported config type");
+            }
         }
-        else if constexpr (std::is_same_v<T, std::string>) {
-            *ptr = value;
-        }
-        else if constexpr (std::is_same_v<T, bool>) {
-            std::transform(value.begin(), value.end(), value.begin(), ::tolower);
-            *ptr = (value == "true" || value == "1" || value == "yes");
-        }
-        else if constexpr (std::is_integral_v<T>) {
-            *ptr = static_cast<T>(std::stoll(value));
-        }
-        else {
-            static_assert(sizeof(T) == 0, "Unsupported config type");
+        catch (...) {
+            // silently ignore any parsing errors, ptr remains unchanged
         }
 
-        return; // stop after match
+        return; // stop after first matching key
     }
 }
 
@@ -152,7 +162,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
         // ...
     }
 
-    #define bind(name, ptr, type) \
+    #define bind(type, name, ptr) \
     do { \
         if (save) { \
             out << name << " = " << *ptr << "\n"; \
@@ -161,12 +171,12 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
         } \
     } while(0)
         
-    bind("touchpad_acceleration_curve", &settings->touchpad_acceleration_curve, std::string);
-    bind("primary_mouse_button", &settings->primary_mouse_button, std::string);
-    bind("cursor_speed", &settings->cursor_speed, float);
-    bind("natural_scrolling_mouse", &settings->natural_scrolling_mouse, bool);
-    bind("natural_scrolling_touchpad", &settings->natural_scrolling_touchpad, bool);
-    bind("touchpad_disable_while_typing", &settings->touchpad_disable_while_typing, bool);
+    bind(std::string, "touchpad_acceleration_curve", &settings->touchpad_acceleration_curve);
+    bind(std::string, "primary_mouse_button", &settings->primary_mouse_button);
+    bind(float, "cursor_speed", &settings->cursor_speed);
+    bind(bool, "natural_scrolling_mouse", &settings->natural_scrolling_mouse);
+    bind(bool, "natural_scrolling_touchpad", &settings->natural_scrolling_touchpad);
+    bind(bool, "touchpad_disable_while_typing", &settings->touchpad_disable_while_typing);
     
     #undef bind
 }
@@ -351,6 +361,7 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
 // It lays out right child first and then left with remainder of space
 static Container *make_self_height_sized_parent(Container *parent) {
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
+    c->receive_events_even_if_obstructed = true;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
@@ -394,13 +405,23 @@ static Container *make_self_height_sized_parent(Container *parent) {
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
-        
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
-        set_argb(cr, {.95, .95, .95, 1});
-        cairo_fill(cr);
+
+        RGBA bg_color;
+        if (c->state.mouse_hovering || c->state.mouse_pressing) {
+            bg_color = RGBA(.965, .965, .965, 1);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
+            set_argb(cr, bg_color);
+            cairo_fill(cr);
+        } else {
+            //draw_round_rect(client, ArgbColor(.984, .984, .984, 1), c->real_bounds, 5 * config->dpi, 0);
+            bg_color = RGBA(.984, .988, .992, 1);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
+            set_argb(cr, bg_color);
+            cairo_fill(cr);
+        }
 
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
-        set_argb(cr, slider_bg);
+        set_argb(cr, RGBA(.818, .818, .818, 1));
         cairo_stroke(cr);
     };
 
@@ -720,6 +741,11 @@ static void make_vert_space(Container *parent, float amount) {
     };
 }
 
+static float full_height(Container *c) {
+    
+    return 0;
+}
+
 static void fill_mouse_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -733,6 +759,13 @@ static void fill_mouse_settings(Container *root, Container *c) {
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
     };
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
     
@@ -745,7 +778,7 @@ static void fill_mouse_settings(Container *root, Container *c) {
         main_thread([]() {
             hypriso->generate_mylar_hyprland_config();
         });
-     });
+    });
     
     make_vert_space(padded_right, 4); 
 
@@ -860,12 +893,20 @@ void fill_left(Container *left) {
     create_tab_option(left, "Display");
     create_tab_option(left, "Mouse & Touchpad");
     create_tab_option(left, "Keyboard");
+    create_tab_option(left, "Shortcuts");
     create_tab_option(left, "Time & Date");
     create_tab_option(left, "Audio");
     create_tab_option(left, "Wifi");
 }
 
 void fill_root(Container *root) {
+    root->when_paint = paint {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        set_argb(cr, right_color);
+        set_rect(cr, c->real_bounds);
+        cairo_fill(cr);
+    };
     auto left_right = root->child(::hbox, FILL_SPACE, FILL_SPACE);
     
     auto left = left_right->child(::vbox, 300, FILL_SPACE);
@@ -881,15 +922,23 @@ void fill_root(Container *root) {
         cairo_fill(cr);
     };
     fill_left(left);
-    
-    auto right = left_right->child(::vbox, FILL_SPACE, FILL_SPACE);
+
+    auto right = left_right->child(::fullycustom, FILL_SPACE, FILL_SPACE);
     right->name = "settings_right";
+    auto d = new RightData;
+    right->user_data = d;
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         set_argb(cr, right_color);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
+    };
+    right->receive_events_even_if_obstructed = true;
+    right->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+        auto h = full_height(c);
+        auto d = (RightData *) c->user_data;
+        d->scroll += ((float) scroll_y) * .01f;
     };
 }
 

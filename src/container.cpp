@@ -134,6 +134,10 @@ void layout_absolute(Container* root, Container* container, const Bounds& bounds
     }
 }
 
+void layout_fullycustom(Container* root, Container* container, const Bounds& bounds) {
+    if (container->pre_layout)
+        container->pre_layout(root, container, bounds);
+}
 
 void layout_vbox(Container* root, Container* container, const Bounds& bounds) {
     for (auto child : container->children) {
@@ -726,6 +730,8 @@ void layout(Container* root, Container* container, const Bounds& bounds) {
     } else if (container->type & layout_type::editable_label) {
     } else if (container->type & layout_type::absolute) {
         layout_absolute(root, container, container->children_bounds);
+    } else if (container->type & layout_type::fullycustom) {
+        layout_fullycustom(root, container, container->children_bounds);
     }
 
     // TODO: this only covers the first layer and not all of them
@@ -1103,3 +1109,5 @@ ScrollPaneSettings::ScrollPaneSettings(float scale) {
     this->right_arrow_height = this->right_arrow_height * scale;
     this->bottom_arrow_width = this->bottom_arrow_width * scale;
 }
+
+
