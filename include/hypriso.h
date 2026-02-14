@@ -29,6 +29,8 @@ struct ConfigSettings {
     bool natural_scrolling_mouse = false;
     bool natural_scrolling_touchpad = false;
     bool touchpad_disable_while_typing = true;
+    int repeat_rate = 30;
+    int repeat_delay = 450;
 };
 
 extern ConfigSettings *set;

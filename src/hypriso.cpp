@@ -2571,6 +2571,9 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:touchpad:natural_scroll = false\n\n";
     }
 
+    base += fz("input:repeat_rate = {}\n\n", set->repeat_rate);
+    base += fz("input:repeat_delay = {}\n\n", set->repeat_delay);
+
     if (set->touchpad_disable_while_typing) {
         base += "input:touchpad:disable_while_typing = true\n\n";
     } else {

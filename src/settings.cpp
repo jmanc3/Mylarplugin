@@ -741,9 +741,90 @@ static void make_vert_space(Container *parent, float amount) {
     };
 }
 
-static float full_height(Container *c) {
+
+static void fill_keyboard_settings(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Keyboard Settings");
     
-    return 0;
+    make_vert_space(padded_right, 10);
+
+    make_slider(padded_right, "Repeat delay", "", .5, [](float value) {
+        //set->repeat_delay = value;
+        static long last_time = 0;
+        static bool already_queued = false;
+        long current = get_current_time_in_ms();
+        long delta = current - last_time;
+        if (delta > 200) {
+            last_time = current;
+            main_thread([]() {
+                hypriso->generate_mylar_hyprland_config();
+            });
+        } else {
+            if (!already_queued) {
+                already_queued = true;
+                main_thread([]() {
+                    later(100, [](Timer *) {
+                        hypriso->generate_mylar_hyprland_config();
+                        already_queued = false;
+                    });
+                });
+            }
+        }
+    });
+
+    make_vert_space(padded_right, 4); 
+    
+    make_slider(padded_right, "Repeat rate", "", .5, [](float value) {
+        //set->repeat_rate = value;
+        static long last_time = 0;
+        static bool already_queued = false;
+        long current = get_current_time_in_ms();
+        long delta = current - last_time;
+        if (delta > 200) {
+            last_time = current;
+            main_thread([]() {
+                hypriso->generate_mylar_hyprland_config();
+            });
+        } else {
+            if (!already_queued) {
+                already_queued = true;
+                main_thread([]() {
+                    later(100, [](Timer *) {
+                        hypriso->generate_mylar_hyprland_config();
+                        already_queued = false;
+                    });
+                });
+            }
+        }
+    });
+    
+    make_vert_space(padded_right, 10); 
+    
+    make_section_title(padded_right, "Layouts");
 }
 
 static void fill_mouse_settings(Container *root, Container *c) {
@@ -763,6 +844,9 @@ static void fill_mouse_settings(Container *root, Container *c) {
         layout(root, c, b);
         c->type = ::fullycustom;
         auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
         for (auto child : c->children) {
             modify_all(child, 0, d->scroll);
         }
@@ -771,7 +855,7 @@ static void fill_mouse_settings(Container *root, Container *c) {
     
     make_section_title(padded_right, "Mouse");
     
-    make_vert_space(padded_right, 4); 
+    make_vert_space(padded_right, 10); 
 
     make_bool(padded_right, "Natural scrolling", "Phone like scrolling behaviour", set->natural_scrolling_mouse, [](bool value) {
         set->natural_scrolling_mouse = value;
@@ -823,7 +907,7 @@ static void fill_mouse_settings(Container *root, Container *c) {
     
     make_section_title(padded_right, "Touchpad");
 
-    make_vert_space(padded_right, 4); 
+    make_vert_space(padded_right, 10); 
     
     make_bool(padded_right, "Natural scrolling", "Phone like scrolling behaviour", set->natural_scrolling_touchpad, [](bool value) {
         set->natural_scrolling_touchpad = value;
@@ -884,6 +968,8 @@ void create_tab_option(Container *parent, std::string label) {
     c->when_clicked = [label](Container *root, Container *c) {
         if (label == "Mouse & Touchpad") {
             fill_mouse_settings(root, c);
+        } else if (label == "Keyboard") {
+            fill_keyboard_settings(root, c);
         }
     };
 }
@@ -936,7 +1022,6 @@ void fill_root(Container *root) {
     };
     right->receive_events_even_if_obstructed = true;
     right->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
-        auto h = full_height(c);
         auto d = (RightData *) c->user_data;
         d->scroll += ((float) scroll_y) * .01f;
     };
