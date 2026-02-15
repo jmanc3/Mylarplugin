@@ -1595,7 +1595,7 @@ static void fill_root(Container *root) {
             }
         };
     }
-    {
+    if (false) {
         auto align = simple_dock_item(root, []() {
             if (icon_alignment == container_alignment::ALIGN_RIGHT) {
                 return "\uE8E2";
@@ -1624,14 +1624,14 @@ static void fill_root(Container *root) {
         };
     }
 
-    {
+    if (false) {
         auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
         active_settings->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:right_click_active");
         };
     }
 
-    {
+    if (false) {
         auto toggle = simple_dock_item(root, ICON("\uF0E2"));
         toggle->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:toggle_layout");
@@ -1639,6 +1639,10 @@ static void fill_root(Container *root) {
     }
 
     {
+        auto extra = simple_dock_item(root, ICON("\ue70e"));
+    }
+
+    if (false) {
         auto night = simple_dock_item(root, ICON("\uE708"));
         night->when_clicked = paint {
            if (nightlight_on)  {
@@ -1653,7 +1657,7 @@ static void fill_root(Container *root) {
         };
     }
     
-    {
+    if (false) {
         auto change = simple_dock_item(root, ICON("\uE705"));
          
         change->when_clicked = paint {
@@ -1669,7 +1673,7 @@ static void fill_root(Container *root) {
         };
     }
 
-    {
+    if (false) {
         auto bluetooth = simple_dock_item(root, ICON("\uE702"));
     }
 

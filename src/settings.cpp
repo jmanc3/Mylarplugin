@@ -557,7 +557,7 @@ static void make_bool(Container *parent, std::string title, std::string descript
     };
 }
 
-static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change) {
+static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, float snap_percentage = 0.0) {
     auto p = make_self_height_sized_parent(parent);
     
     make_label_like(p, title, description);
@@ -568,9 +568,13 @@ static void make_slider(Container *parent, std::string title, std::string descri
 
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     auto slider_info = new SliderInfo;
+    if (snap_percentage != 0.0) {
+        initial_value = std::round(initial_value / snap_percentage) * snap_percentage;
+        initial_value = std::clamp(initial_value, 0.0f, 1.0f);
+    }
     slider_info->value = initial_value;
     right->user_data = slider_info;
-    right->when_paint = paint {
+    right->when_paint = [snap_percentage](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
@@ -583,7 +587,20 @@ static void make_slider(Container *parent, std::string title, std::string descri
 
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, h * .5, 1.0);
             set_argb(cr, slider_bg);
-            cairo_fill(cr);
+            cairo_fill(cr); 
+
+            if (snap_percentage != 0.0) {
+                int count = std::round(1.0f / snap_percentage);
+                float spacing = b.w * snap_percentage;
+                float x_off = 0.0;
+                for (int i = 0; i < count + 1; i++) {
+                    set_rect(cr, {b.x + x_off - std::round(1 * dpi), b.y + std::round(10 * dpi), std::round(2 * dpi), std::round(6 * dpi)});
+                    set_argb(cr, slider_bg);
+                    cairo_fill(cr); 
+
+                    x_off += spacing;
+                }
+            }
         }
         
         {
@@ -595,6 +612,12 @@ static void make_slider(Container *parent, std::string title, std::string descri
             set_argb(cr, {1, 1, 1, 1});
             cairo_fill(cr);
 
+            //b.shrink(1.0);
+            
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
+            set_argb(cr, slider_bg);
+            cairo_stroke(cr);
+
             b.shrink(5 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
             set_argb(cr, accent);
@@ -602,16 +625,21 @@ static void make_slider(Container *parent, std::string title, std::string descri
         }
 
     };
-    right->when_mouse_down = [on_change](Container *root, Container *c) {
+    right->when_mouse_down = [on_change, snap_percentage](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
-        auto scalar = (root->mouse_current_x - b.x) / b.w;
+        float scalar = (root->mouse_current_x - b.x) / b.w;
         if (scalar < 0)
             scalar = 0;
         if (scalar > 1)
             scalar = 1;
+        if (snap_percentage != 0.0) {
+            scalar = std::round(scalar / snap_percentage) * snap_percentage;
+            scalar = std::clamp(scalar, 0.0f, 1.0f);
+        }
+ 
         ((SliderInfo *) c->user_data)->value = scalar;
         if (on_change)
             on_change(scalar);
@@ -627,12 +655,6 @@ static void make_slider(Container *parent, std::string title, std::string descri
         c->real_bounds.w = 350 * dpi;
         c->real_bounds.h = 20 * dpi;
     };
-    right->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
-        auto data = ((SliderInfo *) c->user_data);
-        data->value += (((float) scroll_y) * .00001);
-        data->value = std::max(0.0f, std::min(1.0f, data->value));
-    };
- 
 }
 
 static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected, std::string default_value) {
@@ -794,7 +816,7 @@ static void fill_keyboard_settings(Container *root, Container *c) {
                 });
             }
         }
-    });
+    }, .1);
 
     make_vert_space(padded_right, 4); 
     
@@ -820,7 +842,7 @@ static void fill_keyboard_settings(Container *root, Container *c) {
                 });
             }
         }
-    });
+    }, .1);
     
     make_vert_space(padded_right, 10); 
     
