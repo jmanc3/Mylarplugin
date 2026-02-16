@@ -586,7 +586,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
             b.y += b.h * .5 - h * .5;
             b.h = h;
 
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, h * .5, 1.0);
+            drawRoundedRect(cr, b.x - std::round(5 * dpi), b.y, b.w + std::round(10 * dpi), b.h, h * .5, 1.0);
             set_argb(cr, slider_bg);
             cairo_fill(cr); 
 
