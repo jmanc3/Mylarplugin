@@ -1664,7 +1664,7 @@ static void fill_root(Container *root) {
         };
     }
     
-    if (true) {
+    if (false) {
         auto change = simple_dock_item(root, ICON("\uE705"));
          
         change->when_clicked = paint {
