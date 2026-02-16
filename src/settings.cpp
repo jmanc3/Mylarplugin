@@ -557,7 +557,7 @@ static void make_bool(Container *parent, std::string title, std::string descript
     };
 }
 
-static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, float snap_percentage = 0.0) {
+static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, int notches = 0) {
     auto p = make_self_height_sized_parent(parent);
     
     make_label_like(p, title, description);
@@ -568,13 +568,14 @@ static void make_slider(Container *parent, std::string title, std::string descri
 
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     auto slider_info = new SliderInfo;
-    if (snap_percentage != 0.0) {
+    if (notches != 0) {
+        float snap_percentage = 1.0f / ((float) notches);
         initial_value = std::round(initial_value / snap_percentage) * snap_percentage;
         initial_value = std::clamp(initial_value, 0.0f, 1.0f);
     }
     slider_info->value = initial_value;
     right->user_data = slider_info;
-    right->when_paint = [snap_percentage](Container *root, Container *c) {
+    right->when_paint = [notches](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
@@ -589,7 +590,8 @@ static void make_slider(Container *parent, std::string title, std::string descri
             set_argb(cr, slider_bg);
             cairo_fill(cr); 
 
-            if (snap_percentage != 0.0) {
+            if (notches != 0) {
+                float snap_percentage = 1.0f / ((float) notches);
                 int count = std::round(1.0f / snap_percentage);
                 float spacing = b.w * snap_percentage;
                 float x_off = 0.0;
@@ -625,7 +627,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
         }
 
     };
-    right->when_mouse_down = [on_change, snap_percentage](Container *root, Container *c) {
+    right->when_mouse_down = [on_change, notches](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
@@ -635,7 +637,8 @@ static void make_slider(Container *parent, std::string title, std::string descri
             scalar = 0;
         if (scalar > 1)
             scalar = 1;
-        if (snap_percentage != 0.0) {
+        if (notches != 0) {
+            float snap_percentage = 1.0f / ((float) notches);
             scalar = std::round(scalar / snap_percentage) * snap_percentage;
             scalar = std::clamp(scalar, 0.0f, 1.0f);
         }
@@ -816,7 +819,7 @@ static void fill_keyboard_settings(Container *root, Container *c) {
                 });
             }
         }
-    }, .1);
+    }, 10);
 
     make_vert_space(padded_right, 4); 
     
@@ -842,7 +845,7 @@ static void fill_keyboard_settings(Container *root, Container *c) {
                 });
             }
         }
-    }, .1);
+    }, 10);
     
     make_vert_space(padded_right, 10); 
     
