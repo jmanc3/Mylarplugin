@@ -1055,8 +1055,8 @@ void fill_root(Container *root) {
 void actual_start() {
     settings_app = windowing::open_app();
     RawWindowSettings settings;
-    settings.pos.w = 1200;
-    settings.pos.h = 800;
+    settings.pos.w = 1000;
+    settings.pos.h = 760;
     settings.name = "Settings";
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;

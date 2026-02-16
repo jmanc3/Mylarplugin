@@ -36,7 +36,9 @@ struct PositioningInfo {
     int y = 0;
     int w = 800;
     int h = 600;
-    
+    int min_w = 0;
+    int min_h = 0;
+
     int side = 0; // for docks
 };
 

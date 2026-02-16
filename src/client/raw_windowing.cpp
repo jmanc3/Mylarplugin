@@ -170,7 +170,8 @@ struct wl_window {
     cairo_t *cr = nullptr;  // points to current slot's cr (e.g. slots[0]) for API use
     
     int pending_width, pending_height; // recieved from configured event
-    
+    int min_width = 0, min_height = 0; // applied after first configure so initial size is (w,h)
+
     int logical_width, logical_height;
     int scaled_w, scaled_h;
 
@@ -298,6 +299,9 @@ static void handle_surface_configure(void *data,
         }
     }
 
+    if (!win->configured && win->xdg_toplevel) {
+        xdg_toplevel_set_min_size(win->xdg_toplevel, win->min_width, win->min_height);
+    }
     win->configured = true;
     wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
@@ -535,6 +539,7 @@ bool still_need_work(wl_context *ctx) {
 
 struct wl_window *wl_window_create(struct wl_context *ctx,
                                    int width, int height,
+                                   int min_width, int min_height,
                                    const char *title)
 {
     struct wl_window *win = new wl_window;
@@ -546,6 +551,8 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     win->title = title;
     win->pending_width = width;
     win->pending_height = height;
+    win->min_width = min_width;
+    win->min_height = min_height;
     win->pool = NULL;
 
     // 1️⃣ Create surface
@@ -584,7 +591,7 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     // 5️⃣ Add toplevel listener
     xdg_toplevel_add_listener(win->xdg_toplevel, &xdg_toplevel_listener, win);
 
-    // 6️⃣ Set metadata
+    // 6️⃣ Set metadata (min_size set after first configure so window opens at requested w×h)
     xdg_toplevel_set_title(win->xdg_toplevel, title ? title : "Wayland Window");
 
     // 7️⃣ Single initial commit
@@ -1604,7 +1611,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     rw->id = unique_id++;
 
     if (type == WindowType::NORMAL) {
-        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str());
+        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str());
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;
