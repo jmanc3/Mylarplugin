@@ -817,7 +817,14 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         Pin* pin = (Pin*)c->user_data;
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
-        
+
+        auto backup = c->real_bounds;
+        {
+            auto b = backup;
+            c->real_bounds = b.intersection(c->parent->real_bounds);
+        }
+        defer(c->real_bounds = backup);
+
         bool is_active = false;
         for (auto window : pin->windows)
             if (window.cid == active_cid)
