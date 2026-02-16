@@ -1026,6 +1026,7 @@ void fill_root(Container *root) {
         c->wanted_bounds.w = 300 * mylar->raw_window->dpi;
     };
     left->when_paint = paint {
+        return;
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         set_argb(cr, left_color);
@@ -1039,6 +1040,7 @@ void fill_root(Container *root) {
     auto d = new RightData;
     right->user_data = d;
     right->when_paint = paint {
+        return;
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         set_argb(cr, right_color);

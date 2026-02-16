@@ -863,9 +863,9 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 auto h = cairo_image_surface_get_height(ico_surf);
                 auto w = cairo_image_surface_get_width(ico_surf);
                 if (none) {
-                    cairo_set_source_surface(cr, ico_surf, c->real_bounds.x + c->real_bounds.w * .5 - w * .5, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                    cairo_set_source_surface(cr, ico_surf, std::round(c->real_bounds.x + c->real_bounds.w * .5 - w * .5), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
                 } else {
-                    cairo_set_source_surface(cr, ico_surf, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                    cairo_set_source_surface(cr, ico_surf, std::round(c->real_bounds.x + 10), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
                 }
                 cairo_paint(cr);
                 auto wi = cairo_image_surface_get_height(ico_surf);
