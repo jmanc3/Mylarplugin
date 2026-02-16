@@ -69,6 +69,20 @@ struct wl_window;
 
 bool wl_window_resize_buffer(struct wl_window *win, int new_width, int new_height);
 
+#define WL_TRIPLE_BUFFER_COUNT 3
+
+struct wl_buffer_slot {
+    wl_buffer *buffer = nullptr;
+    cairo_surface_t *cairo_surface = nullptr;
+    cairo_t *cr = nullptr;
+
+    void *data = nullptr;
+    size_t size = 0;
+    int stride = 0;
+
+    bool busy = false;
+};
+
 struct output {
     int id = -1;
     std::string name = "--notsetyet--";
@@ -141,8 +155,7 @@ struct wl_window {
     struct wl_shm_pool *pool = nullptr;
     struct wp_fractional_scale_v1 *fractional_scale = nullptr;
     wp_viewport *viewport = nullptr;
-    wl_buffer *buffer = nullptr;
-    bool busy = false;
+    wl_buffer_slot slots[WL_TRIPLE_BUFFER_COUNT];
     bool dropped_frame = false;
     bool resize_next = false;
 
@@ -154,16 +167,12 @@ struct wl_window {
 
     std::function<void(wl_window *)> on_render = nullptr;
 
-    cairo_surface_t *cairo_surface = nullptr;
-    cairo_t *cr = nullptr;
+    cairo_t *cr = nullptr;  // points to current slot's cr (e.g. slots[0]) for API use
     
     int pending_width, pending_height; // recieved from configured event
     
     int logical_width, logical_height;
     int scaled_w, scaled_h;
-    void *data;
-    size_t size;
-    int stride;
 
     int cur_x = 0;
     int cur_y = 0;
@@ -179,18 +188,20 @@ std::vector<wl_context *> apps;
 std::vector<wl_window *> windows;
 
 static struct wl_buffer *create_shm_buffer(struct wl_context *d, int width, int height);
+static struct wl_buffer *get_attach_buffer(struct wl_window *win);
 
 static void buffer_release(void *data, struct wl_buffer *wl_buffer) {
     log("buffer released and available");
     auto win = (wl_window *) data;
-    win->busy = false;
+    for (int i = 0; i < WL_TRIPLE_BUFFER_COUNT; i++) {
+        if (win->slots[i].buffer == wl_buffer) {
+            win->slots[i].busy = false;
+            break;
+        }
+    }
     if (win->dropped_frame) {
         win->dropped_frame = false;
         windowing::redraw(win->rw);
-
-        //if (win->on_render) {
-            //win->on_render(win);
-        //}
     }
 }
 
@@ -288,7 +299,7 @@ static void handle_surface_configure(void *data,
     }
 
     win->configured = true;
-    wl_surface_attach(win->surface, win->buffer, 0, 0);
+    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 }
@@ -333,27 +344,33 @@ static int create_anonymous_file(off_t size) {
 }
 
 static void destroy_shm_buffer(struct wl_window *win) {
-    if (win->cairo_surface) {
-        cairo_surface_destroy(win->cairo_surface);
-        win->cairo_surface = nullptr;
+    for (int i = 0; i < WL_TRIPLE_BUFFER_COUNT; i++) {
+        wl_buffer_slot *slot = &win->slots[i];
+        if (slot->cairo_surface) {
+            cairo_surface_destroy(slot->cairo_surface);
+            slot->cairo_surface = nullptr;
+        }
+        if (slot->cr) {
+            cairo_destroy(slot->cr);
+            slot->cr = nullptr;
+        }
+        if (slot->buffer) {
+            wl_buffer_destroy(slot->buffer);
+            slot->buffer = nullptr;
+        }
+        if (slot->data) {
+            munmap(slot->data, slot->size);
+            slot->data = nullptr;
+        }
+        slot->size = 0;
+        slot->stride = 0;
+        slot->busy = false;
     }
+    win->cr = nullptr;
+}
 
-    if (win->cr) {
-        cairo_destroy(win->cr);
-        win->cr = nullptr;
-    }
-
-    if (win->buffer) {
-        wl_buffer_destroy(win->buffer);
-        win->buffer = nullptr;
-    }
-
-    if (win->data) {
-        const int stride = win->scaled_w* 4;
-        const int size = stride * win->scaled_h;
-        munmap(win->data, size);
-        win->data = nullptr;
-    }
+static wl_buffer *get_attach_buffer(struct wl_window *win) {
+    return win->slots[0].buffer;
 }
 
 void on_window_render(wl_window *win) {
@@ -366,24 +383,29 @@ void on_window_render(wl_window *win) {
         win->resize_next = false;
     }
     log("on_window_render");
-    if (win->busy) {
-        win->dropped_frame  = true;
+    wl_buffer_slot *slot = nullptr;
+    for (int i = 0; i < WL_TRIPLE_BUFFER_COUNT; i++) {
+        if (!win->slots[i].busy) {
+            slot = &win->slots[i];
+            break;
+        }
+    }
+    if (!slot) {
+        win->dropped_frame = true;
         return;
     }
 
     if (win->rw) {
+        win->rw->cr = slot->cr;
         if (win->rw->on_render) {
             win->rw->on_render(win->rw, win->scaled_w, win->scaled_h);
         }
     }
-    wl_surface_attach(win->surface, win->buffer, 0, 0);
+    wl_surface_attach(win->surface, slot->buffer, 0, 0);
     wl_surface_damage_buffer(win->surface, 0, 0, INT32_MAX, INT32_MAX);
     log("surface commit");
     wl_surface_commit(win->surface);
-    static long start = get_current_time_in_ms();
-    long current = get_current_time_in_ms();
-    if (current - start > 200)
-        win->busy = true;
+    slot->busy = true;
 }
 
 bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_height) {
@@ -400,61 +422,67 @@ bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_hei
     win->scaled_h = win->logical_height * win->current_fractional_scale;
 
     const int stride = win->scaled_w * 4;
-    const int size = stride * win->scaled_h;
+    const size_t size = (size_t)stride * win->scaled_h;
 
-    int fd = create_anonymous_file(size);
-    if (fd < 0) {
-        fprintf(stderr, "Failed to create shm file\n");
-        return false;
-    }
+    for (int i = 0; i < WL_TRIPLE_BUFFER_COUNT; i++) {
+        wl_buffer_slot *slot = &win->slots[i];
+        int fd = create_anonymous_file((off_t)size);
+        if (fd < 0) {
+            fprintf(stderr, "Failed to create shm file\n");
+            destroy_shm_buffer(win);
+            return false;
+        }
 
-    void *data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (data == MAP_FAILED) {
-        fprintf(stderr, "mmap failed: %s\n", strerror(errno));
+        void *data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (data == MAP_FAILED) {
+            fprintf(stderr, "mmap failed: %s\n", strerror(errno));
+            close(fd);
+            destroy_shm_buffer(win);
+            return false;
+        }
+
+        struct wl_shm_pool *pool = wl_shm_create_pool(win->ctx->shm, fd, (int)size);
+        struct wl_buffer *buffer =
+            wl_shm_pool_create_buffer(pool, 0, win->scaled_w, win->scaled_h, stride, WL_SHM_FORMAT_ARGB8888);
+        wl_shm_pool_destroy(pool);
         close(fd);
-        return false;
+
+        if (!buffer) {
+            fprintf(stderr, "Failed to create wl_buffer\n");
+            munmap(data, size);
+            destroy_shm_buffer(win);
+            return false;
+        }
+
+        slot->buffer = buffer;
+        slot->data = data;
+        slot->size = size;
+        slot->stride = stride;
+
+        slot->cairo_surface = cairo_image_surface_create_for_data(
+            (unsigned char*)data,
+            CAIRO_FORMAT_ARGB32,
+            win->scaled_w,
+            win->scaled_h,
+            stride
+        );
+
+        if (cairo_surface_status(slot->cairo_surface) != CAIRO_STATUS_SUCCESS) {
+            fprintf(stderr, "Failed to create cairo surface\n");
+            destroy_shm_buffer(win);
+            return false;
+        }
+
+        slot->cr = cairo_create(slot->cairo_surface);
+        wl_buffer_add_listener(slot->buffer, &buffer_listener, win);
     }
 
-    struct wl_shm_pool *pool = wl_shm_create_pool(win->ctx->shm, fd, size);
-    struct wl_buffer *buffer =
-        wl_shm_pool_create_buffer(pool, 0, win->scaled_w, win->scaled_h, stride, WL_SHM_FORMAT_ARGB8888);
-    wl_shm_pool_destroy(pool);
-    close(fd);
-
-    if (!buffer) {
-        fprintf(stderr, "Failed to create wl_buffer\n");
-        munmap(data, size);
-        return false;
-    }
-
-    win->buffer = buffer;
-    win->data = data;
-
-    win->cairo_surface = cairo_image_surface_create_for_data(
-        (unsigned char*)data,
-        CAIRO_FORMAT_ARGB32,
-        win->scaled_w,
-        win->scaled_h,
-        stride
-    );
-
-    if (cairo_surface_status(win->cairo_surface) != CAIRO_STATUS_SUCCESS) {
-        fprintf(stderr, "Failed to create cairo surface\n");
-        destroy_shm_buffer(win);
-        return false;
-    }
-
-    win->cr = cairo_create(win->cairo_surface);
+    win->cr = win->slots[0].cr;
     if (win->rw)
         win->rw->cr = win->cr;
 
-    wl_buffer_add_listener(win->buffer, &buffer_listener, win);
-    
-    auto cr = win->cr;
-    
     if (win->rw) {
         win->on_render = on_window_render;
-        //win->on_render(win);
     }
 
     if (win->viewport)
@@ -518,9 +546,7 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     win->title = title;
     win->pending_width = width;
     win->pending_height = height;
-    win->buffer = NULL;
     win->pool = NULL;
-    win->data = NULL;
 
     // 1️⃣ Create surface
     win->surface = wl_compositor_create_surface(ctx->compositor);
@@ -569,7 +595,7 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
         wl_display_dispatch(ctx->display);
 
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create shm buffer
-    wl_surface_attach(win->surface, win->buffer, 0, 0);
+    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 
@@ -595,7 +621,7 @@ static void configure_layer_shell(void *data,
     struct wl_window *win = (struct wl_window *)data;
     if (win->configured) {
         config_layer_shell(win, width, height);
-        wl_surface_attach(win->surface, win->buffer, 0, 0);
+        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
         wl_surface_commit(win->surface);
     }
     win->configured = true;
@@ -681,7 +707,7 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
         wl_display_dispatch(ctx->display);
 
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create shm buffer
-    wl_surface_attach(win->surface, win->buffer, 0, 0);
+    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 
@@ -1374,9 +1400,9 @@ void wl_window_destroy(struct wl_window *win) {
     if (win->xdg_surface) xdg_surface_destroy(win->xdg_surface);
     if (win->layer_surface) zwlr_layer_surface_v1_destroy(win->layer_surface);
 
-    if (win->surface) wl_surface_destroy(win->surface);
+    destroy_shm_buffer(win);
 
-    cairo_destroy(win->cr);
+    if (win->surface) wl_surface_destroy(win->surface);
 
     for (int i = windows.size() - 1; i >= 0; i--)
         if (windows[i] == win)
