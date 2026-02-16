@@ -445,7 +445,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
             if (description.empty()) {
                 draw_text(cr,
                     c->real_bounds.x + optionleftpad * dpi, 
-                    c->real_bounds.y + (c->real_bounds.h - bo.h) * .5, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+                    c->real_bounds.y + optiontopbottompad * dpi, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             } else {
                 draw_text(cr,
                     c->real_bounds.x + optionleftpad * dpi, 
