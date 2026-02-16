@@ -1608,8 +1608,9 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;
+        window->on_render = on_window_render;  // set now that rw is set (resize_buffer skipped it)
         if (window->on_render)
-            window->on_render(window);
+            window->on_render(window);  // paint first frame so window is not blank on first show
         windows.push_back(window);
     }
     if (type == WindowType::DOCK) {
@@ -1617,6 +1618,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         window->rw = rw;
         rw->cr = window->cr;
         window->id = rw->id;
+        window->on_render = on_window_render;
         if (window->on_render)
             window->on_render(window);
         windows.push_back(window);        
