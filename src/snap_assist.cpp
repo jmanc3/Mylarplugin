@@ -914,9 +914,11 @@ void snap_assist::close() {
     if (skip_close)
         return;
     bool first = true;
+    bool any_animated = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+           any_animated = true;
            auto helper_data = (HelperData *) child->user_data;
            helper_data->closing = true;
            helper_data->should_slide = false;
@@ -932,6 +934,10 @@ void snap_assist::close() {
            }
        }
     }
+    // If no snap helpers were left (e.g. last one was already removed by thumb click),
+    // clear whitelist and damage so other windows render again.
+    if (!any_animated)
+        actual_close();
 }
 
 void snap_assist::click(int id, int button, int state, float x, float y) {
