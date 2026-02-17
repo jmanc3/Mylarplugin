@@ -47,6 +47,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     cairo
     dbus-1
     alsa
+    libpipewire-0.3
 )
 
 target_link_libraries(Mylardesktop PRIVATE rt PkgConfig::deps)

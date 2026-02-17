@@ -32,6 +32,7 @@ struct ConfigSettings {
     int repeat_rate = 30;
     int repeat_delay = 450;
     bool meter_animations = false;
+    bool prefer_pipewire_audio_backend = false;
 };
 
 extern ConfigSettings *set;
