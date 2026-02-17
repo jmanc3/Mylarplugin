@@ -31,6 +31,7 @@ struct ConfigSettings {
     bool touchpad_disable_while_typing = true;
     int repeat_rate = 30;
     int repeat_delay = 450;
+    bool meter_animations = false;
 };
 
 extern ConfigSettings *set;
