@@ -23,7 +23,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 #ifdef TRACY_ENABLE
     TracyAppInfo("Mylar Desktop", 13);
 #endif
-    
+
     globals->api = handle;
 
     settings::load_save_settings(false, set); // load

@@ -47,9 +47,7 @@ struct AudioClient {
 
 extern std::vector<AudioClient *> audio_clients;
 
-struct App;
-
-void audio_start(App *app);
+void audio_start();
 
 void audio_stop();
 

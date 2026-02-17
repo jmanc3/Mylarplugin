@@ -25,6 +25,7 @@
 #include "overview.h"
 #include "workspace_indicator.h"
 #include "drag_workspace_switcher.h"
+#include "audio.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -1556,6 +1557,7 @@ void heart::begin() {
         dbus_start(DBUS_BUS_SESSION);
         dbus_start(DBUS_BUS_SYSTEM);
     });
+    audio_start();
 
 later_immediate([](Timer*) {
     on_any_container_close = any_container_closed;
@@ -1624,6 +1626,7 @@ void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    audio_stop();
     dbus_end();
     dock::stop();
     for (auto c : actual_root->children) {

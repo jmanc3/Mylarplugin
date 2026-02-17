@@ -13,8 +13,8 @@ SOURCE_FILES := $(wildcard ./src/*.cpp ./src/*/*.cpp)
 OBJECT_FILES := $(patsubst ./%, out/%, $(SOURCE_FILES:.cpp=.o))
 
 # --- Pkg-config dependencies ---
-PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo wayland-server  wayland-client wayland-cursor xkbcommon cairo dbus-1 alsa libpipewire-0.3)
-PKG_LIBS  := $(shell pkg-config --libs   librsvg-2.0 libdrm hyprland pangocairo wayland-server wayland-client wayland-cursor xkbcommon cairo dbus-1 alsa libpipewire-0.3)
+PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo wayland-server  wayland-client wayland-cursor xkbcommon cairo dbus-1 alsa libpipewire-0.3 libpulse)
+PKG_LIBS  := $(shell pkg-config --libs   librsvg-2.0 libdrm hyprland pangocairo wayland-server wayland-client wayland-cursor xkbcommon cairo dbus-1 alsa libpipewire-0.3 libpulse)
 
 # --- Include paths ---
 INCLUDE_FLAGS := -I./include

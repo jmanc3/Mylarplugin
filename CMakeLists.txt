@@ -48,6 +48,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     dbus-1
     alsa
     libpipewire-0.3
+    libpulse
 )
 
 target_link_libraries(Mylardesktop PRIVATE rt PkgConfig::deps)
