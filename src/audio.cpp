@@ -1041,32 +1041,32 @@ void audio_start() {
                 audio_thread_id = std::this_thread::get_id();
             }
         } else {
-	if (try_establishing_connection_with_pulseaudio()) {
-	    backend = AudioBackend::PULSEAUDIO;
-	    audio_thread_id = std::this_thread::get_id();
-	    while (audio_running) {
-		iterate_pulseaudio_mainloop();
-	    }
-	    pa_context_disconnect(context);
-	    pa_context_unref(context);
-	    pa_mainloop_free(mainloop);
-	    context = nullptr;
-	    mainloop = nullptr;
-	    delete_all_audio_clients();
-	} else if (try_establishing_connection_with_pipewire()) {
-	    backend = AudioBackend::PIPEWIRE;
-	    audio_thread_id = std::this_thread::get_id();
-	    while (audio_running) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(20));
-	    }
-	    cleanup_pipewire_state();
-	    delete_all_audio_clients();
-	} else if (try_establishing_connection_with_alsa()) {
-	    backend = AudioBackend::ALSA;
-	    audio_running = true;
-	    ready = true;
-	    audio_thread_id = std::this_thread::get_id();
-	}
+        	if (try_establishing_connection_with_pulseaudio()) {
+        	    backend = AudioBackend::PULSEAUDIO;
+        	    audio_thread_id = std::this_thread::get_id();
+        	    while (audio_running) {
+        		iterate_pulseaudio_mainloop();
+        	    }
+        	    pa_context_disconnect(context);
+        	    pa_context_unref(context);
+        	    pa_mainloop_free(mainloop);
+        	    context = nullptr;
+        	    mainloop = nullptr;
+        	    delete_all_audio_clients();
+        	} else if (try_establishing_connection_with_pipewire()) {
+        	    backend = AudioBackend::PIPEWIRE;
+        	    audio_thread_id = std::this_thread::get_id();
+        	    while (audio_running) {
+        		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        	    }
+        	    cleanup_pipewire_state();
+        	    delete_all_audio_clients();
+        	} else if (try_establishing_connection_with_alsa()) {
+        	    backend = AudioBackend::ALSA;
+        	    audio_running = true;
+        	    ready = true;
+        	    audio_thread_id = std::this_thread::get_id();
+        	}
         }
     });
     threads.push_back(std::move(t));

@@ -7665,6 +7665,7 @@ bool is_being_animating_to(float *value, float target) {
 }
 
 bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name) {
+    return false;
     auto pf = new PF;
     pf->fd = fd;
     pf->name = name;
