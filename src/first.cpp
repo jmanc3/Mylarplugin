@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "hypriso.h"
 
+#include <dbus/dbus-shared.h>
 #include <thread>
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -24,7 +25,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 #endif
     
     globals->api = handle;
-    
+
     settings::load_save_settings(false, set); // load
     settings::load_save_settings(true, set); // save
 
@@ -34,8 +35,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-   heart::end(); 
-   std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    heart::end(); 
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
 void init_mylar(void* h) { // When started directly from hyprland

@@ -501,4 +501,18 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
 
 void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill = 1.0);
 
+struct wl_event_source;
+
+struct PF {
+    int fd;
+    int mask = 0;
+    void *data = nullptr;
+    std::function<void (PF *)> func = nullptr;
+    bool remove = false;
+    wl_event_source *source = nullptr;
+    std::string name;
+};
+
+bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name);
+
 #endif // hypriso_h_INCLUDED

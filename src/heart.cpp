@@ -7,6 +7,7 @@
 #include "heart.h"
 
 #include "container.h"
+#include "simple_dbus.h"
 #include "hypriso.h"
 #include "titlebar.h"
 #include "events.h"
@@ -27,6 +28,7 @@
 
 #include "process.hpp"
 #include <cstdio>
+#include <dbus/dbus-shared.h>
 #include <iterator>
 #include <filesystem>
 #include <fstream>
@@ -1367,6 +1369,11 @@ void add_hyprctl_dispatchers() {
         dock::start();
         return true;
     });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:dbus", [](std::string in) {
+        dbus_start(DBUS_BUS_SESSION);
+        dbus_start(DBUS_BUS_SYSTEM);
+        return true;
+    });
     hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_stop", [](std::string in) {
         dock::stop();
         return true;
@@ -1545,6 +1552,11 @@ void heart::begin() {
     ZoneScoped;
 #endif
     hypriso->create_config_variables();
+    later(1000, [](Timer*) {
+        dbus_start(DBUS_BUS_SESSION);
+        dbus_start(DBUS_BUS_SYSTEM);
+    });
+
 later_immediate([](Timer*) {
     on_any_container_close = any_container_closed;
     create_actual_root();
@@ -1612,6 +1624,7 @@ void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    dbus_end();
     dock::stop();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::CLIENT) {

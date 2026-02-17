@@ -4,6 +4,7 @@
 //
 
 #include "simple_dbus.h"
+#include "hypriso.h"
 #include "container.h"
 //#include "application.h"
 //#include "main.h"
@@ -97,8 +98,8 @@ void start_run_window() {
 
 }
 
-void show_notification(NotificationInfo *) {
-
+void show_notification(NotificationInfo *n) {
+    notify(std::format("{} {} {}", n->app_name, n->body, n->summary));
 }
 
 void bluetooth_wants_response_from_user(BluetoothRequest *br) {
@@ -1269,8 +1270,10 @@ void notification_action_invoked_signal(App *app, NotificationInfo *ni, Notifica
  *************************************************/
 
 
-void dbus_poll_wakeup(App *, int, void *user_data) {
-    auto dbus_connection = (DBusConnection *) user_data;
+void dbus_poll_wakeup(PF *pf) {
+    if (!pf->data)
+        return;
+    auto dbus_connection = (DBusConnection *) pf->data;
     DBusDispatchStatus status;
     do {
         dbus_connection_read_write_dispatch(dbus_connection, 0);
@@ -1309,8 +1312,7 @@ void dbus_start(DBusBusType dbusType) {
         dbus_connection_system = dbus_connection;
     }
     
-    /*if (poll_descriptor(app, file_descriptor, EPOLLIN | EPOLLPRI | EPOLLHUP | EPOLLERR, dbus_poll_wakeup,
-                        dbus_connection, "dbus")) {
+    if (poll_descriptor(file_descriptor, dbus_poll_wakeup, dbus_connection, "dbus")) {
         // Get the names of all the services running
         //
         request_name_of_every_service_running(dbus_connection);
@@ -1331,9 +1333,11 @@ void dbus_start(DBusBusType dbusType) {
             // create_status_notifier_watcher();
             // create_status_notifier_host();
         }
-        
-        dbus_poll_wakeup(nullptr, 0, dbus_connection);
-    }*/
+
+        PF pf;
+        pf.data = dbus_connection;
+        dbus_poll_wakeup(&pf);
+    }
 }
 
 void dbus_end() {

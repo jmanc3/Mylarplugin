@@ -3038,6 +3038,8 @@ void change_root_config_path(std::string path, bool force = true) {
     g_pConfigManager->m_config->changeRootPath(path.c_str());
 }
 
+static std::vector<PF *> polled;
+
 void HyprIso::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -3046,6 +3048,12 @@ void HyprIso::end() {
     g_pHyprRenderer->m_renderPass.removeAllOfType("CBorderPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CTexPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CAnyPassElement");
+    for (auto pf : polled) {
+        wl_event_source_remove(pf->source);
+        delete pf;
+    }
+    polled.clear();
+    
     remove_request_listeners(); 
     // reset to default config
     return_default_config = true;
@@ -7656,5 +7664,32 @@ bool is_being_animating_to(float *value, float target) {
     return false;
 }
 
+bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name) {
+    auto pf = new PF;
+    pf->fd = fd;
+    pf->name = name;
+    pf->data = data;
+    pf->func = func;
+    pf->mask = WL_EVENT_READABLE;
+    pf->source = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, pf->fd, pf->mask, [](int fd, uint32_t mask, void *data){
+        auto pf = (PF *) data;
+        if (pf->func)
+            pf->func(pf);
+        if (pf->remove) {
+            wl_event_source_remove(pf->source);
+            delete pf;
+        }
+        return 0;
+    }, pf);
+    
+    if (!pf->source) {
+        delete pf;
+        return false;
+    }
+    
+    polled.push_back(pf);
+
+    return pf->source;
+}
 
 
