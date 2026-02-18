@@ -102,6 +102,11 @@ void on_render(RawWindow *rw, int w, int h) {
     m->root->real_bounds = Bounds(0, 0, w, h);
     m->root->wanted_bounds = m->root->real_bounds;
     ::layout(m->root, m->root, m->root->real_bounds);
+    auto cr = rw->cr;
+    cairo_save(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR); 
+    cairo_paint(cr);
+    cairo_restore(cr);
     paint_root(m->root);
 }
 

@@ -189,6 +189,36 @@ float get_icon_size(float dpi) {
     return 28 * dpi;
 }
 
+static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
+                                                           float dpi,
+                                                           int popup_w,
+                                                           int popup_h) {
+    const int icon_x = (int) std::round(icon->real_bounds.x / dpi);
+    const int icon_y = (int) std::round(icon->real_bounds.y / dpi);
+    const int icon_w = std::max(1, (int) std::round(icon->real_bounds.w / dpi));
+    const int icon_h = std::max(1, (int) std::round(icon->real_bounds.h / dpi));
+
+    RawWindowSettings settings;
+    settings.pos.w = popup_w;
+    settings.pos.h = popup_h;
+    settings.name = "Popup";
+    settings.popup.use_explicit_anchor_rect = true;
+    settings.popup.anchor_rect_x = icon_x;
+    settings.popup.anchor_rect_y = icon_y;
+    settings.popup.anchor_rect_w = icon_w;
+    settings.popup.anchor_rect_h = icon_h;
+    settings.popup.anchor = RawWindowSettings::PopupAnchor::BOTTOM;
+    settings.popup.gravity = RawWindowSettings::PopupGravity::BOTTOM;
+    settings.popup.use_offset = true;
+    settings.popup.offset_y = -8;
+    settings.popup.constraint_adjustment =
+        RawWindowSettings::POPUP_CONSTRAINT_SLIDE_X |
+        RawWindowSettings::POPUP_CONSTRAINT_SLIDE_Y |
+        RawWindowSettings::POPUP_CONSTRAINT_FLIP_X |
+        RawWindowSettings::POPUP_CONSTRAINT_FLIP_Y;
+    return settings;
+}
+
 static float battery_level = 100;
 static bool charging = true;
 static float volume_level = 100;
@@ -1513,6 +1543,65 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     }
 }
 
+static void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height,
+                     double radius, double stroke_width) {
+    // Ensure the stroke width does not exceed the bounds
+    double half_stroke = stroke_width / 2.0;
+    double adjusted_radius = std::fmin(radius, std::fmin(width, height) / 2.0);
+    double inner_width = width - stroke_width;
+    double inner_height = height - stroke_width - 1;
+    
+    if (inner_width <= 0 || inner_height <= 0) {
+        // Cannot draw if the stroke width exceeds or equals the bounds
+        return;
+    }
+    
+    // Adjusted bounds to ensure the stroke remains inside
+    double adjusted_x = x + half_stroke;
+    double adjusted_y = y + half_stroke;
+    
+    // Begin path for rounded rectangle
+    cairo_new_path(cr);
+    
+    // Move to the start of the top-right corner
+    cairo_move_to(cr, adjusted_x + adjusted_radius, adjusted_y);
+    
+    // Top side
+    cairo_line_to(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y);
+    
+    // Top-right corner
+    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
+              adjusted_radius, -M_PI / 2, 0);
+    
+    // Right side
+    cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - adjusted_radius);
+    
+    // Bottom-right corner
+    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+              adjusted_radius, 0, M_PI / 2);
+    
+    // Bottom side
+    cairo_line_to(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height);
+    
+    // Bottom-left corner
+    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+              adjusted_radius, M_PI / 2, M_PI);
+    
+    // Left side
+    cairo_line_to(cr, adjusted_x, adjusted_y + adjusted_radius);
+    
+    // Top-left corner
+    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
+              adjusted_radius, M_PI, 3 * M_PI / 2);
+    
+    // Close the path
+    cairo_close_path(cr);
+    
+    // Set stroke width and stroke
+    cairo_set_line_width(cr, stroke_width);
+}
+
+
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
     root->type = ::hbox;
@@ -1652,39 +1741,15 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            const int popup_w = 220;
-            const int popup_h = 140;
-            const int icon_x = (int) std::round(c->real_bounds.x / dpi);
-            const int icon_y = (int) std::round(c->real_bounds.y / dpi);
-            const int icon_w = std::max(1, (int) std::round(c->real_bounds.w / dpi));
-            const int icon_h = std::max(1, (int) std::round(c->real_bounds.h / dpi));
-
-            RawWindowSettings settings;
-            settings.pos.w = popup_w;
-            settings.pos.h = popup_h;
-            settings.name = "Popup";
-            settings.popup.use_explicit_anchor_rect = true;
-            settings.popup.anchor_rect_x = icon_x;
-            settings.popup.anchor_rect_y = icon_y;
-            settings.popup.anchor_rect_w = icon_w;
-            settings.popup.anchor_rect_h = icon_h;
-            settings.popup.anchor = RawWindowSettings::PopupAnchor::TOP_RIGHT;
-            settings.popup.gravity = RawWindowSettings::PopupGravity::BOTTOM_RIGHT;
-            settings.popup.use_offset = true;
-            settings.popup.offset_y = -8;
-            settings.popup.constraint_adjustment =
-                RawWindowSettings::POPUP_CONSTRAINT_SLIDE_X |
-                RawWindowSettings::POPUP_CONSTRAINT_SLIDE_Y |
-                RawWindowSettings::POPUP_CONSTRAINT_FLIP_X |
-                RawWindowSettings::POPUP_CONSTRAINT_FLIP_Y;
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 220, 140);
 
             auto out = open_mylar_popup(mylar, settings);
             if (!out)
                 return;
             out->root->when_paint = [out](Container *root, Container *c) {
                 auto cr = out->raw_window->cr;
-                set_argb(cr, {1, 1, 1, 1});
-                set_rect(cr, c->real_bounds);
+                set_argb(cr, {1, 1, 1, .1});
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * out->raw_window->dpi, 1.0);
                 cairo_fill(cr);
             };
             out->root->when_clicked = paint {
