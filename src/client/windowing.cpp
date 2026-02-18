@@ -122,12 +122,7 @@ void on_close(RawWindow *rw) {
             mylar_windows.erase(mylar_windows.begin() + i);
 }
 
-MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings) {
-    auto m = new MylarWindow;
-    m->raw_window = windowing::open_window(app, type, settings);
-    assert(m->raw_window);
-    m->root = new Container();
-    m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
+static void wire_handlers(MylarWindow *m) {
     m->raw_window->on_mouse_move = on_mouse_move;
     m->raw_window->on_mouse_press = on_mouse_press;
     m->raw_window->on_scrolled = on_scrolled;
@@ -138,7 +133,29 @@ MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings s
     m->raw_window->on_render = on_render;
     m->raw_window->on_resize = on_resize;
     m->raw_window->on_close = on_close;
+}
+
+MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings) {
+    auto m = new MylarWindow;
+    m->raw_window = windowing::open_window(app, type, settings);
+    assert(m->raw_window);
+    m->root = new Container();
+    m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
+    wire_handlers(m);
     mylar_windows.push_back(m);
     return m;
 }
 
+MylarWindow *open_mylar_popup(MylarWindow *parent, RawWindowSettings settings) {
+    if (!parent || !parent->raw_window)
+        return nullptr;
+
+    auto m = new MylarWindow;
+    m->raw_window = windowing::open_popup(parent->raw_window, settings);
+    assert(m->raw_window);
+    m->root = new Container();
+    m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
+    wire_handlers(m);
+    mylar_windows.push_back(m);
+    return m;
+}

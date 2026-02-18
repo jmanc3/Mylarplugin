@@ -1370,11 +1370,6 @@ void add_hyprctl_dispatchers() {
         dock::start();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:dbus", [](std::string in) {
-        dbus_start(DBUS_BUS_SESSION);
-        dbus_start(DBUS_BUS_SYSTEM);
-        return true;
-    });
     hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_stop", [](std::string in) {
         dock::stop();
         return true;

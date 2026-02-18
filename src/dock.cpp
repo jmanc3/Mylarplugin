@@ -1647,6 +1647,53 @@ static void fill_root(Container *root) {
 
     {
         auto extra = simple_dock_item(root, ICON("\ue70e"));
+        extra->when_clicked = paint {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
+
+            const int popup_w = 220;
+            const int popup_h = 140;
+            const int icon_x = (int) std::round(c->real_bounds.x / dpi);
+            const int icon_y = (int) std::round(c->real_bounds.y / dpi);
+            const int icon_w = std::max(1, (int) std::round(c->real_bounds.w / dpi));
+            const int icon_h = std::max(1, (int) std::round(c->real_bounds.h / dpi));
+
+            RawWindowSettings settings;
+            settings.pos.w = popup_w;
+            settings.pos.h = popup_h;
+            settings.name = "Popup";
+            settings.popup.use_explicit_anchor_rect = true;
+            settings.popup.anchor_rect_x = icon_x;
+            settings.popup.anchor_rect_y = icon_y;
+            settings.popup.anchor_rect_w = icon_w;
+            settings.popup.anchor_rect_h = icon_h;
+            settings.popup.anchor = RawWindowSettings::PopupAnchor::TOP_RIGHT;
+            settings.popup.gravity = RawWindowSettings::PopupGravity::BOTTOM_RIGHT;
+            settings.popup.use_offset = true;
+            settings.popup.offset_y = -8;
+            settings.popup.constraint_adjustment =
+                RawWindowSettings::POPUP_CONSTRAINT_SLIDE_X |
+                RawWindowSettings::POPUP_CONSTRAINT_SLIDE_Y |
+                RawWindowSettings::POPUP_CONSTRAINT_FLIP_X |
+                RawWindowSettings::POPUP_CONSTRAINT_FLIP_Y;
+
+            auto out = open_mylar_popup(mylar, settings);
+            if (!out)
+                return;
+            out->root->when_paint = [out](Container *root, Container *c) {
+                auto cr = out->raw_window->cr;
+                set_argb(cr, {1, 1, 1, 1});
+                set_rect(cr, c->real_bounds);
+                cairo_fill(cr);
+            };
+            out->root->when_clicked = paint {
+                main_thread([] {
+                    notify("clicked inside");
+                });
+            };
+            windowing::redraw(out->raw_window);
+        };
     }
 
     if (false) {
@@ -2206,4 +2253,3 @@ Bounds dock::get_location(std::string name, int cid) {
      
     return {0, 0, 100, 100};
 }
-

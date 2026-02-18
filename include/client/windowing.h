@@ -9,5 +9,4 @@ struct MylarWindow {
 };
 
 MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings);
-
-
+MylarWindow *open_mylar_popup(MylarWindow *parent, RawWindowSettings settings);

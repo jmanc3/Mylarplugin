@@ -54,6 +54,7 @@ extern "C" {
 }
 
 #include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 #include "../include/container.h"
 #include "../include/events.h"
@@ -133,6 +134,7 @@ struct wl_context {
     int key_repeat_rate = 100;
     int key_repeat_delay = 100;
     int key_repeat_type = 0;
+    uint32_t last_pointer_button_serial = 0;
 
     std::vector<output *> outputs;
     uint32_t shm_format;
@@ -150,6 +152,7 @@ struct wl_window {
     struct wl_surface *surface = nullptr;
     struct xdg_surface *xdg_surface = nullptr;
     struct xdg_toplevel *xdg_toplevel = nullptr;
+    struct xdg_popup *xdg_popup = nullptr;
     struct zwlr_layer_surface_v1 *layer_surface = nullptr;
     struct wl_output *output = nullptr;
     struct wl_shm_pool *pool = nullptr;
@@ -315,6 +318,33 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 static const struct xdg_toplevel_listener xdg_toplevel_listener = {
     .configure = handle_toplevel_configure,
     .close = handle_toplevel_close,
+};
+
+static void handle_popup_configure(void *data, struct xdg_popup *popup, int32_t x, int32_t y, int32_t width, int32_t height) {
+    (void) popup;
+    (void) x;
+    (void) y;
+    auto win = (wl_window *) data;
+    if (width > 0) win->pending_width = width;
+    if (height > 0) win->pending_height = height;
+}
+
+static void handle_popup_done(void *data, struct xdg_popup *popup) {
+    (void) popup;
+    auto win = (wl_window *) data;
+    win->marked_for_closing = true;
+}
+
+static void handle_popup_repositioned(void *data, struct xdg_popup *popup, uint32_t token) {
+    (void) data;
+    (void) popup;
+    (void) token;
+}
+
+static const struct xdg_popup_listener xdg_popup_listener = {
+    .configure = handle_popup_configure,
+    .popup_done = handle_popup_done,
+    .repositioned = handle_popup_repositioned,
 };
 
 /* ---- helper: create a simple shm buffer so surface is mapped ---- */
@@ -610,6 +640,48 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     return win;
 }
 
+struct wl_window *wl_popup_window_create(struct wl_context *ctx,
+                                         int width, int height,
+                                         const char *title)
+{
+    struct wl_window *win = new wl_window;
+    win->ctx = ctx;
+    win->logical_width = width;
+    win->logical_height = height;
+    win->scaled_w = win->logical_width * win->current_fractional_scale;
+    win->scaled_h = win->logical_height * win->current_fractional_scale;
+    win->title = title ? title : "";
+    win->pending_width = width;
+    win->pending_height = height;
+    win->pool = NULL;
+
+    win->surface = wl_compositor_create_surface(ctx->compositor);
+    if (!win->surface) {
+        fprintf(stderr, "Failed to create wl_surface\n");
+        delete win;
+        return nullptr;
+    }
+
+    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
+    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
+    win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface);
+
+    win->xdg_surface = xdg_wm_base_get_xdg_surface(ctx->wm_base, win->surface);
+    if (!win->xdg_surface) {
+        fprintf(stderr, "Failed to get xdg_surface for popup\n");
+        wl_surface_destroy(win->surface);
+        delete win;
+        return nullptr;
+    }
+
+    xdg_surface_add_listener(win->xdg_surface, &xdg_surface_listener, win);
+
+    wl_window_resize_buffer(win, win->scaled_w, win->scaled_h);
+
+    ctx->windows.push_back(win);
+    return win;
+}
+
 static void config_layer_shell(wl_window *win, uint32_t width, uint32_t height) {
     wl_window_resize_buffer(win, width, height);
     if (win->rw)
@@ -833,7 +905,8 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
     double dx = wl_fixed_to_double(sx);
     double dy = wl_fixed_to_double(sy);
     auto ctx = (wl_context *) data;
-    for (auto w : ctx->windows) {
+    auto windows_snapshot = ctx->windows;
+    for (auto w : windows_snapshot) {
         if (w->has_pointer_focus) {
             log(fz("pointer: motion at {}, {} for %s\n", dx, dy, w->title.data()));
             w->cur_x = dx;
@@ -854,7 +927,11 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
     printf("pointer: button %u %s\n", button, st);
     //win->marked_for_closing = true;
     auto ctx = (wl_context *) data;
-    for (auto w : ctx->windows) {
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED)
+        ctx->last_pointer_button_serial = serial;
+
+    auto windows_snapshot = ctx->windows;
+    for (auto w : windows_snapshot) {
         if (w->has_pointer_focus) {
             log(fz("pointer: handle button {} {} {} {}", w->cur_x, w->cur_y, button, state));
             if (w->rw->on_mouse_press) {
@@ -875,7 +952,8 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
     double v = wl_fixed_to_double(value);
     printf("pointer: axis %u value %.2f\n", axis, v);
     auto ctx = (wl_context *) data;
-    for (auto w : ctx->windows) {
+    auto windows_snapshot = ctx->windows;
+    for (auto w : windows_snapshot) {
         if (w->has_pointer_focus) {
             printf("pointer: handle scroll\n");
             if (w->rw->on_scrolled) {
@@ -1065,6 +1143,12 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
                 if (modmask & MOD_CTRL || modmask & MOD_ALT || modmask & MOD_SUPER) {
                     is_text = false;
                 }
+            }
+            if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
+                sym == XKB_KEY_Escape &&
+                win->xdg_popup) {
+                win->marked_for_closing = true;
+                return;
             }
             win->rw->on_key_press(win->rw, key, state == WL_KEYBOARD_KEY_STATE_PRESSED, sym, modmask, is_text, std::string(utf8, len));
         }
@@ -1403,6 +1487,7 @@ struct wl_context *wl_context_create(void) {
 void wl_window_destroy(struct wl_window *win) {
     if (!win) return;
 
+    if (win->xdg_popup) xdg_popup_destroy(win->xdg_popup);
     if (win->xdg_toplevel) xdg_toplevel_destroy(win->xdg_toplevel);
     if (win->xdg_surface) xdg_surface_destroy(win->xdg_surface);
     if (win->layer_surface) zwlr_layer_surface_v1_destroy(win->layer_surface);
@@ -1598,6 +1683,76 @@ RawApp *windowing::open_app() {
     return ra;
 }
 
+static wl_context *find_context(RawApp *app) {
+    if (!app)
+        return nullptr;
+    for (auto c : apps)
+        if (c->id == app->id)
+            return c;
+    return nullptr;
+}
+
+static wl_window *find_window(RawWindow *window) {
+    if (!window)
+        return nullptr;
+    for (auto w : windows)
+        if (w->id == window->id)
+            return w;
+    return nullptr;
+}
+
+static uint32_t to_xdg_popup_anchor(RawWindowSettings::PopupAnchor anchor) {
+    switch (anchor) {
+        case RawWindowSettings::PopupAnchor::NONE: return XDG_POSITIONER_ANCHOR_NONE;
+        case RawWindowSettings::PopupAnchor::TOP: return XDG_POSITIONER_ANCHOR_TOP;
+        case RawWindowSettings::PopupAnchor::BOTTOM: return XDG_POSITIONER_ANCHOR_BOTTOM;
+        case RawWindowSettings::PopupAnchor::LEFT: return XDG_POSITIONER_ANCHOR_LEFT;
+        case RawWindowSettings::PopupAnchor::RIGHT: return XDG_POSITIONER_ANCHOR_RIGHT;
+        case RawWindowSettings::PopupAnchor::TOP_LEFT: return XDG_POSITIONER_ANCHOR_TOP_LEFT;
+        case RawWindowSettings::PopupAnchor::BOTTOM_LEFT: return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+        case RawWindowSettings::PopupAnchor::TOP_RIGHT: return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+        case RawWindowSettings::PopupAnchor::BOTTOM_RIGHT: return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+    }
+    return XDG_POSITIONER_ANCHOR_TOP_LEFT;
+}
+
+static uint32_t to_xdg_popup_gravity(RawWindowSettings::PopupGravity gravity) {
+    switch (gravity) {
+        case RawWindowSettings::PopupGravity::NONE: return XDG_POSITIONER_GRAVITY_NONE;
+        case RawWindowSettings::PopupGravity::TOP: return XDG_POSITIONER_GRAVITY_TOP;
+        case RawWindowSettings::PopupGravity::BOTTOM: return XDG_POSITIONER_GRAVITY_BOTTOM;
+        case RawWindowSettings::PopupGravity::LEFT: return XDG_POSITIONER_GRAVITY_LEFT;
+        case RawWindowSettings::PopupGravity::RIGHT: return XDG_POSITIONER_GRAVITY_RIGHT;
+        case RawWindowSettings::PopupGravity::TOP_LEFT: return XDG_POSITIONER_GRAVITY_TOP_LEFT;
+        case RawWindowSettings::PopupGravity::BOTTOM_LEFT: return XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
+        case RawWindowSettings::PopupGravity::TOP_RIGHT: return XDG_POSITIONER_GRAVITY_TOP_RIGHT;
+        case RawWindowSettings::PopupGravity::BOTTOM_RIGHT: return XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT;
+    }
+    return XDG_POSITIONER_GRAVITY_TOP_LEFT;
+}
+
+static xdg_popup *create_popup_role(wl_window *win, wl_window *parent_win, xdg_positioner *positioner) {
+    if (!win || !parent_win || !positioner || !win->xdg_surface)
+        return nullptr;
+
+    if (win->xdg_popup)
+        return win->xdg_popup;
+
+    struct xdg_surface *popup_parent = parent_win->xdg_surface;
+    if (parent_win->layer_surface)
+        popup_parent = nullptr;
+
+    win->xdg_popup = xdg_surface_get_popup(win->xdg_surface, popup_parent, positioner);
+    if (!win->xdg_popup)
+        return nullptr;
+
+    xdg_popup_add_listener(win->xdg_popup, &xdg_popup_listener, win);
+
+    if (parent_win->layer_surface)
+        zwlr_layer_surface_v1_get_popup(parent_win->layer_surface, win->xdg_popup);
+    return win->xdg_popup;
+}
+
 RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSettings settings) {
     wl_context *ctx = nullptr;
     for (auto c : apps)
@@ -1632,6 +1787,100 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     }
     auto window = windows[windows.size() - 1];
     
+    return rw;
+}
+
+RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) {
+    if (!parent || !parent->creator)
+        return nullptr;
+
+    wl_context *ctx = find_context(parent->creator);
+    if (!ctx || !ctx->wm_base)
+        return nullptr;
+
+    auto rw = new RawWindow;
+    rw->creator = parent->creator;
+    rw->id = unique_id++;
+
+    auto window = wl_popup_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str());
+    if (!window) {
+        delete rw;
+        return nullptr;
+    }
+
+    window->rw = rw;
+    rw->cr = window->cr;
+    window->id = rw->id;
+    window->on_render = on_window_render;
+    windows.push_back(window);
+
+    xdg_positioner *positioner = xdg_wm_base_create_positioner(ctx->wm_base);
+    if (!positioner) {
+        wl_window_destroy(window);
+        delete rw;
+        return nullptr;
+    }
+
+    const int popup_w = settings.pos.w > 0 ? settings.pos.w : 1;
+    const int popup_h = settings.pos.h > 0 ? settings.pos.h : 1;
+    const auto &popup = settings.popup;
+
+    xdg_positioner_set_size(positioner, popup_w, popup_h);
+
+    if (popup.use_explicit_anchor_rect) {
+        xdg_positioner_set_anchor_rect(
+            positioner,
+            popup.anchor_rect_x,
+            popup.anchor_rect_y,
+            popup.anchor_rect_w > 0 ? popup.anchor_rect_w : 1,
+            popup.anchor_rect_h > 0 ? popup.anchor_rect_h : 1
+        );
+    } else {
+        xdg_positioner_set_anchor_rect(positioner, settings.pos.x, settings.pos.y, 1, 1);
+    }
+
+    xdg_positioner_set_anchor(positioner, to_xdg_popup_anchor(popup.anchor));
+    xdg_positioner_set_gravity(positioner, to_xdg_popup_gravity(popup.gravity));
+
+    if (popup.use_offset)
+        xdg_positioner_set_offset(positioner, popup.offset_x, popup.offset_y);
+
+    if (popup.constraint_adjustment != RawWindowSettings::POPUP_CONSTRAINT_NONE)
+        xdg_positioner_set_constraint_adjustment(positioner, popup.constraint_adjustment);
+
+    if (popup.reactive)
+        xdg_positioner_set_reactive(positioner);
+
+    if (popup.use_parent_size)
+        xdg_positioner_set_parent_size(positioner, popup.parent_w, popup.parent_h);
+
+    if (popup.use_parent_configure)
+        xdg_positioner_set_parent_configure(positioner, popup.parent_configure_serial);
+
+    wl_window *window_wl = find_window(rw);
+    wl_window *parent_wl = find_window(parent);
+    if (!create_popup_role(window_wl, parent_wl, positioner)) {
+        xdg_positioner_destroy(positioner);
+        wl_window_destroy(window);
+        delete rw;
+        return nullptr;
+    }
+
+    if (window_wl->xdg_popup && ctx->seat && ctx->last_pointer_button_serial != 0) {
+        xdg_popup_grab(window_wl->xdg_popup, ctx->seat, ctx->last_pointer_button_serial);
+    }
+
+    wl_surface_attach(window_wl->surface, get_attach_buffer(window_wl), 0, 0);
+    wl_surface_commit(window_wl->surface);
+
+    xdg_positioner_destroy(positioner);
+
+    rw->parent = parent;
+    parent->children.push_back(rw);
+
+    if (window->on_render)
+        window->on_render(window);
+
     return rw;
 }
 

@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 #include <mutex>
+#include <vector>
 #include <cairo.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -43,10 +44,69 @@ struct PositioningInfo {
 };
 
 struct RawWindowSettings {
+    enum struct PopupAnchor {
+        NONE,
+        TOP,
+        BOTTOM,
+        LEFT,
+        RIGHT,
+        TOP_LEFT,
+        BOTTOM_LEFT,
+        TOP_RIGHT,
+        BOTTOM_RIGHT,
+    };
+
+    enum struct PopupGravity {
+        NONE,
+        TOP,
+        BOTTOM,
+        LEFT,
+        RIGHT,
+        TOP_LEFT,
+        BOTTOM_LEFT,
+        TOP_RIGHT,
+        BOTTOM_RIGHT,
+    };
+
+    enum PopupConstraintAdjustment : uint32_t {
+        POPUP_CONSTRAINT_NONE = 0,
+        POPUP_CONSTRAINT_SLIDE_X = 1u << 0,
+        POPUP_CONSTRAINT_SLIDE_Y = 1u << 1,
+        POPUP_CONSTRAINT_FLIP_X = 1u << 2,
+        POPUP_CONSTRAINT_FLIP_Y = 1u << 3,
+        POPUP_CONSTRAINT_RESIZE_X = 1u << 4,
+        POPUP_CONSTRAINT_RESIZE_Y = 1u << 5,
+    };
+
+    struct PopupPositioner {
+        bool use_explicit_anchor_rect = false;
+        int anchor_rect_x = 0;
+        int anchor_rect_y = 0;
+        int anchor_rect_w = 1;
+        int anchor_rect_h = 1;
+
+        bool use_offset = false;
+        int offset_x = 0;
+        int offset_y = 0;
+
+        PopupAnchor anchor = PopupAnchor::TOP_LEFT;
+        PopupGravity gravity = PopupGravity::TOP_LEFT;
+        uint32_t constraint_adjustment = POPUP_CONSTRAINT_NONE;
+        bool reactive = false;
+
+        bool use_parent_size = false;
+        int parent_w = 0;
+        int parent_h = 0;
+
+        bool use_parent_configure = false;
+        uint32_t parent_configure_serial = 0;
+    };
+
     std::string name;
     std::string monitor_name;
     PositioningInfo pos;
     int alignment = 0; // 0 none, 1 top, clockwise + 1
+    PopupPositioner popup;
 };
 
 struct RawWindow {    
@@ -94,7 +154,8 @@ namespace windowing {
     RawApp *open_app();
 
     RawWindow *open_window(RawApp *app, WindowType type, RawWindowSettings settings);
-     
+    RawWindow *open_popup(RawWindow *parent, RawWindowSettings settings);
+
     void main_loop(RawApp *app);
 
     void wake_up(RawWindow *window);
