@@ -1557,10 +1557,12 @@ void on_popup_closed(int id) {
     auto m = actual_root; 
 
     for (int i = m->children.size() - 1; i >= 0; i--) {
-        auto cid = *datum<int>(m->children[i], "cid");
-        if (cid == id) {
-            delete m->children[i];
-            m->children.erase(m->children.begin() + i);
+        if (m->children[i]->custom_type == (int) TYPE::POPUP) {
+            auto cid = *datum<int>(m->children[i], "cid");
+            if (cid == id) {
+                delete m->children[i];
+                m->children.erase(m->children.begin() + i);
+            }
         }
     }
 }
