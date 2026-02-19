@@ -81,6 +81,7 @@ enum struct TYPE : uint8_t {
     WORKSPACE_THUMB,
     TEST,
     OUR_POPUP,
+    POPUP,
     OVERVIEW,
     WORKSPACE_CHANGE_INDICATOR,
 };

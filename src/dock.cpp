@@ -11,6 +11,7 @@
 #include "icons.h"
 #include "popup.h"
 #include "edit_pin.h"
+#include "audio.h"
 
 #include <algorithm>
 #include <cairo.h>
@@ -228,10 +229,6 @@ static bool nightlight_on = false;
 
 struct BatteryData : UserData {
     float brightness_level = 100;
-};
-
-struct VolumeData : UserData {
-
 };
 
 struct BrightnessData : UserData {
@@ -568,6 +565,15 @@ static void set_brightness(float amount) {
 }
 
 static void set_volume(float amount) {
+    /*
+    audio([amount]() {
+        for (auto client : audio_clients) {
+            if (client->is_master_volume()) {
+                client->set_volume(amount / 100.0f);
+            }
+        }
+    });
+    */
     static bool queued = false;
     static float latest = amount;
     latest = amount;
@@ -1748,7 +1754,7 @@ static void fill_root(Container *root) {
                 return;
             out->root->when_paint = [out](Container *root, Container *c) {
                 auto cr = out->raw_window->cr;
-                set_argb(cr, {1, 1, 1, .1});
+                set_argb(cr, {1, 1, 1, .8});
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * out->raw_window->dpi, 1.0);
                 cairo_fill(cr);
             };
@@ -1847,7 +1853,7 @@ static void fill_root(Container *root) {
         }, []() {
            return std::format("{}%", (int) volume_level);
         }) ;
-        auto volume_data = new VolumeData;
+        volume->name = "volume";
         std::thread t([]() {
             volume_level = get_volume_level();
         });
@@ -1856,7 +1862,6 @@ static void fill_root(Container *root) {
         volume->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto volume_data = (VolumeData *) c->user_data;
             volume_level += ((double) scroll_y) * .001;
             if (volume_level > 100) {
                volume_level = 100;
@@ -1867,7 +1872,6 @@ static void fill_root(Container *root) {
             last_time_volume_adjusted = get_current_time_in_ms();
             set_volume(volume_level);
         };
-        volume->user_data = volume_data;
     }
 
     {
@@ -2318,3 +2322,12 @@ Bounds dock::get_location(std::string name, int cid) {
      
     return {0, 0, 100, 100};
 }
+
+void dock::update_volume(float vol) {
+    return;
+    volume_level = std::round(vol * 100);
+    for (auto d : docks) {
+        windowing::redraw(d->window->raw_window);
+    }
+}
+

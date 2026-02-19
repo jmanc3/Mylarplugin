@@ -15,6 +15,8 @@ namespace dock {
     void title_change(int cid, std::string title);
     void on_activated(int cid);
 
+    void update_volume(float vol);
+
     void edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command);
 
     void toggle_dock_merge();

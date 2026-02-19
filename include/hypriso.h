@@ -246,7 +246,7 @@ struct HyprIso {
     
     std::function<void(int id)> on_layer_closed = nullptr;
     
-    std::function<void(int id)> on_popup_open = nullptr;
+    std::function<void(int id, int parent_id, bool owner_is_window)> on_popup_open = nullptr;
     
     std::function<void(int id)> on_popup_closed = nullptr;
      
@@ -431,6 +431,8 @@ Bounds bounds_reserved(ThinMonitor *m);
 
 Bounds bounds_monitor(int id);
 Bounds bounds_reserved_monitor(int id);
+
+Bounds bounds_popup(int id);
 
 Bounds bounds_client(int id);
 Bounds bounds_client_final(int id);

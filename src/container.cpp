@@ -972,7 +972,7 @@ Bounds Bounds::round() {
     return *this;
 }
 
-std::string get_uuid() {
+static std::string get_uuid() {
     std::random_device              rd;
     std::mt19937                    gen(rd());
     std::uniform_int_distribution<> dis(0, 15);

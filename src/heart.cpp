@@ -1471,13 +1471,14 @@ void on_workspace_change(int cid) {
     workspace_indicator::on_change(cid);
 }
 
-static std::string rounding_shader = R"(
-// smoothing constant for the edge: more = blurrier, but smoother
-#define M_PI 3.1415926535897932384626433832795
-#define SMOOTHING_CONSTANT (M_PI / 5.34665792551)
+    static std::string rounding_shader = R"(
+    // smoothing constant for the edge: more = blurrier, but smoother
+    #define M_PI 3.1415926535897932384626433832795
+    #define SMOOTHING_CONSTANT (M_PI / 5.34665792551)
 
-uniform float radius;
-uniform float roundingPower;
+    uniform float radius;
+    uniform float roundingPower;
+}
 uniform vec2 topLeft;
 uniform vec2 fullSize;
 uniform int cornerDisableMask; // new
@@ -1487,6 +1488,7 @@ vec4 rounding(vec4 color) {
     vec2 preMirror = pixCoord - (topLeft + fullSize * 0.5); // new
 
     pixCoord -= topLeft + fullSize * 0.5;
+    */
     pixCoord *= vec2(lessThan(pixCoord, vec2(0.0))) * -2.0 + 1.0;
     pixCoord -= fullSize * 0.5 - radius;
     pixCoord += vec2(1.0, 1.0) / fullSize;
@@ -1544,7 +1546,37 @@ void on_config_generated() {
 }
 
 void on_audio_change() {
-    //notify("change in audio");
+    for (auto client : audio_clients) {
+        if (client->is_master_volume()) {
+            dock::update_volume(client->get_volume());
+        }
+    }
+}
+
+void on_popup_closed(int id) {
+    auto m = actual_root; 
+
+    for (int i = m->children.size() - 1; i >= 0; i--) {
+        auto cid = *datum<int>(m->children[i], "cid");
+        if (cid == id) {
+            delete m->children[i];
+            m->children.erase(m->children.begin() + i);
+        }
+    }
+}
+
+void on_popup_open(int id, int parent_id, bool owner_is_window) {
+    {
+        auto m = actual_root; 
+        auto c = m->child(FILL_SPACE, FILL_SPACE);
+        c->custom_type = (int) TYPE::POPUP;
+        c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            c->real_bounds = bounds_popup(*datum<int>(c, "cid"));
+        };
+        *datum<int>(c, "cid") = id; 
+        *datum<int>(c, "parent_cid") = parent_id; 
+        *datum<bool>(c, "owner_is_window") = owner_is_window; 
+    }
 }
 
 void heart::begin() {
@@ -1574,6 +1606,8 @@ void heart::begin() {
         hypriso->is_snapped = is_snapped;
         hypriso->on_window_open = on_window_open;
         hypriso->on_window_closed = on_window_closed;
+        hypriso->on_popup_open = on_popup_open;
+        hypriso->on_popup_closed = on_popup_closed;
         hypriso->on_title_change = on_title_change;
         hypriso->on_layer_open = on_layer_open;
         hypriso->on_layer_closed = on_layer_closed;
@@ -1833,6 +1867,34 @@ void heart::layout_containers() {
             *datum<bool>(c, "touched") = true;
         }
     }
+    for (auto c : backup) {
+        if (c->custom_type == (int) TYPE::POPUP) {
+            bool inserted = false;
+
+            if (true) {
+                auto parent_cid = *datum<int>(c, "parent_cid");
+                for (int i = c->parent->children.size() - 1; i >= 0; i--) {
+                    auto p = c->parent->children[i];
+                    if (p->custom_type == (int) TYPE::LAYER || p->custom_type == (int) TYPE::CLIENT) {
+                        auto pcid = *datum<int>(p, "cid");
+                        if (pcid == parent_cid) {
+                            inserted = true;
+                            c->parent->children.insert(c->parent->children.begin() + i, c);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!inserted)
+                c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+            }
+            *datum<bool>(c, "touched") = true;
+        }
+    }
+
 
     snap_assist::fix_order();
     

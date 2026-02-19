@@ -36,7 +36,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 
 APICALL EXPORT void PLUGIN_EXIT() {
     heart::end(); 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }
 
 void init_mylar(void* h) { // When started directly from hyprland

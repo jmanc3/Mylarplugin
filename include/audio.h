@@ -16,6 +16,8 @@ extern bool audio_running;
 extern bool allow_audio_thread_creation;
 
 struct AudioClient {
+    std::string uuid = "";
+    
     int index = PA_INVALID_INDEX;
     uint32_t pw_node_id = SPA_ID_INVALID;
     pw_node *pw_node_ref = nullptr;
@@ -43,6 +45,8 @@ struct AudioClient {
     double get_volume();
 
     bool is_master_volume();
+
+    AudioClient();
 };
 
 extern std::vector<AudioClient *> audio_clients;

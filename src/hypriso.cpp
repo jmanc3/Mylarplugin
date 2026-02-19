@@ -27,7 +27,6 @@
 #include <cstring>
 #include <drm_fourcc.h>
 #include <glib-object.h>
-//#include <hyprland/src/desktop/Popup.hpp>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
@@ -6998,6 +6997,33 @@ Bounds bounds_monitor(int id) {
     return {0, 0, 0, 0};
 }
 
+struct HyprPopup {
+    int id;  
+    int parent_id = -1; // Can be CWINDOW, LAYER, or POPUP
+    bool owner_is_window = true;
+    SP<Desktop::View::CPopup> p;
+};
+
+std::vector<HyprPopup *> hyprpopus;
+
+Bounds bounds_popup(int id) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hp : hyprpopus) {
+        if (hp->id == id) {
+            if (auto p = hp->p) {
+                if (p->m_mapped) {
+                    auto g = p->coordsGlobal();
+                    auto s = p->size();
+                    return tobounds({g, s});
+                }
+            }
+        }
+    }    
+    return {0, 0, 0, 0};
+}
+
 Bounds bounds_reserved_monitor(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -7437,32 +7463,61 @@ bool HyprIso::has_popup_at(int cid, Bounds b) {
     return false; 
 }
 
-struct HyprPopup {
-    int id;  
-    Desktop::View::CPopup *p;
-};
+// Helper: resolve parent id from layer/window owners
+static std::optional<uint64_t> resolve_parent_from_owner(
+    Desktop::View::CPopup* popup
+) {
+    if (popup->m_layerOwner) {
+        for (auto l : hyprlayers) {
+            if (popup->m_layerOwner == l->l)
+                return l->id;
+        }
+    }
 
-std::vector<HyprPopup *> hyprpopus;
+    if (popup->m_windowOwner) {
+        for (auto w : hyprwindows) {
+            if (popup->m_windowOwner == w->w)
+                return w->id;
+        }
+    }
 
-// src/desktop/Popup.cpp
-// UP<CPopup> CPopup::create(PHLWINDOW pOwner) {
-// UP<CPopup> CPopup::create(PHLLS pOwner) {
-// child of other popup
-// UP<CPopup> CPopup::create(SP<CXDGPopupResource> resource, WP<CPopup> pOwner) {
-// void CPopup::fullyDestroy() {
+    return std::nullopt;
+}
 
-void popup_created(Desktop::View::CPopup *popup) {
-    auto hp = new HyprPopup;
+bool get_owner(HyprPopup *hp, SP<Desktop::View::CPopup> popup) {
+    if (popup->m_windowOwner) {
+        for (auto hw : hyprwindows)
+            if (hw->w == popup->m_windowOwner)
+                hp->parent_id = hw->id;
+        hp->owner_is_window = true;
+        return true;
+    }
+    if (popup->m_layerOwner) {
+        for (auto hl : hyprlayers)
+            if (hl->l == popup->m_layerOwner)
+                hp->parent_id = hl->id;
+        hp->owner_is_window = false;
+        return true;
+    }
+    return false;
+}
+
+void popup_created(SP<Desktop::View::CPopup> popup) {
+    auto* hp = new HyprPopup;
     hp->p = popup;
     hp->id = unique_id++;
+
+    if (!get_owner(hp, popup))
+        notify("no owner of popup, report this issue to github with program that generated this problem");
+
     hyprpopus.push_back(hp);
 
     if (hypriso->on_popup_open) {
-        hypriso->on_popup_open(hp->id);
+        hypriso->on_popup_open(hp->id, hp->parent_id, hp->owner_is_window);
     }
 }
 
-void popup_destroyed(int id, Desktop::View::CPopup *popup) {
+void popup_destroyed(int id) {
     for (int i = 0; i < hyprpopus.size(); i++) {
         auto hp = hyprpopus[i];
         if (hp->id == id) {
@@ -7474,9 +7529,105 @@ void popup_destroyed(int id, Desktop::View::CPopup *popup) {
         }
     }
 }
+// src/desktop/Popup.cpp
+// UP<CPopup> CPopup::create(PHLWINDOW pOwner) {
+// UP<CPopup> CPopup::create(PHLLS pOwner) {
+// child of other popup
+// UP<CPopup> CPopup::create(SP<CXDGPopupResource> resource, WP<CPopup> pOwner) {
+inline CFunctionHook* g_pOnPopupWindowCreate = nullptr;
+typedef SP<Desktop::View::CPopup> (*origPopupWindowCreate)(PHLWINDOW pOwner);
+SP<Desktop::View::CPopup> hook_onPopupWindowCreate(PHLWINDOW pOwner) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //auto popup = (Desktop::View::CPopup *) thisptr;
+
+    auto b = (*(origPopupWindowCreate)g_pOnPopupWindowCreate->m_original)(pOwner);
+    if (b)
+        popup_created(b);
+    return b;
+}
+inline CFunctionHook* g_pOnPopupLayerCreate = nullptr;
+typedef SP<Desktop::View::CPopup> (*origPopupLayerCreate)(PHLLS pOwner);
+SP<Desktop::View::CPopup> hook_onPopupLayerCreate(PHLLS pOwner) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //auto popup = (Desktop::View::CPopup *) thisptr;
+
+    auto b = (*(origPopupLayerCreate)g_pOnPopupLayerCreate->m_original)(pOwner);
+    if (b)
+        popup_created(b);
+    return b;
+}
+inline CFunctionHook* g_pOnPopupSubpopupCreate = nullptr;
+typedef SP<Desktop::View::CPopup> (*origPopupSubpopupCreate)(SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner);
+SP<Desktop::View::CPopup> hook_onPopupSubpopupCreate(SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //auto popup = (Desktop::View::CPopup *) thisptr;
+
+    auto b = (*(origPopupSubpopupCreate)g_pOnPopupSubpopupCreate->m_original)(resource, pOwner);
+    if (b)
+        popup_created(b);
+    return b;
+}
+// void CPopup::fullyDestroy() {
+inline CFunctionHook* g_pOnPopupDestroy = nullptr;
+typedef void (*origPopupDestroy)(Desktop::View::CPopup *);
+void hook_onPopupDestroy(void* thisptr) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto popup = (Desktop::View::CPopup *) thisptr;
+    for (auto hp : hyprpopus)
+        if (hp->p.get() == popup)
+            popup_destroyed(hp->id);
+        
+    (*(origPopupDestroy)g_pOnPopupDestroy->m_original)((Desktop::View::CPopup *) thisptr);
+}
 
 void hook_popup_creation_and_destruction() {
+    //return;
+    int hooked = 0;
+    {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "create");
+        for (auto m : METHODS) {
+            if (m.demangled.find("CPopup::create") != std::string::npos) {
+                if (m.demangled.find("CWindow") != std::string::npos) {
+                    g_pOnPopupWindowCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupWindowCreate);
+                    g_pOnPopupWindowCreate->hook();
+
+                    hooked++;
+                } else if (m.demangled.find("CLayerSurface") != std::string::npos) {
+                    g_pOnPopupLayerCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupLayerCreate);
+                    g_pOnPopupLayerCreate->hook();
+                    hooked++;
+                } else if (m.demangled.find("CXDGPopupResource") != std::string::npos) {
+                    g_pOnPopupSubpopupCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupSubpopupCreate);
+                    g_pOnPopupSubpopupCreate->hook();                        
+                    hooked++;
+                }
+            }
+        }
+    }
+    {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "fullyDestroy");
+        for (auto m : METHODS) {
+            if (m.demangled.find("CPopup::fullyDestroy") != std::string::npos) {
+                g_pOnPopupDestroy = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupDestroy);
+                g_pOnPopupDestroy->hook();
+
+                hooked++;
+            }
+        }
+    }
     
+
+    if (hooked != 4) {
+        notify("failed to hook popup creation and destruction, report to fix");
+    }
 }
 
 void HyprIso::do_default_drag(int cid) {
