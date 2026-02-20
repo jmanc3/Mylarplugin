@@ -44,7 +44,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     } catch (...) {
 
     }
-    //std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
 void init_mylar(void* h) { // When started directly from hyprland

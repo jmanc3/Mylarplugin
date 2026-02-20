@@ -839,7 +839,7 @@ static void on_layer_change() {
 static void test_container(Container *m) {
     auto c = m->child(100, 100);
     c->custom_type = (int) TYPE::TEST;
-    c->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+    c->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         c->scroll_v_real += scroll_y; 
     };
     c->when_paint = [](Container *root, Container *c) {
@@ -1998,7 +1998,7 @@ void consume_everything(Container *c) {
     c->when_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y) {
         consume_event(root, c); 
     };
-    c->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+    c->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         consume_event(root, c); 
     };
     c->when_clicked = consume_event;

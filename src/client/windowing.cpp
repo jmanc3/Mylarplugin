@@ -55,9 +55,9 @@ bool on_scrolled(RawWindow *rw, int source, int axis, int direction, double delt
     event.source = source;
     event.axis = axis;
     event.direction = direction;
-    event.delta = delta;
+    event.delta = delta * .3;
     event.descrete = discrete;
-    event.from_mouse = source == WL_POINTER_AXIS_SOURCE_WHEEL;
+    event.from_mouse = mouse;
     mouse_event(m->root, event);
     return false;
 }

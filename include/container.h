@@ -371,7 +371,7 @@ struct Container {
     void (*when_scrolled)(Container* root, Container* self, int scroll_x, int scroll_y) = nullptr;
 
     // Called when this container was scrolled on
-    std::function<void(Container* root, Container* self, int scroll_x, int scroll_y, bool came_from_touchpad)> when_fine_scrolled = nullptr;
+    std::function<void(Container* root, Container* self, double scroll_x, double scroll_y, bool came_from_touchpad)> when_fine_scrolled = nullptr;
 
     long previous_time_scrolled = 0;
 

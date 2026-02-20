@@ -346,7 +346,7 @@ void handle_mouse_button_press(Container* root, const Event& e) {
         // Check if its a scroll event and call when_scrolled if so
         if (e.scroll) {
             if (p->when_fine_scrolled) {
-                p->when_fine_scrolled(root, p, 0, -e.delta, e.from_mouse);
+                p->when_fine_scrolled(root, p, 0, -e.delta, !e.from_mouse);
                 handle_mouse_motion(root, e.x, e.y);
             }
             continue;

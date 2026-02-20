@@ -456,14 +456,14 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             label_data->scroll_x = overflow_x;
         }
     };
-    label->when_fine_scrolled = [editable](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+    label->when_fine_scrolled = [editable](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         if (!editable)
             return;
         auto data = (PinData *) root->user_data;
         auto label_data = (LabelData *) c->user_data;
         execute_scroll(c, data, label_data, scroll_y);
     };
-    label_parent->when_fine_scrolled = [editable](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+    label_parent->when_fine_scrolled = [editable](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         if (!editable)
             return;
         auto data = (PinData *) root->user_data;

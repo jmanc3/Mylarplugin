@@ -485,7 +485,6 @@ static float get_battery_level() {
 static bool watching_battery = false;
 
 static void watch_battery_level() {
-    return;
     if (watching_battery)
         return;
     watching_battery = true;
@@ -1763,7 +1762,7 @@ static void fill_root(Container *root) {
         });
         t.detach();
 
-        brightness->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+        brightness->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto brightness_data = (BrightnessData *) c->user_data;
@@ -1836,10 +1835,26 @@ static void fill_root(Container *root) {
             }); 
             windowing::redraw(dock->volume->raw_window);
         };
-        volume->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+        volume->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            volume_level += ((double) scroll_y) * .001;
+            if (came_from_touchpad) {
+                volume_level += scroll_y;
+            } else {
+                // When changing volume with mouse, round to next, 0, 5, 3, or 7
+                int full = std::round(volume_level);
+                int last_digit;
+                do {
+                    if (scroll_y > 0) {
+                        full++;
+                    } else if (scroll_y < 0) {
+                        full--;
+                    }
+                    last_digit = full % 10;
+                } while (!(last_digit == 0 || last_digit == 3 || last_digit == 5 || last_digit == 7));
+                
+                volume_level = ((double) full);
+            }
             if (volume_level > 100) {
                volume_level = 100;
             }

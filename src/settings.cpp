@@ -1048,7 +1048,7 @@ void fill_root(Container *root) {
         cairo_fill(cr);
     };
     right->receive_events_even_if_obstructed = true;
-    right->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
+    right->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         auto d = (RightData *) c->user_data;
         d->scroll += ((float) scroll_y) * .01f;
     };

@@ -93,6 +93,46 @@ struct output {
     int32_t physical_width  = -1;
 };
 
+struct pending_pointer_axis_event {
+    uint32_t axis = WL_POINTER_AXIS_VERTICAL_SCROLL;
+    bool has_event = false;
+    bool has_delta = false;
+    double delta = 0.0;
+    bool has_discrete = false;
+    int32_t discrete = 0;
+    bool has_value120 = false;
+    int32_t value120 = 0;
+    bool has_stop = false;
+    uint32_t stop_time = 0;
+    bool has_relative_direction = false;
+    uint32_t relative_direction = 0;
+
+    void clear_payload() {
+        has_event = false;
+        has_delta = false;
+        delta = 0.0;
+        has_discrete = false;
+        discrete = 0;
+        has_value120 = false;
+        value120 = 0;
+        has_stop = false;
+        stop_time = 0;
+        has_relative_direction = false;
+        relative_direction = 0;
+    }
+};
+
+struct pending_pointer_frame_event {
+    bool has_source = false;
+    uint32_t source = WL_POINTER_AXIS_SOURCE_WHEEL;
+    pending_pointer_axis_event axes[2];
+
+    pending_pointer_frame_event() {
+        axes[0].axis = WL_POINTER_AXIS_VERTICAL_SCROLL;
+        axes[1].axis = WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+    }
+};
+
 struct wl_context {
     int wake_pipe[2];
     int id;
@@ -135,12 +175,20 @@ struct wl_context {
     int key_repeat_delay = 100;
     int key_repeat_type = 0;
     uint32_t last_pointer_button_serial = 0;
+    pending_pointer_frame_event pointer_axis_pending;
 
     std::vector<output *> outputs;
     uint32_t shm_format;
 
     std::vector<wl_window *> windows;
 };
+
+static pending_pointer_axis_event *pointer_pending_axis(wl_context *ctx, uint32_t axis) {
+    for (auto &pending : ctx->pointer_axis_pending.axes) {
+        if (pending.axis == axis) return &pending;
+    }
+    return nullptr;
+}
 
 struct wl_window {
     int id;
@@ -949,56 +997,116 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
 
 static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
                                 uint32_t time, uint32_t axis, wl_fixed_t value) {
-    double v = wl_fixed_to_double(value);
-    printf("pointer: axis %u value %.2f\n", axis, v);
     auto ctx = (wl_context *) data;
-    auto windows_snapshot = ctx->windows;
-    for (auto w : windows_snapshot) {
-        if (w->has_pointer_focus) {
-            printf("pointer: handle scroll\n");
-            if (w->rw->on_scrolled) {
-                w->rw->on_scrolled(w->rw, 0, axis, 0, value, 0, 0);
-            }
-            if (w->on_render)
-                w->on_render(w);
-        }
-    }
+    pending_pointer_axis_event *pending = pointer_pending_axis(ctx, axis);
+    if (!pending) return;
+
+    pending->has_event = true;
+    pending->has_delta = true;
+    pending->delta = wl_fixed_to_double(value);
 }
 
 static void pointer_handle_frame(void *data,
 	      struct wl_pointer *wl_pointer) {
+    auto ctx = (wl_context *) data;
+    auto windows_snapshot = ctx->windows;
+
+    auto dispatch_axis = [&](pending_pointer_axis_event &pending) {
+        if (!pending.has_event) return;
+
+        int source = ctx->pointer_axis_pending.has_source ? (int)ctx->pointer_axis_pending.source : (int)WL_POINTER_AXIS_SOURCE_WHEEL;
+        int direction = pending.has_relative_direction ? (int)pending.relative_direction : 0;
+        double delta = pending.has_delta ? pending.delta : 0.0;
+        int discrete = 0;
+        if (pending.has_discrete) {
+            discrete = pending.discrete;
+        } else if (pending.has_value120) {
+            discrete = pending.value120 / 120;
+        }
+        bool mouse = source == WL_POINTER_AXIS_SOURCE_WHEEL ||
+                     source == WL_POINTER_AXIS_SOURCE_WHEEL_TILT;
+
+        for (auto w : windows_snapshot) {
+            if (!w->has_pointer_focus) continue;
+            if (w->rw->on_scrolled) {
+                if (pending.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
+                    w->rw->on_scrolled(w->rw, source, pending.axis, direction, -delta, discrete, mouse);
+                } else {
+                    w->rw->on_scrolled(w->rw, source, pending.axis, direction, delta, discrete, mouse);
+                }
+            }
+            if (w->on_render) {
+                w->on_render(w);
+            }
+        }
+
+        pending.clear_payload();
+    };
+
+    for (auto &pending : ctx->pointer_axis_pending.axes) {
+        dispatch_axis(pending);
+    }
+    ctx->pointer_axis_pending.has_source = false;
 }
 
 static void pointer_handle_axis_source(void *data,
 	    struct wl_pointer *wl_pointer,
 	    uint32_t axis_source) {
+    auto ctx = (wl_context *) data;
+    ctx->pointer_axis_pending.has_source = true;
+    ctx->pointer_axis_pending.source = axis_source;
 }
 
 static void pointer_handle_axis_stop(void *data,
 		  struct wl_pointer *wl_pointer,
 		  uint32_t time,
 		  uint32_t axis) {
+    auto ctx = (wl_context *) data;
+    pending_pointer_axis_event *pending = pointer_pending_axis(ctx, axis);
+    if (!pending) return;
+
+    pending->has_event = true;
+    pending->has_stop = true;
+    pending->stop_time = time;
 }
 
 static void pointer_handle_axis_discrete(void *data,
     struct wl_pointer *wl_pointer,
     uint32_t axis,
     int32_t discrete) {
-	int k = 0;
+    auto ctx = (wl_context *) data;
+    pending_pointer_axis_event *pending = pointer_pending_axis(ctx, axis);
+    if (!pending) return;
+
+    pending->has_event = true;
+    pending->has_discrete = true;
+    pending->discrete = discrete;
 }
 
 static void pointer_handle_axis_value120(void *data,
     struct wl_pointer *wl_pointer,
     uint32_t axis,
     int32_t value120) {
-	int k = 0;
+    auto ctx = (wl_context *) data;
+    pending_pointer_axis_event *pending = pointer_pending_axis(ctx, axis);
+    if (!pending) return;
+
+    pending->has_event = true;
+    pending->has_value120 = true;
+    pending->value120 = value120;
 }
 
 static void pointer_handle_axis_relative_direction(void *data,
 				struct wl_pointer *wl_pointer,
 				uint32_t axis,
 				uint32_t direction) {
-	int k = 0;
+    auto ctx = (wl_context *) data;
+    pending_pointer_axis_event *pending = pointer_pending_axis(ctx, axis);
+    if (!pending) return;
+
+    pending->has_event = true;
+    pending->has_relative_direction = true;
+    pending->relative_direction = direction;
 }
 
 static const struct wl_pointer_listener pointer_listener = {
