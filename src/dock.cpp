@@ -1726,7 +1726,7 @@ static void fill_root(Container *root) {
         };
     }
 
-    if (false) {
+    if (true) {
         auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
         active_settings->when_clicked = paint {
             system("hyprctl dispatch plugin:mylar:right_click_active");
