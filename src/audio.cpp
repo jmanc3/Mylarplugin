@@ -1010,6 +1010,10 @@ void audio_sort() {
 }
 
 void audio_start() {
+    if (!threads.empty()) {
+        audio_stop();
+        audio_join();
+    }
     auto t = std::thread([]() -> void {
         if (backend != AudioBackend::UNSET)
             return;
@@ -1022,6 +1026,8 @@ void audio_start() {
                 }
                 cleanup_pipewire_state();
                 delete_all_audio_clients();
+                audio_running = false;
+                backend = AudioBackend::UNSET;
             } else if (try_establishing_connection_with_pulseaudio()) {
                 backend = AudioBackend::PULSEAUDIO;
                 audio_thread_id = std::this_thread::get_id();
@@ -1034,6 +1040,8 @@ void audio_start() {
                 context = nullptr;
                 mainloop = nullptr;
                 delete_all_audio_clients();
+                audio_running = false;
+                backend = AudioBackend::UNSET;
             } else if (try_establishing_connection_with_alsa()) {
                 backend = AudioBackend::ALSA;
                 audio_running = true;
@@ -1045,7 +1053,7 @@ void audio_start() {
         	    backend = AudioBackend::PULSEAUDIO;
         	    audio_thread_id = std::this_thread::get_id();
         	    while (audio_running) {
-        		iterate_pulseaudio_mainloop();
+            		iterate_pulseaudio_mainloop();
         	    }
         	    pa_context_disconnect(context);
         	    pa_context_unref(context);
@@ -1053,14 +1061,18 @@ void audio_start() {
         	    context = nullptr;
         	    mainloop = nullptr;
         	    delete_all_audio_clients();
+                audio_running = false;
+                backend = AudioBackend::UNSET;
         	} else if (try_establishing_connection_with_pipewire()) {
         	    backend = AudioBackend::PIPEWIRE;
         	    audio_thread_id = std::this_thread::get_id();
         	    while (audio_running) {
-        		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            		std::this_thread::sleep_for(std::chrono::milliseconds(20));
         	    }
         	    cleanup_pipewire_state();
         	    delete_all_audio_clients();
+                audio_running = false;
+                backend = AudioBackend::UNSET;
         	} else if (try_establishing_connection_with_alsa()) {
         	    backend = AudioBackend::ALSA;
         	    audio_running = true;
