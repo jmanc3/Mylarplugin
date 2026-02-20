@@ -541,7 +541,7 @@ static void set_brightness(float amount) {
     t.detach();
 }
 
-static void set_volume(float amount) {
+static void set_master_volume(float amount) {
     audio([amount]() {
         for (auto client : audio_clients) {
             if (client->is_master_volume()) {
@@ -549,22 +549,6 @@ static void set_volume(float amount) {
             }
         }
     });
-    static bool queued = false;
-    static float latest = amount;
-    latest = amount;
-    if (queued)
-        return;
-    queued = true;
-    std::thread t([]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        auto process = std::make_shared<TinyProcessLib::Process>(fz("pactl set-sink-volume @DEFAULT_SINK@ {}%", (int) std::round(latest)));
-
-        for (auto d : docks)
-            windowing::redraw(d->window->raw_window);
-
-        queued = false;
-    });
-    t.detach();
 }
 
 Container *simple_dock_item(Container *root, std::function<std::string()> ico, std::function<std::string()> text = nullptr) {
@@ -1876,7 +1860,7 @@ static void fill_root(Container *root) {
                volume_level = 0;
             }
             last_time_volume_adjusted = get_current_time_in_ms();
-            set_volume(volume_level);
+            set_master_volume(volume_level);
         };
     }
 
@@ -2383,9 +2367,11 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
     root->children.clear();
 
     root->type = ::vbox;
+    auto current = get_current_time_in_ms();
     for (auto c : clients) {
-        if (c.is_master)
+        if (c.is_master && (current - last_time_volume_adjusted) > 100) {
             volume_level = std::round(c.get_volume() * 100);
+        }
         add_title(root, fz("({}) {}", c.get_volume(), c.title), c.uuid);
     }
 }
