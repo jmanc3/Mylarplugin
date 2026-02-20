@@ -1734,8 +1734,10 @@ void heart::layout_containers() {
             auto sort_index = datum<int>(c, "sort_index");
             auto cid = *datum<int>(c, "cid");
             for (int i = 0; i < order.size(); i++)
-               if (order[i] == cid)
-                    *sort_index = i;
+               if (order[i] == cid) {
+                   bool is_pinned = hypriso->is_pinned(cid);
+                   *sort_index = (i + (is_pinned ? 1000 : 0));
+               }
         }
         // sort the children based on index
         std::sort(r->children.begin(), r->children.end(), [](Container *a, Container *b) {
