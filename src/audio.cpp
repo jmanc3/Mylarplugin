@@ -1073,8 +1073,8 @@ void audio_start() {
 }
 
 void audio_stop() {
-    if (audio_change_callback)
-        audio_change_callback();
+    //if (audio_change_callback)
+        //audio_change_callback();
     ready = false;
     audio_running = false;
     if (backend == AudioBackend::PULSEAUDIO) {

@@ -486,6 +486,7 @@ static float get_battery_level() {
 static bool watching_battery = false;
 
 static void watch_battery_level() {
+    return;
     if (watching_battery)
         return;
     watching_battery = true;
@@ -506,20 +507,6 @@ static void watch_battery_level() {
 }
 
 static long last_time_volume_adjusted = 0;
-
-static float get_volume_level() {
-    int value = 50;
-    auto process = std::make_shared<TinyProcessLib::Process>("pactl list sinks | grep '^[[:space:]]Volume:' | head -n $(( $SINK + 1 )) | tail -n 1 | sed -e 's,.* \\([0-9][0-9]*\\)%.*,\\1,'", "", [&value](const char *bytes, size_t n) {
-        std::string text(bytes, n);
-        try {
-            value = std::atoi(text.c_str());
-        } catch (...) {
-
-        }
-    });
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return value;
-}
 
 static void set_brightness(float amount) {
     brightness_level = amount;
@@ -542,9 +529,11 @@ static void set_brightness(float amount) {
 }
 
 static void set_master_volume(float amount) {
+    //notify("set master");
     audio([amount]() {
         for (auto client : audio_clients) {
             if (client->is_master_volume()) {
+            //notify(fz("{}", amount / 100.0f));
                 client->set_volume(amount / 100.0f);
             }
         }
@@ -1813,10 +1802,7 @@ static void fill_root(Container *root) {
            return std::format("{}%", (int) volume_level);
         }) ;
         volume->name = "volume";
-        std::thread t([]() {
-            volume_level = get_volume_level();
-        });
-        t.detach();
+        volume_level = 100;
         volume->when_clicked = paint {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;

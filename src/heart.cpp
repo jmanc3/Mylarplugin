@@ -1583,12 +1583,12 @@ void heart::begin() {
 #endif
     hypriso->create_config_variables();
     later(1000, [](Timer*) {
-        //dbus_start(DBUS_BUS_SESSION);
-        //dbus_start(DBUS_BUS_SYSTEM);
+        dbus_start(DBUS_BUS_SESSION);
+        dbus_start(DBUS_BUS_SYSTEM);
+        audio_start();
     });
     
     audio_state_change_callback(on_audio_change);
-    audio_start();
 
     later_immediate([](Timer*) {
         on_any_container_close = any_container_closed;
@@ -1660,7 +1660,7 @@ void heart::end() {
 #endif
     audio_stop();
     audio_join();
-    //dbus_end();
+    dbus_end();
     dock::stop();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::CLIENT) {

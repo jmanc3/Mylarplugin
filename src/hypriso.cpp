@@ -981,11 +981,7 @@ void recheck_csd_for_all_wayland_windows() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    if (source)    
-        return;
-    source = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, [](void *) {
-        source = nullptr;
-
+    later(10, [](Timer *) {
         for (auto w : g_pCompositor->m_windows) {
             if (w->m_isX11)
                 continue;
@@ -1027,10 +1023,7 @@ void recheck_csd_for_all_wayland_windows() {
                 }
             }
         }
-        
-        return 0; // 0 means stop timer, >0 means retry in that amount of ms
-    }, nullptr);
-    wl_event_source_timer_update(source, 10); // 10ms
+    });
 }
 
 inline CFunctionHook* g_pOnKDECSD = nullptr;
@@ -4528,9 +4521,17 @@ int later_action(void* user_data) {
     if (timer->func)
         timer->func(timer);
     if (!timer->keep_running) {
+        for (int i = polled.size() - 1; i >= 0; i--) {
+            if (polled[i] && polled[i]->source)
+                if (polled[i]->source == timer->source) {
+                    delete polled[i];
+                    polled.erase(polled.begin() + i);
+                }
+        }
         // remove from vec
         wl_event_source_remove(timer->source);
         delete timer;
+
     } else {
         wl_event_source_timer_update(timer->source, timer->delay);
     }
@@ -4547,6 +4548,9 @@ Timer* later(void* data, float time_ms, const std::function<void(Timer*)>& fn) {
     timer->delay  = time_ms;
     timer->source = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, &later_action, timer);
     wl_event_source_timer_update(timer->source, time_ms);
+    auto pf = new PF;
+    pf->source = timer->source;
+    polled.push_back(pf);
     return timer;
 }
 
@@ -4559,6 +4563,9 @@ Timer* later(float time_ms, const std::function<void(Timer*)>& fn) {
     timer->delay  = time_ms;
     timer->source = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, &later_action, timer);
     wl_event_source_timer_update(timer->source, time_ms);
+    auto pf = new PF;
+    pf->source = timer->source;
+    polled.push_back(pf);
     return timer;
 }
 
