@@ -1766,7 +1766,7 @@ static void fill_root(Container *root) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto brightness_data = (BrightnessData *) c->user_data;
-            brightness_data->value += ((double) scroll_y) * .001;
+            brightness_data->value += scroll_y * .4;
             if (brightness_data->value > 100) {
                brightness_data->value = 100;
             }
@@ -1839,7 +1839,7 @@ static void fill_root(Container *root) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             if (came_from_touchpad) {
-                volume_level += scroll_y;
+                volume_level += scroll_y * .25;
             } else {
                 // When changing volume with mouse, round to next, 0, 5, 3, or 7
                 int full = std::round(volume_level);

@@ -441,7 +441,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         auto cr = data->window->raw_window->cr;
         int size = 13 * data->window->raw_window->dpi;
 
-        label_data->scroll_x -= scroll_y * .01;
+        label_data->scroll_x -= scroll_y;
         if (label_data->scroll_x < 0)
            label_data->scroll_x = 0;
 

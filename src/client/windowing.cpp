@@ -55,7 +55,7 @@ bool on_scrolled(RawWindow *rw, int source, int axis, int direction, double delt
     event.source = source;
     event.axis = axis;
     event.direction = direction;
-    event.delta = delta * .3;
+    event.delta = delta;
     event.descrete = discrete;
     event.from_mouse = mouse;
     mouse_event(m->root, event);

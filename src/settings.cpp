@@ -1050,7 +1050,7 @@ void fill_root(Container *root) {
     right->receive_events_even_if_obstructed = true;
     right->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         auto d = (RightData *) c->user_data;
-        d->scroll += ((float) scroll_y) * .01f;
+        d->scroll += scroll_y;
     };
 }
 
