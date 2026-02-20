@@ -521,32 +521,6 @@ static float get_volume_level() {
     return value;
 }
 
-static bool watching_volume = false;
-
-static void watch_volume_level() {
-    if (watching_volume)
-        return;
-    watching_volume = true;
-    auto process = std::make_shared<TinyProcessLib::Process>("pactl subscribe", "", [](const char *bytes, size_t n) {
-        long current = get_current_time_in_ms();
-        std::string text(bytes, n);
-        bool contains = text.find("change") != std::string::npos;
-        if (current - last_time_volume_adjusted > 400 && contains) {
-            volume_level = get_volume_level();
-            for (auto d : docks)
-                windowing::redraw(d->window->raw_window);
-        }
-    });
-    std::thread t([process]() {
-        while (!finished) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        watching_volume = false;
-        process->kill();
-    });
-    t.detach();
-}
-
 static void set_brightness(float amount) {
     brightness_level = amount;
     static bool queued = false;
@@ -1859,7 +1833,6 @@ static void fill_root(Container *root) {
             volume_level = get_volume_level();
         });
         t.detach();
-        watch_volume_level(); 
         volume->when_clicked = paint {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
@@ -2411,6 +2384,8 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
 
     root->type = ::vbox;
     for (auto c : clients) {
+        if (c.is_master)
+            volume_level = std::round(c.get_volume() * 100);
         add_title(root, fz("({}) {}", c.get_volume(), c.title), c.uuid);
     }
 }
@@ -2418,8 +2393,10 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
 void dock::change_in_audio() {
     std::vector<AudioClient> clients;
     clients.reserve(audio_clients.size());
-    for (auto client : audio_clients)
+    for (auto client : audio_clients) {
+        client->is_master = client->is_master_volume();
         clients.push_back(*client);
+    }
     
     main_thread([clients = std::move(clients)]() {
         for (auto d : docks) {
