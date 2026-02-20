@@ -163,6 +163,9 @@ struct Windows {
 struct Dock : UserData {
     RawApp *app = nullptr;
     MylarWindow *window = nullptr;
+    
+    MylarWindow *volume = nullptr;
+    
     Windows *collection = nullptr;
     bool first_fill = true;
     RawWindowSettings creation_settings;
@@ -349,7 +352,7 @@ static void paint_root(Container *root, Container *c) {
     cairo_fill(cr);
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
@@ -364,7 +367,7 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 
         pango_layout_set_height(layout, h);
         pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
-    cairo_set_source_rgba(cr, 1, 1, 1, 1);
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
     PangoRectangle ink;
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
@@ -565,7 +568,6 @@ static void set_brightness(float amount) {
 }
 
 static void set_volume(float amount) {
-    /*
     audio([amount]() {
         for (auto client : audio_clients) {
             if (client->is_master_volume()) {
@@ -573,7 +575,6 @@ static void set_volume(float amount) {
             }
         }
     });
-    */
     static bool queued = false;
     static float latest = amount;
     latest = amount;
@@ -1858,7 +1859,39 @@ static void fill_root(Container *root) {
             volume_level = get_volume_level();
         });
         t.detach();
-        watch_volume_level();
+        watch_volume_level(); 
+        volume->when_clicked = paint {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
+
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, 400);
+
+            dock->volume = open_mylar_popup(mylar, settings);
+            if (!dock->volume)
+                return;
+            dock->volume->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->volume = nullptr;
+            };
+            dock->volume->root->user_data = dock;
+            dock->volume->root->when_paint = [](Container *root, Container *c) {
+                auto dock = (Dock *) root->user_data;
+                auto cr = dock->volume->raw_window->cr;
+                set_argb(cr, {1, 1, 1, .8});
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->volume->raw_window->dpi, 1.0);
+                cairo_fill(cr);
+            };
+            dock->volume->root->when_clicked = paint {
+                main_thread([] {
+                    notify("clicked volume");
+                });
+            };
+            audio_read([]() {
+                dock::change_in_audio();
+            }); 
+            windowing::redraw(dock->volume->raw_window);
+        };
         volume->when_fine_scrolled = [](Container* root, Container* c, int scroll_x, int scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
@@ -2323,11 +2356,80 @@ Bounds dock::get_location(std::string name, int cid) {
     return {0, 0, 100, 100};
 }
 
-void dock::update_volume(float vol) {
-    return;
-    volume_level = std::round(vol * 100);
-    for (auto d : docks) {
-        windowing::redraw(d->window->raw_window);
+static void set_volume(std::string uuid, float scalar) {
+    if (scalar < 0)
+        scalar = 0;
+    if (scalar > 1)
+        scalar = 1;
+
+    audio([uuid, scalar]() {
+        for (auto c : audio_clients) {
+            if (c->uuid == uuid)
+               c->set_volume(scalar);
+        }
+    });
+}
+
+static void add_title(Container *parent, std::string title, std::string uuid_target) {
+    auto line = parent->child(FILL_SPACE, 40);
+    line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.h = 40 * ((Dock *) root->user_data)->volume->raw_window->dpi;
+    };
+    line->when_paint = [title](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        paint_button_bg(root, c);
+
+        auto bounds = draw_text(cr, c, title, 12 * dock->volume->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto b = draw_text(cr,
+            c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
+            title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+    };
+    line->when_clicked = [uuid_target](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        set_volume(uuid_target, scalar);
+    };
+    
+    line->when_drag_start = [uuid_target](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        set_volume(uuid_target, scalar);
+    };
+    line->when_drag = [uuid_target](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        set_volume(uuid_target, scalar);
+    };
+    line->when_drag_end = [uuid_target](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        set_volume(uuid_target, scalar);
+    };
+}
+
+static void fill_volume_root(const std::vector<AudioClient> clients, Container *root) {
+    for (auto ch : root->children)
+        delete ch;
+    root->children.clear();
+
+    root->type = ::vbox;
+    for (auto c : clients) {
+        add_title(root, fz("({}) {}", c.get_volume(), c.title), c.uuid);
     }
+}
+
+void dock::change_in_audio() {
+    std::vector<AudioClient> clients;
+    clients.reserve(audio_clients.size());
+    for (auto client : audio_clients)
+        clients.push_back(*client);
+    
+    main_thread([clients = std::move(clients)]() {
+        for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+
+            if (d->volume)
+                fill_volume_root(clients, d->volume->root);
+            
+            windowing::redraw(d->window->raw_window);
+        }
+    });
 }
 

@@ -1546,11 +1546,7 @@ void on_config_generated() {
 }
 
 void on_audio_change() {
-    for (auto client : audio_clients) {
-        if (client->is_master_volume()) {
-            dock::update_volume(client->get_volume());
-        }
-    }
+    dock::change_in_audio();
 }
 
 void on_popup_closed(int id) {
