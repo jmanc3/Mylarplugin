@@ -207,7 +207,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
             c->z_index = 100;
             c->real_bounds.x += ((current_x - initial_x) * s) * (scalar * snap_back_scalar);
             c->real_bounds.y += ((current_y - initial_y) * s) * (scalar * snap_back_scalar);
-        } else if (c->z_index != 1000) {
+        } else if (c->z_index <= 999) {
             c->z_index = 0;
         }
     }
@@ -438,6 +438,8 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         overview_data->clicked_cid = cid;
         //hypriso->bring_to_front(cid, true);
         c->z_index = 1000;
+        if (hypriso->is_pinned(cid))
+            c->z_index = 1002;
         later(45, [](Timer *) {
             overview::close();
         });
@@ -915,6 +917,13 @@ void overview::close(bool focus) {
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
+                for (auto ch : c->children) {
+                    auto cid = *datum<int>(ch, "cid");
+                    if (hypriso->is_pinned(cid)) {
+                        if (ch->z_index <= 1000)
+                            ch->z_index = 1001;
+                    }
+                }
                 animate(&overview_data->scalar, 0.0, overview_anim_time * 0.9, c->lifetime, [focus](bool normal_end) {
                     if (normal_end) {
                         actual_overview_stop(focus);
