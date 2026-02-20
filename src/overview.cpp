@@ -919,7 +919,8 @@ void overview::close(bool focus) {
                 auto overview_data = (OverviewData *) c->user_data;
                 for (auto ch : c->children) {
                     auto cid = *datum<int>(ch, "cid");
-                    if (hypriso->is_pinned(cid)) {
+                    bool pinned = hypriso->is_pinned(cid);
+                    if (pinned) {
                         if (ch->z_index <= 1000)
                             ch->z_index = 1001;
                     }
