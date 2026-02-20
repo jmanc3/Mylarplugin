@@ -1,6 +1,5 @@
 #include "dock.h"
 
-#include "client/wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 #include "heart.h"
 #include "dock_thumbnails.h"
 
@@ -1702,7 +1701,7 @@ static void fill_root(Container *root) {
                 return;
             out->root->when_paint = [out](Container *root, Container *c) {
                 auto cr = out->raw_window->cr;
-                set_argb(cr, {1, 1, 1, .8});
+                set_argb(cr, {1, 1, 1, 1});
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * out->raw_window->dpi, 1.0);
                 cairo_fill(cr);
             };
@@ -1823,7 +1822,7 @@ static void fill_root(Container *root) {
             dock->volume->root->when_paint = [](Container *root, Container *c) {
                 auto dock = (Dock *) root->user_data;
                 auto cr = dock->volume->raw_window->cr;
-                set_argb(cr, {1, 1, 1, .8});
+                set_argb(cr, {1, 1, 1, 1});
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->volume->raw_window->dpi, 1.0);
                 cairo_fill(cr);
             };
@@ -2313,54 +2312,83 @@ static void set_volume(std::string uuid, float scalar) {
                c->set_volume(scalar);
         }
     });
+    
 }
 
-static void add_title(Container *parent, std::string title, std::string uuid_target) {
+struct AudioData : UserData {
+    std::string title; 
+    std::string icon;
+    float level = 100;
+    bool muted = false;
+};
+
+static Container *add_title(Container *parent) {
     auto line = parent->child(FILL_SPACE, 40);
+    auto audio_data = new AudioData;
+    line->user_data = audio_data;
+    
     line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds.h = 40 * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
-    line->when_paint = [title](Container *root, Container *c) {
+    line->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->volume->raw_window->cr;
+        auto audio_data = (AudioData *) c->user_data;
         paint_button_bg(root, c);
 
-        auto bounds = draw_text(cr, c, title, 12 * dock->volume->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto bounds = draw_text(cr, c, audio_data->title, 12 * dock->volume->raw_window->dpi, false, "Segoe Fluent Icons");
         auto b = draw_text(cr,
             c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
-            title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+            audio_data->title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
     };
-    line->when_clicked = [uuid_target](Container *root, Container *c) {
+    line->when_clicked = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(uuid_target, scalar);
+        set_volume(c->uuid, scalar);
     };
     
-    line->when_drag_start = [uuid_target](Container *root, Container *c) {
+    line->when_drag_start = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(uuid_target, scalar);
+        set_volume(c->uuid, scalar);
     };
-    line->when_drag = [uuid_target](Container *root, Container *c) {
+    line->when_drag = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(uuid_target, scalar);
+        set_volume(c->uuid, scalar);
     };
-    line->when_drag_end = [uuid_target](Container *root, Container *c) {
+    line->when_drag_end = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(uuid_target, scalar);
+        set_volume(c->uuid, scalar);
     };
+    return line;
 }
 
 static void fill_volume_root(const std::vector<AudioClient> clients, Container *root) {
-    for (auto ch : root->children)
-        delete ch;
-    root->children.clear();
-
     root->type = ::vbox;
+    
+    std::vector<std::string> uuids;
+    for (auto client : clients)
+        uuids.push_back(client.uuid);
+
+    merge_create<std::string>(root, uuids, [](Container *c) {
+        return c->uuid;
+    }, [clients](Container *parent, std::string uuid) {
+        for (auto client : clients)
+            if (client.uuid == uuid)  {
+                auto c = add_title(parent);
+                c->uuid = uuid;
+            }
+    });
+
     auto current = get_current_time_in_ms();
-    for (auto c : clients) {
-        if (c.is_master && (current - last_time_volume_adjusted) > 100) {
-            volume_level = std::round(c.get_volume() * 100);
+    for (auto client : clients) {
+        if (client.is_master && (current - last_time_volume_adjusted) > 100) {
+            volume_level = std::round(client.get_volume() * 100);
         }
-        add_title(root, fz("({}) {}", c.get_volume(), c.title), c.uuid);
+        for (auto c : root->children) {
+            if (c->uuid == client.uuid) {
+                auto audio_data = (AudioData *) c->user_data;
+                audio_data->title = fz("({:.2f}) {}", client.get_volume(), client.title);
+            }
+        }
     }
 }
 

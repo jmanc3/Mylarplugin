@@ -1585,8 +1585,8 @@ void heart::begin() {
     audio_state_change_callback(on_audio_change);
     
     later(2000, [](Timer*) {
-        dbus_start(DBUS_BUS_SESSION);
-        dbus_start(DBUS_BUS_SYSTEM);
+        //dbus_start(DBUS_BUS_SESSION);
+        //dbus_start(DBUS_BUS_SYSTEM);
     });
 
     later(2000, [](Timer*) {
