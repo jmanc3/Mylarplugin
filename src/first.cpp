@@ -29,14 +29,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
     settings::load_save_settings(false, set); // load
     settings::load_save_settings(true, set); // save
 
-    heart::begin();
+    try {
+        heart::begin();
+    } catch (...) {
+        
+    }
 
     return {"Mylardesktop", "Mylar is a smooth and beautiful wayland desktop, written on Hyprland", "jmanc3", "1.0"};
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-    heart::end();
-    //std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    try {
+        heart::end();
+    } catch (...) {
+
+    }
+    //std::this_thread::sleep_for(std::chrono::milliseconds(300));
 }
 
 void init_mylar(void* h) { // When started directly from hyprland

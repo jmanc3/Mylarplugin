@@ -1804,6 +1804,8 @@ static void fill_root(Container *root) {
         volume->name = "volume";
         volume_level = 100;
         volume->when_clicked = paint {
+            if (!audio_running)
+                audio_start();
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;

@@ -1582,13 +1582,16 @@ void heart::begin() {
     ZoneScoped;
 #endif
     hypriso->create_config_variables();
-    later(1000, [](Timer*) {
+    audio_state_change_callback(on_audio_change);
+    
+    later(2000, [](Timer*) {
         dbus_start(DBUS_BUS_SESSION);
         dbus_start(DBUS_BUS_SYSTEM);
+    });
+
+    later(2000, [](Timer*) {
         audio_start();
     });
-    
-    audio_state_change_callback(on_audio_change);
 
     later_immediate([](Timer*) {
         on_any_container_close = any_container_closed;

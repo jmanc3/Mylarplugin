@@ -56,7 +56,7 @@ clean:
 	$(RM) $(OUTPUT) $(OBJECT_FILES)
 
 load: all unload
-	hyprctl plugin load ${PWD}/$(OUTPUT)
+	hyprctl plugin load ${PWD}/$(OUTPUT); sleep .4s
 
 unload:
 	hyprctl plugin unload ${PWD}/$(OUTPUT)

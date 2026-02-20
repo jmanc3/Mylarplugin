@@ -3050,7 +3050,7 @@ void HyprIso::end() {
     // reset to default config
     return_default_config = true;
     change_root_config_path(g_pConfigManager->getMainConfigPath());
-    g_pConfigManager->reload();
+    //g_pConfigManager->reload();
     for (auto a : anims)
         delete a;
     anims.clear();
