@@ -492,7 +492,7 @@ void layout_stack(Container* root, Container* container, const Bounds& bounds) {
 // [required] right_box
 // [required] bottom_box
 // [required] content_area
-void layout_scrollpane(Container* root, Container* container, const Bounds& bounds) {
+void layout_scrollpane(Container* root, Container* container, const Bounds& bounds) { 
     assert(container->children.size() == 3 && !container->children[2]->children.empty());
 
     auto* r_bar        = container->children[0];
@@ -638,6 +638,8 @@ void layout_newscrollpane_content(Container* root, ScrollContainer* scroll, cons
 }
 
 void layout_newscrollpane(Container* root, ScrollContainer* scroll, const Bounds& bounds) {
+    if (scroll->pre_layout)
+        scroll->pre_layout(root, scroll, bounds);
     ScrollPaneSettings settings = scroll->settings;
 
     // layout the content as if the scroll bars were needed, and then if the size

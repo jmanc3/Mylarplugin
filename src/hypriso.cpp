@@ -235,6 +235,7 @@ struct Anim {
     float *value = nullptr;
     float start_value;
     float target;
+    float delay;
     long start_time;
     float time_ms;
     std::weak_ptr<bool> lifetime;
@@ -7738,7 +7739,7 @@ void HyprIso::generate_mylar_hyprland_config() {
     }
 }
 
-void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion, std::function<float(float)> lerp_func) {
+void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion, std::function<float(float)> lerp_func, float delay) {
     
     for (auto anim : anims) {
         if (anim->value == value) {
@@ -7749,6 +7750,7 @@ void animate(float *value, float target, float time_ms, std::shared_ptr<bool> li
             anim->lifetime = lifetime;
             anim->on_completion = on_completion;
             anim->lerp_func = lerp_func;
+            anim->delay = delay;
             return;
         }
     }
@@ -7762,6 +7764,7 @@ void animate(float *value, float target, float time_ms, std::shared_ptr<bool> li
     anim->lifetime = lifetime;
     anim->on_completion = on_completion;
     anim->lerp_func = lerp_func;
+    anim->delay = delay;
     
     anims.push_back(anim);
     

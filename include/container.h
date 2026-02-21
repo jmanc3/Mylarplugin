@@ -464,8 +464,8 @@ struct ScrollContainer : public Container {
     long               previous_delta_diff    = -1;
     int                scroll_count           = 0;
     ScrollPaneSettings settings;
-    double             scrollbar_openess     = 1;
-    double             scrollbar_visible     = 1;
+    float              scrollbar_openess     = 1;
+    float              scrollbar_visible     = 1;
     Timeout*           openess_delay_timeout = nullptr;
 
     explicit ScrollContainer(ScrollPaneSettings settings) : settings(std::move(settings)) {

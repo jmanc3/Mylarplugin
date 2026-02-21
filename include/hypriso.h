@@ -484,7 +484,7 @@ Bounds lerp(Bounds start, Bounds end, float scalar);
 
 float pull(std::vector<float>& fls, float scalar);
 
-void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr, std::function<float(float)> lerp_func = nullptr);
+void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr, std::function<float(float)> lerp_func = nullptr, float delay = 0.0);
 bool is_being_animating(float *value);
 bool is_being_animating_to(float *value, float target);
 

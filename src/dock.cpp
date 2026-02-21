@@ -11,6 +11,7 @@
 #include "popup.h"
 #include "edit_pin.h"
 #include "audio.h"
+#include "components.h"
 
 #include <algorithm>
 #include <cairo.h>
@@ -164,6 +165,8 @@ struct Dock : UserData {
     MylarWindow *window = nullptr;
     
     MylarWindow *volume = nullptr;
+
+    MylarWindow *extra = nullptr;
     
     Windows *collection = nullptr;
     bool first_fill = true;
@@ -1695,21 +1698,46 @@ static void fill_root(Container *root) {
 
             RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 220, 140);
 
-            auto out = open_mylar_popup(mylar, settings);
-            if (!out)
+            dock->extra = open_mylar_popup(mylar, settings);
+            if (!dock->extra)
                 return;
-            out->root->when_paint = [out](Container *root, Container *c) {
-                auto cr = out->raw_window->cr;
+            dock->extra->root->user_data = dock;
+            dock->extra->root->when_paint = [dock](Container *root, Container *c) {
+                auto cr = dock->extra->raw_window->cr;
                 set_argb(cr, {1, 1, 1, 1});
-                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * out->raw_window->dpi, 1.0);
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
                 cairo_fill(cr);
             };
-            out->root->when_clicked = paint {
+            dock->extra->root->when_clicked = paint {
                 main_thread([] {
                     notify("clicked inside");
                 });
             };
-            windowing::redraw(out->raw_window);
+            auto extra_root = dock->extra->root;
+            ScrollPaneSettings pane_settings(1.0);
+            auto scroll = make_newscrollpane_as_child(extra_root, pane_settings, [](Container *root) {
+                auto dock = ((Dock *) root->user_data);
+                return DrawContext({dock->extra->raw_window->cr, dock->extra->raw_window->dpi, [dock]() {
+                    windowing::redraw(dock->extra->raw_window);
+                }});
+            });
+            for (int i = 0; i < 20; i++) {
+                auto p = scroll->content->child(FILL_SPACE, 100);
+                p->when_paint = [dock](Container *root, Container *c) {
+                    auto cr = dock->extra->raw_window->cr;
+                    if (c->state.mouse_hovering) {
+                        set_rect(cr, c->real_bounds);
+                        set_argb(cr, {0, 1, 0, 1});
+                        cairo_fill(cr);
+                    } else {
+                        set_rect(cr, c->real_bounds);
+                        set_argb(cr, {0, 1, 1, 1});
+                        cairo_stroke(cr);
+                    }
+                };
+            }
+
+            windowing::redraw(dock->extra->raw_window);
         };
     }
 
