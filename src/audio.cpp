@@ -1010,7 +1010,7 @@ void audio_sort() {
 }
 
 void audio_start() {
-    if (!threads.empty()) {
+    if (!threads.empty() && !audio_running) {
         audio_stop();
         audio_join();
     }
