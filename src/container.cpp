@@ -789,6 +789,12 @@ Container* container_by_name(std::string name, Container* root) {
 
     if (root->type == layout_type::newscroll) {
         auto scroll   = (ScrollContainer*)root;
+        if (scroll->content->name == name)
+            return scroll->content;
+        if (scroll->right->name == name)
+            return scroll->right;
+        if (scroll->bottom->name == name)
+            return scroll->bottom;
         auto possible = container_by_name(name, scroll->content);
         if (possible)
             return possible;

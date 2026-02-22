@@ -1839,7 +1839,7 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, 400);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, 200);
 
             dock->volume = open_mylar_popup(mylar, settings);
             if (!dock->volume)
@@ -1849,6 +1849,15 @@ static void fill_root(Container *root) {
                 dock->volume = nullptr;
             };
             dock->volume->root->user_data = dock;
+            dock->volume->root->wanted_bounds.w = FILL_SPACE;
+            dock->volume->root->wanted_bounds.h = FILL_SPACE;
+            auto scroll = make_newscrollpane_as_child(dock->volume->root, ScrollPaneSettings(1.0), [](Container *root) {
+                auto dock = ((Dock *) root->user_data);
+                return DrawContext({dock->volume->raw_window->cr, dock->volume->raw_window->dpi, [dock]() {
+                    windowing::redraw(dock->volume->raw_window);
+                }});
+            });
+            scroll->name = "volume_root";
             dock->volume->root->when_paint = [](Container *root, Container *c) {
                 auto dock = (Dock *) root->user_data;
                 auto cr = dock->volume->raw_window->cr;
@@ -1856,14 +1865,10 @@ static void fill_root(Container *root) {
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->volume->raw_window->dpi, 1.0);
                 cairo_fill(cr);
             };
-            dock->volume->root->when_clicked = paint {
-                main_thread([] {
-                    notify("clicked volume");
-                });
-            };
+            // Because we need to fill items on first frame
             audio_read([]() {
                 dock::change_in_audio();
-            }); 
+            });
             windowing::redraw(dock->volume->raw_window);
         };
         volume->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
@@ -2450,9 +2455,13 @@ void dock::change_in_audio() {
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 
-            if (d->volume)
-                fill_volume_root(clients, d->volume->root);
-            
+            if (d->volume) {
+                if (auto volume_root = container_by_name("volume_root", d->volume->root)) {
+                    auto scroll = (ScrollContainer *) volume_root;
+                    fill_volume_root(clients, scroll->content);
+                }
+            }
+
             windowing::redraw(d->window->raw_window);
         }
     });
