@@ -1715,14 +1715,17 @@ static void fill_root(Container *root) {
             };
             auto extra_root = dock->extra->root;
             ScrollPaneSettings pane_settings(1.0);
-            auto scroll = make_newscrollpane_as_child(extra_root, pane_settings, [](Container *root) {
-                auto dock = ((Dock *) root->user_data);
+            auto scroll = make_newscrollpane_as_child(extra_root, pane_settings, [](Container *root_not_scroll) {
+                auto dock = ((Dock *) root_not_scroll->user_data);
                 return DrawContext({dock->extra->raw_window->cr, dock->extra->raw_window->dpi, [dock]() {
                     windowing::redraw(dock->extra->raw_window);
                 }});
             });
             for (int i = 0; i < 20; i++) {
                 auto p = scroll->content->child(FILL_SPACE, 100);
+                if (i == 3) {
+                    p->wanted_bounds.w = 1000;
+                }
                 p->when_paint = [dock](Container *root, Container *c) {
                     auto cr = dock->extra->raw_window->cr;
                     if (c->state.mouse_hovering) {
@@ -2455,3 +2458,6 @@ void dock::change_in_audio() {
     });
 }
 
+void dock::change_in_battery() {
+    
+}

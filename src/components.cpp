@@ -6,6 +6,7 @@
 #include "hypriso.h"
 #include "hsluv.h"
 #include "heart.h"
+#include "events.h"
 #include <pango/pango-font.h>
 
 #ifdef TRACY_ENABLE
@@ -19,6 +20,7 @@
 
 Bounds right_thumb_bounds(Container *scrollpane, Bounds thumb_area);
 static void paint_right_thumb(Container *root, Container *container);
+Bounds bottom_thumb_bounds(Container *scrollpane, Bounds thumb_area);
 #define schedule_redraw(ctx) [ctx](float a) { ctx.on_needs_frame(); return a; }
 
 static int scroll_amount = 120;
@@ -332,6 +334,13 @@ void fine_scrollpane_scrolled(Container *root,
                               int scroll_x,
                               int scroll_y,
                               bool came_from_touchpad) {
+    auto scroll = (ScrollContainer *) container;
+    if (bounds_contains(scroll->bottom->real_bounds, root->mouse_current_x, root->mouse_current_y)) {
+        float temp = scroll_y;
+        scroll_y = scroll_x;
+        scroll_x = temp;
+    }
+
     root->consumed_event = true;
     container->scroll_h_real += scroll_x;
     container->scroll_v_real += scroll_y;
@@ -835,7 +844,7 @@ paint_right_thumb(Container *root, Container *container) {
         dpi = ctx.dpi;
     }
         
-    int small_width = std::round(4.0 * dpi);
+    int small_width = std::round(3.0 * dpi);
     
     right_bounds.x += right_bounds.w;
     right_bounds.w = std::max(right_bounds.w * scroll_container->scrollbar_openess, (double) small_width);
@@ -858,41 +867,49 @@ paint_right_thumb(Container *root, Container *container) {
     draw_colored_rect(root, scroll_container, color, right_bounds);
 }
 
-//
-//static void
-//paint_bottom_thumb(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    bool minimal = ((ScrollContainer *) container->parent->parent)->settings.paint_minimal;
-//    auto scroll_container = ((ScrollContainer *) container->parent->parent);
-//    
-//    if (!minimal)
-//        paint_scroll_bg(root, container);
-//    
-//    Container *scrollpane = container->parent->parent;
-//    
-//    auto bottom_bounds = bottom_thumb_bounds(scrollpane, container->real_bounds);
-//    
-//    bottom_bounds.y += bottom_bounds.h;
-//    bottom_bounds.h = std::max(bottom_bounds.h * scroll_container->scrollbar_openess, 2.0);
-//    bottom_bounds.y -= bottom_bounds.h;
-//    bottom_bounds.y -= 2 * (1 - scroll_container->scrollbar_openess);
-//    
-//    RGBA color = config->color_apps_scrollbar_default_thumb;
-//    
-//    if (container->state.mouse_pressing) {
-//        color = config->color_apps_scrollbar_pressed_thumb;
-//    } else if (bounds_contains(bottom_bounds, root->mouse_current_x, root->mouse_current_y)) {
-//        color = config->color_apps_scrollbar_hovered_thumb;
-//    } else if (bottom_bounds.w == 2.0) {
-//        color = config->color_apps_scrollbar_default_thumb;
-//        lighten(&color, 10);
-//    }
-//    color.a = scroll_container->scrollbar_visible;
-//    
-//    draw_colored_rect(color, bottom_bounds);
-//}
+
+static void
+paint_bottom_thumb(Container *root, Container *container) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    bool minimal = ((ScrollContainer *) container->parent->parent)->settings.paint_minimal;
+    auto scroll_container = ((ScrollContainer *) container->parent->parent);
+    
+    if (!minimal)
+        paint_scroll_bg(root, container);
+    
+    Container *scrollpane = container->parent->parent;
+    
+    auto bottom_bounds = bottom_thumb_bounds(scrollpane, container->real_bounds);
+
+    auto data = (ScrollData *) scroll_container->user_data;
+    float dpi = 1.0;
+    if (data->func) {
+        auto ctx = data->func(root);
+        dpi = ctx.dpi;
+    }
+    int small_width = std::round(3.0 * dpi);
+
+    bottom_bounds.y += bottom_bounds.h;
+    bottom_bounds.h = std::max(bottom_bounds.h * scroll_container->scrollbar_openess, (double) small_width);
+    bottom_bounds.y -= bottom_bounds.h;
+    bottom_bounds.y -= small_width * (1 - scroll_container->scrollbar_openess);
+    
+    RGBA color = config->color_apps_scrollbar_default_thumb;
+    
+    if (container->state.mouse_pressing) {
+        color = config->color_apps_scrollbar_pressed_thumb;
+    } else if (bounds_contains(bottom_bounds, root->mouse_current_x, root->mouse_current_y)) {
+        color = config->color_apps_scrollbar_hovered_thumb;
+    } else if (bottom_bounds.w == small_width) {
+        color = config->color_apps_scrollbar_default_thumb;
+        lighten(&color, 10);
+    }
+    color.a = scroll_container->scrollbar_visible;
+
+    draw_colored_rect(root, scroll_container, color, bottom_bounds);
+}
 //
 //static void
 //paint_arrow(Container *root, Container *container) {
@@ -1073,7 +1090,7 @@ mouse_down_arrow_bottom(Container *root, Container *container, bool first_time =
     if (clamp) clamp_scroll((ScrollContainer *) target);
     ::layout(root, container, container->real_bounds);
     std::weak_ptr<bool> lifetime = container->lifetime;
-    later(first_time ? 600 : 150, [lifetime, container, root, target](Timer *) {
+    later(first_time ? 450 : 150, [lifetime, container, root, target](Timer *) {
         if (lifetime.lock()) {
             if (container->state.mouse_pressing) {
                 mouse_down_arrow_bottom(root, container, false);
@@ -1098,7 +1115,7 @@ mouse_down_arrow_up(Container *root, Container *container, bool first_time = tru
     if (clamp) clamp_scroll((ScrollContainer *) target);
     ::layout(root, container, container->real_bounds);
     std::weak_ptr<bool> lifetime = container->lifetime;
-    later(first_time ? 600 : 150, [lifetime, container, root, target](Timer *) {
+    later(first_time ? 450 : 150, [lifetime, container, root, target](Timer *) {
         if (lifetime.lock()) {
             if (container->state.mouse_pressing) {
                 mouse_down_arrow_up(root, container, false);
@@ -1110,137 +1127,55 @@ mouse_down_arrow_up(Container *root, Container *container, bool first_time = tru
     });
 }
 
-//static void
-//mouse_down_arrow_bottom(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    Container *target = nullptr;
-//    bool clamp = false;
-//    if (auto *s = dynamic_cast<ScrollContainer *>(container->parent->parent)) {
-//        target = s;
-//        clamp = true;
-//    } else {
-//        target = container->parent->parent->children[2];
-//    }
-//    target->scroll_v_real -= scroll_amount;
-//    if (clamp) clamp_scroll((ScrollContainer *) target);
-//    // ::layout(target, target->real_bounds, false);
-//    //client_layout(client->app, client);
-//
-//    /*
-//    client_create_animation(client->app,
-//                            client,
-//                            &target->scroll_h_visual, target->lifetime, 0,
-//                            scroll_anim_time,
-//                            easing_function,
-//                            target->scroll_h_real,
-//                            true);
-//    client_create_animation(client->app,
-//                            client,
-//                            &target->scroll_v_visual, target->lifetime, 0,
-//                            scroll_anim_time,
-//                            easing_function,
-//                            target->scroll_v_real,
-//                            true);
-//    
-//    if (mouse_down_arrow_held.load())
-//        return;
-//    mouse_down_arrow_held.store(true);
-//    auto *data = new MouseDownInfo;
-//    data->container = container;
-//    data->vertical_change = -scroll_amount;
-//    app_timeout_create(client->app, client, scroll_anim_time * 1.56, mouse_down_thread, data, const_cast<char *>(__PRETTY_FUNCTION__));
-//    */
-//}
-//
-//static void
-//mouse_down_arrow_left(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    Container *target = nullptr;
-//    bool clamp = false;
-//    if (auto *s = dynamic_cast<ScrollContainer *>(container->parent->parent)) {
-//        target = s;
-//        clamp = true;
-//    } else {
-//        target = container->parent->parent->children[2];
-//    }
-//    target->scroll_h_real += scroll_amount;
-//    if (clamp) clamp_scroll((ScrollContainer *) target);
-//    // ::layout(target, target->real_bounds, false);
-//    /*
-//    client_layout(client->app, client);
-//    
-//    client_create_animation(client->app,
-//                            client,
-//                            &target->scroll_h_visual, target->lifetime, 0,
-//                            scroll_anim_time,
-//                            easing_function,
-//                            target->scroll_h_real,
-//                            true);
-//    client_create_animation(client->app,
-//                            client,
-//                            &target->scroll_v_visual, target->lifetime, 0,
-//                            scroll_anim_time,
-//                            easing_function,
-//                            target->scroll_v_real,
-//                            true);
-//    
-//    if (mouse_down_arrow_held.load())
-//        return;
-//    mouse_down_arrow_held.store(true);
-//    auto *data = new MouseDownInfo;
-//    data->container = container;
-//    data->horizontal_change = scroll_amount;
-//    app_timeout_create(client->app, client, scroll_anim_time * 1.56, mouse_down_thread, data, const_cast<char *>(__PRETTY_FUNCTION__));
-//    */
-//}
-//
-//static void
-//mouse_down_arrow_right(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    Container *target = nullptr;
-//    bool clamp = false;
-//    if (auto *s = dynamic_cast<ScrollContainer *>(container->parent->parent)) {
-//        target = s;
-//        clamp = true;
-//    } else {
-//        target = container->parent->parent->children[2];
-//    }
-//    target->scroll_h_real -= scroll_amount;
-//    if (clamp) clamp_scroll((ScrollContainer *) target);
-//    // ::layout(target, target->real_bounds, false);
-//    /*client_layout(client->app, client);
-//    
-//    client_create_animation(client->app,
-//                            client,
-//                            &target->scroll_h_visual, target->lifetime, 0,
-//                            scroll_anim_time,
-//                            easing_function,
-//                            target->scroll_h_real,
-//                            true);
-//    client_create_animation(client->app,
-//                            client,
-//                            &target->scroll_v_visual, target->lifetime, 0,
-//                            scroll_anim_time,
-//                            easing_function,
-//                            target->scroll_v_real,
-//                            true);
-//    
-//    if (mouse_down_arrow_held.load())
-//        return;
-//    mouse_down_arrow_held.store(true);
-//    auto *data = new MouseDownInfo;
-//    data->container = container;
-//    data->horizontal_change = -scroll_amount;
-//    app_timeout_create(client->app, client, scroll_anim_time * 1.56, mouse_down_thread, data, const_cast<char *>(__PRETTY_FUNCTION__));
-//    */
-//}
-//
+static void
+mouse_down_arrow_left(Container *root, Container *container, bool first_time = true) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto target = (ScrollContainer *) container->parent->parent;
+    bool clamp = true;
+    target->scroll_h_real += scroll_amount;
+    target->scroll_h_visual = target->scroll_v_real;
+    if (clamp) clamp_scroll((ScrollContainer *) target);
+    ::layout(root, container, container->real_bounds);
+    std::weak_ptr<bool> lifetime = container->lifetime;
+    later(first_time ? 450 : 150, [lifetime, container, root, target](Timer *) {
+        if (lifetime.lock()) {
+            if (container->state.mouse_pressing) {
+                mouse_down_arrow_up(root, container, false);
+                auto scroll_data = (ScrollData *) target->user_data;
+                auto ctx = scroll_data->func(root);
+                ctx.on_needs_frame();
+            }
+        }
+    });
+}
+
+
+static void
+mouse_down_arrow_right(Container *root, Container *container, bool first_time = true) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto target = (ScrollContainer *) container->parent->parent;
+    bool clamp = true;
+    target->scroll_h_real -= scroll_amount;
+    target->scroll_h_visual = target->scroll_v_real;
+    if (clamp) clamp_scroll((ScrollContainer *) target);
+    ::layout(root, container, container->real_bounds);
+    std::weak_ptr<bool> lifetime = container->lifetime;
+    later(first_time ? 450 : 150, [lifetime, container, root, target](Timer *) {
+        if (lifetime.lock()) {
+            if (container->state.mouse_pressing) {
+                mouse_down_arrow_up(root, container, false);
+                auto scroll_data = (ScrollData *) target->user_data;
+                auto ctx = scroll_data->func(root);
+                ctx.on_needs_frame();
+            }
+        }
+    });
+}
+
 //static void
 //right_thumb_scrolled(Container *root, Container *container, int scroll_x, int scroll_y) {
 //#ifdef TRACY_ENABLE
@@ -1289,13 +1224,7 @@ mouse_down_arrow_up(Container *root, Container *container, bool first_time = tru
 //    }
 //}
 //
-static void
-mouse_arrow_up(Container *root, Container *container) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //mouse_down_arrow_held = false;
-}
+
 //
 Bounds
 right_thumb_bounds(Container *scrollpane, Bounds thumb_area) {
@@ -1338,52 +1267,52 @@ right_thumb_bounds(Container *scrollpane, Bounds thumb_area) {
     }
     return Bounds(thumb_area.x, thumb_area.y + scroll_offset, thumb_area.w, thumb_height);
 }
-//
-//Bounds
-//bottom_thumb_bounds(Container *scrollpane, Bounds thumb_area) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    if (auto *s = dynamic_cast<ScrollContainer *>(scrollpane)) {
-//        double true_width = actual_true_width(s->content);
-//        if (s->right && s->right->exists && !s->settings.right_inline_track)
-//            true_width += s->right->real_bounds.w;
-//        
-//        double start_scalar = -s->scroll_h_visual / true_width;
-//        double thumb_width = thumb_area.w * (s->real_bounds.w / true_width);
-//        double start_off = thumb_area.x + thumb_area.w * start_scalar;
-//        double avail = thumb_area.w - (start_off - thumb_area.x);
-//        
-//        return {thumb_area.x + thumb_area.w * start_scalar, thumb_area.y, std::min(thumb_width, avail), thumb_area.h};
-//    }
-//    
-//    auto content_area = scrollpane->children[2];
-//    double total_width = content_area->children[0]->real_bounds.w;
-//    
-//    double view_width = content_area->real_bounds.w;
-//    
-//    if (total_width == 0) {
-//        total_width = view_width;
-//    }
-//    double view_scalar = view_width / total_width;
-//    double thumb_width = view_scalar * thumb_area.w;
-//    
-//    // 0 as min pos and 1 as max position
-//    double max_scroll = total_width - view_width;
-//    if (max_scroll < 0)
-//        max_scroll = 0;
-//    
-//    double scroll_scalar = (-content_area->scroll_h_visual) / max_scroll;
-//    double scroll_offset = (thumb_area.w - thumb_width) * scroll_scalar;
-//    if (max_scroll == 0) {
-//        scroll_offset = 0;
-//    }
-//    
-//    if (thumb_width > thumb_area.w) {
-//        thumb_width = thumb_area.w;
-//    }
-//    return Bounds(thumb_area.x + scroll_offset, thumb_area.y, thumb_width, thumb_area.h);
-//}
+
+Bounds
+bottom_thumb_bounds(Container *scrollpane, Bounds thumb_area) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (auto *s = dynamic_cast<ScrollContainer *>(scrollpane)) {
+        double true_width = actual_true_width(s->content);
+        if (s->right && s->right->exists && !s->settings.right_inline_track)
+            true_width += s->right->real_bounds.w;
+        
+        double start_scalar = -s->scroll_h_visual / true_width;
+        double thumb_width = thumb_area.w * (s->real_bounds.w / true_width);
+        double start_off = thumb_area.x + thumb_area.w * start_scalar;
+        double avail = thumb_area.w - (start_off - thumb_area.x);
+        
+        return {thumb_area.x + thumb_area.w * start_scalar, thumb_area.y, std::min(thumb_width, avail), thumb_area.h};
+    }
+    
+    auto content_area = scrollpane->children[2];
+    double total_width = content_area->children[0]->real_bounds.w;
+    
+    double view_width = content_area->real_bounds.w;
+    
+    if (total_width == 0) {
+        total_width = view_width;
+    }
+    double view_scalar = view_width / total_width;
+    double thumb_width = view_scalar * thumb_area.w;
+    
+     //0 as min pos and 1 as max position
+    double max_scroll = total_width - view_width;
+    if (max_scroll < 0)
+        max_scroll = 0;
+    
+    double scroll_scalar = (-content_area->scroll_h_visual) / max_scroll;
+    double scroll_offset = (thumb_area.w - thumb_width) * scroll_scalar;
+    if (max_scroll == 0) {
+        scroll_offset = 0;
+    }
+    
+    if (thumb_width > thumb_area.w) {
+        thumb_width = thumb_area.w;
+    }
+    return Bounds(thumb_area.x + scroll_offset, thumb_area.y, thumb_width, thumb_area.h);
+}
 //
 static void
 clicked_right_thumb(Container *root, Container *thumb_container, bool animate) {
@@ -1417,99 +1346,38 @@ clicked_right_thumb(Container *root, Container *thumb_container, bool animate) {
         return;
     }
 }
-//
-//static void
-//clicked_bottom_thumb(Container *root, Container *thumb_container, bool animate) {
-//    if (auto *s = dynamic_cast<ScrollContainer *>(thumb_container->parent->parent)) {
-//        auto *content = s->content;
-//        
-//        double thumb_width =
-//                bottom_thumb_bounds(thumb_container->parent->parent, thumb_container->real_bounds).w;
-//        double mouse_x = root->mouse_current_x;
-//        if (mouse_x < thumb_container->real_bounds.x) {
-//            mouse_x = thumb_container->real_bounds.x;
-//        } else if (mouse_x > thumb_container->real_bounds.x + thumb_container->real_bounds.w) {
-//            mouse_x = thumb_container->real_bounds.x + thumb_container->real_bounds.w;
-//        }
-//        
-//        mouse_x -= thumb_container->real_bounds.x;
-//        mouse_x -= thumb_width / 2;
-//        double scalar = mouse_x / thumb_container->real_bounds.w;
-//        
-//        double true_width = actual_true_width(s->content);
-//        if (s->right && s->right->exists && !s->settings.right_inline_track)
-//            true_width += s->right->real_bounds.w;
-//        
-//        double x = true_width * scalar;
-//        
-//        s->scroll_h_real = -x;
-//        s->scroll_h_visual = -x;
-//        ::layout(root, s, s->real_bounds);
-//        
-//        return;
-//    }
-//    
-//    auto *scrollpane = thumb_container->parent->parent;
-//    auto *content = scrollpane->children[2];
-//    
-//    double thumb_width =
-//            bottom_thumb_bounds(thumb_container->parent->parent, thumb_container->real_bounds).w;
-//    double mouse_x = root->mouse_current_x;
-//    if (mouse_x < thumb_container->real_bounds.x) {
-//        mouse_x = thumb_container->real_bounds.x;
-//    } else if (mouse_x > thumb_container->real_bounds.x + thumb_container->real_bounds.w) {
-//        mouse_x = thumb_container->real_bounds.x + thumb_container->real_bounds.w;
-//    }
-//    
-//    mouse_x -= thumb_container->real_bounds.x;
-//    mouse_x -= thumb_width / 2;
-//    double scalar = mouse_x / thumb_container->real_bounds.w;
-//    
-//    // why the fuck do I have to add the real...w to true width to actually get
-//    // the true width
-//    double content_width = true_width(content) + content->real_bounds.w;
-//    double x = content_width * scalar;
-//    
-//    Container *content_area = thumb_container->parent->parent->children[2];
-//    content_area->scroll_h_real = -x;
-//    if (!animate)
-//        content_area->scroll_h_visual = -x;
-//    // ::layout(content_area, content_area->real_bounds, false);
-//    /*client_layout(client->app, client);
-//    
-//    if (animate) {
-//        client_create_animation(client->app,
-//                                client,
-//                                &content_area->scroll_h_visual, content_area->lifetime, 0,
-//                                scroll_anim_time * 2,
-//                                easing_function,
-//                                content_area->scroll_h_real,
-//                                true);
-//        client_create_animation(client->app,
-//                                client,
-//                                &content_area->scroll_v_visual, content_area->lifetime, 0,
-//                                scroll_anim_time * 2,
-//                                easing_function,
-//                                content_area->scroll_v_real,
-//                                true);
-//    } else {
-//        client_create_animation(client->app,
-//                                client,
-//                                &content_area->scroll_h_visual, content_area->lifetime, 0,
-//                                0,
-//                                easing_function,
-//                                content_area->scroll_h_real,
-//                                true);
-//        client_create_animation(client->app,
-//                                client,
-//                                &content_area->scroll_v_visual, content_area->lifetime, 0,
-//                                0,
-//                                easing_function,
-//                                content_area->scroll_v_real,
-//                                true);
-//    }
-//    */
-//}
+
+static void
+clicked_bottom_thumb(Container *root, Container *thumb_container, bool animate) {
+    if (auto *s = dynamic_cast<ScrollContainer *>(thumb_container->parent->parent)) {
+        auto *content = s->content;
+        
+        double thumb_width =
+                bottom_thumb_bounds(thumb_container->parent->parent, thumb_container->real_bounds).w;
+        double mouse_x = root->mouse_current_x;
+        if (mouse_x < thumb_container->real_bounds.x) {
+            mouse_x = thumb_container->real_bounds.x;
+        } else if (mouse_x > thumb_container->real_bounds.x + thumb_container->real_bounds.w) {
+            mouse_x = thumb_container->real_bounds.x + thumb_container->real_bounds.w;
+        }
+        
+        mouse_x -= thumb_container->real_bounds.x;
+        mouse_x -= thumb_width / 2;
+        double scalar = mouse_x / thumb_container->real_bounds.w;
+        
+        double true_width = actual_true_width(s->content);
+        if (s->right && s->right->exists && !s->settings.right_inline_track)
+            true_width += s->right->real_bounds.w;
+        
+        double x = true_width * scalar;
+        
+        s->scroll_h_real = -x;
+        s->scroll_h_visual = -x;
+        ::layout(root, s, s->real_bounds);
+        
+        return;
+    }
+}
 //
 static void
 right_scrollbar_mouse_down(Container *root, Container *container) {
@@ -1543,38 +1411,38 @@ right_scrollbar_drag_end(Container *root, Container *container) {
     clicked_right_thumb(root, container, false);
 }
 //
-//static void
-//bottom_scrollbar_mouse_down(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    clicked_bottom_thumb(root, container, true);
-//}
-//
-//static void
-//bottom_scrollbar_drag_start(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    clicked_bottom_thumb(root, container, false);
-//}
-//
-//static void
-//bottom_scrollbar_drag(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    clicked_bottom_thumb(root, container, false);
-//}
-//
-//static void
-//bottom_scrollbar_drag_end(Container *root, Container *container) {
-//#ifdef TRACY_ENABLE
-//    ZoneScoped;
-//#endif
-//    clicked_bottom_thumb(root, container, false);
-//}
-//
+static void
+bottom_scrollbar_mouse_down(Container *root, Container *container) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    clicked_bottom_thumb(root, container, true);
+}
+
+static void
+bottom_scrollbar_drag_start(Container *root, Container *container) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    clicked_bottom_thumb(root, container, false);
+}
+
+static void
+bottom_scrollbar_drag(Container *root, Container *container) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    clicked_bottom_thumb(root, container, false);
+}
+
+static void
+bottom_scrollbar_drag_end(Container *root, Container *container) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    clicked_bottom_thumb(root, container, false);
+}
+
 //static void
 //paint_content(Container *root, Container *container) {
 //#ifdef TRACY_ENABLE
@@ -3699,6 +3567,10 @@ make_newscrollpane_as_child(Container *parent, const ScrollPaneSettings &setting
         if (data->func) {
             DrawContext ctx = data->func(root);
             int amount = std::round(12.0f * (ctx.dpi));
+            scroll->right->children[0]->wanted_bounds.h = amount;
+            scroll->right->children[2]->wanted_bounds.h = amount;
+            scroll->bottom->children[0]->wanted_bounds.w = amount;
+            scroll->bottom->children[2]->wanted_bounds.w = amount;
             scroll->settings.right_width = amount; 
             scroll->settings.right_arrow_height = amount; 
             scroll->settings.bottom_height = amount; 
@@ -3748,27 +3620,6 @@ make_newscrollpane_as_child(Container *parent, const ScrollPaneSettings &setting
         auto data = (ScrollData *) scroll->user_data;
         auto ctx = data->func(root);
         animate(&scroll->scrollbar_openess, 0.0, 100, scroll->lifetime, nullptr, schedule_redraw(ctx));
-        
-        /*
-            int delay = 0;
-            if (bounds_contains(scroll->real_bounds, root->mouse_current_x, root->mouse_current_y)) {
-                delay = 3000;
-            }
-            if (delay == 0) {
-                animate(&scroll->scrollbar_openess, 0.0, 100, scroll->lifetime);
-                //client_create_animation(client->app, client, &scroll->scrollbar_openess, scroll->lifetime,
-                                        //delay, 100, nullptr, 0);
-            } else {
-                if (!scroll->openess_delay_timeout) {
-                    scroll->openess_delay_timeout =
-                            app_timeout_create(client->app, client, 3000, scroll_hover_timeout,
-                                               container->parent, "scrollpane_3000ms_timeout");
-                } else {
-                    scroll->openess_delay_timeout = app_timeout_replace(client->app, client, scroll->openess_delay_timeout,
-                                                                        3000, scroll_hover_timeout, container->parent);
-                }
-            }
-        */
     };
     right_vbox->when_mouse_enters_container = [](Container *root, Container *container) {
         auto scroll = (ScrollContainer *) container->parent;
@@ -3785,9 +3636,6 @@ make_newscrollpane_as_child(Container *parent, const ScrollPaneSettings &setting
     right_top_arrow->when_mouse_down = paint {
         mouse_down_arrow_up(root, c);
     };
-    right_top_arrow->when_mouse_up = mouse_arrow_up;
-    right_top_arrow->when_clicked = mouse_arrow_up;
-    right_top_arrow->when_drag_end = mouse_arrow_up;
     auto right_thumb = right_vbox->child(FILL_SPACE, FILL_SPACE);
     right_thumb->when_paint = paint_right_thumb;
     right_thumb->when_drag_start = right_scrollbar_drag_start;
@@ -3802,39 +3650,49 @@ make_newscrollpane_as_child(Container *parent, const ScrollPaneSettings &setting
     right_bottom_arrow->when_mouse_down = paint {
         mouse_down_arrow_bottom(root, c);
     };
-    right_bottom_arrow->when_mouse_up = mouse_arrow_up;
-    right_bottom_arrow->when_clicked = mouse_arrow_up;
-    right_bottom_arrow->when_drag_end = mouse_arrow_up;
     right_vbox->z_index += 1;
     
     auto bottom_hbox = new Container(FILL_SPACE, FILL_SPACE);
+    bottom_hbox->receive_events_even_if_obstructed = true;
     scrollpane->bottom = bottom_hbox;
     bottom_hbox->parent = scrollpane;
     bottom_hbox->type = ::hbox;
     bottom_hbox->when_fine_scrolled = fine_bottom_thumb_scrolled;
+    bottom_hbox->when_mouse_leaves_container = [](Container *root, Container *container) {
+        auto scroll = (ScrollContainer *) container->parent;
+        auto data = (ScrollData *) scroll->user_data;
+        auto ctx = data->func(root);
+        animate(&scroll->scrollbar_openess, 0.0, 100, scroll->lifetime, nullptr, schedule_redraw(ctx));
+    };
+    bottom_hbox->when_mouse_enters_container = [](Container *root, Container *container) {
+        auto scroll = (ScrollContainer *) container->parent;
+        later(200, [root, scroll](Timer *) {
+            ignore_first_hover(root, scroll);
+        });
+    };
+
     auto bottom_left_arrow = bottom_hbox->child(settings.bottom_arrow_width, FILL_SPACE);
     bottom_left_arrow->user_data = new ButtonData;
     ((ButtonData *) bottom_left_arrow->user_data)->text = "\uE973";
-    //bottom_left_arrow->when_paint = paint_arrow;
-    //bottom_left_arrow->when_mouse_down = mouse_down_arrow_left;
-    //bottom_left_arrow->when_mouse_up = mouse_arrow_up;
-    //bottom_left_arrow->when_clicked = mouse_arrow_up;
-    //bottom_left_arrow->when_drag_end = mouse_arrow_up;
+    bottom_left_arrow->when_paint = paint_arrow;
+    bottom_left_arrow->when_mouse_down = [](Container *root, Container *c) {
+        mouse_down_arrow_right(root, c);
+    };
+    
     auto bottom_thumb = bottom_hbox->child(FILL_SPACE, FILL_SPACE);
-    //bottom_thumb->when_paint = paint_bottom_thumb;
-    //bottom_thumb->when_drag_start = bottom_scrollbar_drag_start;
-    //bottom_thumb->when_drag = bottom_scrollbar_drag;
-    //bottom_thumb->when_drag_end = bottom_scrollbar_drag_end;
-    //bottom_thumb->when_mouse_down = bottom_scrollbar_mouse_down;
+    bottom_thumb->when_paint = paint_bottom_thumb;
+    bottom_thumb->when_drag_start = bottom_scrollbar_drag_start;
+    bottom_thumb->when_drag = bottom_scrollbar_drag;
+    bottom_thumb->when_drag_end = bottom_scrollbar_drag_end;
+    bottom_thumb->when_mouse_down = bottom_scrollbar_mouse_down;
     
     auto bottom_right_arrow = bottom_hbox->child(settings.bottom_arrow_width, FILL_SPACE);
     bottom_right_arrow->user_data = new ButtonData;
     ((ButtonData *) bottom_right_arrow->user_data)->text = "\uE974";
     bottom_right_arrow->when_paint = paint_arrow;
-    //bottom_right_arrow->when_mouse_down = mouse_down_arrow_right;
-    //bottom_right_arrow->when_mouse_up = mouse_arrow_up;
-    //bottom_right_arrow->when_clicked = mouse_arrow_up;
-    //bottom_right_arrow->when_drag_end = mouse_arrow_up;
+    bottom_right_arrow->when_mouse_down = [](Container *root, Container *c) {
+        mouse_down_arrow_right(root, c);
+    };
     bottom_hbox->z_index += 1;
     
     return scrollpane;    

@@ -1767,7 +1767,7 @@ void heart::layout_containers() {
                 //auto b = boxxy;
                 //c->real_bounds = Bounds(b.x, b.y - titlebar_h, b.w, b.h + titlebar_h);
 
-                c->real_bounds = Bounds(b.x + fo.x + so.x, b.y - titlebar_h + fo.y + so.y, b.w, b.h + titlebar_h);
+                c->real_bounds = Bounds(b.x + fo.x + so.x, std::round(b.y - titlebar_h + fo.y + so.y), b.w, std::round(b.h + titlebar_h));
             } else {
                 //auto b = boxxy;
                 c->real_bounds = Bounds(b.x + fo.x + so.x, b.y + fo.y + so.y, b.w, b.h);

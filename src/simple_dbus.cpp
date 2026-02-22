@@ -16,6 +16,7 @@
 //#include "settings_menu.h"
 //#include "wifi_backend.h"
 #include "dbus_helper.h"
+#include "dock.h"
 
 #include <cstdint>
 #include <dbus/dbus.h>
@@ -83,7 +84,7 @@ void bluetooth_service_started() {
 }
 
 void battery_display_device_state_changed() {
-
+    dock::change_in_battery();
 }
 
 void close_notification(int result) {

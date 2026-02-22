@@ -575,7 +575,7 @@ void paint_outline(Container* root, Container* c) {
         if (s->right && s->right->exists)
             paint_outline(root, s->right);
         if (s->bottom && s->bottom->exists)
-            paint_outline(s, s->bottom);
+            paint_outline(root, s->bottom);
     } else {
         std::vector<int> render_order;
         for (int i = 0; i < c->children.size(); i++) {
