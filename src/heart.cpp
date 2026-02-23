@@ -735,8 +735,8 @@ static void on_window_open(int id) {
     
     hypriso->set_corner_rendering_mask_for_window(id, 3);
     
-    apply_restore_info(id);
     later_immediate([id](Timer *) {
+        apply_restore_info(id);
         fit_on_screen(id);
     });
 
@@ -751,7 +751,7 @@ static void on_window_open(int id) {
             auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
             auto tiling = hypriso->is_space_tiling(s);
             hypriso->set_float_state(id, !tiling);
-            //apply_restore_info(id);
+            apply_restore_info(id);
         });
     }
 }

@@ -96,7 +96,11 @@
 #include <hyprland/src/xwayland/XWM.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/layout/space/Space.hpp>
 #undef private
+
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
 
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -109,7 +113,6 @@
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 //#include <hyprland/src/managers/HookSystemManager.hpp>
 #include <hyprland/src/managers/PointerManager.hpp>
-#include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/cursor/CursorShapeOverrideController.hpp>
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
@@ -442,7 +445,11 @@ static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
     if (g_layoutManager->dragController()->target())
         CKeybindManager::changeMouseBindMode(MBIND_INVALID);
 
-    g_layoutManager->changeFloatingMode(PWINDOW->layoutTarget());
+    auto target = PWINDOW->layoutTarget();
+    target->space()->m_algorithm->setFloating(target, should_float, true);
+    //Layout::CAlgorithm::setFloating(target, should_float, true);
+    //target->space()->toggleTargetFloating(target);
+    //g_layoutManager->changeFloatingMode(PWINDOW->layoutTarget());
 
     if (PWINDOW->m_workspace) {
         PWINDOW->m_workspace->updateWindows();
