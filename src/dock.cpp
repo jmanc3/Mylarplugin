@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <filesystem>
 #include <unordered_map>
+#include <condition_variable>
 
 #define BTN_LEFT		0x110
 #define BTN_RIGHT		0x111
@@ -44,6 +45,8 @@ static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
 static void write_saved_pins_to_file(Container *icons);
+
+static void stop_thread();
 
 class Window {
 public:
@@ -2163,6 +2166,7 @@ void dock::stop(std::string monitor_name) {
 
             windowing::close_app(d->app);
         }
+        stop_thread();
         docks.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         cleanup_cached_fonts();   
@@ -2443,7 +2447,14 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
     }
 }
 
-void dock::change_in_audio() {
+static bool thread_created = false;
+static std::thread to_update;
+static std::mutex to_update_mutex;
+static std::condition_variable condition;
+static bool actually_needs_to_wake = false;
+static bool stop_audio_thread = false;
+
+void total_update() {
     std::vector<AudioClient> clients;
     clients.reserve(audio_clients.size());
     for (auto client : audio_clients) {
@@ -2465,6 +2476,47 @@ void dock::change_in_audio() {
             windowing::redraw(d->window->raw_window);
         }
     });
+}
+
+static void stop_thread() {
+    stop_audio_thread = true;
+    std::unique_lock<std::mutex> lock(to_update_mutex);
+    actually_needs_to_wake = true;
+    condition.notify_one();
+    if (to_update.joinable()) {
+        to_update.join();
+    }
+}
+
+void dock::change_in_audio() {
+    if (!thread_created) {
+        thread_created = true;
+        to_update = std::thread([]() {
+            try {
+                defer(thread_created = false);
+                while (audio_running && !stop_audio_thread) {
+                    {
+                        std::unique_lock<std::mutex> lock(to_update_mutex);
+                        condition.wait(lock, []() { return actually_needs_to_wake; });
+                        actually_needs_to_wake = false;
+                    }
+                    
+                    audio_read([]() {
+                        total_update();
+                    });
+                }
+            } catch (...) {
+                thread_created = false;
+            }
+        });
+        to_update.detach();
+        dock::change_in_audio();
+    } else {
+        // wakeup
+        std::unique_lock<std::mutex> lock(to_update_mutex);
+        actually_needs_to_wake = true;
+        condition.notify_one();
+    }
 }
 
 void dock::change_in_battery() {

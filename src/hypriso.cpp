@@ -7569,14 +7569,14 @@ SP<Desktop::View::CPopup> hook_onPopupLayerCreate(PHLLS pOwner) {
     return b;
 }
 inline CFunctionHook* g_pOnPopupSubpopupCreate = nullptr;
-typedef SP<Desktop::View::CPopup> (*origPopupSubpopupCreate)(SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner);
-SP<Desktop::View::CPopup> hook_onPopupSubpopupCreate(SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner) {
+typedef SP<Desktop::View::CPopup> (*origPopupSubpopupCreate)(void *thisptr, SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner);
+SP<Desktop::View::CPopup> hook_onPopupSubpopupCreate(void *thisptr, SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     //auto popup = (Desktop::View::CPopup *) thisptr;
 
-    auto b = (*(origPopupSubpopupCreate)g_pOnPopupSubpopupCreate->m_original)(resource, pOwner);
+    auto b = (*(origPopupSubpopupCreate)g_pOnPopupSubpopupCreate->m_original)(thisptr, resource, pOwner);
     if (b)
         popup_created(b);
     return b;
@@ -7803,10 +7803,10 @@ void animate(float *value, float target, float time_ms, std::shared_ptr<bool> li
                     anims.erase(anims.begin() + i);
                 }
             }
-            delete anim;
             t->keep_running = false;
             if (anim->on_completion)
                 anim->on_completion(false);
+            delete anim;
         }
     });
 }
