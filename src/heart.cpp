@@ -1358,7 +1358,29 @@ void do_snap(SnapPosition pos) {
             if (hypriso->has_focus(cid)) {
                 auto snapped = *datum<bool>(c, "snapped");
                 auto snap_type = *datum<int>(c, "snap_type");
-                drag::snap_window(get_monitor(cid), cid, (int) pos);
+                auto pre_snap_bounds = *datum<Bounds>(c, "pre_snap_bounds");
+                
+                if (pos == SnapPosition::NONE) {
+                    drag::snap_window(get_monitor(cid), cid, (int) pos);                    
+                } if (snapped) {
+                    if (snap_type == (int) SnapPosition::MAX && pos == SnapPosition::MAX) {
+                        drag::snap_window(get_monitor(cid), cid, (int) SnapPosition::NONE);
+                        *datum<Bounds>(c, "pre_snap_bounds") = pre_snap_bounds;
+                    } else {
+                        clear_snap_groups(cid);
+                        auto p = snap_position_to_bounds(get_monitor(cid), (SnapPosition) pos);
+                        *datum<int>(c, "snap_type") = (int) pos;
+                        if (hypriso->has_decorations(cid)) {
+                            hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
+                        } else {
+                            hypriso->move_resize(cid, p.x, p.y, p.w, p.h, false);
+                        }
+                        
+                        drag::merge_client_into_existant_groups(cid, false);
+                    }
+                } else {
+                    drag::snap_window(get_monitor(cid), cid, (int) pos);
+                }
                 return;
             }
         }

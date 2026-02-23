@@ -226,6 +226,10 @@ void drag::end(int cid) {
     snap_window(mon, cid, (int) pos);
     *datum<long>(actual_root, "drag_end_time") = get_current_time_in_ms();
 
+    drag::merge_client_into_existant_groups(cid, true);
+}
+
+void drag::merge_client_into_existant_groups(int cid, bool create_snap_assist_if_needed) {
     if (auto c = get_cid_container(cid)) {
         *datum<bool>(c, "drag_from_titlebar") = false;
         bool is_snapped = *datum<bool>(c, "snapped");
@@ -262,7 +266,8 @@ void drag::end(int cid) {
                 }
             }
 
-            snap_assist::open(get_monitor(cid), cid);
+            if (create_snap_assist_if_needed)
+                snap_assist::open(get_monitor(cid), cid);
         }
     }
 }

@@ -51,6 +51,7 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 
 #include <algorithm>
+#include <mutex>
 #include <hyprutils/math/Vector2D.hpp>
 #include <librsvg/rsvg.h>
 #include <any>
@@ -1610,9 +1611,13 @@ void on_layer_close(PHLLS l) {
 
 static int main_wake_pipe[2];
 static std::vector<std::function<void()>> funcs;
+static std::mutex funcs_mutex;
 
 void main_thread(std::function<void()> func) {
-    funcs.push_back(func);
+    {
+        std::lock_guard<std::mutex> lock(funcs_mutex);
+        funcs.emplace_back(std::move(func));
+    }
     write(main_wake_pipe[1], "x", 1);
 }
 
@@ -1622,10 +1627,16 @@ void setup_wake_main_thread() {
     uint32_t mask = WL_EVENT_READABLE;
     wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, fd, mask, [](int fd, uint32_t mask, void *data){
         char buf[64];
-        read(main_wake_pipe[0], buf, sizeof buf);
-        for (auto f : funcs)
+        while (read(main_wake_pipe[0], buf, sizeof buf) > 0) {}
+
+        std::vector<std::function<void()>> pending;
+        {
+            std::lock_guard<std::mutex> lock(funcs_mutex);
+            pending.swap(funcs);
+        }
+
+        for (auto &f : pending)
             f();
-        funcs.clear();
         return 0;
     }, nullptr);
 }
@@ -7569,14 +7580,14 @@ SP<Desktop::View::CPopup> hook_onPopupLayerCreate(PHLLS pOwner) {
     return b;
 }
 inline CFunctionHook* g_pOnPopupSubpopupCreate = nullptr;
-typedef SP<Desktop::View::CPopup> (*origPopupSubpopupCreate)(void *thisptr, SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner);
-SP<Desktop::View::CPopup> hook_onPopupSubpopupCreate(void *thisptr, SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner) {
+typedef SP<Desktop::View::CPopup> (*origPopupSubpopupCreate)(SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner);
+SP<Desktop::View::CPopup> hook_onPopupSubpopupCreate(SP<CXDGPopupResource> resource, WP<Desktop::View::CPopup> pOwner) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     //auto popup = (Desktop::View::CPopup *) thisptr;
 
-    auto b = (*(origPopupSubpopupCreate)g_pOnPopupSubpopupCreate->m_original)(thisptr, resource, pOwner);
+    auto b = (*(origPopupSubpopupCreate)g_pOnPopupSubpopupCreate->m_original)(resource, pOwner);
     if (b)
         popup_created(b);
     return b;
@@ -7852,5 +7863,4 @@ bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::s
 
     return pf->source;
 }
-
 

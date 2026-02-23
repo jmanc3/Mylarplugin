@@ -2479,25 +2479,46 @@ void total_update() {
 }
 
 static void stop_thread() {
-    stop_audio_thread = true;
-    std::unique_lock<std::mutex> lock(to_update_mutex);
-    actually_needs_to_wake = true;
-    condition.notify_one();
+    {
+        std::unique_lock<std::mutex> lock(to_update_mutex);
+        stop_audio_thread = true;
+        actually_needs_to_wake = true;
+        condition.notify_one();
+    }
     if (to_update.joinable()) {
         to_update.join();
     }
+
+    std::unique_lock<std::mutex> lock(to_update_mutex);
+    thread_created = false;
 }
 
 void dock::change_in_audio() {
-    if (!thread_created) {
-        thread_created = true;
+    total_update();
+    /*
+    bool should_create = false;
+    {
+        std::unique_lock<std::mutex> lock(to_update_mutex);
+        if (!thread_created) {
+            thread_created = true;
+            stop_audio_thread = false;
+            actually_needs_to_wake = false;
+            should_create = true;
+        } else {
+            actually_needs_to_wake = true;
+            condition.notify_one();
+        }
+    }
+
+    if (should_create) {
         to_update = std::thread([]() {
             try {
-                defer(thread_created = false);
-                while (audio_running && !stop_audio_thread) {
+                while (audio_running) {
                     {
                         std::unique_lock<std::mutex> lock(to_update_mutex);
-                        condition.wait(lock, []() { return actually_needs_to_wake; });
+                        condition.wait(lock, []() { return actually_needs_to_wake || stop_audio_thread; });
+                        if (stop_audio_thread)
+                            break;
                         actually_needs_to_wake = false;
                     }
                     
@@ -2506,17 +2527,17 @@ void dock::change_in_audio() {
                     });
                 }
             } catch (...) {
+                // keep process alive; thread state is reset below
+            }
+
+            {
+                std::unique_lock<std::mutex> lock(to_update_mutex);
                 thread_created = false;
             }
         });
-        to_update.detach();
         dock::change_in_audio();
-    } else {
-        // wakeup
-        std::unique_lock<std::mutex> lock(to_update_mutex);
-        actually_needs_to_wake = true;
-        condition.notify_one();
     }
+    */
 }
 
 void dock::change_in_battery() {
