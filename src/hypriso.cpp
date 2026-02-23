@@ -9,10 +9,17 @@
 #include "hypriso.h"
 #include "heart.h"
 
+#include <hyprland/src/SharedDefs.hpp>
+#include <hyprland/src/devices/IKeyboard.hpp>
+
 #define private public
 #include <hyprland/src/render/OpenGL.hpp>
 #undef private
 
+#include "xdg-decoration-unstable-v1.hpp"
+// extern "C" {
+// #include "client/xdg-shell-client-protocol.h"
+// }
 #include <hyprland/src/render/Shader.hpp>
 
 #include <GLES3/gl32.h>
@@ -92,6 +99,7 @@
 #undef private
 
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 
 #include <hyprland/src/xwayland/XWayland.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -99,9 +107,9 @@
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
-#include <hyprland/src/managers/HookSystemManager.hpp>
+//#include <hyprland/src/managers/HookSystemManager.hpp>
 #include <hyprland/src/managers/PointerManager.hpp>
-#include <hyprland/src/managers/LayoutManager.hpp>
+#include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/managers/cursor/CursorShapeOverrideController.hpp>
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
@@ -368,35 +376,43 @@ void set_rounding(int mask) {
     if (!g_pHyprOpenGL || !g_pHyprOpenGL->m_shaders) {
         return;
     }
+
     // todo set shader mask to 3, and then to 0 afterwards
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shQUAD.program);
-    GLint loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shQUAD.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
-    GLint value;
-
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shRGBA.program);
-    loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shRGBA.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
-
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shRGBX.program);
-    loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shRGBX.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
-
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shEXT.program);
-    loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shEXT.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
-
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shCM.program);
-    loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shCM.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
-
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shPASSTHRURGBA.program);
-    loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shPASSTHRURGBA.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
-
-    g_pHyprOpenGL->useProgram(g_pHyprOpenGL->m_shaders->m_shBORDER1.program);
-    loc = glGetUniformLocation(g_pHyprOpenGL->m_shaders->m_shBORDER1.program, "cornerDisableMask");
-    glUniform1i(loc, mask);
+    {
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_QUAD]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
+    { 
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_SHADOW]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
+    { 
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_BORDER1]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
+    { 
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_EXT]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
+    { 
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_CM_BORDER1]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
+    { 
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_PASSTHRURGBA]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
+    { 
+        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_PASSTHRURGBA]);
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, mask);
+    }
 }
 
 PHLWINDOW get_window_from_mouse() {
@@ -421,36 +437,18 @@ void HyprIso::overwrite_animation_speed(float speed) {
 static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
     if (!PWINDOW)
         return;
-    if (PWINDOW->m_isFloating == should_float)
-        return;
 
     // remove drag status
-    if (!g_pInputManager->m_currentlyDraggedWindow.expired())
-        g_pKeybindManager->changeMouseBindMode(MBIND_INVALID);
+    if (g_layoutManager->dragController()->target())
+        CKeybindManager::changeMouseBindMode(MBIND_INVALID);
 
-    if (PWINDOW->m_groupData.pNextWindow.lock() && PWINDOW->m_groupData.pNextWindow.lock() != PWINDOW) {
-        const auto PCURRENT = PWINDOW->getGroupCurrent();
-
-        PCURRENT->m_isFloating = should_float;
-        g_pLayoutManager->getCurrentLayout()->changeWindowFloatingMode(PCURRENT);
-
-        PHLWINDOW curr = PCURRENT->m_groupData.pNextWindow.lock();
-        while (curr != PCURRENT) {
-            curr->m_isFloating = PCURRENT->m_isFloating;
-            curr               = curr->m_groupData.pNextWindow.lock();
-        }
-    } else {
-        PWINDOW->m_isFloating = should_float;
-
-        g_pLayoutManager->getCurrentLayout()->changeWindowFloatingMode(PWINDOW);
-    }
+    g_layoutManager->changeFloatingMode(PWINDOW->layoutTarget());
 
     if (PWINDOW->m_workspace) {
         PWINDOW->m_workspace->updateWindows();
         PWINDOW->m_workspace->updateWindowData();
     }
 
-    g_pLayoutManager->getCurrentLayout()->recalculateMonitor(PWINDOW->monitorID());
     g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 
     return;
@@ -733,84 +731,6 @@ CSurfacePassElement::SRenderData collect_mdata(PHLWINDOW w) {
 
 Bounds tobounds(CBox box);
 
-Bounds HyprIso::getTexBox(int id) {
-#ifdef FORK_WARN
-    static_assert(false, "[Function Body] Make sure our `CSurfacePassElement::getTexBox()` and Hyprland's are synced!");
-    //src/render/pass/SurfacePassElement.cpp
-    //CBox CSurfacePassElement::getTexBox() {
-#endif
-
-    PHLWINDOW w;
-    bool found = false;
-    for (auto h : hyprwindows) {
-        if (h->id == id) {
-            w = h->w;
-            found = true;
-            break;
-        }
-    }
-
-    if (!found)
-        return {};
-    auto m_data = collect_mdata(w); 
-
-    // ===========================
-    
-    const double outputX = -m_data.pMonitor->m_position.x, outputY = -m_data.pMonitor->m_position.y;
-
-    const auto   INTERACTIVERESIZEINPROGRESS = m_data.pWindow && g_pInputManager->m_currentlyDraggedWindow && g_pInputManager->m_dragMode == MBIND_RESIZE;
-    auto         PSURFACE                    = Desktop::View::CWLSurface::fromResource(m_data.surface);
-
-    CBox         windowBox;
-    if (m_data.surface && m_data.mainSurface) {
-        windowBox = {sc<int>(outputX) + m_data.pos.x + m_data.localPos.x, sc<int>(outputY) + m_data.pos.y + m_data.localPos.y, m_data.w, m_data.h};
-
-        // however, if surface buffer w / h < box, we need to adjust them
-        const auto PWINDOW = PSURFACE ? Desktop::View::CWindow::fromView(PSURFACE->view()) : nullptr;
-
-        // center the surface if it's smaller than the viewport we assign it
-        if (PSURFACE && !PSURFACE->m_fillIgnoreSmall && PSURFACE->small() /* guarantees PWINDOW */) {
-            const auto CORRECT  = PSURFACE->correctSmallVec();
-            const auto SIZE     = PSURFACE->getViewporterCorrectedSize();
-            const auto REPORTED = PWINDOW->getReportedSize();
-
-            if (!INTERACTIVERESIZEINPROGRESS) {
-                windowBox.translate(CORRECT);
-
-                windowBox.width  = SIZE.x * (PWINDOW->m_realSize->value().x / REPORTED.x);
-                windowBox.height = SIZE.y * (PWINDOW->m_realSize->value().y / REPORTED.y);
-            } else {
-                windowBox.width  = SIZE.x;
-                windowBox.height = SIZE.y;
-            }
-        }
-    } else { //  here we clamp to 2, these might be some tiny specks
-
-        const auto SURFSIZE = m_data.surface->m_current.size;
-
-        windowBox = {sc<int>(outputX) + m_data.pos.x + m_data.localPos.x, sc<int>(outputY) + m_data.pos.y + m_data.localPos.y, std::max(sc<float>(SURFSIZE.x), 2.F),
-                     std::max(sc<float>(SURFSIZE.y), 2.F)};
-        if (m_data.pWindow && m_data.pWindow->m_realSize->isBeingAnimated() && m_data.surface && !m_data.mainSurface && m_data.squishOversized /* subsurface */) {
-            // adjust subsurfaces to the window
-            const auto REPORTED = m_data.pWindow->getReportedSize();
-            if (REPORTED.x != 0 && REPORTED.y != 0) {
-                windowBox.width  = (windowBox.width / REPORTED.x) * m_data.pWindow->m_realSize->value().x;
-                windowBox.height = (windowBox.height / REPORTED.y) * m_data.pWindow->m_realSize->value().y;
-            }
-        }
-    }
-
-    if (m_data.squishOversized) {
-        if (m_data.localPos.x + windowBox.width > m_data.w)
-            windowBox.width = m_data.w - m_data.localPos.x;
-        if (m_data.localPos.y + windowBox.height > m_data.h)
-            windowBox.height = m_data.h - m_data.localPos.y;
-    }
-
-    return tobounds(windowBox);
-}
-
-
 inline CFunctionHook* g_pOnSurfacePassDraw = nullptr;
 typedef void (*origSurfacePassDraw)(CSurfacePassElement *, const CRegion& damage);
 void hook_onSurfacePassDraw(void* thisptr, const CRegion& damage) {
@@ -819,28 +739,13 @@ void hook_onSurfacePassDraw(void* thisptr, const CRegion& damage) {
 #endif
  
     auto  spe = (CSurfacePassElement *) thisptr;
-    SurfacePassInfo i;
-    i.pos_x = spe->m_data.pos.x;
-    i.pos_y = spe->m_data.pos.y;
-    i.local_pos_x = spe->m_data.localPos.y;
-    i.local_pos_y = spe->m_data.localPos.y;
-    i.w = spe->m_data.w;
-    i.h = spe->m_data.h;
-    auto bb = spe->getTexBox();
-    bb.scale(spe->m_data.pMonitor->m_scale);
-    bb.round();
-    i.cbx = bb.x;
-    i.cby = bb.y;
-    i.cbw = bb.w;
-    i.cbh = bb.h;
-    
+
     auto window = spe->m_data.pWindow;
     //notify("alo");
     int cornermask = 0;
     for (auto hw: hyprwindows) {
         if (hw->w == window) {
             cornermask = hw->cornermask;
-            hw->pass_info = i;
         }
     }
     set_rounding(cornermask); // only top rounding
@@ -1376,35 +1281,15 @@ float hook_WindowRoundingPower(void* thisptr) {
 }
 
 void hook_render_functions() {
-    //return;
-    /*
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "rounding");
-        for (auto m : METHODS) {
-            if (m.signature.find("CWindow") != std::string::npos) {
-                g_pWindowRoundingHook       = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_WindowRounding);
-                g_pWindowRoundingHook->hook();
-                break;
-            }
-        }
-    }
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "roundingPower");
-        for (auto m : METHODS) {
-            if (m.signature.find("CWindow") != std::string::npos) {
-                g_pWindowRoundingPowerHook       = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_WindowRoundingPower);
-                g_pWindowRoundingPowerHook->hook();
-                break;
-            }
-        }
-    }
-    */
- 
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWindow");
-        g_pRenderWindowHook       = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_RenderWindow);
-        g_pRenderWindowHook->hook();
-        pRenderWindow = METHODS[0].address;
+        for (auto m : METHODS) {
+            if (m.demangled.find("CHyprRenderer") != std::string::npos) {
+                g_pRenderWindowHook       = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderWindow);
+                g_pRenderWindowHook->hook();
+                pRenderWindow = m.address;
+            }
+        }
     }
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderLayer");
@@ -1659,21 +1544,16 @@ void HyprIso::create_callbacks() {
         on_open_layer(l);
     }
 
-    static auto openWindow  = HyprlandAPI::registerCallbackDynamic(globals->api, "openWindow", [](void* self, SCallbackInfo& info, std::any data) {
-        if (hypriso->on_window_open) {
-            auto w = std::any_cast<PHLWINDOW>(data); // todo getorcreate ref on our side
+    static auto openWindow = Event::bus()->m_events.window.open.listen([this](PHLWINDOW w) {
+        if (hypriso->on_window_open)
             on_open_window(w);
-        }
     });
-    static auto closeWindow1 = HyprlandAPI::registerCallbackDynamic(globals->api, "closeWindow", [](void* self, SCallbackInfo& info, std::any data) {
-        if (hypriso->on_window_closed) {
-            auto w = std::any_cast<PHLWINDOW>(data); // todo getorcreate ref on our side
+    static auto closeWindow1 = Event::bus()->m_events.window.close.listen([this](PHLWINDOW w) {
+        if (hypriso->on_window_closed)
             on_close_window(w);
-        }
     });
-    static auto windowTitle = HyprlandAPI::registerCallbackDynamic(globals->api, "windowTitle", [](void* self, SCallbackInfo& info, std::any data) {
+    static auto windowTitle = Event::bus()->m_events.window.close.listen([this](PHLWINDOW w) {
         if (hypriso->on_title_change) {
-            auto w = std::any_cast<PHLWINDOW>(data); // todo getorcreate ref on our side
             for (auto hw : hyprwindows) {
                 if (hw->w == w) {
                     hypriso->on_title_change(hw->id);
@@ -1683,34 +1563,20 @@ void HyprIso::create_callbacks() {
         }
     });
 
-    static auto openLayer  = HyprlandAPI::registerCallbackDynamic(globals->api, "openLayer", [](void* self, SCallbackInfo& info, std::any data) {
-        try {
-            auto l = std::any_cast<PHLLS>(data); 
-            on_open_layer(l);
-        } catch (...) {
-            notify("openLayer cast failed");
-        }
+    static auto openLayer = Event::bus()->m_events.layer.opened.listen([this](PHLLS l) {
+        on_open_layer(l);
 
-        if (hypriso->on_layer_change) {
+        if (hypriso->on_layer_change)
             hypriso->on_layer_change();
-        }
     });
-    static auto closeLayer = HyprlandAPI::registerCallbackDynamic(globals->api, "closeLayer", [](void* self, SCallbackInfo& info, std::any data) {
-        try {
-            auto l = std::any_cast<PHLLS>(data); 
-            on_layer_close(l);
-        } catch (...) {
-            notify("closeLayer cast failed");
-        }
+    static auto closeLayer = Event::bus()->m_events.layer.closed.listen([this](PHLLS l) {
+        on_layer_close(l);
 
-        if (hypriso->on_layer_change) {
+        if (hypriso->on_layer_change)
             hypriso->on_layer_change();
-        }
     });
     
-    static auto render = HyprlandAPI::registerCallbackDynamic(globals->api, "render", [](void* self, SCallbackInfo& info, std::any data) {
-        //return;
-        auto stage = std::any_cast<eRenderStage>(data);
+    static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
         if (stage == eRenderStage::RENDER_PRE) {
             #ifdef TRACY_ENABLE
                 FrameMarkStart("Render");
@@ -1730,8 +1596,7 @@ void HyprIso::create_callbacks() {
         }
     });
     
-    static auto mouseMove = HyprlandAPI::registerCallbackDynamic(globals->api, "mouseMove", [](void* self, SCallbackInfo& info, std::any data) {
-        //return;
+    static auto mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
         auto consume = false;
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
@@ -1741,8 +1606,7 @@ void HyprIso::create_callbacks() {
         info.cancelled = consume;
     });
 
-    static auto mouseButton = HyprlandAPI::registerCallbackDynamic(globals->api, "mouseButton", [](void* self, SCallbackInfo& info, std::any data) {
-        auto e       = std::any_cast<IPointer::SButtonEvent>(data);
+    static auto mouseButton = Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo &info) {
         auto consume = false;
         if (hypriso->on_mouse_press) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
@@ -1752,53 +1616,23 @@ void HyprIso::create_callbacks() {
         info.cancelled = consume;
     });
 
-    static auto mouseAxis = HyprlandAPI::registerCallbackDynamic(globals->api, "mouseAxis", [](void* self, SCallbackInfo& info, std::any data) {
+    static auto mouseAxis = Event::bus()->m_events.input.mouse.axis.listen([this](IPointer::SAxisEvent axisevent, Event::SCallbackInfo &info) {
         bool consume = false;
-        auto p       = std::any_cast<std::unordered_map<std::string, std::any>>(data);
-        for (std::pair<const std::string, std::any> pair : p) {
-            if (pair.first == "event") {
-                auto axisevent = std::any_cast<IPointer::SAxisEvent>(pair.second);
-                if (hypriso->on_scrolled) {
-                    consume = hypriso->on_scrolled(0, axisevent.source, axisevent.axis, axisevent.relativeDirection, axisevent.delta, axisevent.deltaDiscrete, axisevent.mouse);
-                }
-            }
+        if (hypriso->on_scrolled) {
+            consume = hypriso->on_scrolled(0, axisevent.source, axisevent.axis, axisevent.relativeDirection, axisevent.delta, axisevent.deltaDiscrete, axisevent.mouse);
         }
         info.cancelled = consume;
     });
 
-    static auto keyPress = HyprlandAPI::registerCallbackDynamic(globals->api, "keyPress", [](void* self, SCallbackInfo& info, std::any data) {
+    static auto keyPress = Event::bus()->m_events.input.keyboard.key.listen([this](IKeyboard::SKeyEvent skeyevent, Event::SCallbackInfo &info) {
         auto consume = false;
         if (hypriso->on_key_press) {
-            auto p = std::any_cast<std::unordered_map<std::string, std::any>>(data);
-            for (std::pair<const std::string, std::any> pair : p) {
-                if (pair.first == "event") {
-                    auto skeyevent = std::any_cast<IKeyboard::SKeyEvent>(pair.second);
-                    consume        = hypriso->on_key_press(0, skeyevent.keycode, skeyevent.state, skeyevent.updateMods);
-                } else if (pair.first == "keyboard") {
-                    auto ikeyboard = std::any_cast<Hyprutils::Memory::CSharedPointer<IKeyboard>>(pair.second);
-                }
-            }
+            consume = hypriso->on_key_press(0, skeyevent.keycode, skeyevent.state, skeyevent.updateMods);
         }
         info.cancelled = consume;
     });
-    /*
-    static auto monitorAdded = HyprlandAPI::registerCallbackDynamic(globals->api, "monitorAdded", [](void* self, SCallbackInfo& info, std::any data) {
-        if (hypriso->on_monitor_open) {
-            auto m = std::any_cast<PHLMONITOR>(data); // todo getorcreate ref on our side
-            on_open_monitor(m);
-        }
-    });
-    
-    static auto monitorRemoved = HyprlandAPI::registerCallbackDynamic(globals->api, "monitorRemoved", [](void* self, SCallbackInfo& info, std::any data) {
-        if (hypriso->on_monitor_closed) {
-            auto m = std::any_cast<PHLMONITOR>(data); // todo getorcreate ref on our side
-            on_close_monitor(m);
-        }
-    });
-    */
-    
 
-    static auto configReloaded = HyprlandAPI::registerCallbackDynamic(globals->api, "configReloaded", [](void* self, SCallbackInfo& info, std::any data) {
+    static auto configReloaded = Event::bus()->m_events.config.reloaded.listen([this]() {
         if (hypriso->on_config_reload) {
             hypriso->on_config_reload();
             
@@ -1817,8 +1651,8 @@ void HyprIso::create_callbacks() {
         hyprspaces.push_back(hs);
     }
 
-    static auto createWorkspace = HyprlandAPI::registerCallbackDynamic(globals->api, "createWorkspace", [](void* self, SCallbackInfo& info, std::any data) {
-        auto s = std::any_cast<CWorkspace*>(data)->m_self.lock();
+    static auto createWorkspace = Event::bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF sref) {
+        auto s = sref.lock();
         auto hs = new HyprWorkspaces;
         hs->w = s;
         hs->id = unique_id++;
@@ -1826,31 +1660,29 @@ void HyprIso::create_callbacks() {
         hyprspaces.push_back(hs);
     });
 
-    static auto destroyWorkspace = HyprlandAPI::registerCallbackDynamic(globals->api, "destroyWorkspace", [](void* self, SCallbackInfo& info, std::any data) {
-        auto s = std::any_cast<CWorkspace*>(data);
-        for (int i = hyprspaces.size() - 1; i >= 0; i--) {
-            auto hs = hyprspaces[i];
-            bool remove = false;
-            if (!hs->w.lock()) {
-                remove = true;
-            } else if (hs->w.get() == s) {
-                remove = true;
+    static auto destroyedWorkspace = Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF sref) {
+        if (auto s = sref.get())
+            for (int i = hyprspaces.size() - 1; i >= 0; i--) {
+                auto hs = hyprspaces[i];
+                bool remove = false;
+                if (!hs->w.lock()) {
+                    remove = true;
+                } else if (hs->w.get() == s) {
+                    remove = true;
+                }
+                if (remove) {
+                    delete hs->buffer;
+                    hyprspaces.erase(hyprspaces.begin() + i);
+                }
             }
-            if (remove) {
-                delete hs->buffer;
-                hyprspaces.erase(hyprspaces.begin() + i);
-            }
-        }
     });
-    static auto workspace = HyprlandAPI::registerCallbackDynamic(globals->api, "workspace", [](void* self, SCallbackInfo& info, std::any data) {
-        //notify("workspace");
+    static auto workspaceChanged = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE w) {
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
             auto m = g_pCompositor->getMonitorFromCursor();
             hypriso->on_mouse_move(0, mouse.x * m->m_scale, mouse.y * m->m_scale);
         }
         if (hypriso->on_workspace_change) {
-            auto w = std::any_cast<PHLWORKSPACE>(data); 
             for (auto space : hyprspaces) {
                 if (space->w == w) {
                     hypriso->on_workspace_change(space->id);
@@ -1859,8 +1691,7 @@ void HyprIso::create_callbacks() {
         }
     });
 
-    static auto activeWindow = HyprlandAPI::registerCallbackDynamic(globals->api, "activeWindow", [](void* self, SCallbackInfo& info, std::any data) {
-        auto p = std::any_cast<PHLWINDOW>(data);
+    static auto windowChanged = Event::bus()->m_events.window.active.listen([this](PHLWINDOW p, Desktop::eFocusReason reason) {
         if (hypriso->on_activated) {
             for (auto h : hyprwindows) {
                 if (h->w == p) {
@@ -2158,7 +1989,7 @@ void monitor_finish(CHyprOpenGLImpl *ptr) {
     TRACY_GPU_ZONE("RenderEnd");
 
     // end the render, copy the data to the main framebuffer
-    if (ptr->m_offloadedFramebuffer) {
+    if LIKELY (ptr->m_offloadedFramebuffer) {
         ptr->m_renderData.damage = ptr->m_renderData.finalDamage;
         ptr->pushMonitorTransformEnabled(true);
 
@@ -2166,7 +1997,7 @@ void monitor_finish(CHyprOpenGLImpl *ptr) {
 
         bool rendering_splash = false;
         if (!rendered_splash_screen(monbox, ptr->m_renderData.pMonitor)) {
-            if (g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && ptr->m_renderData.mouseZoomFactor == 1.0f)
+            if LIKELY (g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && ptr->m_renderData.mouseZoomFactor == 1.0f)
                 ptr->m_renderData.pMonitor->m_zoomController.m_resetCameraState = true;
             ptr->m_renderData.pMonitor->m_zoomController.applyZoomTransform(monbox, ptr->m_renderData);            
         } else {
@@ -2174,7 +2005,7 @@ void monitor_finish(CHyprOpenGLImpl *ptr) {
         }
 
         ptr->m_applyFinalShader = !ptr->m_renderData.blockScreenShader;
-        if (ptr->m_renderData.mouseZoomUseMouse && *PZOOMDISABLEAA)
+        if UNLIKELY (ptr->m_renderData.mouseZoomFactor != 1.F && ptr->m_renderData.mouseZoomUseMouse && *PZOOMDISABLEAA)
             ptr->m_renderData.useNearestNeighbor = true;
         
         if (rendering_splash)
@@ -2182,13 +2013,13 @@ void monitor_finish(CHyprOpenGLImpl *ptr) {
 
         // copy the damaged areas into the mirror buffer
         // we can't use the offloadFB for mirroring, as it contains artifacts from blurring
-        if (!ptr->m_renderData.pMonitor->m_mirrors.empty() && !ptr->m_fakeFrame)
+        if UNLIKELY (!ptr->m_renderData.pMonitor->m_mirrors.empty() && !ptr->m_fakeFrame)
             ptr->saveBufferForMirror(monbox);
 
         ptr->m_renderData.outFB->bind();
         ptr->blend(false);
 
-        if (ptr->m_finalScreenShader.program < 1 && !g_pHyprRenderer->m_crashingInProgress)
+        if LIKELY (ptr->m_finalScreenShader->program() < 1 && !g_pHyprRenderer->m_crashingInProgress)
             ptr->renderTexturePrimitive(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox);
         else
             ptr->renderTexture(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox, {});
@@ -2200,6 +2031,15 @@ void monitor_finish(CHyprOpenGLImpl *ptr) {
         ptr->popMonitorTransformEnabled();
     }
 
+    // invalidate our render FBs to signal to the driver we don't need them anymore
+    ptr->m_renderData.pCurrentMonData->mirrorFB.bind();
+    ptr->m_renderData.pCurrentMonData->mirrorFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+    ptr->m_renderData.pCurrentMonData->mirrorSwapFB.bind();
+    ptr->m_renderData.pCurrentMonData->mirrorSwapFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+    ptr->m_renderData.pCurrentMonData->offloadFB.bind();
+    ptr->m_renderData.pCurrentMonData->offloadFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+    ptr->m_renderData.pCurrentMonData->offMainFB.bind();
+    ptr->m_renderData.pCurrentMonData->offMainFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
     // reset our data
     ptr->m_renderData.pMonitor.reset();
     ptr->m_renderData.mouseZoomFactor   = 1.f;
@@ -2213,14 +2053,18 @@ void monitor_finish(CHyprOpenGLImpl *ptr) {
     // if we dropped to offMain, release it now.
     // if there is a plugin constantly using it, this might be a bit slow,
     // but I haven't seen a single plugin yet use these, so it's better to drop a bit of vram.
-    if (ptr->m_renderData.pCurrentMonData->offMainFB.isAllocated())
+    if UNLIKELY (ptr->m_renderData.pCurrentMonData->offMainFB.isAllocated())
         ptr->m_renderData.pCurrentMonData->offMainFB.release();
 
+    static const auto GLDEBUG = CConfigValue<Hyprlang::INT>("debug:gl_debugging");
+
+    if (*GLDEBUG) {
     // check for gl errors
     const GLenum ERR = glGetError();
 
-    if (ERR == GL_CONTEXT_LOST) /* We don't have infra to recover from this */
+        if UNLIKELY (ERR == GL_CONTEXT_LOST) /* We don't have infra to recover from this */
         RASSERT(false, "glGetError at Opengl::end() returned GL_CONTEXT_LOST. Cannot continue until proper GPU reset handling is implemented.");
+    }
 }
 
 inline CFunctionHook* g_pOnMonitorEndHook = nullptr;
@@ -2364,6 +2208,20 @@ master {
 misc {
     force_default_wallpaper = 0 # Set to 0 or 1 to disable the anime mascot wallpapers
     disable_hyprland_logo = true # If true disables the random hyprland logo / anime girl background. :(
+}
+
+
+windowrule {
+    # Fix some dragging issues with XWayland
+    name = fix-xwayland-drags
+    match:class = ^$
+    match:title = ^$
+    match:xwayland = true
+    match:float = true
+    match:fullscreen = false
+    match:pin = false
+
+    no_focus = true
 }
 
 decoration:rounding = 9
@@ -2585,9 +2443,12 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
     }
 #ifdef NDEBUG
 base += "source = ~/.config/mylar/user.conf\n\n";
+base += "exec-once = ~/.config/mylar/exec_once.sh\n\n";
 #else
 base += "source = ~/.config/mylar/debug_user.conf\n\n";
+base += "exec-once = ~/.config/mylar/debug_exec_once.sh\n\n";
 #endif
+
 
     if (hypriso->on_config_generated)
         hypriso->on_config_generated();
@@ -2658,7 +2519,7 @@ void hook_default_config() {
     }
 }
 
-static SP<SShader> test_shader;
+static SP<CShader> test_shader;
 
 static const char* RECT_VERT_SHADER = R"GLSL(
 #version 330 core
@@ -2700,16 +2561,16 @@ void main() {
 )GLSL";
 
 static void create_custom_shaders() {
-    test_shader = makeShared<SShader>();
+    test_shader = makeShared<CShader>();
 
-    GLuint prog = g_pHyprOpenGL->createProgram(
+    GLuint prog = test_shader->createProgram(
         RECT_VERT_SHADER,
         RECT_FRAG_SHADER,
         true,
         true
     );
 
-    test_shader->program = prog;
+    test_shader->m_program = prog;
 }
 
 static GLuint quadVAO = 0;
@@ -2749,13 +2610,15 @@ static void init_rect_quad() {
 }
 
 void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill) {
+    if (!test_shader)
+        return;
     AnyPass::AnyData anydata([x, y, r, col, edge, fill](AnyPass* pass) {
-        if (!test_shader || !test_shader->program)
+        if (!test_shader || !test_shader->program())
             return;
 
         init_rect_quad();
 
-        glUseProgram(test_shader->program);
+        glUseProgram(test_shader->program());
 
         float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
         float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
@@ -2768,7 +2631,7 @@ void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fi
             Mat3x3     matrix    = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
             Mat3x3     glMatrix  = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
             glUniformMatrix3fv(
-                glGetUniformLocation(test_shader->program, "uProj"),
+                glGetUniformLocation(test_shader->program(), "uProj"),
                 1,
                 GL_TRUE,
                 glMatrix.getMatrix().data()
@@ -2776,17 +2639,17 @@ void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fi
         }
 
         glUniform4f(
-            glGetUniformLocation(test_shader->program, "uColor"),
+            glGetUniformLocation(test_shader->program(), "uColor"),
             col.r, col.g, col.b, col.a
         );
 
         glUniform1f(
-            glGetUniformLocation(test_shader->program, "uEdge"),
+            glGetUniformLocation(test_shader->program(), "uEdge"),
             edge
         );
 
         glUniform1f(
-            glGetUniformLocation(test_shader->program, "uFill"),
+            glGetUniformLocation(test_shader->program(), "uFill"),
             fill
         );
         
@@ -2804,7 +2667,6 @@ void HyprIso::create_hooks() {
     ZoneScoped;
 #endif
     previously_seen_instance_signature = get_previous_instance_signature();
-    //return;
     detect_csd_request_change();
     fix_window_corner_rendering();
     hook_shadow_decorations();
@@ -2821,7 +2683,7 @@ void HyprIso::create_hooks() {
     hook_monitor_render();
     hook_hidden_state_change();
     hook_default_config();
-    create_custom_shaders();
+    //create_custom_shaders();
 }
 
 bool xcb_get_transient_for(xcb_connection_t* conn, xcb_window_t window, xcb_window_t* out) {
@@ -4853,7 +4715,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     // for plugins
     g_pHyprOpenGL->m_renderData.currentWindow = pWindow;
 
-    EMIT_HOOK_EVENT("render", RENDER_PRE_WINDOW);
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOW);
 
     const auto fullAlpha = renderdata.alpha * renderdata.fadeAlpha;
 
@@ -5037,7 +4899,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         }
     }
 
-    EMIT_HOOK_EVENT("render", RENDER_POST_WINDOW);
+    Event::bus()->m_events.render.stage.emit(RENDER_POST_WINDOW);
 
     g_pHyprOpenGL->m_renderData.currentWindow.reset();
 }
@@ -5170,266 +5032,6 @@ void HyprIso::screenshot(int id) {
         }
     }
 }
-
-void ourRenderTexture(SP<CTexture> tex, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
-    RASSERT(g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
-    RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
-
-    TRACY_GPU_ZONE("RenderTextureInternalWithDamage");
-
-    float alpha = std::clamp(data.a, 0.f, 1.f);
-
-    if (data.damage->empty())
-        return;
-
-    CBox newBox = box;
-    g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
-
-    static const auto PDT            = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
-    static const auto PPASS          = CConfigValue<Hyprlang::INT>("render:cm_fs_passthrough");
-    static const auto PENABLECM      = CConfigValue<Hyprlang::INT>("render:cm_enabled");
-    static const auto PCURSORTIMEOUT = CConfigValue<Hyprlang::FLOAT>("cursor:inactive_timeout");
-
-    // get the needed transform for this texture
-    const auto                  MONITOR_INVERTED = Math::wlTransformToHyprutils(Math::invertTransform(g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
-    Hyprutils::Math::eTransform TRANSFORM        = tex->m_transform;
-
-    if (g_pHyprOpenGL->m_monitorTransformEnabled)
-        TRANSFORM = Math::composeTransform(MONITOR_INVERTED, TRANSFORM);
-
-    Mat3x3     matrix   = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
-    Mat3x3     glMatrix = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
-
-    SShader*   shader = nullptr;
-
-    bool       usingFinalShader = false;
-
-    const bool CRASHING = g_pHyprOpenGL->m_applyFinalShader && g_pHyprRenderer->m_crashingInProgress;
-
-    auto       texType = tex->m_type;
-
-    if (CRASHING) {
-        shader           = &g_pHyprOpenGL->m_shaders->m_shGLITCH;
-        usingFinalShader = true;
-    } else if (g_pHyprOpenGL->m_applyFinalShader && g_pHyprOpenGL->m_finalScreenShader.program) {
-        shader           = &g_pHyprOpenGL->m_finalScreenShader;
-        usingFinalShader = true;
-    } else {
-        if (g_pHyprOpenGL->m_applyFinalShader) {
-            shader           = &g_pHyprOpenGL->m_shaders->m_shPASSTHRURGBA;
-            usingFinalShader = true;
-        } else {
-            switch (tex->m_type) {
-                case TEXTURE_RGBA: shader = &g_pHyprOpenGL->m_shaders->m_shRGBA; break;
-                case TEXTURE_RGBX: shader = &g_pHyprOpenGL->m_shaders->m_shRGBX; break;
-
-                case TEXTURE_EXTERNAL: shader = &g_pHyprOpenGL->m_shaders->m_shEXT; break; // might be unused
-                default: RASSERT(false, "tex->m_iTarget unsupported!");
-            }
-        }
-    }
-
-    if (g_pHyprOpenGL->m_renderData.currentWindow && g_pHyprOpenGL->m_renderData.currentWindow->m_ruleApplicator->RGBX().valueOrDefault()) {
-        shader  = &g_pHyprOpenGL->m_shaders->m_shRGBX;
-        texType = TEXTURE_RGBX;
-    }
-
-    glActiveTexture(GL_TEXTURE0);
-    tex->bind();
-
-    tex->setTexParameter(GL_TEXTURE_WRAP_S, data.wrapX);
-    tex->setTexParameter(GL_TEXTURE_WRAP_T, data.wrapY);
-
-    if (g_pHyprOpenGL->m_renderData.useNearestNeighbor) {
-        tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    } else {
-        tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    }
-
-        const bool isHDRSurface      = g_pHyprOpenGL->m_renderData.surface.valid() && g_pHyprOpenGL->m_renderData.surface->m_colorManagement.valid() ? g_pHyprOpenGL->m_renderData.surface->m_colorManagement->isHDR() : false;
-        const bool canPassHDRSurface = isHDRSurface && !g_pHyprOpenGL->m_renderData.surface->m_colorManagement->isWindowsScRGB(); // windows scRGB requires CM shader
-
-        const auto imageDescription = g_pHyprOpenGL->m_renderData.surface.valid() && g_pHyprOpenGL->m_renderData.surface->m_colorManagement.valid() ?
-        NColorManagement::CImageDescription::from(g_pHyprOpenGL->m_renderData.surface->m_colorManagement->imageDescription()) :
-        (data.cmBackToSRGB ? data.cmBackToSRGBSource->m_imageDescription : NColorManagement::DEFAULT_IMAGE_DESCRIPTION);
-
-    const bool skipCM = !*PENABLECM || !g_pHyprOpenGL->m_cmSupported                                                        /* CM unsupported or disabled */
-        || g_pHyprOpenGL->m_renderData.pMonitor->doesNoShaderCM()                                                           /* no shader needed */
-        || (imageDescription->id() == g_pHyprOpenGL->m_renderData.pMonitor->m_imageDescription->id() && !data.cmBackToSRGB) /* Source and target have the same image description */
-        || (((*PPASS && canPassHDRSurface) ||
-             (*PPASS == 1 && !isHDRSurface && g_pHyprOpenGL->m_renderData.pMonitor->m_cmType != NCMType::CM_HDR && g_pHyprOpenGL->m_renderData.pMonitor->m_cmType != NCMType::CM_HDR_EDID)) &&
-            g_pHyprOpenGL->m_renderData.pMonitor->inFullscreenMode()) /* Fullscreen window with pass cm enabled */;
-
-    if (!skipCM && !usingFinalShader && (texType == TEXTURE_RGBA || texType == TEXTURE_RGBX))
-        shader = &g_pHyprOpenGL->m_shaders->m_shCM;
-
-    g_pHyprOpenGL->useProgram(shader->program);
-
-    if (shader == &g_pHyprOpenGL->m_shaders->m_shCM) {
-        shader->setUniformInt(SHADER_TEX_TYPE, texType);
-        if (data.cmBackToSRGB) {
-            static auto PSDREOTF      = CConfigValue<Hyprlang::INT>("render:cm_sdr_eotf");
-            auto        chosenSdrEotf = *PSDREOTF != 3 ? NColorManagement::CM_TRANSFER_FUNCTION_GAMMA22 : NColorManagement::CM_TRANSFER_FUNCTION_SRGB;
-            g_pHyprOpenGL->passCMUniforms(*shader, imageDescription, NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{.transferFunction = chosenSdrEotf}), true, -1, -1);
-        } else
-            g_pHyprOpenGL->passCMUniforms(*shader, imageDescription);
-    }
-
-    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
-    shader->setUniformInt(SHADER_TEX, 0);
-
-    if ((usingFinalShader && *PDT == 0) || CRASHING)
-        shader->setUniformFloat(SHADER_TIME, g_pHyprOpenGL->m_globalTimer.getSeconds() - shader->initialTime);
-    else if (usingFinalShader)
-        shader->setUniformFloat(SHADER_TIME, 0.f);
-
-    if (usingFinalShader) {
-        shader->setUniformInt(SHADER_WL_OUTPUT, g_pHyprOpenGL->m_renderData.pMonitor->m_id);
-        shader->setUniformFloat2(SHADER_FULL_SIZE, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.x, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.y);
-        shader->setUniformFloat(SHADER_POINTER_INACTIVE_TIMEOUT, *PCURSORTIMEOUT);
-        shader->setUniformInt(SHADER_POINTER_HIDDEN, g_pHyprRenderer->m_cursorHiddenByCondition);
-        shader->setUniformInt(SHADER_POINTER_KILLING, g_pInputManager->getClickMode() == CLICKMODE_KILL);
-        shader->setUniformInt(SHADER_POINTER_SHAPE, g_pHyprRenderer->m_lastCursorData.shape);
-        shader->setUniformInt(SHADER_POINTER_SHAPE_PREVIOUS, g_pHyprRenderer->m_lastCursorData.shapePrevious);
-//float CCursorManager::getScaledSize() const {
-    //return m_size * m_cursorScale;
-//}
-        //shader->setUniformFloat(SHADER_POINTER_SIZE, g_pCursorManager->getScaledSize());
-    }
-
-    if (usingFinalShader && *PDT == 0) {
-        PHLMONITORREF pMonitor = g_pHyprOpenGL->m_renderData.pMonitor;
-        Vector2D      p        = ((g_pInputManager->getMouseCoordsInternal() - pMonitor->m_position) * pMonitor->m_scale);
-        p                      = p.transform(Math::wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_pixelSize);
-        shader->setUniformFloat2(SHADER_POINTER, p.x / pMonitor->m_pixelSize.x, p.y / pMonitor->m_pixelSize.y);
-
-        std::vector<float> pressedPos = g_pHyprOpenGL->m_pressedHistoryPositions | std::views::transform([&](const Vector2D& vec) {
-                                            Vector2D pPressed = ((vec - pMonitor->m_position) * pMonitor->m_scale);
-                                            pPressed          = pPressed.transform(Math::wlTransformToHyprutils(pMonitor->m_transform), pMonitor->m_pixelSize);
-                                            return std::array<float, 2>{(float) (pPressed.x / pMonitor->m_pixelSize.x), (float) (pPressed.y / pMonitor->m_pixelSize.y)};
-                                        }) |
-            std::views::join | std::ranges::to<std::vector<float>>();
-
-        shader->setUniform2fv(SHADER_POINTER_PRESSED_POSITIONS, pressedPos.size(), pressedPos);
-
-        std::vector<float> pressedTime =
-            g_pHyprOpenGL->m_pressedHistoryTimers | std::views::transform([](const CTimer& timer) { return timer.getSeconds(); }) | std::ranges::to<std::vector<float>>();
-
-        shader->setUniform1fv(SHADER_POINTER_PRESSED_TIMES, pressedTime.size(), pressedTime);
-
-        shader->setUniformInt(SHADER_POINTER_PRESSED_KILLED, g_pHyprOpenGL->m_pressedHistoryKilled);
-        shader->setUniformInt(SHADER_POINTER_PRESSED_TOUCHED, g_pHyprOpenGL->m_pressedHistoryTouched);
-
-        shader->setUniformFloat(SHADER_POINTER_LAST_ACTIVE, g_pInputManager->m_lastCursorMovement.getSeconds());
-        shader->setUniformFloat(SHADER_POINTER_SWITCH_TIME, g_pHyprRenderer->m_lastCursorData.switchedTimer.getSeconds());
-
-    } else if (usingFinalShader) {
-        shader->setUniformFloat2(SHADER_POINTER, 0.f, 0.f);
-
-        static const std::vector<float> pressedPosDefault(POINTER_PRESSED_HISTORY_LENGTH * 2uz, 0.f);
-        static const std::vector<float> pressedTimeDefault(POINTER_PRESSED_HISTORY_LENGTH, 0.f);
-
-        shader->setUniform2fv(SHADER_POINTER_PRESSED_POSITIONS, pressedPosDefault.size(), pressedPosDefault);
-        shader->setUniform1fv(SHADER_POINTER_PRESSED_TIMES, pressedTimeDefault.size(), pressedTimeDefault);
-        shader->setUniformInt(SHADER_POINTER_PRESSED_KILLED, 0);
-
-        shader->setUniformFloat(SHADER_POINTER_LAST_ACTIVE, 0.f);
-        shader->setUniformFloat(SHADER_POINTER_SWITCH_TIME, 0.f);
-    }
-
-    if (CRASHING) {
-        shader->setUniformFloat(SHADER_DISTORT, g_pHyprRenderer->m_crashingDistort);
-        shader->setUniformFloat2(SHADER_FULL_SIZE, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.x, g_pHyprOpenGL->m_renderData.pMonitor->m_pixelSize.y);
-    }
-
-    if (!usingFinalShader) {
-        shader->setUniformFloat(SHADER_ALPHA, alpha);
-
-        if (data.discardActive) {
-            shader->setUniformInt(SHADER_DISCARD_OPAQUE, !!(g_pHyprOpenGL->m_renderData.discardMode & DISCARD_OPAQUE));
-            shader->setUniformInt(SHADER_DISCARD_ALPHA, !!(g_pHyprOpenGL->m_renderData.discardMode & DISCARD_ALPHA));
-            shader->setUniformFloat(SHADER_DISCARD_ALPHA_VALUE, g_pHyprOpenGL->m_renderData.discardOpacity);
-        } else {
-            shader->setUniformInt(SHADER_DISCARD_OPAQUE, 0);
-            shader->setUniformInt(SHADER_DISCARD_ALPHA, 0);
-        }
-    }
-
-    CBox transformedBox = newBox;
-    transformedBox.transform(Math::wlTransformToHyprutils(Math::invertTransform(g_pHyprOpenGL->m_renderData.pMonitor->m_transform)), g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.x,
-                             g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.y);
-
-    const auto TOPLEFT  = Vector2D(transformedBox.x, transformedBox.y);
-    const auto FULLSIZE = Vector2D(transformedBox.width, transformedBox.height);
-
-    if (!usingFinalShader) {
-        // Rounded corners
-        shader->setUniformFloat2(SHADER_TOP_LEFT, TOPLEFT.x, TOPLEFT.y);
-        shader->setUniformFloat2(SHADER_FULL_SIZE, FULLSIZE.x, FULLSIZE.y);
-        shader->setUniformFloat(SHADER_RADIUS, data.round);
-        shader->setUniformFloat(SHADER_ROUNDING_POWER, data.roundingPower);
-
-        if (data.allowDim && g_pHyprOpenGL->m_renderData.currentWindow) {
-            if (g_pHyprOpenGL->m_renderData.currentWindow->m_notRespondingTint->value() > 0) {
-                const auto DIM = g_pHyprOpenGL->m_renderData.currentWindow->m_notRespondingTint->value();
-                shader->setUniformInt(SHADER_APPLY_TINT, 1);
-                shader->setUniformFloat3(SHADER_TINT, 1.f - DIM, 1.f - DIM, 1.f - DIM);
-            } else if (g_pHyprOpenGL->m_renderData.currentWindow->m_dimPercent->value() > 0) {
-                shader->setUniformInt(SHADER_APPLY_TINT, 1);
-                const auto DIM = g_pHyprOpenGL->m_renderData.currentWindow->m_dimPercent->value();
-                shader->setUniformFloat3(SHADER_TINT, 1.f - DIM, 1.f - DIM, 1.f - DIM);
-            } else
-                shader->setUniformInt(SHADER_APPLY_TINT, 0);
-        } else
-            shader->setUniformInt(SHADER_APPLY_TINT, 0);
-    }
-
-    glBindVertexArray(shader->uniformLocations[SHADER_SHADER_VAO]);
-    if (data.allowCustomUV && g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft != Vector2D(-1, -1)) {
-        const float customUVs[] = {
-            (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.x, (float) (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.y,     (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.x,
-            (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.y,     (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.x, (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.y,
-            (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft.x,     (float) g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight.y,
-        };
-
-        glBindBuffer(GL_ARRAY_BUFFER, shader->uniformLocations[SHADER_SHADER_VBO_UV]);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(customUVs), customUVs);
-    } else {
-        glBindBuffer(GL_ARRAY_BUFFER, shader->uniformLocations[SHADER_SHADER_VBO_UV]);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(fullVerts), fullVerts);
-    }
-
-    if (!g_pHyprOpenGL->m_renderData.clipBox.empty() || !g_pHyprOpenGL->m_renderData.clipRegion.empty()) {
-        CRegion damageClip = g_pHyprOpenGL->m_renderData.clipBox;
-
-        if (!g_pHyprOpenGL->m_renderData.clipRegion.empty()) {
-            if (g_pHyprOpenGL->m_renderData.clipBox.empty())
-                damageClip = g_pHyprOpenGL->m_renderData.clipRegion;
-            else
-                damageClip.intersect(g_pHyprOpenGL->m_renderData.clipRegion);
-        }
-
-        if (!damageClip.empty()) {
-            damageClip.forEachRect([](const auto& RECT) {
-                g_pHyprOpenGL->scissor(&RECT);
-                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-            });
-        }
-    } else {
-        data.damage->forEachRect([](const auto& RECT) {
-            g_pHyprOpenGL->scissor(&RECT);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        });
-    }
-
-    glBindVertexArray(0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    tex->unbind();
-}
-
-
 
 void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alpha) {
 #ifdef TRACY_ENABLE
@@ -5800,7 +5402,7 @@ void HyprIso::set_zoom_factor(float amount, bool instant) {
                 m->m_cursorZoom->setValueAndWarp(amount);
             else 
                 *(m->m_cursorZoom) = amount;
-            g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m->m_id);
+            g_layoutManager->recalculateMonitor(m);
         }
     }    
 }
@@ -5958,7 +5560,7 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
 
         pMonitor->changeWorkspace(pWorkspace);
 
-        Desktop::focusState()->fullWindowFocus(PWINDOW);
+        Desktop::focusState()->fullWindowFocus(PWINDOW, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
         PWINDOW->warpCursor();
     } else {
         std::string args = std::to_string(workspace);
@@ -5988,7 +5590,7 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
             if (const auto PATCOORDS =
                     g_pCompositor->vectorToWindowUnified(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
                 PATCOORDS)
-                Desktop::focusState()->fullWindowFocus(PATCOORDS);
+                Desktop::focusState()->fullWindowFocus(PATCOORDS, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
             else
                 g_pInputManager->refocus();
         }
@@ -6739,7 +6341,7 @@ void renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const 
 #endif
     PHLWINDOW lastWindow;
 
-    EMIT_HOOK_EVENT("render", RENDER_PRE_WINDOWS);
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
 
     std::vector<PHLWINDOWREF> windows, fadingOut, pinned;
     windows.reserve(g_pCompositor->m_windows.size());
@@ -6902,7 +6504,7 @@ void HyprIso::all_lose_focus() {
 #endif
     prev = Desktop::focusState()->window();
     g_pSeatManager->setPointerFocus(nullptr, {});
-    Desktop::focusState()->fullWindowFocus(nullptr);
+    Desktop::focusState()->fullWindowFocus(nullptr, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
 }
 
 void HyprIso::all_gain_focus() {
@@ -6911,7 +6513,7 @@ void HyprIso::all_gain_focus() {
 #endif
     if (auto p = prev.lock()) {
         //g_pSeatManager->setPointerFocus(p, {});
-        Desktop::focusState()->fullWindowFocus(p);        
+        Desktop::focusState()->fullWindowFocus(p, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
     }
 }
 
@@ -7244,53 +6846,6 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
     
 }
 
-void testDraw() {
-    //return;
-    AnyPass::AnyData anydata([](AnyPass* pass) {
-        static bool once = true;
-        static CFramebuffer otherFB;
-        static CFramebuffer matte;
-        PHLMONITOR m;
-        auto mid = hypriso->monitor_from_cursor();
-        for (auto s : hyprmonitors) {
-            if (s->id == mid) {
-                m = s->m;
-            }
-        }
-        if (!m)
-            return;
-        if (!otherFB.isAllocated()) {
-            //otherFB = new CFramebuffer;
-            otherFB.alloc(200, 200, DRM_FORMAT_ABGR8888);
-
-            //matte = new CFramebuffer;
-            matte.alloc(200, 200, DRM_FORMAT_ABGR8888);
-        }
-        if (once) {
-            once = false;
-            auto* LASTFB = g_pHyprOpenGL->m_renderData.currentFB;
-            
-            otherFB.bind();
-            g_pHyprOpenGL->renderRect({0, 0, 50, 50}, CHyprColor(0, 1, 1, 1), {.round = 0});
-            
-            matte.bind();
-            g_pHyprOpenGL->renderBorder({10, 10, 30, 30}, CHyprColor(1, 1, 1, 1), {.round = 10 });
-
-            LASTFB->bind();
-        }
-
-        CHyprOpenGLImpl::STextureRenderData data;
-        CRegion texDamage{g_pHyprOpenGL->m_renderData.damage};
-        data.damage = &texDamage;
-
-        //CBox outbox = {0, 0, m->m_pixelSize.x, m->m_pixelSize.y};
-        CBox outbox = {0, 0, 200, 200};
-        g_pHyprOpenGL->renderTextureMatte(otherFB.getTexture(), outbox, matte);
-    });
-    //g_pHyprOpenGL->m_renderData.damage;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-}
-
 void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, bool clip = false, CBox clipbox = CBox()) {
     RASSERT(g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
     RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
@@ -7308,9 +6863,10 @@ void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, 
     Mat3x3     matrix    = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
     Mat3x3     glMatrix  = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
 
-    SShader*   shader = &g_pHyprOpenGL->m_shaders->m_shMATTE;
+    //auto shader = &g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE];
+    auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE]);
 
-    g_pHyprOpenGL->useProgram(shader->program);
+    //g_pHyprOpenGL->useProgram(shader->program);
     shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
     shader->setUniformInt(SHADER_TEX, 0);
     shader->setUniformInt(SHADER_ALPHA_MATTE, 1);
@@ -7322,7 +6878,7 @@ void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, 
     auto matteTex = matte.getTexture();
     matteTex->bind();
 
-    glBindVertexArray(shader->uniformLocations[SHADER_SHADER_VAO]);
+    glBindVertexArray(shader->getUniformLocation(SHADER_SHADER_VAO));
 
     if (clip) {
         g_pHyprOpenGL->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {

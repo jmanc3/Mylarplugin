@@ -1619,7 +1619,7 @@ void heart::begin() {
         on_any_container_close = any_container_closed;
         create_actual_root();
         add_hyprctl_dispatchers();
-                
+
         hypriso->on_mouse_press = on_mouse_press;
         hypriso->on_mouse_move = on_mouse_move;
         hypriso->on_key_press = on_key_press;
@@ -1628,6 +1628,7 @@ void heart::begin() {
         hypriso->on_render = on_render;
         hypriso->is_snapped = is_snapped;
         hypriso->on_window_open = on_window_open;
+        
         hypriso->on_window_closed = on_window_closed;
         hypriso->on_popup_open = on_popup_open;
         hypriso->on_popup_closed = on_popup_closed;
