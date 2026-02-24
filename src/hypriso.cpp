@@ -2907,7 +2907,20 @@ void change_root_config_path(std::string path, bool force = true) {
         if (default_path.find(conf_path()) != std::string::npos) {
             return;
         }
+
+        /*
+        g_pConfigManager->m_firstExecRequests.clear();
+        g_pConfigManager->m_firstExecDispatched = false;
+        g_pConfigManager->m_isFirstLaunch = false;
+ 
+        later(1000, [](Timer *) {
+            g_pConfigManager->m_firstExecDispatched = false;
+            g_pConfigManager->m_isFirstLaunch = false;
+            g_pConfigManager->dispatchExecOnce();
+        });
+        */
     }
+
     g_pConfigManager->m_config->changeRootPath(path.c_str());
 }
 
@@ -3567,6 +3580,7 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                 }
             }
             */
+            
             {
                 if (instant) {
                     #ifdef TRACY_ENABLE
@@ -3582,6 +3596,7 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                     *c->w->m_realSize = {w, h};
                 }
             }
+            
             {
                 #ifdef TRACY_ENABLE
                     ZoneScopedN("Move regular");
@@ -3594,6 +3609,8 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                 #endif
                 c->w->updateWindowDecos();
             }
+            c->w->layoutTarget()->rememberFloatingSize({w, h});
+            c->w->layoutTarget()->setPositionGlobal(CBox(x, y, w, h));
         }
     }
 }
