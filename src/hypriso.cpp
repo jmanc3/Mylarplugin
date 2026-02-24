@@ -374,7 +374,28 @@ public:
     }
 };
 
+static bool change_mask = false;
+static int surface_mask = 0;
+
+inline CFunctionHook* g_pOnUseShader = nullptr;
+typedef WP<CShader> (*origUseShader)(CHyprOpenGLImpl *, WP<CShader> prog);
+WP<CShader> hook_onUseShader(void* thisptr, WP<CShader> prog) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto shader = (*(origUseShader)g_pOnUseShader->m_original)((CHyprOpenGLImpl *) thisptr, prog);
+    if (change_mask) {
+        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+        glUniform1i(loc, surface_mask);
+    }
+    change_mask = false;
+    return shader;
+}
+
 void set_rounding(int mask) {
+    change_mask = true;
+    surface_mask = mask;
+    return;
     //return; //possibly the slow bomb
     if (!g_pHyprOpenGL || !g_pHyprOpenGL->m_shaders) {
         return;
@@ -2261,7 +2282,7 @@ cursor:zoom_detached_camera = 1
 cursor:zoom_disable_aa = true
 input:float_switch_override_focus = false
 
-windowrule = match:class .*, float on
+windowrule = match:class *, float on
 
 $mainMod = Alt
 bind = $mainMod, Q, exec, $terminal
@@ -2669,6 +2690,18 @@ void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fi
     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
+static void hook_use_shader() {
+    {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "useShader");
+        for (auto m : METHODS) {
+            if (m.demangled.find("CHyprOpenGLImpl") != std::string::npos) {
+                g_pOnUseShader = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onUseShader);
+                g_pOnUseShader->hook();
+            }
+        }
+    }
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2687,6 +2720,7 @@ void HyprIso::create_hooks() {
     hook_dock_change();
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
+    hook_use_shader();
     hook_monitor_render();
     hook_hidden_state_change();
     hook_default_config();
@@ -3601,13 +3635,13 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                 #ifdef TRACY_ENABLE
                     ZoneScopedN("Move regular");
                 #endif
-                c->w->sendWindowSize(false);
+                //c->w->sendWindowSize(false);
             }
             {
                 #ifdef TRACY_ENABLE
                     ZoneScopedN("Update decos");
                 #endif
-                c->w->updateWindowDecos();
+                //c->w->updateWindowDecos();
             }
             c->w->layoutTarget()->rememberFloatingSize({w, h});
             c->w->layoutTarget()->setPositionGlobal(CBox(x, y, w, h));
