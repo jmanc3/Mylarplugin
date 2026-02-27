@@ -43,10 +43,9 @@ static bool labels = true;
 static int pixel_spacing = 1;
 static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
+static RGBA accent = RGBA(.0, .52, .9, 1);
 
 static void write_saved_pins_to_file(Container *icons);
-
-static void stop_thread();
 
 class Window {
 public:
@@ -384,6 +383,8 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 
 }
 
 Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
+    if (!cr)
+        return {0, 0, 0, 0};
     auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
@@ -1724,24 +1725,6 @@ static void fill_root(Container *root) {
                     windowing::redraw(dock->extra->raw_window);
                 }});
             });
-            for (int i = 0; i < 20; i++) {
-                auto p = scroll->content->child(FILL_SPACE, 100);
-                if (i == 3) {
-                    p->wanted_bounds.w = 1000;
-                }
-                p->when_paint = [dock](Container *root, Container *c) {
-                    auto cr = dock->extra->raw_window->cr;
-                    if (c->state.mouse_hovering) {
-                        set_rect(cr, c->real_bounds);
-                        set_argb(cr, {0, 1, 0, 1});
-                        cairo_fill(cr);
-                    } else {
-                        set_rect(cr, c->real_bounds);
-                        set_argb(cr, {0, 1, 1, 1});
-                        cairo_stroke(cr);
-                    }
-                };
-            }
 
             windowing::redraw(dock->extra->raw_window);
         };
@@ -1842,7 +1825,7 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, 200);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, 550);
 
             dock->volume = open_mylar_popup(mylar, settings);
             if (!dock->volume)
@@ -2166,7 +2149,6 @@ void dock::stop(std::string monitor_name) {
 
             windowing::close_app(d->app);
         }
-        stop_thread();
         docks.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         cleanup_cached_fonts();   
@@ -2355,16 +2337,19 @@ Bounds dock::get_location(std::string name, int cid) {
     return {0, 0, 100, 100};
 }
 
-static void set_volume(std::string uuid, float scalar) {
+static void set_volume(std::string uuid, float scalar, bool is_muted) {
     if (scalar < 0)
         scalar = 0;
     if (scalar > 1)
         scalar = 1;
 
-    audio([uuid, scalar]() {
+    audio([uuid, scalar, is_muted]() {
         for (auto c : audio_clients) {
-            if (c->uuid == uuid)
-               c->set_volume(scalar);
+            if (c->uuid == uuid) {
+                if (is_muted)
+                    c->set_mute(false);
+                c->set_volume(scalar);
+            }
         }
     });
     
@@ -2375,44 +2360,208 @@ struct AudioData : UserData {
     std::string icon;
     float level = 100;
     bool muted = false;
+    std::string uuid;
 };
 
-static Container *add_title(Container *parent) {
-    auto line = parent->child(FILL_SPACE, 40);
-    auto audio_data = new AudioData;
-    line->user_data = audio_data;
-    
-    line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.h = 40 * ((Dock *) root->user_data)->volume->raw_window->dpi;
-    };
-    line->when_paint = [](Container *root, Container *c) {
+static void paint_debug_us(Container *root, Container *c) {
+    auto dock = (Dock *) root->user_data;
+    auto cr = dock->volume->raw_window->cr;
+    auto audio_data = (AudioData *) c->user_data;
+    auto b = c->real_bounds;
+    b.shrink(2);
+    set_rect(cr, b);
+    set_argb(cr, {1, 0, 1, 1});
+    cairo_fill(cr);
+}
+
+static int audio_container = 3824729; 
+
+static Container *fill_out_slider(Container *c) {
+    static float dotr = 17;
+    static float thickness = 8;
+    c->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->volume->raw_window->cr;
-        auto audio_data = (AudioData *) c->user_data;
-        paint_button_bg(root, c);
+        auto dpi = dock->volume->raw_window->dpi;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        
+        float final_thickness = std::round(thickness * dpi);
+        float final_dotr = std::round(dotr * dpi);
+        {
+            auto b = c->real_bounds; 
+            //b.x += dotr;
+            //b.w -= dotr * 2;
+            b.y += b.h * .5 - final_thickness * .5;
+            b.h = final_thickness;
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
+            set_argb(cr, {0, 0, 0, .1});
+            cairo_fill(cr);
+        }
 
+        {
+            auto b = c->real_bounds; 
+            b.x += b.w * audio_data->level - final_dotr * .5;
+            b.w = final_dotr;
+            b.y += b.h * .5 - final_dotr * .5;
+            b.h = final_dotr;
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
+            set_argb(cr, {1, 1, 1, 1});
+            cairo_fill(cr);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
+            auto bigger = b;
+            bigger.scale_from_center(1.4);
+            bool dot_intersected = bounds_contains(bigger, root->mouse_current_x, root->mouse_current_y); 
+            if ((c->state.mouse_hovering || c->state.mouse_pressing) && dot_intersected) {
+                b.scale_from_center(.7);
+            } else {
+                b.scale_from_center(.55);
+            }
+            set_argb(cr, {0, 0, 0, .1});
+            cairo_stroke(cr);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
+            set_argb(cr, accent);
+            cairo_fill(cr);
+        }
+        
+    };
+
+    c->when_clicked = [](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        set_volume(audio_data->uuid, scalar, audio_data->muted);
+    };
+    c->when_drag_start = [](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        set_volume(audio_data->uuid, scalar, audio_data->muted);
+    };
+    c->when_drag = [](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        set_volume(audio_data->uuid, scalar, audio_data->muted);
+    };
+    c->when_drag_end = [](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        set_volume(audio_data->uuid, scalar, audio_data->muted);
+    };
+    
+    return nullptr;
+}
+
+static Container *add_volume_option(Container *parent) {
+    auto line = parent->child(::vbox, FILL_SPACE, 40);
+    line->custom_type = audio_container;
+    auto audio_data = new AudioData;
+    line->user_data = audio_data;
+
+    static float total_h = 65;
+    static float top_h = 30;
+    
+    line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.h = total_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
+    };
+
+    auto label_icon = line->child(FILL_SPACE, FILL_SPACE);
+    label_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.h = top_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
+    };
+    label_icon->when_paint = [](Container *root, Container *c) { 
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        //paint_debug_us(root, c);
         auto bounds = draw_text(cr, c, audio_data->title, 12 * dock->volume->raw_window->dpi, false, "Segoe Fluent Icons");
         auto b = draw_text(cr,
             c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
-            audio_data->title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
-    };
-    line->when_clicked = [](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(c->uuid, scalar);
+            audio_data->title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", 
+            c->real_bounds.w * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
     
-    line->when_drag_start = [](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(c->uuid, scalar);
+    auto volume_slider_parent = line->child(::hbox, FILL_SPACE, FILL_SPACE);
+    auto left_volume_icon = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
+    left_volume_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.w = b.h;
     };
-    line->when_drag = [](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(c->uuid, scalar);
+    left_volume_icon->when_clicked = paint {
+        auto dock = (Dock *) root->user_data;
+
+        windowing::set_popup_size(dock->volume->raw_window, 100, 300);
+        
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        auto uuid = audio_data->uuid;
+        auto muted = audio_data->muted;
+        audio([uuid, muted]() {
+            for (auto c : audio_clients) {
+                if (c->uuid == uuid)
+                   c->set_mute(!muted);
+            }
+        });
     };
-    line->when_drag_end = [](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(c->uuid, scalar);
+    left_volume_icon->when_paint = paint {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        auto dpi = dock->volume->raw_window->dpi;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+
+        bool is_muted = audio_data->muted;
+        int val = (int) std::round(audio_data->level * 100);
+        
+        if (!is_muted) {
+            std::string background_bars = "\uE995";
+            RGBA color = {.4, .4, .4, .4};
+            auto b = draw_text(cr, 0, 0, background_bars, 14 * dpi, false, "Segoe Fluent Icons");
+            draw_text(cr, center_x(c, b.w), center_y(c, b.h), background_bars, 14 * dpi, true, "Segoe Fluent Icons", -1, -1, color);
+        }
+        
+        std::string text;
+        if (is_muted) {
+            text = "\uE74F";
+        } else if (val == 0) {
+            text = "\uE992";
+        } else if (val < 33) {
+            text = "\uE993";
+        } else if (val < 66) {
+            text = "\uE994";
+        } else {
+            text = "\uE995";
+        }
+        
+        RGBA color = {0, 0, 0, 1};
+        auto b = draw_text(cr, 0, 0, text, 14 * dpi, false, "Segoe Fluent Icons");
+        draw_text(cr, center_x(c, b.w), center_y(c, b.h), text, 14 * dpi, true, "Segoe Fluent Icons", -1, -1, color);
     };
+    
+    auto slider = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
+    fill_out_slider(slider);
+    auto right_volume_text = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
+    right_volume_text->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.w = b.h;
+    };
+    right_volume_text->when_paint = paint {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        auto dpi = dock->volume->raw_window->dpi;
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        int val = (int) std::round(audio_data->level * 100);
+        std::string level = std::to_string(val);
+        RGBA color = {0, 0, 0, 1};
+        auto b = draw_text(cr, 0, 0, level, 12 * dpi, false, mylar_font);
+        auto x = c->real_bounds.x + c->real_bounds.w - b.w - 2 * dpi;
+        if (val != 100)
+            x = center_x(c, b.w);
+        draw_text(cr, x, center_y(c, b.h), level, 12 * dpi, true, mylar_font, -1, -1, color);
+    };
+
     return line;
 }
 
@@ -2428,7 +2577,7 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
     }, [clients](Container *parent, std::string uuid) {
         for (auto client : clients)
             if (client.uuid == uuid)  {
-                auto c = add_title(parent);
+                auto c = add_volume_option(parent);
                 c->uuid = uuid;
             }
     });
@@ -2441,18 +2590,19 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
         for (auto c : root->children) {
             if (c->uuid == client.uuid) {
                 auto audio_data = (AudioData *) c->user_data;
-                audio_data->title = fz("({:.2f}) {}", client.get_volume(), client.title);
+                audio_data->uuid = client.uuid;
+                audio_data->level = client.get_volume();
+                audio_data->icon = client.icon_name;
+                audio_data->muted = client.is_muted();
+                if (client.subtitle.empty()) {
+                    audio_data->title = client.title;
+                } else {
+                    audio_data->title = fz("{} : {}", client.title, client.subtitle);
+                }
             }
         }
     }
 }
-
-static bool thread_created = false;
-static std::thread to_update;
-static std::mutex to_update_mutex;
-static std::condition_variable condition;
-static bool actually_needs_to_wake = false;
-static bool stop_audio_thread = false;
 
 void total_update() {
     std::vector<AudioClient> clients;
@@ -2478,66 +2628,8 @@ void total_update() {
     });
 }
 
-static void stop_thread() {
-    {
-        std::unique_lock<std::mutex> lock(to_update_mutex);
-        stop_audio_thread = true;
-        actually_needs_to_wake = true;
-        condition.notify_one();
-    }
-    if (to_update.joinable()) {
-        to_update.join();
-    }
-
-    std::unique_lock<std::mutex> lock(to_update_mutex);
-    thread_created = false;
-}
-
 void dock::change_in_audio() {
     total_update();
-    /*
-    bool should_create = false;
-    {
-        std::unique_lock<std::mutex> lock(to_update_mutex);
-        if (!thread_created) {
-            thread_created = true;
-            stop_audio_thread = false;
-            actually_needs_to_wake = false;
-            should_create = true;
-        } else {
-            actually_needs_to_wake = true;
-            condition.notify_one();
-        }
-    }
-
-    if (should_create) {
-        to_update = std::thread([]() {
-            try {
-                while (audio_running) {
-                    {
-                        std::unique_lock<std::mutex> lock(to_update_mutex);
-                        condition.wait(lock, []() { return actually_needs_to_wake || stop_audio_thread; });
-                        if (stop_audio_thread)
-                            break;
-                        actually_needs_to_wake = false;
-                    }
-                    
-                    audio_read([]() {
-                        total_update();
-                    });
-                }
-            } catch (...) {
-                // keep process alive; thread state is reset below
-            }
-
-            {
-                std::unique_lock<std::mutex> lock(to_update_mutex);
-                thread_created = false;
-            }
-        });
-        dock::change_in_audio();
-    }
-    */
 }
 
 void dock::change_in_battery() {

@@ -65,6 +65,7 @@ extern "C" {
 #endif
 
 static int unique_id = 0;
+static uint32_t popup_reposition_token = 1;
 
 struct wl_window;
 
@@ -234,6 +235,11 @@ struct wl_window {
     bool has_keyboard_focus = false;
     bool is_layer = true;
     bool marked_for_closing = false;
+
+    RawWindowSettings::PopupPositioner popup_positioner = {};
+    bool popup_use_fallback_anchor_rect = false;
+    int popup_fallback_anchor_x = 0;
+    int popup_fallback_anchor_y = 0;
 };
 
 std::vector<wl_context *> apps;
@@ -1534,7 +1540,8 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
         d->seat = (wl_seat *) wl_registry_bind(registry, id, &wl_seat_interface, 5);
         wl_seat_add_listener(d->seat, &seat_listener, d);
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
-        d->wm_base = (xdg_wm_base *) wl_registry_bind(registry, id, &xdg_wm_base_interface, 1);
+        const uint32_t wm_base_version = version < 3 ? version : 3;
+        d->wm_base = (xdg_wm_base *) wl_registry_bind(registry, id, &xdg_wm_base_interface, wm_base_version);
         xdg_wm_base_add_listener(d->wm_base, &wm_base_listener, d);
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
         d->layer_shell = (zwlr_layer_shell_v1 *) wl_registry_bind(registry, id, &zwlr_layer_shell_v1_interface, 5);
@@ -1656,7 +1663,7 @@ void windowing::main_loop(RawApp *app) {
     wayland_pf.func = [ctx, &need_flush](PolledFunction pf) {
         short re = pf.revents;
 
-        if (re & POLLERR) {
+        if (re & POLLERR || re & POLLHUP) {
             ctx->running = false;
             return;
         }
@@ -1707,7 +1714,7 @@ void windowing::main_loop(RawApp *app) {
         pfds.reserve(ctx->polled_fds.size());
 
         for (auto &p : ctx->polled_fds) {
-            short ev = POLLIN | POLLERR;
+            short ev = POLLIN | POLLERR | POLLHUP | POLLNVAL;
             if (p.fd == fd && need_flush)
                 ev |= POLLOUT;
             pfds.push_back({ p.fd, ev, 0 });
@@ -1716,6 +1723,9 @@ void windowing::main_loop(RawApp *app) {
         // Block
         if (poll(pfds.data(), pfds.size(), -1) < 0)
             break;
+
+        if (!ctx->running)
+            continue;
 
         // Dispatch
         int end = ctx->polled_fds.size();
@@ -1839,6 +1849,51 @@ static uint32_t to_xdg_popup_gravity(RawWindowSettings::PopupGravity gravity) {
     return XDG_POSITIONER_GRAVITY_TOP_LEFT;
 }
 
+static void apply_popup_positioner_settings(
+    xdg_positioner *positioner,
+    const wl_window *win,
+    int popup_w,
+    int popup_h)
+{
+    if (!positioner || !win)
+        return;
+
+    const auto &popup = win->popup_positioner;
+    xdg_positioner_set_size(positioner, popup_w, popup_h);
+
+    if (popup.use_explicit_anchor_rect) {
+        xdg_positioner_set_anchor_rect(
+            positioner,
+            popup.anchor_rect_x,
+            popup.anchor_rect_y,
+            popup.anchor_rect_w > 0 ? popup.anchor_rect_w : 1,
+            popup.anchor_rect_h > 0 ? popup.anchor_rect_h : 1
+        );
+    } else if (win->popup_use_fallback_anchor_rect) {
+        xdg_positioner_set_anchor_rect(positioner, win->popup_fallback_anchor_x, win->popup_fallback_anchor_y, 1, 1);
+    } else {
+        xdg_positioner_set_anchor_rect(positioner, 0, 0, 1, 1);
+    }
+
+    xdg_positioner_set_anchor(positioner, to_xdg_popup_anchor(popup.anchor));
+    xdg_positioner_set_gravity(positioner, to_xdg_popup_gravity(popup.gravity));
+
+    if (popup.use_offset)
+        xdg_positioner_set_offset(positioner, popup.offset_x, popup.offset_y);
+
+    if (popup.constraint_adjustment != RawWindowSettings::POPUP_CONSTRAINT_NONE)
+        xdg_positioner_set_constraint_adjustment(positioner, popup.constraint_adjustment);
+
+    if (popup.reactive)
+        xdg_positioner_set_reactive(positioner);
+
+    if (popup.use_parent_size)
+        xdg_positioner_set_parent_size(positioner, popup.parent_w, popup.parent_h);
+
+    if (popup.use_parent_configure)
+        xdg_positioner_set_parent_configure(positioner, popup.parent_configure_serial);
+}
+
 static xdg_popup *create_popup_role(wl_window *win, wl_window *parent_win, xdg_positioner *positioner) {
     if (!win || !parent_win || !positioner || !win->xdg_surface)
         return nullptr;
@@ -1920,6 +1975,10 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
     rw->cr = window->cr;
     window->id = rw->id;
     window->on_render = on_window_render;
+    window->popup_positioner = settings.popup;
+    window->popup_use_fallback_anchor_rect = !settings.popup.use_explicit_anchor_rect;
+    window->popup_fallback_anchor_x = settings.pos.x;
+    window->popup_fallback_anchor_y = settings.pos.y;
     windows.push_back(window);
 
     xdg_positioner *positioner = xdg_wm_base_create_positioner(ctx->wm_base);
@@ -1931,39 +1990,7 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
 
     const int popup_w = settings.pos.w > 0 ? settings.pos.w : 1;
     const int popup_h = settings.pos.h > 0 ? settings.pos.h : 1;
-    const auto &popup = settings.popup;
-
-    xdg_positioner_set_size(positioner, popup_w, popup_h);
-
-    if (popup.use_explicit_anchor_rect) {
-        xdg_positioner_set_anchor_rect(
-            positioner,
-            popup.anchor_rect_x,
-            popup.anchor_rect_y,
-            popup.anchor_rect_w > 0 ? popup.anchor_rect_w : 1,
-            popup.anchor_rect_h > 0 ? popup.anchor_rect_h : 1
-        );
-    } else {
-        xdg_positioner_set_anchor_rect(positioner, settings.pos.x, settings.pos.y, 1, 1);
-    }
-
-    xdg_positioner_set_anchor(positioner, to_xdg_popup_anchor(popup.anchor));
-    xdg_positioner_set_gravity(positioner, to_xdg_popup_gravity(popup.gravity));
-
-    if (popup.use_offset)
-        xdg_positioner_set_offset(positioner, popup.offset_x, popup.offset_y);
-
-    if (popup.constraint_adjustment != RawWindowSettings::POPUP_CONSTRAINT_NONE)
-        xdg_positioner_set_constraint_adjustment(positioner, popup.constraint_adjustment);
-
-    if (popup.reactive)
-        xdg_positioner_set_reactive(positioner);
-
-    if (popup.use_parent_size)
-        xdg_positioner_set_parent_size(positioner, popup.parent_w, popup.parent_h);
-
-    if (popup.use_parent_configure)
-        xdg_positioner_set_parent_configure(positioner, popup.parent_configure_serial);
+    apply_popup_positioner_settings(positioner, window, popup_w, popup_h);
 
     wl_window *window_wl = find_window(rw);
     wl_window *parent_wl = find_window(parent);
@@ -2046,6 +2073,88 @@ void windowing::set_size(RawWindow *window, int width, int height) {
     ctx->have_functions_to_execute = true;
     write(ctx->wake_pipe[1], "x", 1);
 };
+
+static void set_popup_size_impl(
+    RawWindow *window,
+    int width,
+    int height,
+    const RawWindowSettings *settings)
+{
+    if (!window || !window->creator)
+        return;
+
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == window->creator->id)
+            ctx = c;
+    if (!ctx)
+        return;
+
+    wl_window *win = nullptr;
+    for (auto w : windows)
+        if (w->id == window->id)
+            win = w;
+    if (!win || !win->xdg_popup || !ctx->wm_base)
+        return;
+
+    const int popup_w = width > 0 ? width : 1;
+    const int popup_h = height > 0 ? height : 1;
+    const bool has_settings = settings != nullptr;
+    const auto updated_popup_positioner = has_settings ? settings->popup : RawWindowSettings::PopupPositioner{};
+    const bool updated_use_fallback_anchor_rect = has_settings ? !settings->popup.use_explicit_anchor_rect : false;
+    const int updated_fallback_anchor_x = has_settings ? settings->pos.x : 0;
+    const int updated_fallback_anchor_y = has_settings ? settings->pos.y : 0;
+
+    std::lock_guard<std::mutex> lock(ctx->functions_mut);
+    ctx->functions_to_call.push_back([
+        ctx,
+        win,
+        popup_w,
+        popup_h,
+        has_settings,
+        updated_popup_positioner,
+        updated_use_fallback_anchor_rect,
+        updated_fallback_anchor_x,
+        updated_fallback_anchor_y
+    ]() {
+        if (!ctx || !win || !win->xdg_popup || !ctx->wm_base)
+            return;
+
+        if (has_settings) {
+            win->popup_positioner = updated_popup_positioner;
+            win->popup_use_fallback_anchor_rect = updated_use_fallback_anchor_rect;
+            win->popup_fallback_anchor_x = updated_fallback_anchor_x;
+            win->popup_fallback_anchor_y = updated_fallback_anchor_y;
+        }
+
+        const uint32_t popup_version = xdg_popup_get_version(win->xdg_popup);
+        if (popup_version >= XDG_POPUP_REPOSITION_SINCE_VERSION) {
+            xdg_positioner *positioner = xdg_wm_base_create_positioner(ctx->wm_base);
+            if (!positioner)
+                return;
+
+            apply_popup_positioner_settings(positioner, win, popup_w, popup_h);
+            xdg_popup_reposition(win->xdg_popup, positioner, popup_reposition_token++);
+            xdg_positioner_destroy(positioner);
+        }
+
+        win->pending_width = popup_w;
+        win->pending_height = popup_h;
+        wl_window_resize_buffer(win, popup_w, popup_h);
+        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+        wl_surface_commit(win->surface);
+    });
+    ctx->have_functions_to_execute = true;
+    write(ctx->wake_pipe[1], "x", 1);
+}
+
+void windowing::set_popup_size(RawWindow *window, int width, int height) {
+    set_popup_size_impl(window, width, height, nullptr);
+}
+
+void windowing::set_popup_size(RawWindow *window, int width, int height, const RawWindowSettings &settings) {
+    set_popup_size_impl(window, width, height, &settings);
+}
 
 void windowing::close_window(RawWindow *window) {
     wl_context *ctx = nullptr;

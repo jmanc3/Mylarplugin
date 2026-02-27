@@ -226,20 +226,24 @@ static std::tuple<int, float, int, int> from_root(Container *c) {
     return {rid, s, stage, active_id};
 }
 
-static Container *first_above_of(Container *c, TYPE type) {
+static Container *first_above_of(Container *c, int type) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     Container *client_above = nullptr; 
     Container *current = c;
     while (current->parent != nullptr) {
-        if (current->parent->custom_type == (int) type) {
+        if (current->parent->custom_type == type) {
             return current->parent;
         }
         current = current->parent;
     }
     //assert(client_above && fz("Did not find container of type {} above, probably logic bug introduced", (int) type).c_str());
     return nullptr; 
+}
+
+static Container *first_above_of(Container *c, TYPE type) {
+    return first_above_of(c, (int) type);
 }
 
 static Container *get_cid_container(int id) {

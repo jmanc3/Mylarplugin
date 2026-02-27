@@ -2282,7 +2282,7 @@ cursor:zoom_detached_camera = 1
 cursor:zoom_disable_aa = true
 input:float_switch_override_focus = false
 
-windowrule = match:class *, float on
+windowrule = match:class .*, float on
 
 $mainMod = Alt
 bind = $mainMod, Q, exec, $terminal

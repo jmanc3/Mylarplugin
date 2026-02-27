@@ -160,6 +160,8 @@ namespace windowing {
 
     void wake_up(RawWindow *window);
     void set_size(RawWindow *window, int width, int height);
+    void set_popup_size(RawWindow *window, int width, int height);
+    void set_popup_size(RawWindow *window, int width, int height, const RawWindowSettings &settings);
     void redraw(RawWindow *window);
 
     void close_window(RawWindow *window);   
