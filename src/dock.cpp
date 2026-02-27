@@ -1825,7 +1825,11 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, 550);
+            static float total_h = 65;
+            int amount = audio_clients.size();
+            if (1 > amount)
+                amount = 1;
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, total_h * amount);
 
             dock->volume = open_mylar_popup(mylar, settings);
             if (!dock->volume)
@@ -2478,21 +2482,22 @@ static Container *add_volume_option(Container *parent) {
         auto audio_data = (AudioData *) audio_c->user_data;
         //paint_debug_us(root, c);
         auto bounds = draw_text(cr, c, audio_data->title, 12 * dock->volume->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto dpi = dock->volume->raw_window->dpi;
         auto b = draw_text(cr,
-            c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
+            c->real_bounds.x + 7 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
             audio_data->title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", 
-            c->real_bounds.w * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
+            (c->real_bounds.w - 14 * dpi) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
     
     auto volume_slider_parent = line->child(::hbox, FILL_SPACE, FILL_SPACE);
+
     auto left_volume_icon = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     left_volume_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds.w = b.h;
     };
     left_volume_icon->when_clicked = paint {
         auto dock = (Dock *) root->user_data;
-
-        windowing::set_popup_size(dock->volume->raw_window, 100, 300);
+        //windowing::set_popup_size(dock->volume->raw_window, 100, 300);
         
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
@@ -2562,6 +2567,12 @@ static Container *add_volume_option(Container *parent) {
         draw_text(cr, x, center_y(c, b.h), level, 12 * dpi, true, mylar_font, -1, -1, color);
     };
 
+    auto right_pad = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
+    right_pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.w = b.h * .2;
+    };
+    
+
     return line;
 }
 
@@ -2572,6 +2583,16 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
     for (auto client : clients)
         uuids.push_back(client.uuid);
 
+    bool change = false;
+    for (auto u : uuids) {
+        bool found = false;
+        for (auto r : root->children)
+            if (r->uuid == u)
+                found = true;
+        if (!found)
+            change = true;
+    }
+
     merge_create<std::string>(root, uuids, [](Container *c) {
         return c->uuid;
     }, [clients](Container *parent, std::string uuid) {
@@ -2581,6 +2602,15 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
                 c->uuid = uuid;
             }
     });
+
+    if (change) {
+        /*
+        static float total_h = 65;
+        auto dock = (Dock *) root->user_data;
+        std::lock_guard<std::mutex> guard(dock->app->mutex);
+        windowing::set_popup_size(dock->volume->raw_window, 330, total_h * root->children.size());
+        */
+    }
 
     auto current = get_current_time_in_ms();
     for (auto client : clients) {
