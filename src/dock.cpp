@@ -2365,6 +2365,10 @@ struct AudioData : UserData {
     float level = 100;
     bool muted = false;
     std::string uuid;
+
+    bool attempted_to_load_icon_once = false;
+    float old_dpi = 0.0;
+    cairo_surface_t *icon_surface = nullptr;
 };
 
 static void paint_debug_us(Container *root, Container *c) {
@@ -2480,13 +2484,40 @@ static Container *add_volume_option(Container *parent) {
         auto cr = dock->volume->raw_window->cr;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        //paint_debug_us(root, c);
-        auto bounds = draw_text(cr, c, audio_data->title, 12 * dock->volume->raw_window->dpi, false, "Segoe Fluent Icons");
         auto dpi = dock->volume->raw_window->dpi;
+
+        if (std::abs(audio_data->old_dpi - dpi) > EPSILON) {
+            audio_data->old_dpi = dpi;
+            if (audio_data->icon_surface) {
+                cairo_surface_destroy(audio_data->icon_surface); 
+                audio_data->icon_surface = nullptr;
+            }
+            audio_data->attempted_to_load_icon_once = false;
+        }
+        if (!audio_data->attempted_to_load_icon_once) {
+            audio_data->attempted_to_load_icon_once = true;
+            auto icon = audio_data->icon;
+            auto full = one_shot_icon(24 * dpi, {icon, to_lower(icon), c3ic_fix_wm_class(icon), to_lower(icon)});
+            if (!full.empty()) 
+                load_icon_full_path(&audio_data->icon_surface, full, 24 * dpi);
+        }
+
+        int x_off = 0;
+        if (audio_data->icon_surface) {
+            auto width = cairo_image_surface_get_width(audio_data->icon_surface);
+            auto height = cairo_image_surface_get_height(audio_data->icon_surface);
+            cairo_set_source_surface(cr, audio_data->icon_surface, 
+                c->real_bounds.x + 3 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - height * .5);
+            cairo_paint(cr);
+            x_off += width + 6 * dpi;
+        }
+
+        //paint_debug_us(root, c);
+        auto bounds = draw_text(cr, c, audio_data->title, 12 * dpi, false, "Segoe Fluent Icons");
         auto b = draw_text(cr,
-            c->real_bounds.x + 7 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
-            audio_data->title, 12 * dock->volume->raw_window->dpi, true, "Segoe Fluent Icons", 
-            (c->real_bounds.w - 14 * dpi) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
+            c->real_bounds.x + 7 * dpi + x_off, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
+            audio_data->title, 12 * dpi, true, "Segoe Fluent Icons", 
+            (c->real_bounds.w - 14 * dpi - x_off) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
     
     auto volume_slider_parent = line->child(::hbox, FILL_SPACE, FILL_SPACE);
@@ -2578,7 +2609,7 @@ static Container *add_volume_option(Container *parent) {
 
 static void fill_volume_root(const std::vector<AudioClient> clients, Container *root) {
     root->type = ::vbox;
-    
+
     std::vector<std::string> uuids;
     for (auto client : clients)
         uuids.push_back(client.uuid);
