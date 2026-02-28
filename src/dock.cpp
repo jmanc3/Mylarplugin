@@ -31,6 +31,7 @@
 #include <sys/stat.h>
 #include <filesystem>
 #include <unordered_map>
+#include <unordered_set>
 #include <condition_variable>
 
 #define BTN_LEFT		0x110
@@ -2341,15 +2342,18 @@ Bounds dock::get_location(std::string name, int cid) {
     return {0, 0, 100, 100};
 }
 
-static void set_volume(std::string uuid, float scalar, bool is_muted) {
+static void set_volume(const std::vector<std::string> &uuids, float scalar, bool is_muted) {
     if (scalar < 0)
         scalar = 0;
     if (scalar > 1)
         scalar = 1;
 
-    audio([uuid, scalar, is_muted]() {
+    if (uuids.empty())
+        return;
+
+    audio([uuids, scalar, is_muted]() {
         for (auto c : audio_clients) {
-            if (c->uuid == uuid) {
+            if (std::find(uuids.begin(), uuids.end(), c->uuid) != uuids.end()) {
                 if (is_muted)
                     c->set_mute(false);
                 c->set_volume(scalar);
@@ -2359,13 +2363,20 @@ static void set_volume(std::string uuid, float scalar, bool is_muted) {
     
 }
 
+static void set_volume(std::string uuid, float scalar, bool is_muted) {
+    set_volume(std::vector<std::string>{uuid}, scalar, is_muted);
+}
+
 struct AudioData : UserData {
     std::string title; 
     std::string icon;
     float level = 100;
     bool muted = false;
     std::string uuid;
+    std::vector<std::string> uuids;
     int pid = -1;
+    bool merged = false;
+    int indent_level = 0;
 
     bool attempted_to_load_icon_once = false;
     float old_dpi = 0.0;
@@ -2384,6 +2395,7 @@ static void paint_debug_us(Container *root, Container *c) {
 }
 
 static int audio_container = 3824729; 
+static std::unordered_set<int> expanded_audio_pids;
 
 static Container *fill_out_slider(Container *c) {
     static float dotr = 17;
@@ -2439,25 +2451,25 @@ static Container *fill_out_slider(Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        set_volume(audio_data->uuid, scalar, audio_data->muted);
+        set_volume(audio_data->uuids, scalar, audio_data->muted);
     };
     c->when_drag_start = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        set_volume(audio_data->uuid, scalar, audio_data->muted);
+        set_volume(audio_data->uuids, scalar, audio_data->muted);
     };
     c->when_drag = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        set_volume(audio_data->uuid, scalar, audio_data->muted);
+        set_volume(audio_data->uuids, scalar, audio_data->muted);
     };
     c->when_drag_end = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        set_volume(audio_data->uuid, scalar, audio_data->muted);
+        set_volume(audio_data->uuids, scalar, audio_data->muted);
     };
     
     return nullptr;
@@ -2479,6 +2491,18 @@ static Container *add_volume_option(Container *parent) {
     auto label_icon = line->child(FILL_SPACE, FILL_SPACE);
     label_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds.h = top_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
+    };
+    label_icon->when_clicked = [](Container *root, Container *c) {
+        auto audio_c = first_above_of(c, audio_container);
+        auto audio_data = (AudioData *) audio_c->user_data;
+        if (!audio_data->merged || audio_data->pid <= 0)
+            return;
+        if (expanded_audio_pids.find(audio_data->pid) != expanded_audio_pids.end()) {
+            expanded_audio_pids.erase(audio_data->pid);
+        } else {
+            expanded_audio_pids.insert(audio_data->pid);
+        }
+        dock::change_in_audio();
     };
     label_icon->when_paint = [](Container *root, Container *c) { 
         auto dock = (Dock *) root->user_data;
@@ -2514,10 +2538,20 @@ static Container *add_volume_option(Container *parent) {
         }
 
         //paint_debug_us(root, c);
-        auto bounds = draw_text(cr, c, audio_data->title, 12 * dpi, false, "Segoe Fluent Icons");
+        auto label = audio_data->title;
+        if (audio_data->merged) {
+            if (expanded_audio_pids.find(audio_data->pid) != expanded_audio_pids.end()) {
+                label = "[-] " + label;
+            } else {
+                label = "[+] " + label;
+            }
+        } else if (audio_data->indent_level > 0) {
+            label = "  " + label;
+        }
+        auto bounds = draw_text(cr, c, label, 12 * dpi, false, "Segoe Fluent Icons");
         auto b = draw_text(cr,
             c->real_bounds.x + 7 * dpi + x_off, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
-            audio_data->title, 12 * dpi, true, "Segoe Fluent Icons", 
+            label, 12 * dpi, true, "Segoe Fluent Icons", 
             (c->real_bounds.w - 14 * dpi - x_off) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
     
@@ -2537,11 +2571,11 @@ static Container *add_volume_option(Container *parent) {
         
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        auto uuid = audio_data->uuid;
         auto muted = audio_data->muted;
-        audio([uuid, muted]() {
+        auto uuids = audio_data->uuids;
+        audio([uuids, muted]() {
             for (auto c : audio_clients) {
-                if (c->uuid == uuid)
+                if (std::find(uuids.begin(), uuids.end(), c->uuid) != uuids.end())
                    c->set_mute(!muted);
             }
         });
@@ -2611,31 +2645,133 @@ static Container *add_volume_option(Container *parent) {
     return line;
 }
 
-static void fill_volume_root(const std::vector<AudioClient> clients, Container *root) {
+struct VolumeRow {
+    std::string id;
+    std::string title;
+    std::string icon;
+    float level = 0;
+    bool muted = false;
+    int pid = -1;
+    bool merged = false;
+    int indent_level = 0;
+    std::vector<std::string> uuids;
+};
+
+static std::string make_unmerged_title(const AudioClient &client) {
+    if (client.subtitle.empty())
+        return client.title;
+    return fz("{} : {}", client.title, client.subtitle);
+}
+
+static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &clients) {
+    std::unordered_map<int, std::vector<AudioClient *>> clients_by_pid;
+    for (auto &client : clients) {
+        if (client.pid > 0) {
+            clients_by_pid[client.pid].push_back(&client);
+        }
+    }
+
+    std::vector<VolumeRow> rows;
+    std::unordered_set<int> emitted_pids;
+    std::unordered_set<std::string> emitted_uuids;
+
+    for (auto &client : clients) {
+        if (client.pid > 0) {
+            auto &group = clients_by_pid[client.pid];
+            if (group.size() > 1) {
+                if (emitted_pids.find(client.pid) != emitted_pids.end())
+                    continue;
+                emitted_pids.insert(client.pid);
+
+                VolumeRow merged;
+                merged.id = fz("pid:{}", client.pid);
+                merged.pid = client.pid;
+                merged.merged = true;
+                merged.level = 0;
+                merged.muted = true;
+
+                std::string subtitle_for_group;
+                for (auto grouped_client : group) {
+                    merged.uuids.push_back(grouped_client->uuid);
+                    merged.level += grouped_client->get_volume();
+                    merged.muted = merged.muted && grouped_client->is_muted();
+                    if (merged.icon.empty() && !grouped_client->icon_name.empty()) {
+                        merged.icon = grouped_client->icon_name;
+                    }
+                    if (subtitle_for_group.empty() && !grouped_client->subtitle.empty()) {
+                        subtitle_for_group = grouped_client->subtitle;
+                    }
+                }
+                merged.level /= (float) group.size();
+                if (subtitle_for_group.empty()) {
+                    subtitle_for_group = group.front()->title;
+                }
+                merged.title = subtitle_for_group;
+                rows.push_back(std::move(merged));
+
+                if (expanded_audio_pids.find(client.pid) != expanded_audio_pids.end()) {
+                    for (auto grouped_client : group) {
+                        VolumeRow child;
+                        child.id = fz("uuid:{}:{}", client.pid, grouped_client->uuid);
+                        child.title = make_unmerged_title(*grouped_client);
+                        child.icon = grouped_client->icon_name;
+                        child.level = grouped_client->get_volume();
+                        child.muted = grouped_client->is_muted();
+                        child.pid = grouped_client->pid;
+                        child.indent_level = 1;
+                        child.uuids.push_back(grouped_client->uuid);
+                        rows.push_back(std::move(child));
+                    }
+                }
+                continue;
+            }
+        }
+
+        if (emitted_uuids.find(client.uuid) != emitted_uuids.end())
+            continue;
+        emitted_uuids.insert(client.uuid);
+        VolumeRow single;
+        single.id = fz("uuid:{}", client.uuid);
+        single.title = make_unmerged_title(client);
+        single.icon = client.icon_name;
+        single.level = client.get_volume();
+        single.muted = client.is_muted();
+        single.pid = client.pid;
+        single.uuids.push_back(client.uuid);
+        rows.push_back(std::move(single));
+    }
+
+    return rows;
+}
+
+static void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
     root->type = ::vbox;
 
-    std::vector<std::string> uuids;
-    for (auto client : clients)
-        uuids.push_back(client.uuid);
+    auto rows = build_volume_rows(clients);
+
+    std::vector<std::string> row_ids;
+    row_ids.reserve(rows.size());
+    std::unordered_map<std::string, const VolumeRow *> rows_by_id;
+    for (auto &row : rows) {
+        row_ids.push_back(row.id);
+        rows_by_id[row.id] = &row;
+    }
 
     bool change = false;
-    for (auto u : uuids) {
+    for (auto id : row_ids) {
         bool found = false;
         for (auto r : root->children)
-            if (r->uuid == u)
+            if (r->uuid == id)
                 found = true;
         if (!found)
             change = true;
     }
 
-    merge_create<std::string>(root, uuids, [](Container *c) {
+    merge_create<std::string>(root, row_ids, [](Container *c) {
         return c->uuid;
-    }, [clients](Container *parent, std::string uuid) {
-        for (auto client : clients)
-            if (client.uuid == uuid)  {
-                auto c = add_volume_option(parent);
-                c->uuid = uuid;
-            }
+    }, [](Container *parent, std::string id) {
+        auto c = add_volume_option(parent);
+        c->uuid = id;
     });
 
     if (change) {
@@ -2652,20 +2788,38 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
         if (client.is_master && (current - last_time_volume_adjusted) > 100) {
             volume_level = std::round(client.get_volume() * 100);
         }
+    }
+
+    for (auto c : root->children) {
+        auto iter = rows_by_id.find(c->uuid);
+        if (iter == rows_by_id.end())
+            continue;
+        auto row = iter->second;
+        auto audio_data = (AudioData *) c->user_data;
+        audio_data->uuid = row->id;
+        audio_data->uuids = row->uuids;
+        audio_data->level = row->level;
+        audio_data->pid = row->pid;
+        audio_data->icon = row->icon;
+        audio_data->muted = row->muted;
+        audio_data->title = row->title;
+        audio_data->merged = row->merged;
+        audio_data->indent_level = row->indent_level;
+    }
+
+    for (auto expanded_pid = expanded_audio_pids.begin(); expanded_pid != expanded_audio_pids.end();) {
+        bool exists = false;
         for (auto c : root->children) {
-            if (c->uuid == client.uuid) {
-                auto audio_data = (AudioData *) c->user_data;
-                audio_data->uuid = client.uuid;
-                audio_data->level = client.get_volume();
-                audio_data->pid = client.pid;
-                audio_data->icon = client.icon_name;
-                audio_data->muted = client.is_muted();
-                if (client.subtitle.empty()) {
-                    audio_data->title = client.title;
-                } else {
-                    audio_data->title = fz("{} : {} : {}", client.pid, client.title, client.subtitle);
-                }
+            auto audio_data = (AudioData *) c->user_data;
+            if (audio_data->merged && audio_data->pid == *expanded_pid) {
+                exists = true;
+                break;
             }
+        }
+        if (exists) {
+            ++expanded_pid;
+        } else {
+            expanded_pid = expanded_audio_pids.erase(expanded_pid);
         }
     }
 }
