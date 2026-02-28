@@ -7,6 +7,8 @@ namespace overview {
     void instant_close();
     void click(int id, int button, int state, float x, float y);
 
+    void should_draw(bool state);
+
     bool is_showing();
 };
 

@@ -386,6 +386,29 @@ void drag_workspace_switcher::open() {
         *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .12}, edge, size * .8);
         drag_switcher_actual_open();
     });
+
+    auto monitor = hypriso->monitor_from_cursor();
+    later(1000.0f / 30.0f, [monitor](Timer *t) {
+        t->keep_running = true;
+        bool found = false;
+        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+            auto c = actual_root->children[i];
+            if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+                found = true;
+            }
+        }
+        if (!found) {
+            t->keep_running = false;
+        }
+        
+        auto spaces = hypriso->get_workspace_ids(monitor);
+        overview::should_draw(false);
+        int active_id = hypriso->get_active_workspace_id(monitor);
+        for (auto s : spaces) {
+            hypriso->screenshot_space(monitor, s);
+        }
+        overview::should_draw(true);
+    });
 }
 
 static void actual_drag_workspace_switcher_close() {

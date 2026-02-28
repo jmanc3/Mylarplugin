@@ -60,10 +60,6 @@ static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
 void alt_tab::on_window_open(int id) {
     Container *c = get_cid_container(id);
 
-    //later_immediate([](Timer *) {
-        //hypriso->screenshot_all();
-    //});
-
     assert(c && "alt_tab::on_window_open assumes Container for id has already been created");
 
     if (!get_data<long>(c->uuid, LAST_TIME_ACTIVE))
@@ -217,22 +213,9 @@ static void paint_tab_option(Container *actual_root, Container *c) {
 }
 
 static void create_tab_option(int cid, Container *parent) {
-    later_immediate([cid](Timer *) { hypriso->screenshot(cid); });
-    later(100, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
-    later(240, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
-    later(500, [cid](Timer *) { hypriso->screenshot(cid); damage_all(); });
     bool is_first = parent->children.size() <= 1;
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
-    if (is_first) {
-        std::weak_ptr<bool> r = c->lifetime;
-        auto timer = later(1000.0f / 30.0f, [cid, r](Timer *timer) {
-            if (!r.lock())
-                timer->keep_running = false;
-            hypriso->screenshot(cid);
-        });
-        timer->keep_running = true;
-    }
-    
+
     *datum<int>(c, "cid") = cid;
     c->when_paint = paint_tab_option;
     c->receive_events_even_if_obstructed_by_one = true;
@@ -514,6 +497,53 @@ void alt_tab::show() {
     is_showing = true;
     later_immediate([](Timer *) {
         hypriso->screenshot_all(); 
+    });
+    static int off = 0;
+    off = 0;
+    later(1000.0f / 120.0f, [](Timer *t) {
+        t->keep_running = true;
+
+        // Find ALT_TAB container
+        auto altTab = std::find_if(
+            actual_root->children.begin(),
+            actual_root->children.end(),
+            [](auto c) { return c->custom_type == (int)TYPE::ALT_TAB; }
+        );
+
+        if (altTab == actual_root->children.end()) {
+            t->keep_running = false;
+            return;
+        }
+
+        auto c = *altTab;
+
+        if (c->children.empty()) {
+            return;
+        }
+
+        const size_t count = c->children.size();
+        if (count == 0)
+            return;
+
+        // --- Always capture first three ---
+        const size_t firstCount = std::min<size_t>(3, count);
+        for (size_t i = 0; i < firstCount; ++i) {
+            auto ch = c->children[i];
+            int cid = *datum<int>(ch, "cid");
+            hypriso->screenshot(cid);
+        }
+
+        // --- Capture wrapped offset index ---
+        size_t wrapped = off % count;
+
+        // Avoid duplicate capture if wrapped is already in first 3
+        if (wrapped >= firstCount) {
+            auto ch = c->children[wrapped];
+            int cid = *datum<int>(ch, "cid");
+            hypriso->screenshot(cid);
+        }
+
+        off++;
     });
     {
         auto m = actual_root;

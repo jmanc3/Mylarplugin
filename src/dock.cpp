@@ -235,6 +235,46 @@ static float brightness_level = 100;
 static bool finished = false;
 static bool nightlight_on = false;
 
+struct VolumeRow {
+    std::string id;
+    std::string title;
+    std::string icon;
+    float level = 0;
+    bool muted = false;
+    int pid = -1;
+    bool merged = false;
+    int indent_level = 0;
+    std::vector<std::string> uuids;
+};
+
+static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &clients);
+
+static constexpr int volume_popup_w = 330;
+static constexpr float volume_row_h = 65.0f;
+
+static int volume_popup_height_for_rows(size_t row_count) {
+    auto rows = std::max<size_t>(1, row_count);
+    return (int) std::round(volume_row_h * (float) rows);
+}
+
+static std::vector<AudioClient> snapshot_audio_clients() {
+    std::vector<AudioClient> clients;
+    audio_read([&]() {
+        clients.reserve(audio_clients.size());
+        for (auto client : audio_clients) {
+            client->is_master = client->is_master_volume();
+            clients.push_back(*client);
+        }
+    });
+    return clients;
+}
+
+static void resize_volume_popup_for_rows(Dock *dock, size_t row_count) {
+    if (!dock || !dock->volume || !dock->volume->raw_window)
+        return;
+    windowing::set_popup_size(dock->volume->raw_window, volume_popup_w, volume_popup_height_for_rows(row_count));
+}
+
 struct BatteryData : UserData {
     float brightness_level = 100;
 };
@@ -1826,11 +1866,10 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            static float total_h = 65;
-            int amount = audio_clients.size();
-            if (1 > amount)
-                amount = 1;
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 330, total_h * amount);
+            auto clients = snapshot_audio_clients();
+            auto rows = build_volume_rows(clients);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(
+                c, dpi, volume_popup_w, volume_popup_height_for_rows(rows.size()));
 
             dock->volume = open_mylar_popup(mylar, settings);
             if (!dock->volume)
@@ -2481,7 +2520,7 @@ static Container *add_volume_option(Container *parent) {
     auto audio_data = new AudioData;
     line->user_data = audio_data;
 
-    static float total_h = 65;
+    static float total_h = volume_row_h;
     static float top_h = 30;
     
     line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -2645,18 +2684,6 @@ static Container *add_volume_option(Container *parent) {
     return line;
 }
 
-struct VolumeRow {
-    std::string id;
-    std::string title;
-    std::string icon;
-    float level = 0;
-    bool muted = false;
-    int pid = -1;
-    bool merged = false;
-    int indent_level = 0;
-    std::vector<std::string> uuids;
-};
-
 static std::string make_unmerged_title(const AudioClient &client) {
     if (client.subtitle.empty())
         return client.title;
@@ -2757,16 +2784,6 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
         rows_by_id[row.id] = &row;
     }
 
-    bool change = false;
-    for (auto id : row_ids) {
-        bool found = false;
-        for (auto r : root->children)
-            if (r->uuid == id)
-                found = true;
-        if (!found)
-            change = true;
-    }
-
     merge_create<std::string>(root, row_ids, [](Container *c) {
         return c->uuid;
     }, [](Container *parent, std::string id) {
@@ -2774,14 +2791,8 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
         c->uuid = id;
     });
 
-    if (change) {
-        /*
-        static float total_h = 65;
-        auto dock = (Dock *) root->user_data;
-        std::lock_guard<std::mutex> guard(dock->app->mutex);
-        windowing::set_popup_size(dock->volume->raw_window, 330, total_h * root->children.size());
-        */
-    }
+    auto dock = (Dock *) root->user_data;
+    resize_volume_popup_for_rows(dock, rows.size());
 
     auto current = get_current_time_in_ms();
     for (auto client : clients) {
@@ -2825,14 +2836,8 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
 }
 
 void total_update() {
-    std::vector<AudioClient> clients;
-    clients.reserve(audio_clients.size());
-    for (auto client : audio_clients) {
-        client->is_master = client->is_master_volume();
-        clients.push_back(*client);
-    }
-    
-    main_thread([clients = std::move(clients)]() {
+    main_thread([]() {
+        auto clients = snapshot_audio_clients();
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 
@@ -2840,6 +2845,7 @@ void total_update() {
                 if (auto volume_root = container_by_name("volume_root", d->volume->root)) {
                     auto scroll = (ScrollContainer *) volume_root;
                     fill_volume_root(clients, scroll->content);
+                    windowing::redraw(d->volume->raw_window);
                 }
             }
 

@@ -16,6 +16,10 @@
 static float shrink_factor = 1.0;
 static bool should_paint_overview = true;
 
+void overview::should_draw(bool state) {
+    should_paint_overview = state;
+}
+
 struct OverviewData : UserData {
     std::vector<int> order;
     float scalar = 0.0;
@@ -674,6 +678,8 @@ void actual_open(int monitor) {
     hypriso->all_lose_focus();
     
     hypriso->whitelist_on = true;
+
+    auto open_workspace = hypriso->get_active_workspace_id(monitor);
     
     auto over = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
     auto hotconer_tl = datum<float>(over, "hotconer_tl");
@@ -702,7 +708,7 @@ void actual_open(int monitor) {
     screenshot_loop();
     auto creation_time = get_current_time_in_ms();
     
-    over->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+    over->when_paint = [monitor, creation_time, open_workspace](Container *actual_root, Container *c) {
         if (!should_paint_overview)
             return;
         paint_over_wallpaper(actual_root, c, monitor, creation_time);
