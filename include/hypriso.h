@@ -294,6 +294,8 @@ struct HyprIso {
     void move(int id, int x, int y);
     void move_resize(int id, int x, int y, int w, int h, bool instant = true);
     void move_resize(int id, Bounds b, bool instant = true);
+
+    float fps(int monitor_id);
     
     int monitor_from_cursor();
     

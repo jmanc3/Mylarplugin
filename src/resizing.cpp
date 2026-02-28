@@ -398,11 +398,11 @@ void adjust_grouped_with(int cid) {
 }
 
 void resizing::motion(int cid) {
-    // debounce 100 ms
     static Timer *timer = nullptr;
     if (timer)
         return;
-    timer = later(60, [cid](Timer *t) {
+    auto fps = hypriso->fps(get_monitor(cid)) * 1.1;
+    timer = later(1000.0f / fps, [cid](Timer *t) {
         for (auto c : actual_root->children) {
             if (c->custom_type == (int) TYPE::CLIENT_RESIZE) {
                 resize_client(cid, active_resize_type);

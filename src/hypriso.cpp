@@ -3590,31 +3590,7 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
     for (auto c : hyprwindows) {
         if (c->id == id) {
             auto scaling_factor = c->w->m_monitor->m_scale;
-            /*
-            {
-                float x_scaled = ((float) x) * scaling_factor;
-                auto rounded = std::round(x_scaled);
-                auto top = std::ceil(x_scaled);
-                auto bottom = std::floor(x_scaled);
-                // detect a position that is going to experience a problem 
-                if (top == rounded && bottom != rounded) { 
-                    // hack workaround
-                    x = x - 1; 
-                }
-            }
-            {
-                float x_scaled = ((float) x + w) * scaling_factor;
-                auto rounded = std::round(x_scaled);
-                auto top = std::ceil(x_scaled);
-                auto bottom = std::floor(x_scaled);
-                // detect a position that is going to experience a problem 
-                if (top == rounded && bottom != rounded) { 
-                    // hack workaround
-                    w = w + 1; 
-                }
-            }
-            */
-            
+
             {
                 if (instant) {
                     #ifdef TRACY_ENABLE
@@ -7476,5 +7452,14 @@ bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::s
     polled.push_back(pf);
 
     return pf->source;
+}
+
+float HyprIso::fps(int monitor_id) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id == monitor_id) {
+            return hm->m->m_refreshRate;
+        }
+    }
+    return 60;
 }
 
