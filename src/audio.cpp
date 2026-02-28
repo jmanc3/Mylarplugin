@@ -20,6 +20,9 @@
 #include <iostream>
 #include <cstring>
 #include <cmath>
+#include <climits>
+#include <cerrno>
+#include <cstdlib>
 #include <condition_variable>
 
 #include <pipewire/pipewire.h>
@@ -95,6 +98,18 @@ static int pw_sync_seq = 1;
 static bool pw_initial_sync_done = false;
 
 void sort();
+
+static int parse_pid_value(const char *value) {
+    if (!value || !*value)
+        return -1;
+
+    char *end = nullptr;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed <= 0 || parsed > INT_MAX)
+        return -1;
+    return static_cast<int>(parsed);
+}
 
 static void delete_all_audio_clients() {
     for (auto c: audio_clients)
@@ -370,6 +385,7 @@ static void on_sink_input(pa_context *, const pa_sink_input_info *l, int eol, vo
         client = new AudioClient;
     client->title = data->name;
     client->index = data->index;
+    client->pid = -1;
 
     if (l->proplist) {
         size_t nbytes;
@@ -377,6 +393,12 @@ static void on_sink_input(pa_context *, const pa_sink_input_info *l, int eol, vo
         pa_proplist_get(l->proplist, PA_PROP_APPLICATION_NAME, &data, &nbytes);
         if (data) {
             client->subtitle = std::string((const char *) data, nbytes);
+            data = nullptr;
+        }
+        pa_proplist_get(l->proplist, PA_PROP_APPLICATION_PROCESS_ID, &data, &nbytes);
+        if (data) {
+            std::string pid_str((const char *) data, nbytes);
+            client->pid = parse_pid_value(pid_str.c_str());
             data = nullptr;
         }
 
@@ -589,6 +611,10 @@ static void pipewire_update_client_identity(AudioClient *client, const spa_dict 
     const char *media_name = spa_dict_lookup(props, PW_KEY_MEDIA_NAME);
     const char *app_name = spa_dict_lookup(props, PW_KEY_APP_NAME);
     const char *icon_name = spa_dict_lookup(props, PW_KEY_APP_ICON_NAME);
+    const char *process_id = spa_dict_lookup(props, "application.process.id");
+    if ((!process_id || !*process_id))
+        process_id = spa_dict_lookup(props, "client.pid");
+    client->pid = parse_pid_value(process_id);
     if (node_name && *node_name)
         client->pw_node_name = node_name;
 

@@ -2365,6 +2365,7 @@ struct AudioData : UserData {
     float level = 100;
     bool muted = false;
     std::string uuid;
+    int pid = -1;
 
     bool attempted_to_load_icon_once = false;
     float old_dpi = 0.0;
@@ -2656,12 +2657,13 @@ static void fill_volume_root(const std::vector<AudioClient> clients, Container *
                 auto audio_data = (AudioData *) c->user_data;
                 audio_data->uuid = client.uuid;
                 audio_data->level = client.get_volume();
+                audio_data->pid = client.pid;
                 audio_data->icon = client.icon_name;
                 audio_data->muted = client.is_muted();
                 if (client.subtitle.empty()) {
                     audio_data->title = client.title;
                 } else {
-                    audio_data->title = fz("{} : {}", client.title, client.subtitle);
+                    audio_data->title = fz("{} : {} : {}", client.pid, client.title, client.subtitle);
                 }
             }
         }

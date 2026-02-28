@@ -17,6 +17,7 @@ extern bool allow_audio_thread_creation;
 
 struct AudioClient {
     std::string uuid = "";
+    int pid = -1;
     
     int index = PA_INVALID_INDEX;
     uint32_t pw_node_id = SPA_ID_INVALID;
