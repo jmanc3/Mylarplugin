@@ -2521,10 +2521,14 @@ static Container *add_volume_option(Container *parent) {
     };
     
     auto volume_slider_parent = line->child(::hbox, FILL_SPACE, FILL_SPACE);
+    volume_slider_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.h = (total_h - top_h) * ((Dock *) root->user_data)->volume->raw_window->dpi * .87;
+    };
 
     auto left_volume_icon = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     left_volume_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.w = b.h;
+        float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.w = (total_h - top_h) * dpi * 1.1;
     };
     left_volume_icon->when_clicked = paint {
         auto dock = (Dock *) root->user_data;
@@ -2580,7 +2584,8 @@ static Container *add_volume_option(Container *parent) {
     fill_out_slider(slider);
     auto right_volume_text = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     right_volume_text->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.w = b.h;
+        float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.w = (total_h - top_h) * dpi * 1.2;
     };
     right_volume_text->when_paint = paint {
         auto dock = (Dock *) root->user_data;
@@ -2592,9 +2597,7 @@ static Container *add_volume_option(Container *parent) {
         std::string level = std::to_string(val);
         RGBA color = {0, 0, 0, 1};
         auto b = draw_text(cr, 0, 0, level, 12 * dpi, false, mylar_font);
-        auto x = c->real_bounds.x + c->real_bounds.w - b.w - 2 * dpi;
-        if (val != 100)
-            x = center_x(c, b.w);
+        auto x = c->real_bounds.x + 17 * dpi;
         draw_text(cr, x, center_y(c, b.h), level, 12 * dpi, true, mylar_font, -1, -1, color);
     };
 
