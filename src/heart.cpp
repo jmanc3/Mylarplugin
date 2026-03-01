@@ -920,7 +920,7 @@ static void on_activated(int id) {
     alt_tab::on_activated(id);
     dock::on_activated(id);
     snap_assist::close();
-    overview::close(false);
+    //overview::close(false);
 }
 
 static void on_draw_decos(std::string name, int monitor, int id, float a) {
@@ -1484,7 +1484,7 @@ void on_title_change(int cid) {
 
 void on_workspace_change(int cid) {
     snap_assist::close();
-    overview::close();
+    //overview::close();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::OUR_POPUP) {
             popup::close(c->uuid);
@@ -1607,8 +1607,8 @@ void heart::begin() {
     audio_state_change_callback(on_audio_change);
     
     later(2000, [](Timer*) {
-        //dbus_start(DBUS_BUS_SESSION);
-        //dbus_start(DBUS_BUS_SYSTEM);
+        dbus_start(DBUS_BUS_SESSION);
+        dbus_start(DBUS_BUS_SYSTEM);
     });
 
     later(2000, [](Timer*) {
@@ -1823,6 +1823,7 @@ void heart::layout_containers() {
             auto id = *datum<int>(c, "cid");
             set_exists(c, hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id));
             set_exists(c, (c->exists && (hypriso->get_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor())))); 
+            //set_exists(c, (c->exists); 
             
             for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                 auto child = actual_root->children[i];

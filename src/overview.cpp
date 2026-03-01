@@ -401,6 +401,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         }
     }
     *datum<int>(c, "cid") = cid;
+    *datum<bool>(c, "was_hidden") = hypriso->is_hidden(cid);
     *datum<bool>(c, "was_hovering") = false;
     *datum<bool>(c, "opaque") = hypriso->is_opaque(cid);
     *datum<long>(c, "time_since_hovering_change") = 0;
@@ -682,6 +683,9 @@ void actual_open(int monitor) {
     auto open_workspace = hypriso->get_active_workspace_id(monitor);
     
     auto over = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
+    *datum<int>(over, "monitor") = monitor;
+    *datum<int>(over, "initial_workspace_id") = hypriso->get_active_workspace_id(monitor);
+    
     auto hotconer_tl = datum<float>(over, "hotconer_tl");
     *hotconer_tl = 0.0;
     animate(hotconer_tl, 1.0, 530, over->lifetime); 
@@ -875,9 +879,20 @@ static void actual_overview_stop(bool focus) {
     bool removed = false;
     //auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
     //free_text_texture(info.id);
+    int monitor = -1;
+    int initial_workspace_id = -1;
+    auto order = get_window_stacking_order();
+    for (auto o : order) {
+        if (hypriso->alt_tabbable(o)) {
+            hypriso->set_hidden(o, false);
+        }
+    }
     for (int i = m->children.size() - 1; i >= 0; i--) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
+            monitor = *datum<int>(c, "monitor");
+            initial_workspace_id = *datum<int>(c, "initial_workspace_id");
+ 
             auto o_data = (OverviewData *) c->user_data;
             auto dragged_cid = -1;
             for (auto ch : c->children) {
@@ -907,7 +922,7 @@ static void actual_overview_stop(bool focus) {
         }
     }
     damage_all();
-    if (removed && focus)
+    if (removed && focus && hypriso->get_active_workspace_id(monitor) == initial_workspace_id)
         later_immediate([](Timer *) {
             hypriso->all_gain_focus();
         });

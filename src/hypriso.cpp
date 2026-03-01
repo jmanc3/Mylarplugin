@@ -3619,8 +3619,9 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                 #endif
                 //c->w->updateWindowDecos();
             }
-            c->w->layoutTarget()->rememberFloatingSize({w, h});
-            c->w->layoutTarget()->setPositionGlobal(CBox(x, y, w, h));
+            auto target = c->w->layoutTarget();
+            target->rememberFloatingSize({w, h});
+            target->setPositionGlobal(CBox(x, y, w, h));
         }
     }
 }

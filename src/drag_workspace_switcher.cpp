@@ -167,7 +167,9 @@ void drag_switcher_actual_open() {
                 }
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
-                return;
+                if (!overview::is_showing())
+                    return;
+                //return;
                 drag_workspace_switcher::press(c->uuid);
                 auto space = *datum<int>(c, "workspace");
                 if (space == -1) {
@@ -177,29 +179,17 @@ void drag_switcher_actual_open() {
                     if (!spaces.empty())
                         next = spaces[spaces.size() - 1] + 1;
                     later_immediate([next](Timer *) {
-                        //overview::instant_close();
-
                         auto mon = hypriso->monitor_from_cursor();
                         auto before = hypriso->get_active_workspace_id(mon);
 
                         hypriso->move_to_workspace(next, false);
-                        drag_workspace_switcher::close();
-
-                        hypriso->screenshot_space(mon, before);
-                        hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
                     });
                 } else {
                     later_immediate([space](Timer *) {
-                        //overview::instant_close();
-
                         auto mon = hypriso->monitor_from_cursor();
                         auto before = hypriso->get_active_workspace_id(mon);
 
-                        drag_workspace_switcher::close();
                         hypriso->move_to_workspace(hypriso->space_id_to_raw(space), false);
-
-                        hypriso->screenshot_space(mon, before);
-                        hypriso->screenshot_space(mon, space);
                     });
                 }
             };
@@ -402,7 +392,7 @@ void drag_workspace_switcher::open() {
         }
         
         auto spaces = hypriso->get_workspace_ids(monitor);
-        overview::should_draw(false);
+        //overview::should_draw(false);
         int active_id = hypriso->get_active_workspace_id(monitor);
         for (auto s : spaces) {
             hypriso->screenshot_space(monitor, s);
