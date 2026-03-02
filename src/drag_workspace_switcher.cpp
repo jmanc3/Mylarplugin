@@ -397,7 +397,7 @@ void drag_workspace_switcher::open() {
         for (auto s : spaces) {
             hypriso->screenshot_space(monitor, s);
         }
-        overview::should_draw(true);
+        //overview::should_draw(true);
     });
 }
 

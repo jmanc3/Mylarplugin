@@ -5115,7 +5115,7 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 
                 auto before = g_pHyprOpenGL->m_renderData.useNearestNeighbor;
                 g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-                //tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+                tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
                 g_pHyprOpenGL->renderTexture(tex, box, data);
                 g_pHyprOpenGL->m_renderData.useNearestNeighbor = before;
@@ -5289,7 +5289,7 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                     if (clip)
                         g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
                     g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-                    //tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
                     g_pHyprOpenGL->renderTexture(tex, box, data);
 

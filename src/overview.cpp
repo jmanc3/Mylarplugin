@@ -33,6 +33,7 @@ struct ThumbData : UserData {
 
 static bool running = false;
 static float overview_anim_time = 220.0f;
+static long creation_time_global = 0;
 
 static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
@@ -417,11 +418,11 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     } else {
         *datum<float>(c, "alpha_fade_in") = 1.0;
     }
-    c->when_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+    c->when_paint = [monitor](Container *actual_root, Container *c) {
         if (!should_paint_overview)
             return;
         
-        paint_option(actual_root, c, monitor, creation_time);
+        paint_option(actual_root, c, monitor, creation_time_global);
     };
     c->receive_events_even_if_obstructed_by_one = true;
     c->when_drag_end_is_click = false;
@@ -710,12 +711,12 @@ void actual_open(int monitor) {
     };
     over->when_mouse_up = nullptr;
     screenshot_loop();
-    auto creation_time = get_current_time_in_ms();
-    
-    over->when_paint = [monitor, creation_time, open_workspace](Container *actual_root, Container *c) {
+    auto creation_time_global = get_current_time_in_ms();
+
+    over->when_paint = [monitor, open_workspace, creation_time_global](Container *actual_root, Container *c) {
         if (!should_paint_overview)
             return;
-        paint_over_wallpaper(actual_root, c, monitor, creation_time);
+        paint_over_wallpaper(actual_root, c, monitor, creation_time_global);
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -749,7 +750,7 @@ void actual_open(int monitor) {
 
         //testDraw();
     };
-    over->after_paint = [monitor, creation_time](Container *actual_root, Container *c) {
+    over->after_paint = [monitor](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -764,11 +765,11 @@ void actual_open(int monitor) {
         draw_colored_circ(0, 0, 75 * s * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
 
     };
-    over->pre_layout = [monitor, creation_time](Container *actual_root, Container *c, const Bounds &b) {
+    over->pre_layout = [monitor, creation_time_global](Container *actual_root, Container *c, const Bounds &b) {
         c->real_bounds = bounds_reserved_monitor(monitor);
 
         auto workspace_monitor = hypriso->get_active_workspace_id(monitor);
-        
+
         auto order = get_window_stacking_order();
         //std::reverse(order.begin(), order.end());
         static std::vector<int> actual_order;
@@ -781,8 +782,8 @@ void actual_open(int monitor) {
 
         merge_create<int>(c, actual_order, [](Container *c) {
             return *datum<int>(c, "cid");
-        }, [monitor, creation_time](Container *parent, int data) {
-            create_option(data, parent, monitor, creation_time);
+        }, [monitor, creation_time_global](Container *parent, int data) {
+            create_option(data, parent, monitor, creation_time_global);
         });
 
         auto reserved = bounds_reserved_monitor(monitor);
@@ -829,7 +830,7 @@ void actual_open(int monitor) {
         auto overx = reserved.w - minX - maxW;
         auto overy = reserved.h - minY - maxH;
 
-        layout_options(actual_root, c, b, creation_time, overx, overy);
+        layout_options(actual_root, c, b, creation_time_global, overx, overy);
     };
     hypriso->damage_entire(monitor);
 }
