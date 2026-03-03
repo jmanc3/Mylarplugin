@@ -15,6 +15,9 @@
 
 static float shrink_factor = 1.0;
 static bool should_paint_overview = true;
+static int fake_paint_space = -1;
+
+static void fake_paint_actual();
 
 void overview::should_draw(bool state) {
     should_paint_overview = state;
@@ -134,16 +137,11 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     //rect(m, {0, 0, 0, .5}, 0, 0, 2.0, true);
 }
 
-void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, long creation_time) {
-    if (screenshotting_wallpaper)
-        return;
-    fadeout_docks(actual_root, c, monitor, creation_time);
-    
+void paint_over_wallpaper_actual(Container *actual_root, Container *c, int monitor, long creation_time) {
     auto root = get_rendering_root();
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-    if (stage != (int) STAGE::RENDER_POST_WINDOWS || monitor != rid)
-        return;
+ 
     renderfix
     auto m = bounds_monitor(monitor);
     m.scale(s);
@@ -168,12 +166,23 @@ void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, lon
     border(b, {1, 1, 1, .05}, 1, 0, 14 * s); 
 }
 
-static void paint_option(Container *actual_root, Container *c, int monitor, long creation_time) {
+void paint_over_wallpaper(Container *actual_root, Container *c, int monitor, long creation_time) {
+    if (screenshotting_wallpaper)
+        return;
+    fadeout_docks(actual_root, c, monitor, creation_time);
+    
     auto root = get_rendering_root();
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
     if (stage != (int) STAGE::RENDER_POST_WINDOWS || monitor != rid)
         return;
+    paint_over_wallpaper_actual(actual_root, c, monitor, creation_time); 
+}
+
+static void paint_option(Container *actual_root, Container *c, int monitor, long creation_time) {
+    auto root = get_rendering_root();
+    if (!root) return;
+    auto [rid, s, stage, active_id] = roots_info(actual_root, root);
     renderfix
 
     auto overview_data = (OverviewData *) c->parent->user_data;
@@ -574,7 +583,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     };
 }
 
-static void layout_options(Container *actual_root, Container *c, const Bounds &b, long creation_time, float overx, float overy) {
+static void layout_options(Container *actual_root, Container *c, const Bounds &b, long creation_time, float overx, float overy, int space) {
     for (auto ch : c->children) {
         auto cid = *datum<int>(ch, "cid");
         auto final_bounds = *datum<Bounds>(ch, "final_bounds");
@@ -669,6 +678,7 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
             }
         }
         auto lerped = lerp(bounds, final_bounds, scalar); 
+        lerped.x += hypriso->workspace_offset_space_id(space).x;
 
         ch->wanted_bounds = lerped;
         ch->real_bounds = ch->wanted_bounds;
@@ -712,8 +722,18 @@ void actual_open(int monitor) {
     over->when_mouse_up = nullptr;
     screenshot_loop();
     auto creation_time_global = get_current_time_in_ms();
+    over->automatically_paint_children = false;
 
     over->when_paint = [monitor, open_workspace, creation_time_global](Container *actual_root, Container *c) {
+        //auto root = get_rendering_root();
+        //auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        //notify(fz("{}", hypriso->get_active_workspace_id(monitor)));
+        
+        
+        if (fake_paint_space != -1) {
+            fake_paint_actual();
+            return;
+        }
         if (!should_paint_overview)
             return;
         paint_over_wallpaper(actual_root, c, monitor, creation_time_global);
@@ -722,6 +742,7 @@ void actual_open(int monitor) {
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (stage != (int) STAGE::RENDER_POST_WINDOWS || monitor != rid)
             return;
+        c->automatically_paint_children = true;
         renderfix
         auto overview_data = (OverviewData *) c->user_data;
         auto bounds = bounds_monitor(rid);
@@ -751,6 +772,7 @@ void actual_open(int monitor) {
         //testDraw();
     };
     over->after_paint = [monitor](Container *actual_root, Container *c) {
+        c->automatically_paint_children = false;
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -829,8 +851,8 @@ void actual_open(int monitor) {
 
         auto overx = reserved.w - minX - maxW;
         auto overy = reserved.h - minY - maxH;
-
-        layout_options(actual_root, c, b, creation_time_global, overx, overy);
+        auto initial_workspace_id = *datum<int>(c, "initial_workspace_id");
+        layout_options(actual_root, c, b, creation_time_global, overx, overy, initial_workspace_id);
     };
     hypriso->damage_entire(monitor);
 }
@@ -969,5 +991,22 @@ void overview::click(int id, int button, int state, float x, float y) {
 
 bool overview::is_showing() {
     return running;
+}
+
+static void fake_paint_actual() {
+    Container *over = nullptr;
+    for (auto c : actual_root->children)
+        if (c->custom_type == (int) TYPE::OVERVIEW)
+            over = c;
+    if (!over)
+        return;
+    int monitor = *datum<int>(over, "monitor");
+    long creation_time = creation_time_global;
+    
+    paint_over_wallpaper_actual(actual_root, over, monitor, creation_time_global);
+}
+
+void overview::fake_paint(int id) {
+    fake_paint_space = id;
 }
 

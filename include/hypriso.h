@@ -307,7 +307,8 @@ struct HyprIso {
 
     Bounds floating_offset(int id);
     Bounds workspace_offset(int id);
-
+    Bounds workspace_offset_space_id(int id);
+    
     Bounds min_size(int id);
     bool is_x11(int id);
     bool is_fullscreen(int id);

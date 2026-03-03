@@ -21,7 +21,7 @@ static RGBA left_color = RGBA(.941, .957, .976, 1);
 static RGBA right_color = RGBA(.941, .957, .976, 1);
 static RGBA option_color = RGBA(.87, .87, .87, 1);
 static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
-static RGBA slider_bg = RGBA(.77, .77, .77, 1);
+static RGBA slider_bg = option_widget_bg_color;
 static RGBA bool_border = RGBA(.47, .47, .47, 1);
 static RGBA accent = RGBA(.0, .52, .9, 1);
 
@@ -1023,7 +1023,7 @@ void fill_root(Container *root) {
     auto left = left_right->child(::vbox, 300, FILL_SPACE);
     left->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        c->wanted_bounds.w = 300 * mylar->raw_window->dpi;
+        c->wanted_bounds.w = 200 * mylar->raw_window->dpi;
     };
     left->when_paint = paint {
         return;

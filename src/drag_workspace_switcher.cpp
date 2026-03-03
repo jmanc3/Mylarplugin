@@ -392,12 +392,12 @@ void drag_workspace_switcher::open() {
         }
         
         auto spaces = hypriso->get_workspace_ids(monitor);
-        //overview::should_draw(false);
         int active_id = hypriso->get_active_workspace_id(monitor);
         for (auto s : spaces) {
+            overview::fake_paint(s);
             hypriso->screenshot_space(monitor, s);
         }
-        //overview::should_draw(true);
+        overview::fake_paint(-1);
     });
 }
 

@@ -5716,6 +5716,17 @@ Bounds HyprIso::floating_offset(int id) {
 
     return {};
 }
+
+Bounds HyprIso::workspace_offset_space_id(int space) {
+    for (auto hs : hyprspaces) {
+        if (hs->id == space) {
+            auto off = hs->w->m_renderOffset->value();
+            return {off.x, off.y, 0, 0};
+        }
+    }
+    return {};
+}
+
 Bounds HyprIso::workspace_offset(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
