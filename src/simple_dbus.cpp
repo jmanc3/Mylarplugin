@@ -18,12 +18,14 @@
 #include "dbus_helper.h"
 #include "dock.h"
 
+#include <chrono>
 #include <cstdint>
 #include <dbus/dbus.h>
 #include <defer.h>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <thread>
 
 #ifdef TRACY_ENABLE
 
@@ -84,7 +86,7 @@ void bluetooth_service_started() {
 }
 
 void battery_display_device_state_changed() {
-    dock::change_in_battery();
+    //dock::change_in_battery();
 }
 
 void close_notification(int result) {
@@ -1362,60 +1364,15 @@ void dbus_end() {
         DBusConnection *dbus_connection = i == 0 ? dbus_connection_session : dbus_connection_system;
         if (!dbus_connection)
             continue;
-        
-        DBusError error = DBUS_ERROR_INIT;
-        defer(dbus_error_free(&error));
-        
-        if (registered_object_path && dbus_connection == dbus_connection_session) {
-            if (!dbus_connection_unregister_object_path(dbus_connection, "/org/freedesktop/Notifications")) {
-                fprintf(stderr, "%s", "Error unregistering object path /org/freedesktop/Notifications");
-            }
-            
-            dbus_bus_release_name(dbus_connection, "org.freedesktop.Notifications", &error);
-            if (dbus_error_is_set(&error)) {
-                fprintf(stderr, "Error releasing name: %s\n%s\n", error.name, error.message);
-            }
-            
-            registered_object_path = false;
-        }
-        
-        if (dbus_connection == dbus_connection_session) {
-            dbus_bus_release_name(dbus_connection, "org.kde.StatusNotifierWatcher", &error);
-            if (dbus_error_is_set(&error)) {
-                fprintf(stderr, "Error releasing name: %s\n%s\n", error.name, error.message);
-            }
-            
-            int pid = 23184910;
-            auto host = std::string("org.kde.StatusNotifierHost-" + std::to_string(pid));
-            dbus_bus_release_name(dbus_connection, host.c_str(), &error);
-            if (dbus_error_is_set(&error)) {
-                fprintf(stderr, "Error releasing name: %s\n%s\n", error.name, error.message);
-            }
-        }
-        
-        dbus_bus_remove_match(dbus_connection,
-                              "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'",
-                              &error);
-        if (dbus_error_is_set(&error)) {
-            fprintf(stderr, "Error trying to remove NameOwnerChanged rule due to: %s\n%s\n", error.name, error.message);
-        }
-        dbus_bus_remove_match(dbus_connection,
-                              "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameAcquired'",
-                              &error);
-        if (dbus_error_is_set(&error)) {
-            fprintf(stderr, "Error trying to remove NameAcquired rule due to: %s\n%s\n", error.name, error.message);
-        }
-        dbus_bus_remove_match(dbus_connection,
-                              "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameLost'",
-                              &error);
-        if (dbus_error_is_set(&error)) {
-            fprintf(stderr, "Error trying to remove NameLost rule due to: %s\n%s\n", error.name, error.message);
-        }
-        
+
+        registered_object_path = false;
+
+        //dbus_connection_close(dbus_connection);
         dbus_connection_unref(dbus_connection);
     }
     dbus_connection_session = nullptr;
     dbus_connection_system = nullptr;
+    //std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 }
 
 bool kde_shutdown_check_and_call(std::string func) {

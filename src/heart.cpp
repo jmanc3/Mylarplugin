@@ -1603,15 +1603,20 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (!polling_thread) {
+        polling_thread = new PollingThread;
+        polling_thread->start();
+    }
+    
     hypriso->create_config_variables();
     audio_state_change_callback(on_audio_change);
-    
-    later(2000, [](Timer*) {
-        dbus_start(DBUS_BUS_SESSION);
-        dbus_start(DBUS_BUS_SYSTEM);
-    });
 
     later(2000, [](Timer*) {
+        //dbus_start(DBUS_BUS_SYSTEM);
+        dbus_start(DBUS_BUS_SESSION);
+    });
+
+    later(2100, [](Timer*) {
         audio_start();
     });
 
@@ -1684,6 +1689,9 @@ void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    polling_thread->stop_and_join();
+    delete polling_thread;
+    polling_thread = nullptr;
     audio_stop();
     audio_join();
     dbus_end();

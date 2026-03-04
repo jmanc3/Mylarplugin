@@ -60,15 +60,16 @@ target_include_directories(Mylardesktop PUBLIC
 )
 
 # --- Compiler & Tracy defines ---
-target_compile_definitions(Mylardesktop PRIVATE
-    TRACY_ENABLE
+#target_compile_definitions(Mylardesktop PRIVATE
+    #TRACY_ENABLE
     #TRACY_ON_DEMAND
-    TRACY_NO_MEMORY   # avoid malloc/free hooks (important for plugins)
-)
+    #TRACY_NO_MEMORY   # avoid malloc/free hooks (important for plugins)
+#)
 
 target_compile_options(Mylardesktop PRIVATE
     -fPIC
     --no-gnu-unique
+    -fno-gnu-unique
 )
 
 install(TARGETS Mylardesktop)
