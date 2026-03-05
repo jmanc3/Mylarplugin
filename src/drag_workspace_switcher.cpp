@@ -133,7 +133,7 @@ void drag_switcher_actual_open() {
                 float pressed_amount = *datum<float>(c, "pressed_amount");
 
                 auto openess = *datum<float>(c->parent, "openess");
-                render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
+                //render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
                 if (space != -1) {
                     //hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
                     hypriso->draw_workspace(monitor, space, c->real_bounds, 8 * s);
@@ -250,7 +250,7 @@ void drag_switcher_actual_open() {
 
         RGBA col = {.18, .18, .18, .9f * peaking_amount - .1f * openess};
         auto b = c->real_bounds;
-        render_drop_shadow(monitor, 1.0, {0, 0, 0, .37f * peaking_amount}, 8 * s, 2.0, b);
+        //render_drop_shadow(monitor, 1.0, {0, 0, 0, .37f * peaking_amount}, 8 * s, 2.0, b);
         if (openess == 0.0) {
             rect(b, col, 3, 8 * s * (1 - openess), 2.0, true, 1.0); 
         } else {

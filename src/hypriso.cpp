@@ -3009,7 +3009,6 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
- 
     //return;
     if (box.h <= 0 || box.w <= 0)
         return;
@@ -3020,6 +3019,7 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
     }
     if (cornermask == 16)
         round = 0;
+    blur = false;
     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -3052,6 +3052,7 @@ void border(Bounds box, RGBA color, float size, int cornermask, float round, flo
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    //return;
     if (box.h <= 0 || box.w <= 0)
         return;
     bool clip = hypriso->clip;
@@ -6954,6 +6955,7 @@ void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, 
 
 void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROUNDINGBASE, float ROUNDINGPOWER, CBox fullBox, int range, bool sharp) {
     bool clip = hypriso->clip;
+    clip = false;
     Bounds clipbox = hypriso->clipbox;
     if (clip && !tocbox(clipbox).overlaps(fullBox)) {
         return; 

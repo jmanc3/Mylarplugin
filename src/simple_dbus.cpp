@@ -1289,6 +1289,7 @@ void dbus_start(DBusBusType dbusType) {
     //
     DBusError error = DBUS_ERROR_INIT;
     defer(dbus_error_free(&error));
+    return;
     
     auto *dbus_connection = dbus_bus_get(dbusType, &error);
     if (dbus_error_is_set(&error)) {
