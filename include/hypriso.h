@@ -303,6 +303,8 @@ struct HyprIso {
     //std::vector<ThinClient *> windows;
     //std::vector<ThinMonitor *> monitors;
 
+    void save_position_info(int cid);
+    
     bool wants_titlebar(int id);
     void reserve_titlebar(int id, int size);
 

@@ -380,7 +380,7 @@ public:
     }
 };
 
-static bool change_mask = false;
+static bool change_mask = true;
 static int surface_mask = 0;
 
 inline CFunctionHook* g_pOnUseShader = nullptr;
@@ -394,12 +394,11 @@ WP<CShader> hook_onUseShader(void* thisptr, WP<CShader> prog) {
         GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
         glUniform1i(loc, surface_mask);
     }
-    change_mask = false;
     return shader;
 }
 
 void set_rounding(int mask) {
-    change_mask = true;
+    //change_mask = true;
     surface_mask = mask;
     return;
     //return; //possibly the slow bomb
@@ -2644,8 +2643,10 @@ static void init_rect_quad() {
 }
 
 void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill) {
-    if (!test_shader)
+    if (!test_shader) {
+        rect({x - r * .5, y - r *.5, r, r}, col, 0, r * .43);
         return;
+    }
     AnyPass::AnyData anydata([x, y, r, col, edge, fill](AnyPass* pass) {
         if (!test_shader || !test_shader->program())
             return;
@@ -5291,15 +5292,15 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                         std::min(hw->w_size.w / hw->fb->m_size.x, 1.0), 
                         std::min(hw->w_size.h / hw->fb->m_size.y, 1.0) 
                     );
-                    set_rounding(cornermask);
                     if (clip)
                         g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
                     g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
+                    set_rounding(cornermask);
                     g_pHyprOpenGL->renderTexture(tex, box, data);
-
                     set_rounding(0);
+                    
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
                     g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
                     if (clip)
@@ -6958,6 +6959,7 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
         return; 
     }
     AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp, clip, clipbox](AnyPass* pass) {
+        set_rounding(0);
         CHyprColor m_realShadowColor = CHyprColor(b.r, b.g, b.b, b.a);
         if (g_pCompositor->m_windows.empty())
             return;
@@ -7656,3 +7658,13 @@ void PollingThread::stop_and_join() {
         delete watched;
     fds.clear();
 }
+
+void HyprIso::save_position_info(int id) {
+    for (auto c : hyprwindows) {
+        if (c->id == id) {
+            auto target = c->w->layoutTarget();
+            target->space()->setTargetGeom(CBox(c->w->m_realPosition->goal(), c->w->m_realSize->goal()), target);
+        }
+    }
+}
+

@@ -137,6 +137,24 @@ void drag_switcher_actual_open() {
                 if (space != -1) {
                     //hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
                     hypriso->draw_workspace(monitor, space, c->real_bounds, 8 * s);
+
+                    {
+                        auto b = c->real_bounds;
+                        float bar_perc = .25f;
+                        b.y += b.h - b.h * bar_perc;
+                        b.h = b.h * bar_perc;
+                        rect(b, {0, 0, 0, .5}, 3, 8 * s);
+
+                        auto num = hypriso->space_id_to_raw(space);
+
+                        auto text = gen_text_texture(mylar_font, fz("Desktop {}", num), 12 * s, {1, 1, 1, 1});
+                        b.w = text.w;
+                        b.h = text.h;
+                        b.x += 6 * s;
+                        b.y += (c->real_bounds.h * bar_perc) * .5 - text.h * .5;
+                        draw_texture(text, b, 1.0, c->real_bounds.w - 8 * s);
+                        free_text_texture(text.id);
+                    }
                 }
                 
                 auto b = c->real_bounds;
@@ -378,6 +396,31 @@ void drag_workspace_switcher::open() {
     });
 
     auto monitor = hypriso->monitor_from_cursor();
+    auto fps = hypriso->fps(monitor);
+    
+    later(1000.0f / fps, [monitor](Timer *t) {
+        t->keep_running = true;
+        bool found = false;
+        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+            auto c = actual_root->children[i];
+            if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+                found = true;
+            }
+        }
+        if (!found) {
+            t->keep_running = false;
+        }
+        
+        auto spaces = hypriso->get_workspace_ids(monitor);
+        int active_id = hypriso->get_active_workspace_id(monitor);
+        for (auto s : spaces) {
+            if (s == active_id) {
+                overview::fake_paint(s);
+                hypriso->screenshot_space(monitor, s);
+            }
+        }
+        overview::fake_paint(-1);
+    });
     later(1000.0f / 30.0f, [monitor](Timer *t) {
         t->keep_running = true;
         bool found = false;
@@ -394,8 +437,10 @@ void drag_workspace_switcher::open() {
         auto spaces = hypriso->get_workspace_ids(monitor);
         int active_id = hypriso->get_active_workspace_id(monitor);
         for (auto s : spaces) {
-            overview::fake_paint(s);
-            hypriso->screenshot_space(monitor, s);
+            if (s != active_id) {
+                overview::fake_paint(s);
+                hypriso->screenshot_space(monitor, s);
+            }
         }
         overview::fake_paint(-1);
     });

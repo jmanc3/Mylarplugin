@@ -739,6 +739,9 @@ static void on_window_open(int id) {
         apply_restore_info(id);
         fit_on_screen(id);
     });
+    later(100, [id](Timer *) {
+        //hypriso->save_position_info(id);
+    });
 
     titlebar::on_window_open(id);
     alt_tab::on_window_open(id);
