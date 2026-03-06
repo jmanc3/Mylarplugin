@@ -986,7 +986,7 @@ static void on_render(int id, int stage) {
     }
     
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
-        //rect({10, 10, 300, 300}, {.5, .5, .5, .3}, 0, 15.0f, 2.0, true);
+        //rect({10, 10, 300, 300}, {0, 0, 0, 1}, 0, 15.0f, 2.0, true);
         auto snap_edge_animation = *datum<float>(actual_root, "snap_edge_animation");
         if (snap_edge_animation != 0.0 && snap_edge_animation != 1.0) {
            int mon = *datum<int>(actual_root, "snap_edge_animation_mon");
@@ -1660,6 +1660,7 @@ void heart::begin() {
 
     	hypriso->create_callbacks();
     	hypriso->create_hooks();
+    	make_gesture();
     	
         hypriso->add_float_rule();
 

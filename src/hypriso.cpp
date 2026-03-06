@@ -108,6 +108,8 @@
 
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/event/EventBus.hpp>
+#include <hyprland/src/managers/input/trackpad/GestureTypes.hpp>
+#include <hyprland/src/managers/input/trackpad/TrackpadGestures.hpp>
 
 #include <hyprland/src/xwayland/XWayland.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -3022,7 +3024,6 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
     }
     if (cornermask == 16)
         round = 0;
-    //blur = false;
     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -3030,7 +3031,7 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
  
         CHyprOpenGLImpl::SRectRenderData rectdata;
         auto region = new CRegion(tocbox(box));
-        //rectdata.damage        = nullptr;
+        rectdata.damage        = nullptr;
         rectdata.blur          = blur;
         rectdata.blurA         = blurA;
         rectdata.round         = std::round(round);
@@ -7672,3 +7673,34 @@ void HyprIso::save_position_info(int id) {
     }
 }
 
+class CExpoGesture : public ITrackpadGesture {
+  public:
+    CExpoGesture()          = default;
+    virtual ~CExpoGesture() = default;
+
+    virtual void begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+        notify("begin");
+    }
+    virtual void update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+        notify("update");
+    }
+    virtual void end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+        notify("end");
+    }
+};
+
+
+void make_gesture() {
+    notify("add gesture");
+    int fingerCount = 3;
+    eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_VERTICAL;
+    uint32_t modMask = 0;
+    float deltaScale = 1.0f;
+    bool disableInhibit = true;
+    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
+    if (!resultFromGesture) {
+        notify(fz("{}", resultFromGesture.error().c_str()));
+    }
+
+    //resultFromGesture = g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
+}

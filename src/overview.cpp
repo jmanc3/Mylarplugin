@@ -80,6 +80,14 @@ static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
     static RGBA default_color("rgba(999999ff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", default_color);
 }
+static RGBA titlebar_button_bg_hovered_color() {
+    static RGBA default_color("rgba(ff0000ff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_button_bg_hovered_color", default_color);
+}
+static RGBA titlebar_button_bg_pressed_color() {
+    static RGBA default_color("rgba(0000ffff)");
+    return hypriso->get_varcolor("plugin:mylardesktop:titlebar_button_bg_pressed_color", default_color);
+}
 
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
@@ -247,7 +255,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         Bounds titlebar_bounds = c->real_bounds;
         bool child_hovered = false;
         if (!c->children.empty()) {
-            if (c->children[0]->state.mouse_hovering || c->children[0]->state.mouse_pressing) {
+            if (c->children[1]->state.mouse_hovering || c->children[1]->state.mouse_pressing) {
                 titlebar_mask = 14;
                 titlebar_bounds.w -= std::round(titlebar_bounds.h * titlebar_button_ratio());
                 child_hovered = true;
@@ -321,7 +329,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
                     overflow = icon_width + 16 * s;
 
                 auto clip_w = c->real_bounds.w - overflow - overflow_amount;
-                clip_w -= c->children[0]->real_bounds.w;
+                clip_w -= ((c->children[0]->real_bounds.w + c->children[1]->real_bounds.w) * s);
                 if (clip_w > 0) {
                     clip(to_parent(root, c), s);
                     draw_texture(*texture_info, 
@@ -331,33 +339,66 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
         }
 
         if (!c->children.empty()) {
-            auto ch = c->children[0];
-            auto close_bounds = c->real_bounds;
-            auto bw = std::round(close_bounds.h * titlebar_button_ratio());
-            close_bounds.x += close_bounds.w - bw; 
-            close_bounds.w = bw;
-            if (ch->state.mouse_pressing) {
-                rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0, false);
-            } else if (ch->state.mouse_hovering) {
-                rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0, false);
-            } else {
-                //auto co = color_titlebar_focused();
-                //co.a = fadea;
-                //rect(close_bounds, co, 13, roundingAmt * s, 2.0, false);
-            }
-            auto icon = "\ue8bb";
-            auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
-            ico_color.a = fadea;
-            auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
-                icon, ico_color, titlebar_button_icon_h() * shrink_factor);
+            {
+                auto ch = c->children[0];
+                auto close_bounds = c->real_bounds;
+                auto bw = std::round(close_bounds.h * titlebar_button_ratio());
+                close_bounds.x += close_bounds.w - bw * 2; 
+                close_bounds.w = bw;
+                if (ch->state.mouse_pressing) {
+                    rect(close_bounds, titlebar_button_bg_pressed_color(), 0, 0, 2.0, false);
+                } else if (ch->state.mouse_hovering) {
+                    rect(close_bounds, titlebar_button_bg_hovered_color(), 0, 0, 2.0, false);
+                } else {
+                    //auto co = color_titlebar_focused();
+                    //co.a = fadea;
+                    //rect(close_bounds, co, 13, roundingAmt * s, 2.0, false);
+                }
+                //auto icon = "\ue712";
+                auto icon = "\ue713";
+                auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
+                ico_color.a = fadea;
+                auto closed = get_cached_texture(root, root, "setting_setting_invariant", "Segoe Fluent Icons", 
+                    icon, ico_color, titlebar_button_icon_h() * shrink_factor * 1.2);
 
-            auto texture_info = closed;
-            if (texture_info->id != -1) {
-                clip(to_parent(root, c), s);
-                draw_texture(*texture_info, 
-                    close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
-                    close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
-                    1.0 * fade_in_a);
+                auto texture_info = closed;
+                if (texture_info->id != -1) {
+                    clip(to_parent(root, c), s);
+                    draw_texture(*texture_info, 
+                        close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
+                        close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
+                        1.0 * fade_in_a);
+                }
+            }
+            {
+                auto ch = c->children[1];
+                auto close_bounds = c->real_bounds;
+                auto bw = std::round(close_bounds.h * titlebar_button_ratio());
+                close_bounds.x += close_bounds.w - bw; 
+                close_bounds.w = bw;
+                if (ch->state.mouse_pressing) {
+                    rect(close_bounds, titlebar_closed_button_bg_pressed_color(), 13, roundingAmt * s, 2.0, false);
+                } else if (ch->state.mouse_hovering) {
+                    rect(close_bounds, titlebar_closed_button_bg_hovered_color(), 13, roundingAmt * s, 2.0, false);
+                } else {
+                    //auto co = color_titlebar_focused();
+                    //co.a = fadea;
+                    //rect(close_bounds, co, 13, roundingAmt * s, 2.0, false);
+                }
+                auto icon = "\ue8bb";
+                auto ico_color = titlebar_closed_button_icon_color_hovered_pressed();
+                ico_color.a = fadea;
+                auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+                    icon, ico_color, titlebar_button_icon_h() * shrink_factor);
+
+                auto texture_info = closed;
+                if (texture_info->id != -1) {
+                    clip(to_parent(root, c), s);
+                    draw_texture(*texture_info, 
+                        close_bounds.x + close_bounds.w * .5 - texture_info->w * .5, 
+                        close_bounds.y + close_bounds.h * .5 - texture_info->h * .5,
+                        1.0 * fade_in_a);
+                }
             }
         }
     }
@@ -537,38 +578,22 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         consume_event(root, c);
         //drag_workspace_switcher::force_hold_open(false);
     };
-
-    auto close = c->child(FILL_SPACE, FILL_SPACE);
-    close->when_paint = [](Container *actual_root, Container *c) {
-        return;
+    
+    auto right_click = c->child(FILL_SPACE, FILL_SPACE);
+    right_click->when_clicked = [cid](Container *actual_root, Container *c) {
+        titlebar::titlebar_right_click(cid);
+    };
+    right_click->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        renderfix
-
-        c->real_bounds.h += 1;
-        c->real_bounds.round();
-
-        if (c->state.mouse_pressing) {
-            rect(c->real_bounds, titlebar_closed_button_bg_pressed_color(), 13, 10 * s, 2.0);
-        } else if (c->state.mouse_hovering) {
-            rect(c->real_bounds, titlebar_closed_button_bg_hovered_color(), 13, 10 * s, 2.0);
-        } else if (c->parent->state.mouse_hovering) {
-            rect(c->real_bounds, color_titlebar_focused(), 13, 10 * s, 2.0);
-        }
-
-        auto icon = "\ue8bb";
-        auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
-            icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h());
-
-        if (c->state.mouse_pressing || c->state.mouse_hovering || c->parent->state.mouse_hovering) {
-            auto texture_info = closed;
-            if (texture_info->id != -1) {
-                clip(to_parent(root, c), s);
-                draw_texture(*texture_info, center_x(c, texture_info->w), center_y(c, texture_info->h), 1.0);
-            }
-        }
+        
+        auto w = titlebar_h * shrink_factor * titlebar_button_ratio();
+        c->wanted_bounds = {b.x + b.w - w * 2, b.y, w, ((float) titlebar_h) * shrink_factor};
+        c->real_bounds = c->wanted_bounds;
     };
+
+    auto close = c->child(FILL_SPACE, FILL_SPACE);
     close->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
         auto root = get_rendering_root();
         if (!root) return;

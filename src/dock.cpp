@@ -231,6 +231,7 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
 static float battery_level = 100;
 static bool charging = true;
 static float volume_level = 100;
+static bool is_master_muted = false;
 static float brightness_level = 100;
 static bool finished = false;
 static bool nightlight_on = false;
@@ -1841,7 +1842,7 @@ static void fill_root(Container *root) {
         auto volume = simple_dock_item(root, []() {
             std::string text = "";
             auto val = volume_level;
-            bool mute_state = volume_level < 1;
+            bool mute_state = is_master_muted;
             if (mute_state) {
                 text = "\uE74F";
             } else if (val == 0) {
@@ -2798,6 +2799,7 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
     for (auto client : clients) {
         if (client.is_master && (current - last_time_volume_adjusted) > 100) {
             volume_level = std::round(client.get_volume() * 100);
+            is_master_muted = client.is_muted();
         }
     }
 
