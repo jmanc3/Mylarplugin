@@ -2644,6 +2644,9 @@ static void init_rect_quad() {
 
 void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill) {
     if (!test_shader) {
+        auto rendering_monitor = current_rendering_monitor();
+        auto dpi = scale(rendering_monitor);
+        r *= dpi;
         rect({x - r * .5, y - r *.5, r, r}, col, 0, r * .43);
         return;
     }
@@ -3019,7 +3022,7 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
     }
     if (cornermask == 16)
         round = 0;
-    blur = false;
+    //blur = false;
     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -3027,12 +3030,11 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
  
         CHyprOpenGLImpl::SRectRenderData rectdata;
         auto region = new CRegion(tocbox(box));
-        rectdata.damage        = region;
+        //rectdata.damage        = nullptr;
         rectdata.blur          = blur;
         rectdata.blurA         = blurA;
         rectdata.round         = std::round(round);
         rectdata.roundingPower = roundingPower;
-        rectdata.xray = false;
 
         if (clip)
             g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
