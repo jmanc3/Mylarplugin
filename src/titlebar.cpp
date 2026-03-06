@@ -477,7 +477,11 @@ void create_titlebar(Container *root, Container *parent) {
             bool being_animated = hypriso->being_animated(cid);
             if (being_animated || (drag::dragging() && drag::drag_window() == cid) || (resizing::resizing() && resizing::resizing_window() == cid))
                 bounds.h += 1 * s;
-            rect(bounds, titlebar_color, 12, hypriso->get_rounding(cid) * s, 2.0f);
+            if (titlebar_color.a == 1.0) {
+                rect(bounds, titlebar_color, 12, hypriso->get_rounding(cid) * s, 2.0f, false);
+            } else {
+                rect(bounds, titlebar_color, 12, hypriso->get_rounding(cid) * s, 2.0f, true);
+            }
         }
     };
     titlebar_parent->receive_events_even_if_obstructed_by_one = true;
