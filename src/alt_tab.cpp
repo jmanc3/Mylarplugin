@@ -17,6 +17,13 @@ static long show_time = 0;
 static long show_delay = 40;
 static float visual_offset_amt = 0;
 
+static int wrap_index(int index, size_t size) {
+    if (size == 0)
+        return 0;
+    int mod = index % static_cast<int>(size);
+    return mod < 0 ? mod + static_cast<int>(size) : mod;
+}
+
 static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_focused_color", default_color);
@@ -98,7 +105,7 @@ static void paint_tab_option(Container *actual_root, Container *c) {
         hypriso->damage_entire(rid);
     }
 
-    int real_active_index = active_index % c->parent->children.size();
+    int real_active_index = wrap_index(active_index, c->parent->children.size());
     int index = 0;
     for (int i = 0; i < c->parent->children.size(); i++) {
         if (c->parent->children[i] == c) {
@@ -499,9 +506,9 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         if (rid != *datum<int>(c, "creation_monitor"))
             return;
 
-        int real_active_index = active_index % c->parent->children.size();
-        int before_index = (active_index - 1) % c->parent->children.size();
-        int after_index = (active_index + 1) % c->parent->children.size();
+        int real_active_index = wrap_index(active_index, c->children.size());
+        int before_index = wrap_index(active_index - 1, c->children.size());
+        int after_index = wrap_index(active_index + 1, c->children.size());
 
 
         Container *before = nullptr;
@@ -530,9 +537,9 @@ void fill_root(Container *root, Container *alt_tab_parent) {
             Bounds center;
             center.x = finalB.x + finalB.w * .5;
             center.y = finalB.y + finalB.h * .5;
-            center.w = 10 * s;
-            center.h = 10 * s;
-            draw_colored_circ(center.x, center.y, center.w, {1, 1, 1, .6}, 1.0);
+            center.w = 4 * s;
+            center.h = 4 * s;
+            draw_colored_circ(center.x, center.y, center.w, {1, 1, 1, 1}, 1.0);
             center.x -= center.w * .5 * s;
             center.y -= center.h * .5 * s;
             center.w *= s;
@@ -624,7 +631,7 @@ void alt_tab::close(bool focus) {
             if (c->custom_type == (int) TYPE::ALT_TAB) {
                 if (focus) {
                     if (!c->children.empty()) {
-                        int real_active_index = active_index % c->children.size();
+                        int real_active_index = wrap_index(active_index, c->children.size());
                         auto cid = *datum<int>(c->children[real_active_index], "cid");
                         later_immediate([cid](Timer *) {
                             hypriso->set_hidden(cid, false);
@@ -672,4 +679,3 @@ void alt_tab::visual_offset(float scalar) {
 void alt_tab::show_reticle(bool state) {
     reticle = state;
 }
-
