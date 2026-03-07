@@ -7,6 +7,7 @@ namespace alt_tab {
     
     void show();
     void close(bool focus);
+    void show_reticle(bool state);
     
     void visual_offset(float scalar);
     

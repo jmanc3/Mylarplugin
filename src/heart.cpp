@@ -1161,6 +1161,7 @@ static void on_config_reload() {
         alt_tab::visual_offset(0);
         alt_tab::show();
         alt_tab::move(1);
+        alt_tab::show_reticle(true);
     }, [](Bounds s) { 
         offset += s.x;
         if (offset > offset_click) {
@@ -1175,6 +1176,7 @@ static void on_config_reload() {
     }, []() { 
         alt_tab::visual_offset(0);
         alt_tab::close(true);
+        alt_tab::show_reticle(false);
     });
 }
 

@@ -12,6 +12,7 @@
 static float sd = .65;
 Bounds max_thumb = { 510 * sd, 310 * sd, 510 * sd, 310 * sd };
 static int active_index = 0;
+static bool reticle = false;
 static long show_time = 0;
 static long show_delay = 40;
 static float visual_offset_amt = 0;
@@ -481,6 +482,9 @@ void fill_root(Container *root, Container *alt_tab_parent) {
     };
     alt_tab_parent->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;
+
+        if (!reticle)
+            return;
         
         if (get_current_time_in_ms() - show_time < show_delay) {
             request_damage(actual_root, c);
@@ -664,3 +668,8 @@ bool alt_tab::showing() {
 void alt_tab::visual_offset(float scalar) {
     visual_offset_amt = scalar;
 }
+
+void alt_tab::show_reticle(bool state) {
+    reticle = state;
+}
+
