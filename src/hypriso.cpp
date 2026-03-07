@@ -9,6 +9,7 @@
 #include "hypriso.h"
 #include "heart.h"
 
+#include <cstdint>
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 
@@ -250,6 +251,23 @@ typedef enum
     OB_CLIENT_FUNC_UNDECORATE = 1 << 9  /*!< Allow to be undecorated */
 } ObFunctions;
 
+struct GestureHolding {
+    int fingerCount = 3;
+    eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_HORIZONTAL;
+    uint32_t modMask = 0;
+    float deltaScale = 1.0f;
+    bool disableInhibit = true;
+    
+    GestureHolding(int fingerCount, eTrackpadGestureDirection direction, uint32_t modMask, float deltaScale, bool disableInhibit) {
+        this->fingerCount = fingerCount;
+        this->direction = direction;
+        this->modMask = modMask;
+        this->deltaScale = deltaScale;
+        this->disableInhibit = disableInhibit;
+    };
+};
+
+static std::vector<GestureHolding> gestures_created;
 
 struct Anim {
     float *value = nullptr;
@@ -2278,7 +2296,7 @@ layerrule = match:class Dock, blur on
 
 input:follow_mouse = 2
 
-gesture = 3, horizontal, workspace
+#gesture = 3, horizontal, workspace
 
 cursor:no_warps = true
 
@@ -2994,6 +3012,10 @@ void HyprIso::end() {
     for (auto a : anims)
         delete a;
     anims.clear();
+
+    for (auto g : gestures_created)
+        g_pTrackpadGestures->removeGesture(g.fingerCount, g.direction, g.modMask, g.deltaScale, g.disableInhibit);
+    gestures_created.clear();
 }
 
 CBox tocbox(Bounds b) {
@@ -7675,32 +7697,36 @@ void HyprIso::save_position_info(int id) {
 
 class CExpoGesture : public ITrackpadGesture {
   public:
-    CExpoGesture()          = default;
-    virtual ~CExpoGesture() = default;
+    CExpoGesture() = default;
+    ~CExpoGesture() = default;
 
-    virtual void begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
-        notify("begin");
+    void begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
+        ITrackpadGesture::begin(e);
+        //notify(fz("begin {} {} {}", (int) e.direction, e.swipe->delta, e.swipe->timeMs));
     }
-    virtual void update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
-        notify("update");
+    void update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+        //notify(fz("begin {} {} {}", (int) e.direction, e.swipe->delta, e.swipe->timeMs));
     }
-    virtual void end(const ITrackpadGesture::STrackpadGestureEnd& e) {
-        notify("end");
+    void end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+        //notify(fz("begin {} {} {}", (int) e.direction, e.swipe->cancelled, e.swipe->timeMs));
+    }
+
+    bool isDirectionSensitive() {
+        //notify("dir sens");
+        return true;
     }
 };
 
 
-void make_gesture() {
-    notify("add gesture");
-    int fingerCount = 3;
-    eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_VERTICAL;
-    uint32_t modMask = 0;
-    float deltaScale = 1.0f;
-    bool disableInhibit = true;
-    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(), fingerCount, direction, modMask, deltaScale, disableInhibit);
+void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit) {
+    gestures_created.clear();
+    
+    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(), fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit);
+
+    // so we can removeGesture when unloading plugin so a crash doesn't happen
+    gestures_created.push_back(GestureHolding(fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit));
+    
     if (!resultFromGesture) {
         notify(fz("{}", resultFromGesture.error().c_str()));
     }
-
-    //resultFromGesture = g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, disableInhibit);
 }

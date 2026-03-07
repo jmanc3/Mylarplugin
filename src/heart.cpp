@@ -1151,6 +1151,7 @@ static void on_config_reload() {
     hypriso->add_float_rule();
     hypriso->overwrite_defaults();
     dock::redraw();
+    make_gesture(3, 7, 0, 1.0, false);
 }
 
 Bounds fixed_box(float startx, float starty, float endx, float endy) {
@@ -1660,7 +1661,6 @@ void heart::begin() {
 
     	hypriso->create_callbacks();
     	hypriso->create_hooks();
-    	make_gesture();
     	
         hypriso->add_float_rule();
 

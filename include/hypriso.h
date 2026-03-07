@@ -555,7 +555,7 @@ bool poll_descriptor(int fd, std::function<void (PollingThread::WatchedFD *)> fu
 // On main thread loop
 bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name);
 
-void make_gesture();
+void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit);
 
 #endif // hypriso_h_INCLUDED
 
