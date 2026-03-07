@@ -7697,17 +7697,32 @@ void HyprIso::save_position_info(int id) {
 
 class CExpoGesture : public ITrackpadGesture {
   public:
-    CExpoGesture() = default;
+    std::function<void (Bounds delta)> start_func = nullptr;
+    std::function<void (Bounds delta)> update_func = nullptr;
+    std::function<void ()> end_func = nullptr;
+      
+    CExpoGesture(std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end) {
+        this->start_func = start;
+        this->update_func = update;
+        this->end_func = end;
+    };
     ~CExpoGesture() = default;
 
     void begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
         ITrackpadGesture::begin(e);
-        //notify(fz("begin {} {} {}", (int) e.direction, e.swipe->delta, e.swipe->timeMs));
+        if (start_func)
+            start_func({e.swipe->delta.x, e.swipe->delta.x, 0, 0});
+        //notify(fz("begin {} {} {}", (int) e.direction, {e.swipe->delta.x, e.swipe->delta.x, 0, 0}, e.swipe->timeMs));
     }
     void update(const ITrackpadGesture::STrackpadGestureUpdate& e) {
+        if (update_func)
+            update_func({e.swipe->delta.x, e.swipe->delta.x, 0, 0});
+        
         //notify(fz("begin {} {} {}", (int) e.direction, e.swipe->delta, e.swipe->timeMs));
     }
     void end(const ITrackpadGesture::STrackpadGestureEnd& e) {
+        if (end_func)
+            end_func();
         //notify(fz("begin {} {} {}", (int) e.direction, e.swipe->cancelled, e.swipe->timeMs));
     }
 
@@ -7718,10 +7733,10 @@ class CExpoGesture : public ITrackpadGesture {
 };
 
 
-void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit) {
+void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit, std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end) {
     gestures_created.clear();
     
-    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(), fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit);
+    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(std::move(start), std::move(update), std::move(end)), fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit);
 
     // so we can removeGesture when unloading plugin so a crash doesn't happen
     gestures_created.push_back(GestureHolding(fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit));

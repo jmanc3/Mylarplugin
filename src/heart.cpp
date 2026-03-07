@@ -1151,7 +1151,26 @@ static void on_config_reload() {
     hypriso->add_float_rule();
     hypriso->overwrite_defaults();
     dock::redraw();
-    make_gesture(3, 7, 0, 1.0, false);
+
+    static float offset = 0;
+
+    // alt tab gesture
+    make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
+        offset = 0;
+        alt_tab::show();
+    }, [](Bounds s) { 
+        offset += s.x;
+        float offset_click = 70;
+        if (offset > offset_click) {
+            alt_tab::move(1);
+            offset = 0;
+        } else if (offset < -offset_click) {
+            offset = 0;
+            alt_tab::move(-1);
+        }
+    }, []() { 
+        alt_tab::close(true);
+    });
 }
 
 Bounds fixed_box(float startx, float starty, float endx, float endy) {
