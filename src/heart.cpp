@@ -26,6 +26,7 @@
 #include "workspace_indicator.h"
 #include "drag_workspace_switcher.h"
 #include "audio.h"
+#include "coverflow.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -1158,11 +1159,14 @@ static void on_config_reload() {
     // alt tab gesture
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset = 0;
-        alt_tab::visual_offset(0);
-        alt_tab::show();
-        alt_tab::move(1);
-        alt_tab::show_reticle(true);
+        //alt_tab::visual_offset(0);
+        //alt_tab::show_reticle(true);
+        //alt_tab::show();
+        //alt_tab::move(1);
+        coverflow::open();
     }, [](Bounds s) { 
+        coverflow::scroll(s.x, s.y);
+        /*
         offset += s.x;
         if (offset > offset_click) {
             alt_tab::move(1);
@@ -1172,11 +1176,15 @@ static void on_config_reload() {
             alt_tab::move(-1);
         }
         alt_tab::visual_offset(offset / offset_click);
+        */
         damage_all();
     }, []() { 
+        coverflow::close();
+        /*
         alt_tab::visual_offset(0);
         alt_tab::close(true);
         alt_tab::show_reticle(false);
+        */
     });
 }
 
@@ -1960,7 +1968,15 @@ void heart::layout_containers() {
             *datum<bool>(c, "touched") = true;
         }
     }
-
+    for (auto c : backup) {
+        if (c->custom_type == (int) TYPE::COVERFLOW) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+            }
+            *datum<bool>(c, "touched") = true;
+        }
+    }
 
     snap_assist::fix_order();
     
