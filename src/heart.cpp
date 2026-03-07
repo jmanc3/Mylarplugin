@@ -1153,14 +1153,16 @@ static void on_config_reload() {
     dock::redraw();
 
     static float offset = 0;
+    static float offset_click = 70;
 
     // alt tab gesture
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset = 0;
+        alt_tab::visual_offset(0);
         alt_tab::show();
+        alt_tab::move(1);
     }, [](Bounds s) { 
         offset += s.x;
-        float offset_click = 70;
         if (offset > offset_click) {
             alt_tab::move(1);
             offset = 0;
@@ -1168,7 +1170,10 @@ static void on_config_reload() {
             offset = 0;
             alt_tab::move(-1);
         }
+        alt_tab::visual_offset(offset / offset_click);
+        damage_all();
     }, []() { 
+        alt_tab::visual_offset(0);
         alt_tab::close(true);
     });
 }

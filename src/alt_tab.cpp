@@ -14,6 +14,7 @@ Bounds max_thumb = { 510 * sd, 310 * sd, 510 * sd, 310 * sd };
 static int active_index = 0;
 static long show_time = 0;
 static long show_delay = 40;
+static float visual_offset_amt = 0;
 
 static RGBA color_titlebar_focused() {
     static RGBA default_color("ffffffff");
@@ -480,6 +481,60 @@ void fill_root(Container *root, Container *alt_tab_parent) {
     };
     alt_tab_parent->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;
+        
+        if (get_current_time_in_ms() - show_time < show_delay) {
+            request_damage(actual_root, c);
+            return;
+        }
+        auto root = get_rendering_root();
+        if (!root) return;
+
+        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        if (stage != (int) STAGE::RENDER_LAST_MOMENT)
+            return;
+        if (rid != *datum<int>(c, "creation_monitor"))
+            return;
+
+        int real_active_index = active_index % c->parent->children.size();
+        int before_index = (active_index - 1) % c->parent->children.size();
+        int after_index = (active_index + 1) % c->parent->children.size();
+
+
+        Container *before = nullptr;
+        Container *current = nullptr;
+        Container *after = nullptr;
+        for (int i = 0; i < c->children.size(); i++) {
+            if (i == real_active_index) 
+                current = c->children[i];
+             if (i == before_index) 
+                before = c->children[i];
+             if (i == after_index) 
+                after = c->children[i];
+        }
+        if (current && after && before) {
+            auto start = current->real_bounds;
+            Bounds end;
+            if (visual_offset_amt > 0) {
+                end = after->real_bounds;
+            } else {
+                end = before->real_bounds;
+            }
+            start.scale(s);
+            end.scale(s);
+            auto finalB = lerp(start, end, std::abs(visual_offset_amt));
+
+            Bounds center;
+            center.x = finalB.x + finalB.w * .5;
+            center.y = finalB.y + finalB.h * .5;
+            center.w = 10 * s;
+            center.h = 10 * s;
+            draw_colored_circ(center.x, center.y, center.w, {1, 1, 1, .6}, 1.0);
+            center.x -= center.w * .5 * s;
+            center.y -= center.h * .5 * s;
+            center.w *= s;
+            center.h *= s;
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .2}, center.w * .5, 2.0f, center);
+        }
     };
 }
 
@@ -604,4 +659,8 @@ void alt_tab::on_activated(int id) {
 
 bool alt_tab::showing() {
     return showing;
+}
+
+void alt_tab::visual_offset(float scalar) {
+    visual_offset_amt = scalar;
 }
