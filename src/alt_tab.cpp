@@ -711,3 +711,33 @@ void alt_tab::visual_offset(float scalar) {
 void alt_tab::show_reticle(bool state) {
     reticle = state;
 }
+
+bool alt_tab::at_start() {
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto c = actual_root->children[i];
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            int real_active_index = wrap_index(active_index, c->children.size());
+            if (real_active_index == 0) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+bool alt_tab::at_end() {
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto c = actual_root->children[i];
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            int real_active_index = wrap_index(active_index, c->children.size());
+            if (real_active_index == (c->children.size() - 1)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+

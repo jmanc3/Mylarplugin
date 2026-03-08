@@ -1170,6 +1170,13 @@ static void on_config_reload() {
         //coverflow::scroll(s.x, s.y);
         
         offset += s.x;
+        if (alt_tab::at_start())
+            if (offset < 0)
+                offset = 0;
+        if (alt_tab::at_end())
+            if (offset > 0)
+                offset = 0;
+
         if (offset > offset_click) {
             alt_tab::move(1);
             offset = 0;

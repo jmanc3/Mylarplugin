@@ -13,5 +13,8 @@ namespace alt_tab {
     
     void move(int dir);
 
+    bool at_start();
+    bool at_end();
+
     bool showing();
 }
