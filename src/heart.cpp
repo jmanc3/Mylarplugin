@@ -888,7 +888,8 @@ static void on_monitor_open(int id) {
     auto cid = datum<int>(c, "cid");
     *cid = id;
     heart::layout_containers();
-    dock::start(hypriso->monitor_name(id));
+    if (set->show_docks)
+        dock::start(hypriso->monitor_name(id));
 }
 
 static void on_monitor_closed(int id) {

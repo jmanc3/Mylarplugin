@@ -62,6 +62,7 @@ struct ConfigSettings {
     int repeat_delay = 450;
     bool meter_animations = false;
     bool prefer_pipewire_audio_backend = false;
+    bool show_docks = true;
 };
 
 extern ConfigSettings *set;

@@ -5,6 +5,7 @@
 #include "hypriso.h"
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
+#include "dock.h"
 
 #include <thread>
 #include <fstream>
@@ -177,6 +178,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "natural_scrolling_mouse", &settings->natural_scrolling_mouse);
     bind(bool, "natural_scrolling_touchpad", &settings->natural_scrolling_touchpad);
     bind(bool, "touchpad_disable_while_typing", &settings->touchpad_disable_while_typing);
+    bind(bool, "show_docks", &settings->show_docks);
     
     #undef bind
 }
@@ -766,6 +768,47 @@ static void make_vert_space(Container *parent, float amount) {
     };
 }
 
+static void fill_dock_settings(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Dock Settings");
+    
+    make_vert_space(padded_right, 10);
+    
+    make_bool(padded_right, "Show docks", "", set->show_docks, [](bool c) {
+        set->show_docks = c;
+
+        if (set->show_docks) {
+            dock::start();
+        } else {
+            dock::stop();
+        }
+    });
+}
+
 
 static void fill_keyboard_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
@@ -995,6 +1038,8 @@ void create_tab_option(Container *parent, std::string label) {
             fill_mouse_settings(root, c);
         } else if (label == "Keyboard") {
             fill_keyboard_settings(root, c);
+        } else if (label == "Dock") {
+            fill_dock_settings(root, c);
         }
     };
 }
@@ -1008,6 +1053,7 @@ void fill_left(Container *left) {
     create_tab_option(left, "Time & Date");
     create_tab_option(left, "Audio");
     create_tab_option(left, "Wifi");
+    create_tab_option(left, "Dock");
 }
 
 void fill_root(Container *root) {
