@@ -105,7 +105,18 @@ static void paint_tab_option(Container *actual_root, Container *c) {
         hypriso->damage_entire(rid);
     }
 
-    int real_active_index = wrap_index(active_index, c->parent->children.size());
+    auto ai = active_index;
+    if (reticle) {
+        if (std::abs(visual_offset_amt) > .5) {
+            if (visual_offset_amt > 0) {
+                ai += 1;
+            } else {
+                ai -= 1;
+            }
+        }
+    }
+
+    int real_active_index = wrap_index(ai, c->parent->children.size());
     int index = 0;
     for (int i = 0; i < c->parent->children.size(); i++) {
         if (c->parent->children[i] == c) {
@@ -271,6 +282,17 @@ static void create_tab_option(int cid, Container *parent) {
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         renderfix
 
+        auto ai = active_index;
+        if (reticle) {
+            if (std::abs(visual_offset_amt) > .5) {
+                if (visual_offset_amt > 0) {
+                    ai += 1;
+                } else {
+                    ai -= 1;
+                }
+            }
+        }
+
         int index = 0;
         for (int i = 0; i < c->parent->parent->children.size(); i++) {
             if (c->parent->parent->children[i] == c->parent) {
@@ -279,7 +301,7 @@ static void create_tab_option(int cid, Container *parent) {
             }
         }
 
-        if (active_index != index)
+        if (ai != index)
             return;
         if (c->state.mouse_pressing) {
             rect(c->real_bounds, titlebar_closed_button_bg_pressed_color(), 13, 10 * s, 2.0);
@@ -631,7 +653,17 @@ void alt_tab::close(bool focus) {
             if (c->custom_type == (int) TYPE::ALT_TAB) {
                 if (focus) {
                     if (!c->children.empty()) {
-                        int real_active_index = wrap_index(active_index, c->children.size());
+                        auto ai = active_index;
+                        if (reticle) {
+                            if (std::abs(visual_offset_amt) > .5) {
+                                if (visual_offset_amt > 0) {
+                                    ai += 1;
+                                } else {
+                                    ai -= 1;
+                                }
+                            }
+                        }
+                        int real_active_index = wrap_index(ai, c->children.size());
                         auto cid = *datum<int>(c->children[real_active_index], "cid");
                         later_immediate([cid](Timer *) {
                             hypriso->set_hidden(cid, false);

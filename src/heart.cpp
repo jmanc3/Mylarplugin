@@ -1159,14 +1159,14 @@ static void on_config_reload() {
     // alt tab gesture
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset = 0;
-        //alt_tab::visual_offset(0);
-        //alt_tab::show_reticle(true);
-        //alt_tab::show();
+        alt_tab::visual_offset(0);
+        alt_tab::show_reticle(true);
+        alt_tab::show();
         //alt_tab::move(1);
-        coverflow::open();
+        //coverflow::open();
     }, [](Bounds s) { 
-        coverflow::scroll(s.x, s.y);
-        /*
+        //coverflow::scroll(s.x, s.y);
+        
         offset += s.x;
         if (offset > offset_click) {
             alt_tab::move(1);
@@ -1176,15 +1176,14 @@ static void on_config_reload() {
             alt_tab::move(-1);
         }
         alt_tab::visual_offset(offset / offset_click);
-        */
+        
         damage_all();
     }, []() { 
-        coverflow::close();
-        /*
-        alt_tab::visual_offset(0);
+        //coverflow::close();
+        
         alt_tab::close(true);
         alt_tab::show_reticle(false);
-        */
+        alt_tab::visual_offset(0);
     });
 }
 
