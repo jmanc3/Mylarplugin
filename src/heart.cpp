@@ -1155,10 +1155,12 @@ static void on_config_reload() {
 
     static float offset = 0;
     static float offset_click = 70;
+    // TODO: offset_click should scale down so that 1200 offset can rotate all windows list
+    // only scale if factor > 1
 
     // alt tab gesture
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
-        offset = 0;
+        offset = offset_click * .3;
         alt_tab::visual_offset(0);
         alt_tab::show_reticle(true);
         alt_tab::show();

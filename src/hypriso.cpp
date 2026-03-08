@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <hyprland/src/SharedDefs.hpp>
+#include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
 
 #define private public
@@ -3552,6 +3553,22 @@ bool HyprIso::is_fake_fullscreen(int id) {
     }
 
     return false;
+}
+
+void HyprIso::set_fullscreen(int id, bool state) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            hw->w->m_ruleApplicator->syncFullscreenOverride(Desktop::Types::COverridableVar(false, Desktop::Types::PRIORITY_SET_PROP));
+
+            if (state) {
+                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 2, .client = (eFullscreenMode) 2});
+            } else {
+                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 0});
+            }
+            hw->w->m_ruleApplicator->syncFullscreenOverride(
+                Desktop::Types::COverridableVar(hw->w->m_fullscreenState.internal == hw->w->m_fullscreenState.client, Desktop::Types::PRIORITY_SET_PROP));
+        }
+    }
 }
 
 void HyprIso::fake_fullscreen(int id, bool state) {

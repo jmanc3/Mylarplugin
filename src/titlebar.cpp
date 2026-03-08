@@ -114,6 +114,21 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
     }
     {
         PopOption pop;
+        if (hypriso->is_fullscreen(cid)) {
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        }
+        pop.text = "Fullscreen";   
+        pop.on_clicked = [cid]() {
+            if (hypriso->is_fullscreen(cid)) {
+                hypriso->set_fullscreen(cid, false);
+            } else {
+                hypriso->set_fullscreen(cid, true);
+            }
+        };
+        root.push_back(pop);
+    }
+    {
+        PopOption pop;
         if (hypriso->is_fake_fullscreen(cid)) {
             pop.icon_left = ":Papirus:checkbox-checked-symbolic";
         } else {
