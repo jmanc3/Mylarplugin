@@ -376,6 +376,7 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
     if (alt_held) {
         if (key == KEY_TAB) {
             if (state) {
+                bool is_open = alt_tab::showing();
                 alt_tab::show();
                 if (shift_held) {
                     alt_tab::move(-1);
@@ -1154,46 +1155,64 @@ static void on_config_reload() {
     hypriso->overwrite_defaults();
     dock::redraw();
 
-    static float offset = 0;
-    static float offset_click = 70;
+    static float offset_x = 0;
+    static float offset_y = 0;
+    static float offset_click = 75;
     // TODO: offset_click should scale down so that 1200 offset can rotate all windows list
     // only scale if factor > 1
 
     // alt tab gesture
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
-        offset = offset_click * .3;
-        alt_tab::visual_offset(0);
-        alt_tab::show_reticle(true);
+        offset_x = 0;
+        offset_y = 0;
+        //alt_tab::visual_offset(0);
+        //alt_tab::show_reticle(true);
         alt_tab::show();
         //alt_tab::move(1);
         //coverflow::open();
     }, [](Bounds s) { 
         //coverflow::scroll(s.x, s.y);
         
-        offset += s.x;
-        if (alt_tab::at_start())
-            if (offset < 0)
-                offset = 0;
-        if (alt_tab::at_end())
-            if (offset > 0)
-                offset = 0;
+        offset_x += s.x;
+        offset_y += s.y;
 
-        if (offset > offset_click) {
-            alt_tab::move(1);
-            offset = 0;
-        } else if (offset < -offset_click) {
-            offset = 0;
-            alt_tab::move(-1);
+        if (alt_tab::at_start_row())
+            if (offset_y < 0)
+                offset_y = 0;
+        if (alt_tab::at_end_row())
+            if (offset_y > 0)
+                offset_y = 0;
+        if (alt_tab::at_start_col())
+            if (offset_x < 0)
+                offset_x = 0;
+        if (alt_tab::at_end_col())
+            if (offset_x > 0)
+                offset_x = 0;
+
+        if (offset_x > offset_click) {
+            alt_tab::move_x(1);
+            offset_x = 0;
+        } else if (offset_x < -offset_click) {
+            offset_x = 0;
+            alt_tab::move_x(-1);
         }
-        alt_tab::visual_offset(offset / offset_click);
+        if (offset_y > offset_click) {
+            alt_tab::move_y(1);
+            offset_y = 0;
+        } else if (offset_y < -offset_click) {
+            offset_y = 0;
+            alt_tab::move_y(-1);
+        }
+        
+        //alt_tab::visual_offset(offset / offset_click);
         
         damage_all();
     }, []() { 
         //coverflow::close();
         
         alt_tab::close(true);
-        alt_tab::show_reticle(false);
-        alt_tab::visual_offset(0);
+        //alt_tab::show_reticle(false);
+        //alt_tab::visual_offset(0);
     });
 }
 

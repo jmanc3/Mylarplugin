@@ -479,6 +479,8 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         alt_tab_parent_pre_layout(actual_root, c, b); 
     };
     alt_tab_parent->when_paint = [](Container *actual_root, Container *c) {
+        if (c->children.empty())
+            return;
         if (get_current_time_in_ms() - show_time < show_delay) {
             request_damage(actual_root, c);
             return;
@@ -679,6 +681,133 @@ void alt_tab::close(bool focus) {
     }
 }
 
+void alt_tab::move_y(int dir) {
+    std::vector<std::vector<Container *>> lines;
+
+    int active_y = 0;
+    int active_x = 0;
+
+    float last_x = 1000000;
+
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            if (c->children.empty())
+                return;
+
+            int real_active_index = wrap_index(active_index, c->children.size());
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch->real_bounds.x < last_x) {
+                    // start of line
+                    lines.push_back({});
+                }
+
+                auto last = &lines[lines.size() - 1];
+                last->push_back(ch);
+                last_x = ch->real_bounds.x;
+
+                if (i == real_active_index) {
+                    active_y = lines.size() - 1;
+                    active_x = last->size() - 1;
+                }
+            }
+        }
+    }
+
+    auto before_y = active_y;
+    auto before_line = lines[before_y];
+    active_y += dir;
+
+    if (active_y < 0)
+        active_y = 0;
+    if (active_y > lines.size() - 1)
+        active_y = lines.size() - 1;
+    if (active_y == before_y)
+        return;
+
+    Container *target = before_line[active_x];
+    auto after_line = lines[active_y];
+    int closest_amount = 1000000;
+    Container *other = target;
+    auto middle = target->real_bounds.x + target->real_bounds.w * .5;
+    for (auto ch : after_line) {
+        auto other_middle = ch->real_bounds.x + ch->real_bounds.w * .5;
+        auto diff = (int) std::abs(other_middle - middle);
+        if (diff < closest_amount) {
+            closest_amount = diff;
+            other = ch;
+        }
+    }
+
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch == other)
+                    active_index = i;
+            }
+        }
+    }
+
+    damage_all();
+}
+
+void alt_tab::move_x(int dir) {
+    std::vector<std::vector<Container *>> lines;
+    
+    int active_y = 0;
+    int active_x = 0;
+    
+    float last_x = 1000000;
+    
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            if (c->children.empty())
+                return;
+            
+            int real_active_index = wrap_index(active_index, c->children.size());
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch->real_bounds.x < last_x) {
+                    // start of line
+                    lines.push_back({});
+                }
+
+                auto last = &lines[lines.size() - 1];
+                last->push_back(ch);
+                last_x = ch->real_bounds.x;
+
+                if (i == real_active_index) {
+                    active_y = lines.size() - 1;
+                    active_x = last->size() - 1;
+                }
+            }
+        }
+    }    
+
+    auto line = lines[active_y];
+    active_x += dir;
+
+    if (active_x < 0)
+        active_x = 0;
+    if (active_x > line.size() - 1)
+        active_x = line.size() - 1;
+
+    Container *target = line[active_x];
+
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch == target)
+                    active_index = i;
+            }
+        }
+    }
+
+    damage_all();
+}
+
 void alt_tab::move(int dir) {
     if (!showing())
         return;
@@ -712,32 +841,152 @@ void alt_tab::show_reticle(bool state) {
     reticle = state;
 }
 
-bool alt_tab::at_start() {
-    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-        auto c = actual_root->children[i];
+bool alt_tab::at_start_col() {
+    std::vector<std::vector<Container *>> lines;
+
+    int active_y = 0;
+    int active_x = 0;
+
+    float last_x = 1000000;
+
+    for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
-            int real_active_index = wrap_index(active_index, c->children.size());
-            if (real_active_index == 0) {
+            if (c->children.empty())
                 return true;
+
+            int real_active_index = wrap_index(active_index, c->children.size());
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch->real_bounds.x < last_x) {
+                    // start of line
+                    lines.push_back({});
+                }
+
+                auto last = &lines[lines.size() - 1];
+                last->push_back(ch);
+                last_x = ch->real_bounds.x;
+
+                if (i == real_active_index) {
+                    active_y = lines.size() - 1;
+                    active_x = last->size() - 1;
+                }
             }
         }
     }
 
-    return false;
+    auto before_line = lines[active_y];
+    return active_x == 0;
 }
 
-bool alt_tab::at_end() {
-    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-        auto c = actual_root->children[i];
+bool alt_tab::at_end_col() {
+    std::vector<std::vector<Container *>> lines;
+
+    int active_y = 0;
+    int active_x = 0;
+
+    float last_x = 1000000;
+
+    for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
-            int real_active_index = wrap_index(active_index, c->children.size());
-            if (real_active_index == (c->children.size() - 1)) {
+            if (c->children.empty())
                 return true;
+
+            int real_active_index = wrap_index(active_index, c->children.size());
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch->real_bounds.x < last_x) {
+                    // start of line
+                    lines.push_back({});
+                }
+
+                auto last = &lines[lines.size() - 1];
+                last->push_back(ch);
+                last_x = ch->real_bounds.x;
+
+                if (i == real_active_index) {
+                    active_y = lines.size() - 1;
+                    active_x = last->size() - 1;
+                }
             }
         }
     }
 
-    return false;
+    auto before_line = lines[active_y];
+    return active_x == (before_line.size() - 1);
 }
+
+
+bool alt_tab::at_start_row() {
+    std::vector<std::vector<Container *>> lines;
+
+    int active_y = 0;
+    int active_x = 0;
+
+    float last_x = 1000000;
+
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            if (c->children.empty())
+                return true;
+
+            int real_active_index = wrap_index(active_index, c->children.size());
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch->real_bounds.x < last_x) {
+                    // start of line
+                    lines.push_back({});
+                }
+
+                auto last = &lines[lines.size() - 1];
+                last->push_back(ch);
+                last_x = ch->real_bounds.x;
+
+                if (i == real_active_index) {
+                    active_y = lines.size() - 1;
+                    active_x = last->size() - 1;
+                }
+            }
+        }
+    }
+
+    return active_y == 0;
+}
+
+bool alt_tab::at_end_row() {
+    std::vector<std::vector<Container *>> lines;
+
+    int active_y = 0;
+    int active_x = 0;
+
+    float last_x = 1000000;
+
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::ALT_TAB) {
+            if (c->children.empty())
+                return true;
+
+            int real_active_index = wrap_index(active_index, c->children.size());
+            for (int i = 0; i < c->children.size(); i++) {
+                auto ch = c->children[i];
+                if (ch->real_bounds.x < last_x) {
+                    // start of line
+                    lines.push_back({});
+                }
+
+                auto last = &lines[lines.size() - 1];
+                last->push_back(ch);
+                last_x = ch->real_bounds.x;
+
+                if (i == real_active_index) {
+                    active_y = lines.size() - 1;
+                    active_x = last->size() - 1;
+                }
+            }
+        }
+    }
+
+    return active_y == (lines.size() - 1);
+}
+
 
 
