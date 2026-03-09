@@ -475,7 +475,7 @@ void paint_resize_edge(Container *actual_root, Container *c) {
         update_resize_edge_preview_bar(cid);
 
         // debug border
-        //border(b, {1, 0, 1, 1}, 4);
+        //border(b, {1, 0, 1, .3}, resize_edge_size());
 
         {
             auto vert_dot_amount = *datum<float>(c, "vertical_bar_dot_amount_shown");

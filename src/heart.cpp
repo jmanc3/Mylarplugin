@@ -82,6 +82,13 @@ static void set_exists(Container *c, bool state) {
 }
 
 static bool on_mouse_move(int id, float x, float y) {
+    static int previous = -1;
+    auto current = hypriso->monitor_from_cursor();
+    if (previous != current) {
+        previous = current;
+        damage_all();
+    }
+    
     heart::layout_containers();
     auto mou = mouse();
     x = mou.x;
@@ -1162,6 +1169,7 @@ static void on_config_reload() {
     // only scale if factor > 1
 
     // alt tab gesture
+    
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset_x = 0;
         offset_y = 0;
@@ -1214,6 +1222,7 @@ static void on_config_reload() {
         //alt_tab::show_reticle(false);
         //alt_tab::visual_offset(0);
     });
+    
 }
 
 Bounds fixed_box(float startx, float starty, float endx, float endy) {

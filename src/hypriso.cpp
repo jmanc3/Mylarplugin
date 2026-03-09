@@ -30,6 +30,7 @@
 #include <glib.h>
 #include <hyprutils/math/Box.hpp>
 #include <hyprutils/math/Misc.hpp>
+#include <hyprutils/string/ConstVarList.hpp>
 #include <iostream>
 #include <bits/types/idtype_t.h>
 #include <cmath>
@@ -2302,6 +2303,7 @@ input:follow_mouse = 2
 gesture = 3, up, dispatcher, plugin:mylar:overview_open_or_show_desktop 
 gesture = 3, down, dispatcher, plugin:mylar:overview_close_or_hide_desktop 
 
+mylar-gesture = 3, horizontal, alt_tab
 
 
 cursor:no_warps = true
@@ -3678,6 +3680,14 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
             //target->rememberFloatingSize({w, h});
             //target->setPositionGlobal(CBox(x, y, w, h));
             target->space()->setTargetGeom(CBox(x, y, w, h), target);
+
+            Vector2D middle = target->position().middle();
+            const auto PMONITOR = g_pCompositor->getMonitorFromVector(middle);
+            if (PMONITOR && PMONITOR->m_activeWorkspace && target->floating() /* If we're resaizing a tiled target, don't do this */) {
+                const auto WS = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
+                target->assignToSpace(WS->m_space);
+            }
+            target->damageEntire();
         }
     }
 }
@@ -7766,4 +7776,83 @@ void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaS
     if (!resultFromGesture) {
         notify(fz("{}", resultFromGesture.error().c_str()));
     }
+}
+
+
+Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
+{
+    Hyprlang::CParseResult result;
+
+    CConstVarList data(RHS);
+    size_t fingerCount = 0;
+    eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
+
+    try {
+        fingerCount = std::stoul(std::string { data[0] });
+    } catch (...) {
+        result.setError(std::format("Invalid value {} for finger count", data[0]).c_str());
+        return result;
+    }
+
+    if (fingerCount <= 1 || fingerCount >= 10) {
+        result.setError(std::format("Invalid value {} for finger count", data[0]).c_str());
+        return result;
+    }
+
+    int argIndex = 1;
+    uint32_t modMask = 0;
+    float deltaScale = 1.F;
+
+    for (; argIndex < data.size(); ++argIndex) {
+        const auto& arg = data[argIndex];
+        if (arg.starts_with("mod:")) {
+            modMask = g_pKeybindManager->stringToModMask(std::string { arg.substr(4) });
+        } else if (arg.starts_with("scale:")) {
+            try {
+                deltaScale = std::clamp(std::stof(std::string { arg.substr(6) }), 0.1F, 10.F);
+            } catch (...) {
+                result.setError(std::format("Invalid delta scale: {}", std::string { arg.substr(6) }).c_str());
+                return result;
+            }
+        } else {
+            // Not a mod or scale, so it must be the gesture command (expo/unset)
+            break;
+        }
+    }
+
+    std::expected<void, std::string> resultFromGesture;
+
+    if (data[argIndex] == "vertical"){
+        direction = g_pTrackpadGestures->dirForString("vertical");
+        if (direction == TRACKPAD_GESTURE_DIR_NONE) {
+            result.setError(std::format("Invalid direction: {}", data[1]).c_str());
+            return result;
+        }
+        resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(nullptr, nullptr, nullptr), fingerCount, direction, modMask, deltaScale, true);
+    }
+    else if (data[argIndex] == "horizontal"){
+        direction = g_pTrackpadGestures->dirForString("horizontal");
+        if (direction == TRACKPAD_GESTURE_DIR_NONE) {
+            result.setError(std::format("Invalid direction: {}", data[1]).c_str());
+            return result;
+        }
+        resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(nullptr, nullptr, nullptr), fingerCount, direction, modMask, deltaScale, true);
+    }
+    else if (data[argIndex] == "unset")
+        resultFromGesture = g_pTrackpadGestures->removeGesture(fingerCount, direction, modMask, deltaScale, true);
+    else {
+        result.setError(std::format("Invalid gesture: {}", data[argIndex]).c_str());
+        return result;
+    }
+
+    if (!resultFromGesture) {
+        result.setError(resultFromGesture.error().c_str());
+        return result;
+    }
+
+    return result;
+}
+
+void add_mylar_gesture() {
+    HyprlandAPI::addConfigKeyword(globals->api, "mylar-gesture", ::mylarGestureKeyword, {});
 }
