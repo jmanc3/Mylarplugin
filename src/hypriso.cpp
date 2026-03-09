@@ -2263,6 +2263,9 @@ master {
 misc {
     force_default_wallpaper = 0 # Set to 0 or 1 to disable the anime mascot wallpapers
     disable_hyprland_logo = true # If true disables the random hyprland logo / anime girl background. :(
+    disable_xdg_env_checks = true
+    disable_hyprland_guiutils_check = true
+    disable_watchdog_warning = true
 }
 
 
@@ -2300,8 +2303,8 @@ input:follow_mouse = 2
 
 #gesture = 3, horizontal, workspace
 
-gesture = 3, up, dispatcher, plugin:mylar:overview_open_or_show_desktop 
-gesture = 3, down, dispatcher, plugin:mylar:overview_close_or_hide_desktop 
+#gesture = 3, up, dispatcher, plugin:mylar:overview_open_or_show_desktop 
+#gesture = 3, down, dispatcher, plugin:mylar:overview_close_or_hide_desktop 
 
 mylar-gesture = 3, horizontal, alt_tab
 
@@ -5208,6 +5211,8 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
             continue;
         if (!hm->wallfb)
             continue;
+        if (!hm->wallfb->getTexture())
+            return;
         bool clip = hypriso->clip;
         Bounds clipbox = hypriso->clipbox;
         if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
@@ -5220,7 +5225,11 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
              //notify("draw");
             auto roundingPower = 2.0f;
             auto cornermask = 0;
+            if (!hm->wallfb)
+                return;
             auto tex = hm->wallfb->getTexture();
+            if (!tex)
+                return;
             auto box = tocbox(b);
 
             CHyprOpenGLImpl::STextureRenderData data;
@@ -7764,10 +7773,11 @@ class CExpoGesture : public ITrackpadGesture {
     }
 };
 
+void gestures_reset() {
+    gestures_created.clear();
+}
 
 void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit, std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end) {
-    gestures_created.clear();
-    
     std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(std::move(start), std::move(update), std::move(end)), fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit);
 
     // so we can removeGesture when unloading plugin so a crash doesn't happen

@@ -20,7 +20,7 @@ PKG_LIBS  := $(shell pkg-config --libs   librsvg-2.0 libdrm hyprland pangocairo 
 INCLUDE_FLAGS := -I./include
 
 # --- Common compiler flags ---
-COMMON_FLAGS := -std=c++2b -fPIC --no-gnu-unique -fno-gnu-unique -Wno-unknown-argument $(INCLUDE_FLAGS) $(PKG_FLAGS)
+COMMON_FLAGS := -std=c++2b -fPIC --no-gnu-unique -fno-gnu-unique -Wno-unknown-argument $(INCLUDE_FLAGS) $(PKG_FLAGS) 
 
 # --- Build type flags ---
 DEBUG_FLAGS := -g -O0 $(MORE_DEBUG_FLAGS)

@@ -559,5 +559,7 @@ bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::s
 
 void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit, std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end);
 
+void gestures_reset();
+
 #endif // hypriso_h_INCLUDED
 

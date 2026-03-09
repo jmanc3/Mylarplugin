@@ -1169,6 +1169,24 @@ static void on_config_reload() {
     // only scale if factor > 1
 
     // alt tab gesture
+    gestures_reset();
+
+    static float over_y = 0;
+    make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
+        over_y = 0;
+        over_y += s.y;
+        if (over_y < 0 && !overview::is_showing()) {
+            overview::open(hypriso->monitor_from_cursor());
+        }
+    }, [](Bounds s) {
+        over_y += s.y;
+        if (over_y < 0 && !overview::is_showing()) {
+            overview::open(hypriso->monitor_from_cursor());
+        }
+    }, []() {
+        if (over_y > 0)
+            overview::close(false);
+    });
     
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset_x = 0;
