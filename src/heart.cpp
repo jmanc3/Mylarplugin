@@ -1455,6 +1455,33 @@ void do_snap(SnapPosition pos) {
 } 
 
 void add_hyprctl_dispatchers() {
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:overview_open_or_show_desktop", [](std::string in) {
+        if (!overview::is_showing())
+            if (hypriso->whitelist_on) {
+                hypriso->whitelist_on = false;
+                damage_all();
+                return true;
+            }
+            
+        if (!overview::is_showing())
+            overview::open(hypriso->monitor_from_cursor()); 
+        return true;
+    });
+    hypriso->add_hyprctl_dispatcher("plugin:mylar:overview_close_or_hide_desktop", [](std::string in) {
+        if (overview::is_showing()) {
+            overview::close(); 
+            return true;
+        }
+        
+        if (!hypriso->whitelist_on) {
+            hypriso->whitelist_on = true;
+            damage_all();
+            return true;
+        }
+
+        return true;
+    });
+
     hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_start", [](std::string in) {
         dock::start();
         return true;

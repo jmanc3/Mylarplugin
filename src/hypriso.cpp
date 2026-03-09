@@ -2299,6 +2299,11 @@ input:follow_mouse = 2
 
 #gesture = 3, horizontal, workspace
 
+gesture = 3, up, dispatcher, plugin:mylar:overview_open_or_show_desktop 
+gesture = 3, down, dispatcher, plugin:mylar:overview_close_or_hide_desktop 
+
+
+
 cursor:no_warps = true
 
 ecosystem:no_update_news = true
