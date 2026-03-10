@@ -1192,6 +1192,7 @@ static void on_config_reload() {
             }
         }
     }, []() {
+        opened = false;
         //overview::overwrite_openess(-1.0);
         if (over_y > 0)
             overview::close();
