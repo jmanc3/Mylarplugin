@@ -110,9 +110,8 @@ static bool on_mouse_move(int id, float x, float y) {
     {
         auto m = actual_root;
         auto cid = *datum<int>(m, "cid");
-        auto bounds = bounds_monitor(cid);
         auto [rid, s, stage, active_id] = from_root(m);
-        Event event(x - bounds.x, y - bounds.y);
+        Event event(x, y);
         //notify(fz("{} {}                       ", event.x, event.y));
         
         move_event(m, event);
@@ -224,9 +223,8 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
     {
         auto m = actual_root; 
         auto cid = *datum<int>(m, "cid");
-        auto bounds = bounds_monitor(cid);
         auto [rid, s, stage, active_id] = from_root(m);
-        Event event(x - bounds.x, y - bounds.y, button, state);
+        Event event(x, y, button, state);
         mouse_event(m, event);
     }
 
@@ -259,9 +257,6 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
         auto cid = *datum<int>(m, "cid");
         auto bounds = bounds_monitor(cid);
         auto [rid, s, stage, active_id] = from_root(m);
-        event.x -= bounds.x;
-        event.y -= bounds.y;
-        //Event event(x - bounds.x, y - bounds.y, button, state);
         mouse_event(m, event);
     }
 
@@ -1314,11 +1309,13 @@ static void create_actual_root() {
         if (stage == (int)STAGE::RENDER_POST_WALLPAPER && dragging && c->state.mouse_button_pressed == BTN_LEFT) {
             auto b = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
 
+            // renderfix euivalent
             auto mb = bounds_monitor(rid);
             b.x -= mb.x;
             b.y -= mb.y;
             b.scale(s);
             b.round();
+            
             auto col = color_sel_color();
             float rounding = 9.0f;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .18}, std::round(rounding * s), 2.0, b);
@@ -1970,14 +1967,15 @@ void heart::layout_containers() {
             
             for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                 auto child = actual_root->children[i];
-                auto cid = *datum<int>(child, "cid");
-                if (child->custom_type == (int) TYPE::CLIENT && cid == id) {
-                    c->real_bounds = child->real_bounds;
-                    //actual_root->children.insert(actual_root->children.begin() + i + 1, c);
-                    actual_root->children.insert(actual_root->children.begin() + i, c);
-                    *datum<bool>(c, "touched") = true;
-                    if (c->pre_layout) {
-                        c->pre_layout(actual_root, c, actual_root->real_bounds);
+                if (child->custom_type == (int) TYPE::CLIENT) {
+                    auto cid = *datum<int>(child, "cid");
+                    if (cid == id) {
+                        c->real_bounds = child->real_bounds;
+                        actual_root->children.insert(actual_root->children.begin() + i, c);
+                        *datum<bool>(c, "touched") = true;
+                        if (c->pre_layout) {
+                            c->pre_layout(actual_root, c, actual_root->real_bounds);
+                        }
                     }
                 }
             }
