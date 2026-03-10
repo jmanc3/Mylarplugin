@@ -481,7 +481,8 @@ void fill_root(Container *root, Container *alt_tab_parent) {
     alt_tab_parent->when_paint = [](Container *actual_root, Container *c) {
         if (c->children.empty())
             return;
-        if (get_current_time_in_ms() - show_time < show_delay) {
+        auto current = get_current_time_in_ms();
+        if (current - show_time < show_delay) {
             request_damage(actual_root, c);
             return;
         }
@@ -496,7 +497,10 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         c->automatically_paint_children = true;
         renderfix
         hypriso->damage_entire(rid);
-        rect(bounds_monitor(rid).scale(s), {0, 0, 0, .3});
+        float bgalpha = (current - show_time) / 100.0f;
+        if (bgalpha > 1.0)
+            bgalpha = 1.0f;
+        rect(bounds_monitor(rid).scale(s), {0, 0, 0, .4f * bgalpha});
 
         bool any_subpart_damaged = false;
         auto shown_yet = datum<bool>(c, "shown_yet");
