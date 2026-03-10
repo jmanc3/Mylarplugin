@@ -1173,19 +1173,22 @@ static void on_config_reload() {
 
     static float over_y = 0;
     static float total_over = 170.0f;
+    static bool opened = false;
     make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
         over_y = 0;
         over_y += s.y;
-        if (over_y < 0 && !overview::is_showing()) {
+        if (over_y < 0 && !overview::is_showing() && !opened) {
             //overview::overwrite_openess((-over_y) / total_over);
             overview::open(hypriso->monitor_from_cursor());
+            opened = true;
         }
     }, [](Bounds s) {
         over_y += s.y;
         if (over_y < 0) {
             //overview::overwrite_openess((-over_y) / total_over);
-            if (!overview::is_showing()) {
+            if (!overview::is_showing() && !opened) {
                 overview::open(hypriso->monitor_from_cursor());
+                opened = true;
             }
         }
     }, []() {
