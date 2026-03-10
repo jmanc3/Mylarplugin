@@ -1232,11 +1232,13 @@ static void on_config_reload() {
             alt_tab::move_x(-1);
         }
         if (offset_y > offset_click) {
-            alt_tab::move_y(1);
+            alt_tab::move_y(1, (offset_x / offset_click) * 250);
+            offset_x = 0;
             offset_y = 0;
         } else if (offset_y < -offset_click) {
             offset_y = 0;
-            alt_tab::move_y(-1);
+            offset_x = 0;
+            alt_tab::move_y(-1, (offset_x / offset_click) * 250);
         }
         
         //alt_tab::visual_offset(offset / offset_click);

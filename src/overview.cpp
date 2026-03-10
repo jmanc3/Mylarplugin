@@ -1063,7 +1063,7 @@ static void fake_paint_actual() {
     int monitor = *datum<int>(over, "monitor");
     long creation_time = creation_time_global;
     
-    paint_over_wallpaper_actual(actual_root, over, monitor, creation_time_global);
+    //paint_over_wallpaper_actual(actual_root, over, monitor, creation_time_global);
 }
 
 void overview::fake_paint(int id) {

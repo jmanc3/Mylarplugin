@@ -14,7 +14,7 @@ namespace alt_tab {
     void move(int dir);
     
     void move_x(int dir);
-    void move_y(int dir);
+    void move_y(int dir, float off_x);
 
     bool at_start_row();
     bool at_end_row();

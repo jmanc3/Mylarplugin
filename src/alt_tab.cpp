@@ -687,7 +687,7 @@ void alt_tab::close(bool focus) {
     }
 }
 
-void alt_tab::move_y(int dir) {
+void alt_tab::move_y(int dir, float off_x) {
     std::vector<std::vector<Container *>> lines;
 
     int active_y = 0;
@@ -735,7 +735,7 @@ void alt_tab::move_y(int dir) {
     auto after_line = lines[active_y];
     int closest_amount = 1000000;
     Container *other = target;
-    auto middle = target->real_bounds.x + target->real_bounds.w * .5;
+    auto middle = target->real_bounds.x + target->real_bounds.w * .5 + off_x;
     for (auto ch : after_line) {
         auto other_middle = ch->real_bounds.x + ch->real_bounds.w * .5;
         auto diff = (int) std::abs(other_middle - middle);
