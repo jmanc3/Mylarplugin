@@ -102,7 +102,7 @@ void drag_switcher_actual_open() {
                 auto root = get_rendering_root();
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-                if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
+                if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
                     return;
 
                 float active_amount = 0.0;
@@ -235,7 +235,7 @@ void drag_switcher_actual_open() {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
+        if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         auto openess = *datum<float>(c, "openess");
         auto peaking_amount = *datum<float>(c, "peaking_amount");
@@ -291,7 +291,7 @@ void drag_switcher_actual_open() {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (rid != monitor || stage != (int) STAGE::RENDER_LAST_MOMENT)
+        if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         auto openess = *datum<float>(c, "openess");
         auto peaking_amount = *datum<float>(c, "peaking_amount");

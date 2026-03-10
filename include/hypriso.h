@@ -91,6 +91,8 @@ enum struct STAGE : uint8_t {
     RENDER_POST_MIRROR,    /* After rendering a mirror */
     RENDER_PRE_WINDOW,     /* Before rendering a window (any pass) Note some windows (e.g. tiled) may have 2 passes (main & popup) */
     RENDER_POST_WINDOW,    /* After rendering a window (any pass) */
+    RENDER_PRE_CURSOR,
+    RENDER_POST_CURSOR
 };
 
 enum class SnapPosition {

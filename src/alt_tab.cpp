@@ -92,7 +92,7 @@ static void paint_tab_option(Container *actual_root, Container *c) {
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
 
-    if (stage != (int) STAGE::RENDER_LAST_MOMENT)
+    if (stage != (int) STAGE::RENDER_PRE_CURSOR)
         return;
     renderfix
     if (*datum<bool>(c, "dragging")) {
@@ -489,7 +489,7 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         if (!root) return;
 
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (stage != (int) STAGE::RENDER_LAST_MOMENT)
+        if (stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         if (rid != *datum<int>(c, "creation_monitor"))
             return;
@@ -527,7 +527,7 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         if (!root) return;
 
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (stage != (int) STAGE::RENDER_LAST_MOMENT)
+        if (stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         if (rid != *datum<int>(c, "creation_monitor"))
             return;

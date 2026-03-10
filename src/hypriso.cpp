@@ -13,6 +13,9 @@
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
+#include <hyprland/src/debug/HyprDebugOverlay.hpp>
+#include <hyprland/src/debug/HyprNotificationOverlay.hpp>
+#include <hyprland/src/hyprerror/HyprError.hpp>
 
 #define private public
 #include <hyprland/src/render/OpenGL.hpp>
@@ -41,6 +44,7 @@
 #include <glib-object.h>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/managers/animation/AnimationManager.hpp>
 #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
 
 #include <unordered_map>
@@ -1242,6 +1246,16 @@ static void configHandleGradientDestroy(void** data) {
         delete sc<CGradientValueData*>(*data);
 }
 
+void ourRenderMonitor(PHLMONITOR pMonitor, bool commit);
+
+inline CFunctionHook* g_pRenderMonitorHook = nullptr;
+typedef void (*origRenderMonitorFunc)(CHyprRenderer *, PHLMONITOR pMonitor, bool commit);
+void hook_RenderMonitor(void* thisptr, PHLMONITOR pMonitor, bool commit) {
+    ourRenderMonitor(pMonitor, commit);
+    //(*(origRenderMonitorFunc)g_pRenderMonitorHook->m_original)((CHyprRenderer *)thisptr, pMonitor, commit);
+}
+
+
 inline CFunctionHook* g_pRenderWindowHook = nullptr;
 
 typedef void (*origRenderWindowFunc)(CHyprRenderer *, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
@@ -1356,7 +1370,13 @@ void hook_render_functions() {
     }
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderMonitor");
-        pRenderMonitor = METHODS[0].address;
+        for (auto m : METHODS) {
+            if (m.demangled.find("CHyprRenderer") != std::string::npos) {
+                g_pRenderMonitorHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderMonitor);
+                g_pRenderMonitorHook->hook();
+                pRenderMonitor = m.address;
+            }
+        }
     }
     
 }
@@ -7866,3 +7886,263 @@ Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
 void add_mylar_gesture() {
     HyprlandAPI::addConfigKeyword(globals->api, "mylar-gesture", ::mylarGestureKeyword, {});
 }
+
+void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
+    auto p = g_pHyprRenderer.get();
+    static std::chrono::high_resolution_clock::time_point renderStart        = std::chrono::high_resolution_clock::now();
+    static std::chrono::high_resolution_clock::time_point renderStartOverlay = std::chrono::high_resolution_clock::now();
+    static std::chrono::high_resolution_clock::time_point endRenderOverlay   = std::chrono::high_resolution_clock::now();
+
+    static auto                                           PDEBUGOVERLAY       = CConfigValue<Hyprlang::INT>("debug:overlay");
+    static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
+    static auto                                           PDAMAGEBLINK        = CConfigValue<Hyprlang::INT>("debug:damage_blink");
+    static auto                                           PSOLDAMAGE          = CConfigValue<Hyprlang::INT>("debug:render_solitary_wo_damage");
+    static auto                                           PVFR                = CConfigValue<Hyprlang::INT>("misc:vfr");
+
+    static int                                            damageBlinkCleanup = 0; // because double-buffered
+
+    const float                                           ZOOMFACTOR = pMonitor->m_cursorZoom->value();
+
+    if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
+        Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
+        return;
+    }
+
+    if (!*PDAMAGEBLINK)
+        damageBlinkCleanup = 0;
+
+    if (*PDEBUGOVERLAY == 1) {
+        renderStart = std::chrono::high_resolution_clock::now();
+        g_pDebugOverlay->frameData(pMonitor);
+    }
+
+    if (!g_pCompositor->m_sessionActive)
+        return;
+
+    if (g_pAnimationManager)
+        g_pAnimationManager->frameTick();
+
+    if (pMonitor->m_id == p->m_mostHzMonitor->m_id ||
+        *PVFR == 1) { // unfortunately with VFR we don't have the guarantee mostHz is going to be updated all the time, so we have to ignore that
+
+        g_pConfigManager->dispatchExecOnce(); // We exec-once when at least one monitor starts refreshing, meaning stuff has init'd
+
+        if (g_pConfigManager->m_wantsMonitorReload)
+            g_pConfigManager->performMonitorReload();
+    }
+
+    if (pMonitor->m_scheduledRecalc) {
+        pMonitor->m_scheduledRecalc = false;
+        if (pMonitor->m_activeWorkspace) // might be missing (mirror)
+            pMonitor->m_activeWorkspace->m_space->recalculate();
+    }
+
+    if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
+        return;
+
+    // tearing and DS first
+    bool shouldTear = pMonitor->updateTearing();
+
+    if (pMonitor->attemptDirectScanout()) {
+        pMonitor->m_directScanoutIsActive = true;
+        return;
+    } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive) {
+        Log::logger->log(Log::DEBUG, "Left a direct scanout.");
+        pMonitor->m_lastScanout.reset();
+        pMonitor->m_directScanoutIsActive = false;
+
+        // reset DRM format, but only if needed since it might modeset
+        if (pMonitor->m_output->state->state().drmFormat != pMonitor->m_prevDrmFormat)
+            pMonitor->m_output->state->setFormat(pMonitor->m_prevDrmFormat);
+
+        pMonitor->m_drmFormat = pMonitor->m_prevDrmFormat;
+    }
+
+    Event::bus()->m_events.render.pre.emit(pMonitor);
+
+    const auto NOW = Time::steadyNow();
+
+    // check the damage
+    bool hasChanged = pMonitor->m_output->needsFrame || pMonitor->m_damage.hasChanged();
+
+    if (!hasChanged && *PDAMAGETRACKINGMODE != DAMAGE_TRACKING_NONE && pMonitor->m_forceFullFrames == 0 && damageBlinkCleanup == 0)
+        return;
+
+    if (*PDAMAGETRACKINGMODE == -1) {
+        Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
+        return;
+    }
+
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
+
+    pMonitor->m_renderingActive = true;
+
+    // we need to cleanup fading out when rendering the appropriate context
+    g_pCompositor->cleanupFadingOut(pMonitor->m_id);
+
+    // TODO: this is getting called with extents being 0,0,0,0 should it be?
+    // potentially can save on resources.
+
+    TRACY_GPU_ZONE("Render");
+
+    static bool zoomLock = false;
+    if (zoomLock && ZOOMFACTOR == 1.f) {
+        g_pPointerManager->unlockSoftwareAll();
+        zoomLock = false;
+    } else if (!zoomLock && ZOOMFACTOR != 1.f) {
+        g_pPointerManager->lockSoftwareAll();
+        zoomLock = true;
+    }
+
+    if (pMonitor == g_pCompositor->getMonitorFromCursor())
+        g_pHyprOpenGL->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
+    else
+        g_pHyprOpenGL->m_renderData.mouseZoomFactor = 1.f;
+
+    if (pMonitor->m_zoomAnimProgress->value() != 1) {
+        g_pHyprOpenGL->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
+        g_pHyprOpenGL->m_renderData.mouseZoomUseMouse  = false;
+        g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+    }
+
+    CRegion damage, finalDamage;
+    if (!p->beginRender(pMonitor, damage, RENDER_MODE_NORMAL)) {
+        Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
+        return;
+    }
+
+    // if we have no tracking or full tracking, invalidate the entire monitor
+    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
+        damage = {0, 0, sc<int>(pMonitor->m_transformedSize.x) * 10.0, sc<int>(pMonitor->m_transformedSize.y) * 10.0};
+
+    finalDamage = damage;
+
+    // update damage in renderdata as we modified it
+    g_pHyprOpenGL->setDamage(damage, finalDamage);
+
+    if (pMonitor->m_forceFullFrames > 0) {
+        pMonitor->m_forceFullFrames -= 1;
+        if (pMonitor->m_forceFullFrames > 10)
+            pMonitor->m_forceFullFrames = 0;
+    }
+
+    Event::bus()->m_events.render.stage.emit(RENDER_BEGIN);
+
+    bool renderCursor = true;
+
+    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+        p->renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, RENDER_PASS_MAIN /* solitary = no popups */);
+    else if (!finalDamage.empty()) {
+        if (pMonitor->isMirror()) {
+            g_pHyprOpenGL->blend(false);
+            g_pHyprOpenGL->renderMirrored();
+            g_pHyprOpenGL->blend(true);
+            Event::bus()->m_events.render.stage.emit(RENDER_POST_MIRROR);
+            renderCursor = false;
+        } else {
+            CBox renderBox = {0, 0, sc<double>(pMonitor->m_pixelSize.x), sc<double>(pMonitor->m_pixelSize.y)};
+            p->renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
+
+            p->renderLockscreen(pMonitor, NOW, renderBox);
+
+            if (pMonitor == Desktop::focusState()->monitor()) {
+                g_pHyprNotificationOverlay->draw(pMonitor);
+                g_pHyprError->draw();
+            }
+
+            // for drawing the debug overlay
+            if (pMonitor == g_pCompositor->m_monitors.front() && *PDEBUGOVERLAY == 1) {
+                renderStartOverlay = std::chrono::high_resolution_clock::now();
+                g_pDebugOverlay->draw();
+                endRenderOverlay = std::chrono::high_resolution_clock::now();
+            }
+
+            if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
+                CRectPassElement::SRectData data;
+                data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+                data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
+                p->m_renderPass.add(makeUnique<CRectPassElement>(data));
+                damageBlinkCleanup = 1;
+            } else if (*PDAMAGEBLINK) {
+                damageBlinkCleanup++;
+                if (damageBlinkCleanup > 3)
+                    damageBlinkCleanup = 0;
+            }
+        }
+    } else if (!pMonitor->isMirror()) {
+        p->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
+        if (pMonitor->m_activeSpecialWorkspace)
+            p->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
+    }
+
+    renderCursor = renderCursor && p->shouldRenderCursor();
+    
+    Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
+
+    if (renderCursor) {
+        TRACY_GPU_ZONE("RenderCursor");
+        g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, g_pHyprOpenGL->m_renderData.damage);
+    }
+
+    Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
+
+    if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
+        // render the DPMS black if we are animating
+        CRectPassElement::SRectData data;
+        data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+        data.color = Colors::BLACK.modifyA(pMonitor->m_dpmsBlackOpacity->value());
+        p->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    }
+
+    Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
+
+    p->endRender();
+
+    TRACY_GPU_COLLECT;
+
+    CRegion    frameDamage{g_pHyprOpenGL->m_renderData.damage};
+
+    const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
+    frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
+
+    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR)
+        frameDamage.add(0, 0, sc<int>(pMonitor->m_transformedSize.x), sc<int>(pMonitor->m_transformedSize.y));
+
+    if (*PDAMAGEBLINK)
+        frameDamage.add(damage);
+
+    if (!pMonitor->m_mirrors.empty())
+        p->damageMirrorsWith(pMonitor, frameDamage);
+
+    pMonitor->m_renderingActive = false;
+
+    Event::bus()->m_events.render.stage.emit(RENDER_POST);
+
+    pMonitor->m_output->state->addDamage(frameDamage);
+    pMonitor->m_output->state->setPresentationMode(shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE :
+                                                                Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC);
+
+    if (commit)
+        p->commitPendingAndDoExplicitSync(pMonitor);
+
+    if (shouldTear)
+        pMonitor->m_tearingState.busy = true;
+
+    if (*PDAMAGEBLINK || *PVFR == 0 || pMonitor->m_pendingFrame)
+        g_pCompositor->scheduleFrameForMonitor(pMonitor, Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
+
+    pMonitor->m_pendingFrame = false;
+
+    if (*PDEBUGOVERLAY == 1) {
+        const float durationUs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - renderStart).count() / 1000.f;
+        g_pDebugOverlay->renderData(pMonitor, durationUs);
+
+        if (pMonitor == g_pCompositor->m_monitors.front()) {
+            const float noOverlayUs = durationUs - std::chrono::duration_cast<std::chrono::nanoseconds>(endRenderOverlay - renderStartOverlay).count() / 1000.f;
+            g_pDebugOverlay->renderDataNoOverlay(pMonitor, noOverlayUs);
+        } else
+            g_pDebugOverlay->renderDataNoOverlay(pMonitor, durationUs);
+    }
+}
+
+

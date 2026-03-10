@@ -994,7 +994,11 @@ static void on_render(int id, int stage) {
             paint_outline(actual_root, actual_root);
         }
     }
-    
+    if (stage == (int) STAGE::RENDER_POST_CURSOR) {
+    }
+    if (stage == (int) STAGE::RENDER_PRE_CURSOR) {
+    }
+
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
         //rect({10, 10, 300, 300}, {0, 0, 0, 1}, 0, 15.0f, 2.0, true);
         auto snap_edge_animation = *datum<float>(actual_root, "snap_edge_animation");
