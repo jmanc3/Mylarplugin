@@ -17,6 +17,8 @@ static float shrink_factor = 1.0;
 static bool should_paint_overview = true;
 static int fake_paint_space = -1;
 
+static float overopen = -1;
+
 static void fake_paint_actual();
 
 static std::vector<float> snapback = { 0, 0.0050000000000000044, 0.010000000000000009, 0.017000000000000015, 0.02400000000000002, 0.03300000000000003, 0.04300000000000004, 0.05400000000000005, 0.06699999999999995, 0.08099999999999996, 0.09599999999999997, 0.11399999999999999, 0.134, 0.15600000000000003, 0.18200000000000005, 0.20999999999999996, 0.243, 0.281, 0.32499999999999996, 0.387, 0.43999999999999995, 0.486, 0.527, 0.563, 0.596, 0.626, 0.654, 0.679, 0.7030000000000001, 0.725, 0.745, 0.764, 0.782, 0.798, 0.8140000000000001, 0.8280000000000001, 0.842, 0.855, 0.867, 0.878, 0.888, 0.898, 0.908, 0.917, 0.925, 0.933, 0.94, 0.947, 0.953, 0.959, 0.964, 0.969, 0.974, 0.978, 0.982, 0.986, 0.989, 0.993, 0.995, 0.998, 1 };
@@ -135,6 +137,8 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     renderfix
     auto overview_data = (OverviewData *) c->user_data;
     auto scalar = overview_data->scalar;
+    if (overopen != -1)
+        scalar = overopen;
     //scalar = pull(slidetopos2, scalar);
     
     auto m = bounds_monitor(monitor);
@@ -158,6 +162,9 @@ void paint_over_wallpaper_actual(Container *actual_root, Container *c, int monit
 
     auto overview_data = (OverviewData *) c->user_data;
     auto scalar = overview_data->scalar;
+    if (overopen != -1)
+        scalar = overopen;
+    
     //scalar = pull(slidetopos2, scalar);
    
     float padamount = .17;
@@ -196,6 +203,9 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
 
     auto overview_data = (OverviewData *) c->parent->user_data;
     auto scalar = overview_data->scalar;
+    if (overopen != -1)
+        scalar = overopen;
+    
     auto fade_in_a = *datum<float>(c, "alpha_fade_in");
     //scalar = pull(slidetopos2, scalar);
     
@@ -442,7 +452,10 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     });
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     // Windows added after overview open, put at front so when overview closes, they wont be on top
-    if (overview_data->scalar >= 1.0) {
+    auto scalar = overview_data->scalar;
+    if (overopen != -1)
+        scalar = overopen;
+    if (scalar >= 1.0) {
         for (int i = 0; parent->children.size(); i++) {
             auto ch = parent->children[i];
             if (ch == c) {
@@ -463,7 +476,9 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     *datum<float>(c, "snap_back_current_x") = 0.0;
     *datum<float>(c, "snap_back_current_y") = 0.0;
     *datum<Bounds>(c, "previous_bounds") = Bounds(-1, -1, -1, -1);
-    if (overview_data->scalar == 1.0) {
+    if (overopen != -1)
+        scalar = overopen;
+    if (scalar == 1.0) {
         *datum<float>(c, "alpha_fade_in") = 0.0;
         animate(datum<float>(c, "alpha_fade_in"), 1.0, overview_anim_time, c->lifetime);
     } else {
@@ -511,7 +526,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     };
     c->when_drag_start = paint {
         *datum<float>(c, "snap_back_scalar") = 1.0;
-        *datum<bool>(c, "started_on_close") = c->children[0]->state.mouse_hovering;
+        *datum<bool>(c, "started_on_close") = c->children[0]->state.mouse_hovering || c->children[1]->state.mouse_hovering;
         
         auto overview_data = (OverviewData *) c->parent->user_data;
         consume_event(root, c);
@@ -521,6 +536,8 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         consume_event(root, c);
     };
     c->when_drag_end = [monitor](Container *root, Container *c) {
+        drag_workspace_switcher::force_hold_open(false);
+        
         //return;
         auto cid = *datum<int>(c, "cid");
         //for (auto c : actual_root->children) {
@@ -677,6 +694,8 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
 
         auto overview_data = (OverviewData *) c->user_data;
         auto scalar = overview_data->scalar;
+        if (overopen != -1)
+            scalar = overopen; 
 
         auto was_hovering = datum<bool>(ch, "was_hovering");
         auto time_since_hovering_change = datum<long>(ch, "time_since_hovering_change");
@@ -788,6 +807,8 @@ void actual_open(int monitor) {
         auto actual_h = 130 * s;
         //auto scalar = pull(slidetopos2, overview_data->scalar);
         auto scalar = overview_data->scalar;
+        if (overopen != -1)
+            scalar = overopen; 
         Bounds b = {bounds.x + bounds.w * .5 * s - actual_w * .5,
               10 * s * scalar - actual_h + actual_h * scalar,
               actual_w,
@@ -898,7 +919,10 @@ void overview::open(int monitor) {
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
                 auto overview_data = (OverviewData *) c->user_data;
-                if (overview_data->scalar != 1.0) {
+                auto scalar = overview_data->scalar;
+                if (overopen != -1)
+                    scalar = overopen;
+                if (scalar != 1.0 && overopen != -1) {
                     animate(&overview_data->scalar, 1.0, overview_anim_time, c->lifetime, nullptr, [](float scalar) {
                         return pull(slidetopos2, scalar);
                     }); 
@@ -1044,5 +1068,13 @@ static void fake_paint_actual() {
 
 void overview::fake_paint(int id) {
     fake_paint_space = id;
+}
+
+void overview::overwrite_openess(float a) {
+    overopen = a;
+    if (overopen > 1)
+        overopen = 1;
+    if (overopen < 0)
+        overopen = -1;
 }
 

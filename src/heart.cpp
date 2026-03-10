@@ -1172,20 +1172,26 @@ static void on_config_reload() {
     gestures_reset();
 
     static float over_y = 0;
+    static float total_over = 170.0f;
     make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
         over_y = 0;
         over_y += s.y;
         if (over_y < 0 && !overview::is_showing()) {
+            //overview::overwrite_openess((-over_y) / total_over);
             overview::open(hypriso->monitor_from_cursor());
         }
     }, [](Bounds s) {
         over_y += s.y;
-        if (over_y < 0 && !overview::is_showing()) {
-            overview::open(hypriso->monitor_from_cursor());
+        if (over_y < 0) {
+            //overview::overwrite_openess((-over_y) / total_over);
+            if (!overview::is_showing()) {
+                overview::open(hypriso->monitor_from_cursor());
+            }
         }
     }, []() {
+        //overview::overwrite_openess(-1.0);
         if (over_y > 0)
-            overview::close(false);
+            overview::close();
     });
     
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 

@@ -1106,8 +1106,8 @@ void actual_start() {
     RawWindowSettings settings;
     settings.pos.w = 1000;
     settings.pos.h = 760;
-    settings.pos.min_w = 600;
-    settings.pos.min_h = 500;
+    settings.pos.min_w = 900;
+    settings.pos.min_h = 700;
     settings.name = "Settings";
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;
