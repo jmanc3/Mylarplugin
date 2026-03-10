@@ -19,7 +19,7 @@ static float visual_offset_amt = 0;
 
 static int wrap_index(int index, size_t size) {
     if (size == 0)
-        return 0;
+       return 0;
     int mod = index % static_cast<int>(size);
     return mod < 0 ? mod + static_cast<int>(size) : mod;
 }
@@ -495,6 +495,8 @@ void fill_root(Container *root, Container *alt_tab_parent) {
             return;
         c->automatically_paint_children = true;
         renderfix
+        hypriso->damage_entire(rid);
+        rect(bounds_monitor(rid).scale(s), {0, 0, 0, .3});
 
         bool any_subpart_damaged = false;
         auto shown_yet = datum<bool>(c, "shown_yet");
