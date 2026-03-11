@@ -46,6 +46,8 @@ static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 static RGBA accent = RGBA(.0, .52, .9, 1);
 
+static std::vector<std::thread> dock_threads;
+
 static void write_saved_pins_to_file(Container *icons);
 
 class Window {
@@ -338,9 +340,8 @@ get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeig
 }
 
 static void cleanup_cached_fonts() {
-    for (auto font: cached_fonts) {
+    for (auto font: cached_fonts)
         delete font;
-    }
     cached_fonts.clear();
     cached_fonts.shrink_to_fit();
 }
@@ -2184,6 +2185,7 @@ void dock::start(std::string monitor_name) {
     //return;
     std::thread t(dock_start, monitor_name);
     t.detach();
+    dock_threads.push_back(std::move(t));
 }
 
 void dock::stop(std::string monitor_name) {
@@ -2195,7 +2197,14 @@ void dock::stop(std::string monitor_name) {
             windowing::close_app(d->app);
         }
         docks.clear();
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        for (int i = 0; i < dock_threads.size(); i++) {
+            if (dock_threads[i].joinable()) {
+                dock_threads[i].join();
+            }
+        }
+
+        dock_threads.clear();
         cleanup_cached_fonts();   
     } else {
         for (auto d : docks) {

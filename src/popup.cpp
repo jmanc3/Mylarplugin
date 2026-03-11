@@ -58,10 +58,11 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
     pud->mid = mid;
     pud->cid = cid;
     p->user_data = pud;
-    p->real_bounds = Bounds(x, y, p->wanted_bounds.w, p->wanted_bounds.h);
+    auto mb = bounds_monitor(mid);
+    p->real_bounds = Bounds(x + mb.x, y + mb.y, p->wanted_bounds.w, p->wanted_bounds.h);
     
     { // keep on screen
-        auto mb = bounds_reserved_monitor(hypriso->monitor_from_cursor());
+        auto mb = bounds_reserved_monitor(mid);
         if (p->real_bounds.x + p->real_bounds.w > mb.x + mb.w) {
             int overflow_x = (p->real_bounds.x + p->real_bounds.w) - (mb.x + mb.w);
             p->real_bounds.x -= overflow_x;

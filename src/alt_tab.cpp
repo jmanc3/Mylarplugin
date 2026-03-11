@@ -384,16 +384,12 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
 
 
 void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bounds &b) {
-    Container *root = nullptr;
-    auto creation_monitor = *datum<int>(c, "creation_monitor");
-    for (auto m : actual_monitors) {
-        if (*datum<int>(m, "cid") == creation_monitor) {
-            root = m;
-            break;
-        }
-    }
+    auto root = get_rendering_root();
     if (!root) return;
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+    auto creation_monitor = *datum<int>(c, "creation_monitor");
+    if (rid != creation_monitor)
+        return;
 
     Bounds thumb_bounds;
     {  // Populate 
@@ -439,18 +435,13 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
         thumb_bounds = position_tab_options(c, root->real_bounds.w * .6); 
     }
 
-    //c->wanted_bounds = Bounds(center_x(root, 600), center_y(root, 450), 600, 450);
     c->wanted_bounds = Bounds(thumb_bounds.x, thumb_bounds.y, thumb_bounds.w, thumb_bounds.h);
     c->real_bounds = c->wanted_bounds;
     c->real_bounds.x += 20;
-    //modify_all(c, center_x(root, c->real_bounds.w), center_y(root, c->real_bounds.h));
     c->real_bounds.grow(20);
-
-    // Don't draw if tab option fully outside
-    //for (auto child : c->children) {
-        //child->exists = overlaps(c->real_bounds, child->real_bounds);
-    //}   
-    //::layout(actual_root, c, c->real_bounds); 
+    
+    auto mb = bounds_monitor(rid);
+    modify_all(c, mb.x, mb.y);
 }
 
 void fill_root(Container *root, Container *alt_tab_parent) {
@@ -500,7 +491,10 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         float bgalpha = (current - show_time) / 100.0f;
         if (bgalpha > 1.0)
             bgalpha = 1.0f;
-        rect(bounds_monitor(rid).scale(s), {0, 0, 0, .4f * bgalpha});
+        auto bgb = bounds_monitor(rid).scale(s).round();
+        bgb.x = 0;
+        bgb.y = 0;
+        rect(bgb, {0, 0, 0, .4f * bgalpha});
 
         bool any_subpart_damaged = false;
         auto shown_yet = datum<bool>(c, "shown_yet");
@@ -508,74 +502,13 @@ void fill_root(Container *root, Container *alt_tab_parent) {
             request_damage(root, c); // request full redamage
         }
         *shown_yet = true;
-        if (c->state.mouse_pressing) {
-            //rect(c->real_bounds, {1, 1, 1, 1});
-        } else if (c->state.mouse_hovering) {
-            //rect(c->real_bounds, {1, 0, 1, 1});
-        }
         auto b = c->real_bounds; 
         b.grow(10 * s);
         rect(b, {1, 1, 1, .4}, 0, 8 * s, 2.0, true);
     };
+
     alt_tab_parent->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;
-
-        if (!reticle)
-            return;
-        
-        if (get_current_time_in_ms() - show_time < show_delay) {
-            request_damage(actual_root, c);
-            return;
-        }
-        auto root = get_rendering_root();
-        if (!root) return;
-
-        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (stage != (int) STAGE::RENDER_PRE_CURSOR)
-            return;
-        if (rid != *datum<int>(c, "creation_monitor"))
-            return;
-
-        int real_active_index = wrap_index(active_index, c->children.size());
-        int before_index = wrap_index(active_index - 1, c->children.size());
-        int after_index = wrap_index(active_index + 1, c->children.size());
-
-
-        Container *before = nullptr;
-        Container *current = nullptr;
-        Container *after = nullptr;
-        for (int i = 0; i < c->children.size(); i++) {
-            if (i == real_active_index) 
-                current = c->children[i];
-             if (i == before_index) 
-                before = c->children[i];
-             if (i == after_index) 
-                after = c->children[i];
-        }
-        if (current && after && before) {
-            auto start = current->real_bounds;
-            Bounds end;
-            if (visual_offset_amt > 0) {
-                end = after->real_bounds;
-            } else {
-                end = before->real_bounds;
-            }
-            start.scale(s);
-            end.scale(s);
-            auto finalB = lerp(start, end, std::abs(visual_offset_amt));
-
-            Bounds center;
-            center.x = finalB.x + finalB.w * .5;
-            center.y = finalB.y + finalB.h * .5;
-            center.w = 4 * s;
-            center.h = 4 * s;
-            draw_colored_circ(center.x, center.y, center.w, {1, 1, 1, 1}, 1.0);
-            center.x -= center.w * .5 * s;
-            center.y -= center.h * .5 * s;
-            center.w *= s;
-            center.h *= s;
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .2}, center.w * .5, 2.0f, center);
-        }
     };
 }
 
@@ -646,9 +579,7 @@ void alt_tab::show() {
         auto alt_tab_parent = m->child(FILL_SPACE, FILL_SPACE);
         fill_root(m, alt_tab_parent);
     }
-    for (auto m : actual_monitors) {
-        hypriso->damage_entire(*datum<int>(m, "cid"));
-    }
+    damage_all();
 }
 
 void alt_tab::close(bool focus) {

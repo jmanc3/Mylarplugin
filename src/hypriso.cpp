@@ -7751,7 +7751,10 @@ void HyprIso::save_position_info(int id) {
     for (auto c : hyprwindows) {
         if (c->id == id) {
             auto target = c->w->layoutTarget();
-            target->space()->setTargetGeom(CBox(c->w->m_realPosition->goal(), c->w->m_realSize->goal()), target);
+            auto ccb = CBox(c->w->m_realPosition->goal(), c->w->m_realSize->goal());
+            //target->rememberFloatingSize({ccb.w, ccb.h});
+            //target->setPositionGlobal(CBox(ccb.x, ccb.y, ccb.w, ccb.h));
+            target->space()->setTargetGeom(ccb, target);
         }
     }
 }

@@ -1523,7 +1523,10 @@ void add_hyprctl_dispatchers() {
     });
 
     hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_start", [](std::string in) {
-        dock::start();
+        for (auto m : actual_monitors) {
+            auto mid = *datum<int>(m, "cid");
+            dock::start(hypriso->monitor_name(mid));
+        }
         return true;
     });
     hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_stop", [](std::string in) {
