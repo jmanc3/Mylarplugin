@@ -2247,6 +2247,7 @@ std::string get_launch_command(int cid) {
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
     std::string command = get_launch_command(cid);
+    std::string icon = hypriso->class_name(cid);
     std::string stack_rule = hypriso->class_name(cid);
     
     for (auto d : docks) {
@@ -2256,6 +2257,7 @@ void dock::add_window(int cid) {
                 auto pin = (Pin *) ch->user_data;
                 if (pin->stacking_rule == stack_rule) {
                     command = pin->command;
+                    icon = pin->icon;
                     break;
                 }
             }
@@ -2274,7 +2276,7 @@ void dock::add_window(int cid) {
         window->cid = cid;
         window->stack_rule = stack_rule;
         window->title = hypriso->title_name(cid);
-        window->window_icon = hypriso->class_name(cid);
+        window->window_icon = icon;
         window->command = command;
         
         if (hypriso->has_focus(cid))

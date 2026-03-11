@@ -893,6 +893,10 @@ static void on_monitor_open(int id) {
     heart::layout_containers();
     if (set->show_docks)
         dock::start(hypriso->monitor_name(id));
+
+    later(10, [](Timer *) {
+        damage_all();
+    });
 }
 
 static void on_monitor_closed(int id) {
