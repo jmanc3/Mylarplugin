@@ -9,6 +9,7 @@ namespace drag_workspace_switcher {
     void close_visually();
     
     void force_hold_open(bool state);
+    void set_overwrite_monitor(int rid);
 
     // does a click animation on the container uuid 
     void press(std::string uuid);

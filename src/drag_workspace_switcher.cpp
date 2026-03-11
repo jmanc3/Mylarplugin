@@ -20,6 +20,18 @@ static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000
 // {"anchors":[{"x":0,"y":1},{"x":0.30000000000000004,"y":0.675},{"x":1,"y":0}],"controls":[{"x":0.20596153063651845,"y":0.9462499830457899},{"x":0.4476281973031851,"y":0.06847220526801215}]}
 static std::vector<float> snapback = { 0, 0.0050000000000000044, 0.010000000000000009, 0.017000000000000015, 0.02400000000000002, 0.03300000000000003, 0.04300000000000004, 0.05400000000000005, 0.06699999999999995, 0.08099999999999996, 0.09599999999999997, 0.11399999999999999, 0.134, 0.15600000000000003, 0.18200000000000005, 0.20999999999999996, 0.243, 0.281, 0.32499999999999996, 0.387, 0.43999999999999995, 0.486, 0.527, 0.563, 0.596, 0.626, 0.654, 0.679, 0.7030000000000001, 0.725, 0.745, 0.764, 0.782, 0.798, 0.8140000000000001, 0.8280000000000001, 0.842, 0.855, 0.867, 0.878, 0.888, 0.898, 0.908, 0.917, 0.925, 0.933, 0.94, 0.947, 0.953, 0.959, 0.964, 0.969, 0.974, 0.978, 0.982, 0.986, 0.989, 0.993, 0.995, 0.998, 1 };
 
+static int over_monitor = -1;
+
+void drag_workspace_switcher::set_overwrite_monitor(int rid) {
+    over_monitor = rid;
+}
+
+int target_monitor() {
+    if (over_monitor != -1)
+        return over_monitor;
+    return hypriso->monitor_from_cursor();
+}
+
 void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     auto openess = *datum<float>(parent, "openess");
     auto b = parent->real_bounds;
@@ -50,7 +62,6 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
 
 void drag_switcher_actual_open() {
     hold_open = false;
-    auto monitor = hypriso->monitor_from_cursor();
     auto c = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
     *datum<float>(c, "openess") = 0.0;
     auto peaking_amount = datum<float>(c, "peaking_amount");
@@ -59,9 +70,10 @@ void drag_switcher_actual_open() {
         return pull(snapback, a);
     });
     c->custom_type = (int) TYPE::WORKSPACE_SWITCHER;
-    c->pre_layout = [monitor](Container *actual_root, Container *c, const Bounds &bounds) {
+    c->pre_layout = [](Container *actual_root, Container *c, const Bounds &bounds) {
         auto openess = *datum<float>(c, "openess");
         auto peaking_amount = *datum<float>(c, "peaking_amount");
+        auto monitor = target_monitor();
         
         auto b = bounds_monitor(monitor);
         auto new_h = 30;
@@ -197,14 +209,14 @@ void drag_switcher_actual_open() {
                     if (!spaces.empty())
                         next = spaces[spaces.size() - 1] + 1;
                     later_immediate([next](Timer *) {
-                        auto mon = hypriso->monitor_from_cursor();
+                        auto mon = target_monitor();
                         auto before = hypriso->get_active_workspace_id(mon);
 
                         hypriso->move_to_workspace(next, false);
                     });
                 } else {
                     later_immediate([space](Timer *) {
-                        auto mon = hypriso->monitor_from_cursor();
+                        auto mon = target_monitor();
                         auto before = hypriso->get_active_workspace_id(mon);
 
                         hypriso->move_to_workspace(hypriso->space_id_to_raw(space), false);
@@ -231,10 +243,11 @@ void drag_switcher_actual_open() {
 
         layout_spaces(actual_root, c, monitor);
     };
-    c->when_paint = [monitor](Container *actual_root, Container *c) {
+    c->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        auto monitor = target_monitor();
         if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         auto openess = *datum<float>(c, "openess");
@@ -287,10 +300,11 @@ void drag_switcher_actual_open() {
         }
     };
     c->receive_events_even_if_obstructed_by_one = true;
-    c->after_paint = [monitor](Container *actual_root, Container *c) {
+    c->after_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        auto monitor = target_monitor();
         if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         auto openess = *datum<float>(c, "openess");
@@ -381,7 +395,7 @@ void drag_workspace_switcher::open() {
     switcher_showing = true;
 
     later_immediate([](Timer *) {
-        auto mon = hypriso->monitor_from_cursor();
+        auto mon = target_monitor();
         auto ids = hypriso->get_workspace_ids(mon);
         for (auto id : ids)
             hypriso->screenshot_space(mon, id);
@@ -395,10 +409,11 @@ void drag_workspace_switcher::open() {
         drag_switcher_actual_open();
     });
 
-    auto monitor = hypriso->monitor_from_cursor();
+    auto monitor = target_monitor();
     auto fps = hypriso->fps(monitor);
     
-    later(1000.0f / fps, [monitor](Timer *t) {
+    later(1000.0f / fps, [](Timer *t) {
+        auto monitor = target_monitor();
         t->keep_running = true;
         bool found = false;
         for (int i = actual_root->children.size() - 1; i >= 0; i--) {
@@ -421,7 +436,8 @@ void drag_workspace_switcher::open() {
         }
         overview::fake_paint(-1);
     });
-    later(1000.0f / 30.0f, [monitor](Timer *t) {
+    later(1000.0f / 30.0f, [](Timer *t) {
+        auto monitor = target_monitor();
         t->keep_running = true;
         bool found = false;
         for (int i = actual_root->children.size() - 1; i >= 0; i--) {

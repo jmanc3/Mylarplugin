@@ -741,6 +741,7 @@ static void layout_options(Container *actual_root, Container *c, const Bounds &b
 
 void actual_open(int monitor) {
     hypriso->all_lose_focus();
+    drag_workspace_switcher::set_overwrite_monitor(monitor);
     
     hypriso->whitelist_on = true;
 
@@ -956,6 +957,7 @@ void fade_in_min_max(int cid) {
 }
 
 static void actual_overview_stop(bool focus) {
+    drag_workspace_switcher::set_overwrite_monitor(-1);
     running = false;
     hypriso->whitelist_on = false;
     auto m = actual_root;
