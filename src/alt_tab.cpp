@@ -219,6 +219,9 @@ static void paint_tab_option(Container *actual_root, Container *c) {
 
     if (real_active_index == index) {
         Bounds bo = c->real_bounds;
+        auto mb = bounds_monitor(rid);
+        bo.x -= mb.x;
+        bo.y -= mb.y;
         bo.scale(s);
         bo.grow(std::round(3 * s));
         bo.round();
