@@ -23,7 +23,7 @@ static RGBA right_color = RGBA(.941, .957, .976, 1);
 static RGBA option_color = RGBA(.87, .87, .87, 1);
 static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
 static RGBA slider_bg = option_widget_bg_color;
-static RGBA bool_border = option_widget_bg_color;
+static RGBA bool_border = RGBA(.70, .70, .70, 1);
 static RGBA accent = RGBA(.0, .52, .9, 1);
 
 static float optiontopbottompad = 15;

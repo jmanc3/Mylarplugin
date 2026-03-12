@@ -352,7 +352,7 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
         auto cid = *datum<int>(ch, "cid");
         auto size = hypriso->thumbnail_size(cid);
         Item item;
-        item.aspectRatio = size.w / (size.h + titlebar_h);
+        item.aspectRatio = size.w / (size.h + titlebar_h * s);
         items.push_back(item);
     }
 

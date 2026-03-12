@@ -1925,7 +1925,7 @@ void heart::layout_containers() {
 
     for (auto c : actual_root->children) {
         auto cid = *datum<int>(c, "cid");
-        set_exists(c, hypriso->is_mapped(cid) && !hypriso->is_hidden(cid));
+        set_exists(c, hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && !hypriso->whitelist_on && hypriso->render_whitelist.empty());
         
         if (c->exists) {
             auto b = bounds_client(cid);
@@ -1972,6 +1972,7 @@ void heart::layout_containers() {
             auto id = *datum<int>(c, "cid");
             set_exists(c, hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id));
             set_exists(c, (c->exists && (hypriso->get_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor())))); 
+            set_exists(c, !hypriso->whitelist_on && hypriso->render_whitelist.empty());
             //set_exists(c, (c->exists); 
             
             for (int i = actual_root->children.size() - 1; i >= 0; i--) {

@@ -12,6 +12,7 @@
 #include "edit_pin.h"
 #include "audio.h"
 #include "components.h"
+#include "settings.h"
 
 #include <algorithm>
 #include <cairo.h>
@@ -1969,6 +1970,19 @@ static void fill_root(Container *root) {
             auto cr = mylar->raw_window->cr;
             auto bounds = draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi, false);
             c->wanted_bounds.w = bounds.w + 20;
+        };
+        date->when_clicked = paint {
+            main_thread([]() {
+                std::vector<PopOption> root;
+                PopOption pop;
+                pop.text = "Settings";
+                pop.on_clicked = []() {
+                    settings::start();
+                };
+                root.push_back(pop);
+                auto m = mouse();
+                popup::open(root, m.x, m.y);
+            });
         };
     }
 
