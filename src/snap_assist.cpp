@@ -531,21 +531,27 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 }
                 if (alpha >= 0.75 && !parent_data->closing) {
                     hypriso->clip = true;
-                    auto clipbox = c->parent->real_bounds;
-                    clipbox.scale(s);
-                    hypriso->clipbox = clipbox;
+                    auto parent = c->parent->real_bounds;
+                    auto mb = bounds_monitor(rid);
+                    parent.x -= mb.x;
+                    parent.y -= mb.y;
+                    parent.scale(s);
+                    parent.round();
+                    hypriso->clipbox = parent;
                 }
+                auto l2 = l;
                 if (parent_data->should_slide) {
-                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, fadea);
+                    hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, fadea);
                 } else if (our_space != parent_space) {
-                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3, pull(slidetopos, fadea));
+                    hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, pull(slidetopos, fadea));
                 } else {
-                    hypriso->draw_thumbnail(data->cid, l, 10 * s, 2.0, 3);
+                    hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3);
                 }
                 if (c->state.mouse_hovering) {
                     //rect(final_thumb_spot, {1, 1, 1, .3}, 3, 10 * s, 2.0, false, 1.0);
                 }
                 hypriso->clip = false;
+                hypriso->clipbox = Bounds();
             };
 
             auto close = thumb->child(FILL_SPACE, FILL_SPACE);

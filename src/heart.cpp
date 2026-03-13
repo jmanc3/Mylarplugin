@@ -1504,6 +1504,7 @@ void add_hyprctl_dispatchers() {
             if (hypriso->whitelist_on) {
                 hypriso->whitelist_on = false;
                 damage_all();
+                hypriso->simulateMouseMovement();
                 return true;
             }
             
@@ -1520,6 +1521,7 @@ void add_hyprctl_dispatchers() {
         if (!hypriso->whitelist_on) {
             hypriso->whitelist_on = true;
             damage_all();
+            hypriso->simulateMouseMovement();
             return true;
         }
 
