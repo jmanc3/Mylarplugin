@@ -2413,6 +2413,8 @@ bindl = , XF86AudioPause, exec, playerctl play-pause
 bindl = , XF86AudioPlay, exec, playerctl play-pause
 bindl = , XF86AudioPrev, exec, playerctl previous
 
+bind = ,Print, exec, hyprctl dispatch plugin:mylar:screenshot_tool
+
 xwayland {
   force_zero_scaling = true
 }

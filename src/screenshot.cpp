@@ -20,6 +20,7 @@ void actual_open_screenshot_tool() {
 
         if (stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
+        hypriso->damage_entire(rid);
         renderfix
         
         rect(c->real_bounds, {0, 0, 0, .2});
