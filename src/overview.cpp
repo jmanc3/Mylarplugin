@@ -448,7 +448,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
     auto overview_data = (OverviewData *) parent->user_data;
 
     later_immediate([cid](Timer *) {
-        hypriso->set_hidden(cid, true);
+        //hypriso->set_hidden(cid, true);
     });
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     // Windows added after overview open, put at front so when overview closes, they wont be on top
@@ -554,7 +554,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
                             if (!spaces.empty())
                                 next = spaces[spaces.size() - 1] + 1;
                             later_immediate([monitor, cid, next](Timer *) {                                
-                                hypriso->set_hidden(cid, false);
+                                //hypriso->set_hidden(cid, false);
                                 hypriso->move_to_workspace(cid, next, false);
                                 hypriso->bring_to_front(cid, false);
 
@@ -762,7 +762,7 @@ void actual_open(int monitor) {
     for (auto o : order) {
         if (hypriso->alt_tabbable(o) && get_monitor(o) == monitor && hypriso->get_active_workspace_id_client(o) == hypriso->get_active_workspace_id(monitor)) {
             overview_data->order.push_back(o);
-            hypriso->set_hidden(o, true);
+            //hypriso->set_hidden(o, true);
         }
     }
     over->user_data = overview_data;
@@ -969,7 +969,7 @@ static void actual_overview_stop(bool focus) {
     auto order = get_window_stacking_order();
     for (auto o : order) {
         if (hypriso->alt_tabbable(o)) {
-            hypriso->set_hidden(o, false);
+            //hypriso->set_hidden(o, false);
         }
     }
     for (int i = m->children.size() - 1; i >= 0; i--) {
@@ -986,16 +986,16 @@ static void actual_overview_stop(bool focus) {
                 }
             }
             for (auto o : o_data->order) {
-                hypriso->set_hidden(o, false);
+                //hypriso->set_hidden(o, false);
                 fade_in_min_max(o);
             }
             if (dragged_cid != -1) {
-                hypriso->set_hidden(dragged_cid, false);
+                //hypriso->set_hidden(dragged_cid, false);
                 if (focus)
                     hypriso->bring_to_front(dragged_cid, true);
                 fade_in_min_max(dragged_cid);
             } else if (o_data->clicked_cid != -1) {
-                hypriso->set_hidden(o_data->clicked_cid, false);
+                //hypriso->set_hidden(o_data->clicked_cid, false);
                 if (focus)
                     hypriso->bring_to_front(o_data->clicked_cid, true);
                 fade_in_min_max(o_data->clicked_cid);
