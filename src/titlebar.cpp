@@ -372,7 +372,6 @@ void paint_titlebar(Container *actual_root, Container *c) {
     auto cid = *datum<int>(client, "cid");
 
     if (active_id == cid && stage == (int) STAGE::RENDER_PRE_WINDOW) {
-        {
         renderfix
         auto a = *datum<float>(client, "titlebar_alpha");
 
@@ -444,18 +443,7 @@ void paint_titlebar(Container *actual_root, Container *c) {
                 }
             }
         }
-        }
-
     }
-    /*
-    auto bb = bounds_client(cid);
-    bb.y -= titlebar_h;
-    bb.h = titlebar_h;
-    bb.scale(s);
-    //bb.w = 30;
-    */
-    //auto i = hypriso->pass_info(cid);
-    //rect({i.cbx, i.cby - std::round(titlebar_h * s), i.cbw, std::round(titlebar_h * s)}, {1, 0, 0, 1});
 }
 
 void create_titlebar(Container *root, Container *parent) {

@@ -551,7 +551,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     //rect(final_thumb_spot, {1, 1, 1, .3}, 3, 10 * s, 2.0, false, 1.0);
                 }
                 hypriso->clip = false;
-                hypriso->clipbox = Bounds();
             };
 
             auto close = thumb->child(FILL_SPACE, FILL_SPACE);
@@ -896,6 +895,20 @@ void snap_assist::open(int monitor, int cid) {
     later_immediate([monitor, cid](Timer *) {
         hypriso->screenshot_all(); 
         actual_open(monitor, cid);
+    });
+    later(1000.0f / (hypriso->fps(monitor) * .33), [](Timer *t) {
+        t->keep_running = true;
+
+        bool found = false;
+        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+           auto child = actual_root->children[i];
+           if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+               found = true;
+           }
+        }
+        if (!found)
+            t->keep_running = false;
+        hypriso->screenshot_all();
     });
 }
 
