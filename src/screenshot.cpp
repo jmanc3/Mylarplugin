@@ -31,6 +31,7 @@ void screenshot_tool::open() {
     screenshot_tool::close();
     later_immediate([](Timer *) {
         actual_open_screenshot_tool();
+        damage_all();
     });
 }
 
