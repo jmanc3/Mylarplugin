@@ -340,6 +340,20 @@ static void on_sink(pa_context *, const pa_sink_info *l, int eol, void *) {
 
     auto data = (pa_sink_info *) l;
 
+    // PulseAudio may expose a synthetic fallback sink named auto_null.
+    // Keep it out of the client list so it doesn't appear as a real device.
+    if (data->name && strcmp(data->name, "auto_null") == 0) {
+        for (int i = 0; i < audio_clients.size(); i++) {
+            if (audio_clients[i]->index == data->index && audio_clients[i]->is_master) {
+                delete audio_clients[i];
+                audio_clients.erase(audio_clients.begin() + i);
+                sort();
+                break;
+            }
+        }
+        return;
+    }
+
     AudioClient *client = nullptr;
     bool create = true;
     for (auto c: audio_clients) {
@@ -470,14 +484,18 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
     switch (event_type & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) {
         case PA_SUBSCRIPTION_EVENT_SINK: {
             if (event_type_masked == PA_SUBSCRIPTION_EVENT_REMOVE) {
+                bool removed = false;
                 for (int i = 0; i < audio_clients.size(); i++) {
                     if (audio_clients[i]->index == index && audio_clients[i]->is_master) {
                         delete audio_clients[i];
                         audio_clients.erase(audio_clients.begin() + i);
+                        removed = true;
                         sort();
                         break;
                     }
                 }
+                if (removed && audio_change_callback)
+                    audio_change_callback();
             } else {
                 if (!(o = pa_context_get_sink_info_by_index(c, index, on_sink, userdata))) {
                     fprintf(stderr, "ERROR: pa_context_get_sink_info_by_index() failed\n");
@@ -489,14 +507,18 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
         }
         case PA_SUBSCRIPTION_EVENT_SINK_INPUT: {
             if (event_type_masked == PA_SUBSCRIPTION_EVENT_REMOVE) {
+                bool removed = false;
                 for (int i = 0; i < audio_clients.size(); i++) {
                     if (audio_clients[i]->index == index && !audio_clients[i]->is_master) {
                         delete audio_clients[i];
                         audio_clients.erase(audio_clients.begin() + i);
+                        removed = true;
                         sort();
                         break;
                     }
                 }
+                if (removed && audio_change_callback)
+                    audio_change_callback();
             } else {
                 if (!(o = pa_context_get_sink_input_info(c, index, on_sink_input, userdata))) {
                     fprintf(stderr, "ERROR: pa_context_get_sink_input_info() failed\n");

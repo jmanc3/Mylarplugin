@@ -361,6 +361,9 @@ namespace heart {
     void begin();
     void end();
     void layout_containers();
+
+    void set_force_meta_open(bool state);
+    void set_zoom(float zoom);
 }
 
 #endif // heart_h_INCLUDED

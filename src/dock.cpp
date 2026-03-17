@@ -2817,6 +2817,33 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
         c->uuid = id;
     });
 
+    {
+        std::unordered_map<std::string, Container *> child_by_id;
+        child_by_id.reserve(root->children.size());
+        for (auto *child : root->children) {
+            child_by_id[child->uuid] = child;
+        }
+
+        std::vector<Container *> ordered_children;
+        ordered_children.reserve(root->children.size());
+        std::unordered_set<Container *> seen;
+        seen.reserve(root->children.size());
+
+        for (const auto &id : row_ids) {
+            auto it = child_by_id.find(id);
+            if (it == child_by_id.end())
+                continue;
+            ordered_children.push_back(it->second);
+            seen.insert(it->second);
+        }
+        for (auto *child : root->children) {
+            if (seen.find(child) == seen.end()) {
+                ordered_children.push_back(child);
+            }
+        }
+        root->children = std::move(ordered_children);
+    }
+
     auto dock = (Dock *) root->user_data;
     resize_volume_popup_for_rows(dock, rows.size());
 

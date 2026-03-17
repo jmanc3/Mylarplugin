@@ -50,6 +50,10 @@ static bool META_PRESSED = false;
 static float zoom_factor = 1.0;
 static long zoom_nicely_ended_time = 0;
 static bool zoom_needs_speed_update = true;
+static bool force_meta_open = false;
+static bool IS_META_PRESSED() {
+    return META_PRESSED || force_meta_open;
+}
 
 static bool mouse_down = false;
 //static bool and_on_desktop = false;
@@ -273,7 +277,7 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
     bool current_was_mouse = source == WL_POINTER_AXIS_SOURCE_WHEEL;
     auto current = get_current_time_in_ms();
     auto time_since = (current - zoom_nicely_ended_time);
-    if (META_PRESSED && time_since > 1000) {
+    if (IS_META_PRESSED() && time_since > 1000) {
         auto dtdt = (delta * .05);
         if (!current_was_mouse) {
             dtdt *= .35; // slow down on touchpads
@@ -718,12 +722,12 @@ static void on_window_open(int id) {
             return inside && on_workspace;
         };
         c->when_mouse_down = paint {
-            if (META_PRESSED && c->state.mouse_button_pressed == BTN_RIGHT) {
+            if (IS_META_PRESSED() && c->state.mouse_button_pressed == BTN_RIGHT) {
                 root->consumed_event = true;
             }
         };
         c->when_clicked = paint {
-            if (c->state.mouse_button_pressed == BTN_RIGHT && META_PRESSED) {
+            if (c->state.mouse_button_pressed == BTN_RIGHT && IS_META_PRESSED()) {
                 auto cid = *datum<int>(c, "cid");
                 titlebar::titlebar_right_click(cid);
                 root->consumed_event = true;
@@ -2326,3 +2330,13 @@ void damage_all() {
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid")); 
 }
+
+void heart::set_force_meta_open(bool state) {
+    force_meta_open = state;
+}
+
+void heart::set_zoom(float zoom) {
+    zoom_factor = zoom;
+    hypriso->set_zoom_factor(zoom);
+}
+

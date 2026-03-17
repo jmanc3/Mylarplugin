@@ -340,6 +340,9 @@ struct HyprMonitor {
 
     CFramebuffer *wallfb = nullptr;
     Bounds wall_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
+
+    CFramebuffer *monfb = nullptr;
+    Bounds mon_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 };
 
 static std::vector<HyprMonitor *> hyprmonitors;
@@ -2413,7 +2416,7 @@ bindl = , XF86AudioPause, exec, playerctl play-pause
 bindl = , XF86AudioPlay, exec, playerctl play-pause
 bindl = , XF86AudioPrev, exec, playerctl previous
 
-bind = ,Print, exec, hyprctl dispatch plugin:mylar:screenshot_tool
+#bind = ,Print, exec, hyprctl dispatch plugin:mylar:screenshot_tool
 
 xwayland {
   force_zero_scaling = true
@@ -4729,6 +4732,9 @@ void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACE startedOn, PHLWORKS
 #endif
     auto pMonitor = m;
     if (!pMonitor)
+        return;
+    
+    if (!startedOn || !w || !m)
         return;
 
     g_pHyprRenderer->makeEGLCurrent();
@@ -8206,3 +8212,64 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
 }
 
 
+void HyprIso::screenshot_monitor(int mon) {
+    for (auto h : hyprmonitors) {
+        if (h->id == mon) {
+            if (!h->monfb)
+                h->monfb = new CFramebuffer;
+            PHLWORKSPACEREF startedOn = h->m->m_activeWorkspace;
+            screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
+            h->mon_size.y = h->m->m_pixelSize.x;
+            h->mon_size.x = h->m->m_pixelSize.y;
+        }
+    }
+}
+
+void HyprIso::draw_monitor(int mon, Bounds b) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id != mon)
+            continue;
+        if (!hm->monfb)
+            continue;
+        if (!hm->monfb->getTexture())
+            return;
+        bool clip = hypriso->clip;
+        Bounds clipbox = hypriso->clipbox;
+        if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+            return; 
+        }
+        AnyPass::AnyData anydata([hm, mon, b, clip, clipbox](AnyPass* pass) {
+            auto roundingPower = 2.0f;
+            auto cornermask = 0;
+            if (!hm->monfb)
+                return;
+            auto tex = hm->monfb->getTexture();
+            if (!tex)
+                return;
+            auto box = tocbox(b);
+
+            CHyprOpenGLImpl::STextureRenderData data;
+            data.allowCustomUV = true;
+
+            data.round = 0.0;
+            data.roundingPower = roundingPower;
+            data.a = 1.0;
+
+            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+                std::min(1.0, 1.0),
+                std::min(1.0, 1.0)
+            );
+            set_rounding(cornermask);
+            if (clip)
+                g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+            g_pHyprOpenGL->renderTexture(tex, box, data);
+            set_rounding(0);
+            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+            if (clip)
+                g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+        });
+        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    }
+}

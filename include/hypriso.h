@@ -373,6 +373,7 @@ struct HyprIso {
     void screenshot_deco(int id);
     void screenshot_space(int mon, int id);
     void screenshot_wallpaper(int mon);
+    void screenshot_monitor(int mon);
 
     Bounds thumbnail_size(int id);
 
@@ -382,6 +383,7 @@ struct HyprIso {
     void draw_raw_min_thumbnail(int id, Bounds b, float scalar);
     void draw_workspace(int mon, int id, Bounds b, int rounding = 0, float alpha = 1.0);
     void draw_wallpaper(int mon, Bounds b, int rounding = 0, float alpha = 1.0);
+    void draw_monitor(int mon, Bounds b);
 
     void send_false_position(int x, int y);
     void send_false_click();
