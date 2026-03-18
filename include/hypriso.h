@@ -373,7 +373,9 @@ struct HyprIso {
     void screenshot_deco(int id);
     void screenshot_space(int mon, int id);
     void screenshot_wallpaper(int mon);
+    
     void screenshot_monitor(int mon);
+    void save_monitor_to_png(int mon, std::string output_path);
 
     Bounds thumbnail_size(int id);
 

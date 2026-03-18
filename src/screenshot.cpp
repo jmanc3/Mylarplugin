@@ -3,7 +3,7 @@
 #include "heart.h"
 #include "overview.h"
 
-void label(Container *parent, std::string icon, std::string text) {
+Container *label(Container *parent, std::string icon, std::string text) {
     static float label_h = 20;
     static float pad = 10;
     
@@ -53,9 +53,11 @@ void label(Container *parent, std::string icon, std::string text) {
             free_text_texture(info.id); 
         }
     };
+    return full;
 }
 
 void actual_open_screenshot_tool() {
+    //setCursorImageUntilUnset("crosshair");
     auto tool = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
     tool->custom_type = (int) TYPE::SCREENSHOT_TOOL;
     tool->automatically_paint_children = false;
@@ -71,7 +73,17 @@ void actual_open_screenshot_tool() {
     };
     type->spacing = 20;
 
-    label(type, "\uEC4E", "Full screen");
+    {
+        auto ch = label(type, "\uEC4E", "Full screen");
+        ch->when_clicked = paint {
+            auto rid = hypriso->monitor_from_cursor();
+            hypriso->save_monitor_to_png(rid, "/tmp/out.png");
+            notify("Saved to: /tmp/out.png");
+            later_immediate([](Timer *) {
+                screenshot_tool::close();
+            });
+        };
+    }
     label(type, "\uF407", "Rectangle");
     label(type, "\uECE9", "Window");
     label(type, "\uF408", "Freeform");
@@ -133,11 +145,13 @@ void actual_open_screenshot_tool() {
 }
 
 void screenshot_tool::open() {
+    //unsetCursorImage();
     screenshot_tool::close();
     heart::set_force_meta_open(true);
     later_immediate([](Timer *) {
         for (auto m : actual_monitors) {
-            hypriso->screenshot_monitor(*datum<int>(m, "cid"));
+            int monitor = *datum<int>(m, "cid");
+            hypriso->screenshot_monitor(monitor);
         }
         hypriso->whitelist_on = true;
         actual_open_screenshot_tool();
