@@ -80,12 +80,13 @@ void actual_open_screenshot_tool() {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (rid != hypriso->monitor_from_cursor())
-            return;
 
         c->real_bounds = bounds_monitor(rid);
         c->wanted_bounds = c->real_bounds;
 
+        if (rid != hypriso->monitor_from_cursor())
+            return;
+        
         auto type = c->children[0];
         auto fixed_w = (type->wanted_pad.x + type->wanted_pad.w + (type->spacing * type->children.size() - 1));
         auto fixed_h = type->wanted_pad.y + type->wanted_pad.h;
@@ -115,12 +116,16 @@ void actual_open_screenshot_tool() {
 
         if (stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
-        c->automatically_paint_children = true;
-        hypriso->damage_entire(rid);
-        renderfix
         
+        renderfix
         hypriso->draw_monitor(rid, c->real_bounds);
         rect(c->real_bounds, {0, 0, 0, .1});
+        hypriso->damage_entire(rid);
+        
+        if (rid != hypriso->monitor_from_cursor())
+            return;
+ 
+        c->automatically_paint_children = true;
     };
     tool->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;
