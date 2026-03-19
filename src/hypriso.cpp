@@ -71,6 +71,7 @@
 #include <algorithm>
 #include <mutex>
 #include <vector>
+#include <memory>
 #include <hyprutils/math/Vector2D.hpp>
 #include <librsvg/rsvg.h>
 #include <any>
@@ -8226,6 +8227,117 @@ void HyprIso::screenshot_monitor(int mon) {
     }
 }
 
+void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_path) {
+    for (auto hm : hyprwindows) {
+        if (!hm || hm->id != cid)
+            continue;
+
+        if (!hm->deco_fb || !hm->deco_fb->isAllocated()) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", cid);
+            return;
+        }
+
+        const int w = static_cast<int>(hm->deco_fb->m_size.x);
+        const int h = static_cast<int>(hm->deco_fb->m_size.y);
+        if (w <= 0 || h <= 0) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", cid, w, h);
+            return;
+        }
+
+        g_pHyprRenderer->makeEGLCurrent();
+
+        GLint previousReadFB = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->deco_fb->getFBID());
+
+        const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
+        auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+
+        const GLenum glErr = glGetError();
+        if (glErr != GL_NO_ERROR) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", cid, static_cast<int>(glErr));
+            return;
+        }
+
+        std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, cid, outputPath = std::move(output_path)]() mutable {
+            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
+            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
+            auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
+            std::memset(cairoPixels.get(), 0, cairoPixelsSize);
+
+            // Convert + flip vertically in ONE pass.
+            for (int y = 0; y < h; ++y) {
+                auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
+                const int srcY = y;
+
+                for (int x = 0; x < w; ++x) {
+                    const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
+
+                    const uint8_t r = rgbaPixels[src + 0];
+                    const uint8_t g = rgbaPixels[src + 1];
+                    const uint8_t b = rgbaPixels[src + 2];
+                    const uint8_t a = rgbaPixels[src + 3];
+
+                    // Premultiply alpha for Cairo ARGB32.
+                    const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
+                    const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
+                    const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
+
+                    dst[x] = (static_cast<uint32_t>(a) << 24) |
+                             (pr << 16) |
+                             (pg << 8)  |
+                             pb;
+                }
+            }
+
+            cairo_surface_t* surface = cairo_image_surface_create_for_data(
+                cairoPixels.get(),
+                CAIRO_FORMAT_ARGB32,
+                w,
+                h,
+                cairoStride
+            );
+
+            if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", cid);
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            std::filesystem::path outPath(outputPath);
+            std::error_code ec;
+
+            if (outPath.has_parent_path())
+                std::filesystem::create_directories(outPath.parent_path(), ec);
+
+            if (ec) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
+            cairo_surface_destroy(surface);
+
+            if (writeStatus != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, cid);
+                return;
+            }
+        });
+
+        t.detach();
+
+        return;
+    }
+
+    Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
+}
+
 void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
     for (auto hm : hyprmonitors) {
         if (!hm || hm->id != mon)
@@ -8249,9 +8361,10 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
 
-        std::vector<uint8_t> rgbaPixels(static_cast<size_t>(w) * h * 4);
+        const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
+        auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.data());
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
         glPixelStorei(GL_PACK_ALIGNMENT, 4);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
@@ -8262,69 +8375,73 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
             return;
         }
 
-        const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
-        std::vector<uint8_t> cairoPixels(static_cast<size_t>(cairoStride) * h, 0);
+        std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, mon, outputPath = std::move(output_path)]() mutable {
+            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
+            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
+            auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
+            std::memset(cairoPixels.get(), 0, cairoPixelsSize);
 
-        // Convert + flip vertically in ONE pass
-        for (int y = 0; y < h; ++y) {
-            auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.data() + static_cast<size_t>(y) * cairoStride);
+            // Convert + flip vertically in ONE pass.
+            for (int y = 0; y < h; ++y) {
+                auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
+                const int srcY = y;
 
-            //const int srcY = h - 1 - y; // <-- single required flip
-            const int srcY = y;
+                for (int x = 0; x < w; ++x) {
+                    const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
 
-            for (int x = 0; x < w; ++x) {
-                const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
+                    const uint8_t r = rgbaPixels[src + 0];
+                    const uint8_t g = rgbaPixels[src + 1];
+                    const uint8_t b = rgbaPixels[src + 2];
+                    const uint8_t a = rgbaPixels[src + 3];
 
-                const uint8_t r = rgbaPixels[src + 0];
-                const uint8_t g = rgbaPixels[src + 1];
-                const uint8_t b = rgbaPixels[src + 2];
-                const uint8_t a = rgbaPixels[src + 3];
+                    // Premultiply alpha for Cairo ARGB32.
+                    const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
+                    const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
+                    const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
 
-                // Premultiply alpha for Cairo ARGB32
-                const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
-                const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
-                const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
-
-                dst[x] = (static_cast<uint32_t>(a) << 24) |
-                         (pr << 16) |
-                         (pg << 8)  |
-                         pb;
+                    dst[x] = (static_cast<uint32_t>(a) << 24) |
+                             (pr << 16) |
+                             (pg << 8)  |
+                             pb;
+                }
             }
-        }
 
-        cairo_surface_t* surface = cairo_image_surface_create_for_data(
-            cairoPixels.data(),
-            CAIRO_FORMAT_ARGB32,
-            w,
-            h,
-            cairoStride
-        );
+            cairo_surface_t* surface = cairo_image_surface_create_for_data(
+                cairoPixels.get(),
+                CAIRO_FORMAT_ARGB32,
+                w,
+                h,
+                cairoStride
+            );
 
-        if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", mon);
+            if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", mon);
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            std::filesystem::path outPath(outputPath);
+            std::error_code ec;
+
+            if (outPath.has_parent_path())
+                std::filesystem::create_directories(outPath.parent_path(), ec);
+
+            if (ec) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
             cairo_surface_destroy(surface);
-            return;
-        }
 
-        std::filesystem::path outPath(output_path);
-        std::error_code ec;
+            if (writeStatus != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, mon);
+                return;
+            }
+        });
 
-        if (outPath.has_parent_path())
-            std::filesystem::create_directories(outPath.parent_path(), ec);
-
-        if (ec) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", output_path, ec.message());
-            cairo_surface_destroy(surface);
-            return;
-        }
-
-        const auto writeStatus = cairo_surface_write_to_png(surface, output_path.c_str());
-        cairo_surface_destroy(surface);
-
-        if (writeStatus != CAIRO_STATUS_SUCCESS) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", output_path, mon);
-            return;
-        }
+        t.detach();
 
         return;
     }
@@ -8380,3 +8497,13 @@ void HyprIso::draw_monitor(int mon, Bounds b) {
         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     }
 }
+
+int HyprIso::window_from_mouse() {
+    PHLWINDOW w = get_window_from_mouse();
+    if (w) {
+        for (auto h : hyprwindows)
+            if (h->w == w)
+                return h->id;
+    }
+    return -1;
+};

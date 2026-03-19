@@ -376,6 +376,8 @@ struct HyprIso {
     
     void screenshot_monitor(int mon);
     void save_monitor_to_png(int mon, std::string output_path);
+    
+    void save_window_to_png(int cid, bool decorations, std::string output_path);
 
     Bounds thumbnail_size(int id);
 
@@ -411,6 +413,8 @@ struct HyprIso {
     void fake_fullscreen(int id, bool state);
 
     SurfacePassInfo pass_info(int cid);
+
+    int window_from_mouse();
 
     std::vector<int> get_workspace_ids(int monitor);
     std::vector<int> get_workspaces(int monitor);

@@ -3,6 +3,9 @@
 #include "heart.h"
 #include "overview.h"
 
+static bool showing = true;
+static int mode = 0; // 1 rectangle, 2 window
+
 Container *label(Container *parent, std::string icon, std::string text) {
     static float label_h = 20;
     static float pad = 10;
@@ -84,8 +87,20 @@ void actual_open_screenshot_tool() {
             });
         };
     }
-    label(type, "\uF407", "Rectangle");
-    label(type, "\uECE9", "Window");
+    {
+        auto ch = label(type, "\uF407", "Rectangle");
+        ch->when_clicked = paint {
+        };
+    }
+    {
+        auto ch = label(type, "\uECE9", "Window");
+        ch->when_clicked = paint {
+            showing = false;
+            hypriso->whitelist_on = false;
+            mode = 2;
+            setCursorImageUntilUnset("crosshair");
+        }; 
+    }
     label(type, "\uF408", "Freeform");
 
     tool->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
@@ -120,6 +135,7 @@ void actual_open_screenshot_tool() {
             final_w, final_h);
         type->real_bounds = type->wanted_bounds;
         layout(actual_root, type, type->real_bounds);
+        type->exists = showing;
     };
     tool->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
@@ -130,22 +146,46 @@ void actual_open_screenshot_tool() {
             return;
         
         renderfix
-        hypriso->draw_monitor(rid, c->real_bounds);
-        rect(c->real_bounds, {0, 0, 0, .1});
+        if (showing) {
+            hypriso->draw_monitor(rid, c->real_bounds);
+            rect(c->real_bounds, {0, 0, 0, .1});
+        }
+        
         hypriso->damage_entire(rid);
         
         if (rid != hypriso->monitor_from_cursor())
             return;
- 
-        c->automatically_paint_children = true;
+
+        if (showing)
+            c->automatically_paint_children = true;
     };
     tool->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;
     };
+    tool->when_clicked = paint {
+        if (!showing) {
+            if (mode == 2) {
+                auto cid = hypriso->window_from_mouse();
+                hypriso->bring_to_front(cid);
+                later_immediate([cid](Timer *) {
+                    screenshot_tool::close();
+                    damage_all();
+                    
+                    later_immediate([cid](Timer *) {
+                        hypriso->screenshot_deco(cid);
+                        hypriso->save_window_to_png(cid, true, "/tmp/out.png");
+                        notify("Saved to: /tmp/out.png");
+                    });
+                });
+            }
+        }
+    };
 }
 
 void screenshot_tool::open() {
-    //unsetCursorImage();
+    showing = true;
+    mode = 0;
+    
     screenshot_tool::close();
     heart::set_force_meta_open(true);
     later_immediate([](Timer *) {
@@ -162,6 +202,7 @@ void screenshot_tool::open() {
 void screenshot_tool::close() {
     if (!overview::is_showing())
         hypriso->whitelist_on = false;
+    unsetCursorImage();
     
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
