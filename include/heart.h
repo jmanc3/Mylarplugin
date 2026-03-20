@@ -356,6 +356,7 @@ struct SnapLimits {
 
 SnapLimits get_snap_limits(int monitor);
 Bounds snap_position_to_bounds_limited(int mon, SnapPosition pos, SnapLimits limits);
+Bounds fixed_box(float startx, float starty, float endx, float endy);
 
 namespace heart {    
     void begin();

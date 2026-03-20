@@ -2,6 +2,8 @@
 
 #include "heart.h"
 #include "overview.h"
+#include <linux/input-event-codes.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 static bool showing = true;
 static int mode = 0; // 1 rectangle, 2 window
@@ -90,6 +92,10 @@ void actual_open_screenshot_tool() {
     {
         auto ch = label(type, "\uF407", "Rectangle");
         ch->when_clicked = paint {
+            showing = false;
+            hypriso->whitelist_on = false;
+            mode = 1;
+            setCursorImageUntilUnset("crosshair");
         };
     }
     {
@@ -137,6 +143,9 @@ void actual_open_screenshot_tool() {
         layout(actual_root, type, type->real_bounds);
         type->exists = showing;
     };
+    static Bounds rect_selection;
+    static bool rect_showing = false;
+    rect_showing = false;
     tool->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
@@ -150,7 +159,13 @@ void actual_open_screenshot_tool() {
             hypriso->draw_monitor(rid, c->real_bounds);
             rect(c->real_bounds, {0, 0, 0, .1});
         }
-        
+        if (rect_showing) {
+            auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
+            fixed.scale(s);
+            fixed.round();
+            border(fixed, {1, 1, 1, .8}, 2 * s);
+        }
+
         hypriso->damage_entire(rid);
         
         if (rid != hypriso->monitor_from_cursor())
@@ -162,6 +177,7 @@ void actual_open_screenshot_tool() {
     tool->after_paint = [](Container *actual_root, Container *c) {
         c->automatically_paint_children = false;
     };
+    tool->when_drag_end_is_click = false;
     tool->when_clicked = paint {
         if (!showing) {
             if (mode == 2) {
@@ -177,6 +193,50 @@ void actual_open_screenshot_tool() {
                         notify("Saved to: /tmp/out.png");
                     });
                 });
+            }
+        }
+    };
+    tool->when_drag_start = [](Container *actual_root, Container *c) {
+        if (!showing) {
+            if (mode == 1) {
+                rect_showing = true;
+                rect_selection = Bounds(actual_root->mouse_current_x, actual_root->mouse_current_y, 
+                                        actual_root->mouse_current_x, actual_root->mouse_current_y);
+            }
+        }
+    };
+    tool->when_drag = [](Container *actual_root, Container *c) {
+        if (!showing) {
+            if (mode == 1) {
+                rect_selection = Bounds(rect_selection.x, rect_selection.y, 
+                                        actual_root->mouse_current_x, actual_root->mouse_current_y);
+                
+            }
+        }
+    };
+    tool->when_drag_end = [](Container *actual_root, Container *c) {
+        if (!showing) {
+            if (mode == 1) {
+                rect_selection = Bounds(rect_selection.x, rect_selection.y, 
+                                        actual_root->mouse_current_x, actual_root->mouse_current_y);
+                
+            }
+        }
+    };
+    
+    tool->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (key == KEY_ESC && !pressed) {
+            later_immediate([](Timer *) {
+                screenshot_tool::close();
+            });
+        }
+        if (key == KEY_ENTER) {
+            if (!showing) {
+                if (mode == 1 && !pressed && rect_showing) {
+                    later_immediate([](Timer *) {
+                        screenshot_tool::close();
+                    });
+                }
             }
         }
     };
