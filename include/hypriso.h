@@ -375,7 +375,7 @@ struct HyprIso {
     void screenshot_wallpaper(int mon);
     
     void screenshot_monitor(int mon);
-    void save_monitor_to_png(int mon, std::string output_path);
+    void save_monitor_to_png(int mon, std::string output_path, Bounds region = Bounds());
     
     void save_window_to_png(int cid, bool decorations, std::string output_path);
 
@@ -572,4 +572,3 @@ void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaS
 void gestures_reset();
 
 #endif // hypriso_h_INCLUDED
-

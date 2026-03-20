@@ -8338,7 +8338,7 @@ void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_p
     Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
 }
 
-void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
+void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds region) {
     for (auto hm : hyprmonitors) {
         if (!hm || hm->id != mon)
             continue;
@@ -8348,11 +8348,49 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
             return;
         }
 
-        const int w = static_cast<int>(hm->monfb->m_size.x);
-        const int h = static_cast<int>(hm->monfb->m_size.y);
-        if (w <= 0 || h <= 0) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", mon, w, h);
+        const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
+        const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
+        if (framebufferW <= 0 || framebufferH <= 0) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
             return;
+        }
+
+        int readX = 0;
+        int readY = 0;
+        int readW = framebufferW;
+        int readH = framebufferH;
+
+        if (!(region.w == 0 && region.h == 0)) {
+            if (region.w <= 0 || region.h <= 0) {
+                Log::logger->log(
+                    Log::ERR,
+                    "save_monitor_to_png: monitor {} crop region has invalid size {}x{}",
+                    mon, region.w, region.h
+                );
+                return;
+            }
+
+            const int regionLeft   = static_cast<int>(std::floor(region.x));
+            const int regionTop    = static_cast<int>(std::floor(region.y));
+            const int regionRight  = static_cast<int>(std::ceil(region.x + region.w));
+            const int regionBottom = static_cast<int>(std::ceil(region.y + region.h));
+
+            readX = std::max(0, regionLeft);
+            readY = std::max(0, regionTop);
+            const int clampedRight  = std::min(framebufferW, regionRight);
+            const int clampedBottom = std::min(framebufferH, regionBottom);
+
+            readW = clampedRight - readX;
+            readH = clampedBottom - readY;
+
+            if (readW <= 0 || readH <= 0) {
+                Log::logger->log(
+                    Log::ERR,
+                    "save_monitor_to_png: monitor {} crop region ({}, {}, {}, {}) is outside framebuffer {}x{}",
+                    mon, region.x, region.y, region.w, region.h, framebufferW, framebufferH
+                );
+                return;
+            }
         }
 
         g_pHyprRenderer->makeEGLCurrent();
@@ -8361,10 +8399,10 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
 
-        const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
+        const size_t rgbaPixelsSize = static_cast<size_t>(readW) * readH * 4;
         auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
+        glReadPixels(readX, readY, readW, readH, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
         glPixelStorei(GL_PACK_ALIGNMENT, 4);
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
@@ -8375,19 +8413,19 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
             return;
         }
 
-        std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, mon, outputPath = std::move(output_path)]() mutable {
-            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
-            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
+        std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, outputPath = std::move(output_path)]() mutable {
+            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
+            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
             auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
             std::memset(cairoPixels.get(), 0, cairoPixelsSize);
 
             // Convert + flip vertically in ONE pass.
-            for (int y = 0; y < h; ++y) {
+            for (int y = 0; y < readH; ++y) {
                 auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
                 const int srcY = y;
 
-                for (int x = 0; x < w; ++x) {
-                    const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
+                for (int x = 0; x < readW; ++x) {
+                    const size_t src = (static_cast<size_t>(srcY) * readW + x) * 4;
 
                     const uint8_t r = rgbaPixels[src + 0];
                     const uint8_t g = rgbaPixels[src + 1];
@@ -8409,8 +8447,8 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path) {
             cairo_surface_t* surface = cairo_image_surface_create_for_data(
                 cairoPixels.get(),
                 CAIRO_FORMAT_ARGB32,
-                w,
-                h,
+                readW,
+                readH,
                 cairoStride
             );
 

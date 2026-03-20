@@ -107,7 +107,7 @@ void actual_open_screenshot_tool() {
             setCursorImageUntilUnset("crosshair");
         }; 
     }
-    label(type, "\uF408", "Freeform");
+    //label(type, "\uF408", "Freeform");
 
     tool->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
         auto root = get_rendering_root();
@@ -233,6 +233,11 @@ void actual_open_screenshot_tool() {
         if (key == KEY_ENTER) {
             if (!showing) {
                 if (mode == 1 && !pressed && rect_showing) {
+                    auto rid = hypriso->monitor_from_cursor();
+                    auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
+                    fixed.scale(scale(rid));
+                    hypriso->save_monitor_to_png(rid, "/tmp/out.png", fixed);
+                    notify("Saved to: /tmp/out.png");
                     later_immediate([](Timer *) {
                         screenshot_tool::close();
                     });
