@@ -2,6 +2,7 @@
 
 #include "heart.h"
 #include "overview.h"
+#include <algorithm>
 #include <cmath>
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -90,7 +91,26 @@ void actual_open_screenshot_tool() {
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         renderfix
-        border(c->real_bounds, {1, 1, 1, .7}, 1);
+        auto mb = bounds_monitor(rid);
+        mb.scale(s);
+        mb.round();
+
+        auto sel = c->real_bounds;
+        auto sel_left = std::max(sel.x, mb.x);
+        auto sel_top = std::max(sel.y, mb.y);
+        auto sel_right = std::min(sel.x + sel.w, mb.x + mb.w);
+        auto sel_bottom = std::min(sel.y + sel.h, mb.y + mb.h);
+        const bool has_selection = sel_right > sel_left && sel_bottom > sel_top;
+
+        if (has_selection) {
+            // Darken everything outside the selected region.
+            rect({mb.x, mb.y, mb.w, sel_top - mb.y}, {0, 0, 0, .3});
+            rect({mb.x, sel_top, sel_left - mb.x, sel_bottom - sel_top}, {0, 0, 0, .3});
+            rect({sel_right, sel_top, (mb.x + mb.w) - sel_right, sel_bottom - sel_top}, {0, 0, 0, .3});
+            rect({mb.x, sel_bottom, mb.w, (mb.y + mb.h) - sel_bottom}, {0, 0, 0, .3});
+        }
+
+        border(c->real_bounds, {1, 1, 1, 1}, 1);
     };
     consume_everything(select_box);
     
