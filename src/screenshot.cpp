@@ -2,6 +2,7 @@
 
 #include "heart.h"
 #include "overview.h"
+#include <cmath>
 #include <linux/input-event-codes.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -80,6 +81,8 @@ void actual_open_screenshot_tool() {
 
     static Bounds rect_selection;
     rect_selection = Bounds();
+    static bool rect_showing = false;
+    rect_showing = false;
     
     auto select_box = tool->child(::hbox, FILL_SPACE, FILL_SPACE);
     select_box->when_paint = [](Container *actual_root, Container *c) {
@@ -87,25 +90,198 @@ void actual_open_screenshot_tool() {
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         renderfix
-        border(c->real_bounds, {1, 1, 1, 1}, 1);
+        border(c->real_bounds, {1, 1, 1, .7}, 1);
     };
     consume_everything(select_box);
     
     static Bounds initial_box;
-    select_box->when_drag_start = paint {
-        initial_box = rect_selection;
+    enum class SelectionDragType {
+        NONE,
+        MOVE,
+        LEFT,
+        RIGHT,
+        TOP,
+        BOTTOM,
+        TOP_LEFT,
+        TOP_RIGHT,
+        BOTTOM_LEFT,
+        BOTTOM_RIGHT,
     };
-    select_box->when_drag = [](Container *actual_root, Container *c) {
+    static SelectionDragType selection_drag = SelectionDragType::NONE;
+    auto cursor_from_selection_drag = [](SelectionDragType drag) -> const char * {
+        switch (drag) {
+            case SelectionDragType::LEFT:
+                return "w-resize";
+            case SelectionDragType::RIGHT:
+                return "e-resize";
+            case SelectionDragType::TOP:
+                return "n-resize";
+            case SelectionDragType::BOTTOM:
+                return "s-resize";
+            case SelectionDragType::TOP_LEFT:
+                return "nw-resize";
+            case SelectionDragType::TOP_RIGHT:
+                return "ne-resize";
+            case SelectionDragType::BOTTOM_LEFT:
+                return "sw-resize";
+            case SelectionDragType::BOTTOM_RIGHT:
+                return "se-resize";
+            default:
+                return "crosshair";
+        }
+    };
+    auto selection_drag_type_for_point = [](float mouse_x, float mouse_y) -> SelectionDragType {
+        auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
+        const float corner_hit = 14.0f;
+        const float edge_hit = 12.0f;
+        const float right = fixed.x + fixed.w;
+        const float bottom = fixed.y + fixed.h;
+
+        const bool near_left = std::abs(mouse_x - fixed.x) <= edge_hit;
+        const bool near_right = std::abs(mouse_x - right) <= edge_hit;
+        const bool near_top = std::abs(mouse_y - fixed.y) <= edge_hit;
+        const bool near_bottom = std::abs(mouse_y - bottom) <= edge_hit;
+        const bool inside_x = mouse_x >= fixed.x && mouse_x <= right;
+        const bool inside_y = mouse_y >= fixed.y && mouse_y <= bottom;
+
+        const bool near_top_left = std::abs(mouse_x - fixed.x) <= corner_hit && std::abs(mouse_y - fixed.y) <= corner_hit;
+        const bool near_top_right = std::abs(mouse_x - right) <= corner_hit && std::abs(mouse_y - fixed.y) <= corner_hit;
+        const bool near_bottom_left = std::abs(mouse_x - fixed.x) <= corner_hit && std::abs(mouse_y - bottom) <= corner_hit;
+        const bool near_bottom_right = std::abs(mouse_x - right) <= corner_hit && std::abs(mouse_y - bottom) <= corner_hit;
+
+        if (near_top_left) {
+            return SelectionDragType::TOP_LEFT;
+        }
+        if (near_top_right) {
+            return SelectionDragType::TOP_RIGHT;
+        }
+        if (near_bottom_left) {
+            return SelectionDragType::BOTTOM_LEFT;
+        }
+        if (near_bottom_right) {
+            return SelectionDragType::BOTTOM_RIGHT;
+        }
+        if (inside_y && near_left) {
+            return SelectionDragType::LEFT;
+        }
+        if (inside_y && near_right) {
+            return SelectionDragType::RIGHT;
+        }
+        if (inside_x && near_top) {
+            return SelectionDragType::TOP;
+        }
+        if (inside_x && near_bottom) {
+            return SelectionDragType::BOTTOM;
+        }
+        if (inside_x && inside_y) {
+            return SelectionDragType::MOVE;
+        }
+        return SelectionDragType::NONE;
+    };
+    auto apply_select_drag = [](Container *actual_root) {
         float off_x = actual_root->mouse_current_x - actual_root->mouse_initial_x;
         float off_y = actual_root->mouse_current_y - actual_root->mouse_initial_y;
         auto copy = initial_box;
-        copy.x += off_x;
-        copy.y += off_y;
-        copy.w += off_x;
-        copy.h += off_y;
+        const bool x_is_left = initial_box.x <= initial_box.w;
+        const bool y_is_top = initial_box.y <= initial_box.h;
+
+        auto set_left = [&](float value) {
+            if (x_is_left) {
+                copy.x = value;
+            } else {
+                copy.w = value;
+            }
+        };
+        auto set_right = [&](float value) {
+            if (x_is_left) {
+                copy.w = value;
+            } else {
+                copy.x = value;
+            }
+        };
+        auto set_top = [&](float value) {
+            if (y_is_top) {
+                copy.y = value;
+            } else {
+                copy.h = value;
+            }
+        };
+        auto set_bottom = [&](float value) {
+            if (y_is_top) {
+                copy.h = value;
+            } else {
+                copy.y = value;
+            }
+        };
+
+        if (selection_drag == SelectionDragType::MOVE) {
+            copy.x += off_x;
+            copy.y += off_y;
+            copy.w += off_x;
+            copy.h += off_y;
+        } else if (selection_drag == SelectionDragType::LEFT) {
+            set_left((x_is_left ? initial_box.x : initial_box.w) + off_x);
+        } else if (selection_drag == SelectionDragType::RIGHT) {
+            set_right((x_is_left ? initial_box.w : initial_box.x) + off_x);
+        } else if (selection_drag == SelectionDragType::TOP) {
+            set_top((y_is_top ? initial_box.y : initial_box.h) + off_y);
+        } else if (selection_drag == SelectionDragType::BOTTOM) {
+            set_bottom((y_is_top ? initial_box.h : initial_box.y) + off_y);
+        } else if (selection_drag == SelectionDragType::TOP_LEFT) {
+            set_left((x_is_left ? initial_box.x : initial_box.w) + off_x);
+            set_top((y_is_top ? initial_box.y : initial_box.h) + off_y);
+        } else if (selection_drag == SelectionDragType::TOP_RIGHT) {
+            set_right((x_is_left ? initial_box.w : initial_box.x) + off_x);
+            set_top((y_is_top ? initial_box.y : initial_box.h) + off_y);
+        } else if (selection_drag == SelectionDragType::BOTTOM_LEFT) {
+            set_left((x_is_left ? initial_box.x : initial_box.w) + off_x);
+            set_bottom((y_is_top ? initial_box.h : initial_box.y) + off_y);
+        } else if (selection_drag == SelectionDragType::BOTTOM_RIGHT) {
+            set_right((x_is_left ? initial_box.w : initial_box.x) + off_x);
+            set_bottom((y_is_top ? initial_box.h : initial_box.y) + off_y);
+        }
+
         rect_selection = copy;
     };
-    select_box->when_drag_end = select_box->when_drag;
+    auto update_select_cursor = [selection_drag_type_for_point, cursor_from_selection_drag](Container *actual_root) {
+        if (!rect_showing || mode != 1) {
+            return;
+        }
+        auto drag = selection_drag_type_for_point(actual_root->mouse_current_x, actual_root->mouse_current_y);
+        setCursorImageUntilUnset(cursor_from_selection_drag(drag));
+    };
+
+    select_box->when_mouse_enters_container = [update_select_cursor](Container *actual_root, Container *c) {
+        consume_event(actual_root, c);
+        update_select_cursor(actual_root);
+    };
+    select_box->when_mouse_motion = [update_select_cursor](Container *actual_root, Container *c) {
+        consume_event(actual_root, c);
+        update_select_cursor(actual_root);
+    };
+    select_box->when_mouse_leaves_container = [](Container *actual_root, Container *c) {
+        consume_event(actual_root, c);
+        if (mode == 1)
+            setCursorImageUntilUnset("crosshair");
+    };
+    select_box->when_drag_start = [selection_drag_type_for_point, cursor_from_selection_drag](Container *actual_root, Container *c) {
+        initial_box = rect_selection;
+        selection_drag = selection_drag_type_for_point(actual_root->mouse_initial_x, actual_root->mouse_initial_y);
+        if (selection_drag == SelectionDragType::NONE) {
+            selection_drag = SelectionDragType::MOVE;
+        }
+        setCursorImageUntilUnset(cursor_from_selection_drag(selection_drag));
+    };
+    select_box->when_drag = [apply_select_drag](Container *actual_root, Container *c) {
+        apply_select_drag(actual_root);
+        consume_event(actual_root, c);
+    };
+    select_box->when_drag_end = [apply_select_drag, update_select_cursor](Container *actual_root, Container *c) {
+        apply_select_drag(actual_root);
+        selection_drag = SelectionDragType::NONE;
+        update_select_cursor(actual_root);
+        consume_event(actual_root, c);
+    };
     
     
 
@@ -139,8 +315,6 @@ void actual_open_screenshot_tool() {
     }
     //label(type, "\uF408", "Freeform");
     
-    static bool rect_showing = false;
-    rect_showing = false;
     tool->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
         auto root = get_rendering_root();
         if (!root) return;
@@ -218,22 +392,24 @@ void actual_open_screenshot_tool() {
     };
     tool->when_drag_end_is_click = false;
     tool->when_clicked = paint {
-        if (!showing) {
-            if (mode == 2) {
-                auto cid = hypriso->window_from_mouse();
-                hypriso->bring_to_front(cid);
+        if (mode == 2) {
+            auto cid = hypriso->window_from_mouse();
+            hypriso->bring_to_front(cid);
+            later_immediate([cid](Timer *) {
+                screenshot_tool::close();
+                damage_all();
+                
                 later_immediate([cid](Timer *) {
-                    screenshot_tool::close();
-                    damage_all();
-                    
-                    later_immediate([cid](Timer *) {
-                        hypriso->screenshot_deco(cid);
-                        hypriso->save_window_to_png(cid, true, "/tmp/out.png");
-                        notify("Saved to: /tmp/out.png");
-                    });
+                    hypriso->screenshot_deco(cid);
+                    hypriso->save_window_to_png(cid, true, "/tmp/out.png");
+                    notify("Saved to: /tmp/out.png");
                 });
-            }
+            });
         }
+
+        later_immediate([](Timer *) {
+            screenshot_tool::close();
+        });
     };
     tool->when_drag_start = [](Container *actual_root, Container *c) {
         if (mode == 1) {
@@ -309,5 +485,3 @@ void screenshot_tool::close() {
     heart::set_force_meta_open(false);
     heart::set_zoom(1.0);
 }
-
-
