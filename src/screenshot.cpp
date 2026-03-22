@@ -78,6 +78,37 @@ void actual_open_screenshot_tool() {
     };
     type->spacing = 20;
 
+    static Bounds rect_selection;
+    rect_selection = Bounds();
+    
+    auto select_box = tool->child(::hbox, FILL_SPACE, FILL_SPACE);
+    select_box->when_paint = [](Container *actual_root, Container *c) {
+        auto root = get_rendering_root();
+        if (!root) return;
+        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        renderfix
+        border(c->real_bounds, {1, 1, 1, 1}, 1);
+    };
+    consume_everything(select_box);
+    
+    static Bounds initial_box;
+    select_box->when_drag_start = paint {
+        initial_box = rect_selection;
+    };
+    select_box->when_drag = [](Container *actual_root, Container *c) {
+        float off_x = actual_root->mouse_current_x - actual_root->mouse_initial_x;
+        float off_y = actual_root->mouse_current_y - actual_root->mouse_initial_y;
+        auto copy = initial_box;
+        copy.x += off_x;
+        copy.y += off_y;
+        copy.w += off_x;
+        copy.h += off_y;
+        rect_selection = copy;
+    };
+    select_box->when_drag_end = select_box->when_drag;
+    
+    
+
     {
         auto ch = label(type, "\uEC4E", "Full screen");
         ch->when_clicked = paint {
@@ -92,7 +123,6 @@ void actual_open_screenshot_tool() {
     {
         auto ch = label(type, "\uF407", "Rectangle");
         ch->when_clicked = paint {
-            showing = false;
             hypriso->whitelist_on = false;
             mode = 1;
             setCursorImageUntilUnset("crosshair");
@@ -108,7 +138,9 @@ void actual_open_screenshot_tool() {
         }; 
     }
     //label(type, "\uF408", "Freeform");
-
+    
+    static bool rect_showing = false;
+    rect_showing = false;
     tool->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
         auto root = get_rendering_root();
         if (!root) return;
@@ -141,11 +173,18 @@ void actual_open_screenshot_tool() {
             final_w, final_h);
         type->real_bounds = type->wanted_bounds;
         layout(actual_root, type, type->real_bounds);
-        type->exists = showing;
+        type->exists = showing && mode != 1;
+
+        auto select_box = c->children[1];
+        auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
+        select_box->wanted_bounds = fixed;
+        select_box->real_bounds = fixed;
+        select_box->exists = true;
+        if (rect_showing) {
+            layout(actual_root, select_box, select_box->real_bounds);
+        }
     };
-    static Bounds rect_selection;
-    static bool rect_showing = false;
-    rect_showing = false;
+
     tool->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
@@ -155,15 +194,15 @@ void actual_open_screenshot_tool() {
             return;
         
         renderfix
-        if (showing) {
+        if (showing && mode != 1) {
             hypriso->draw_monitor(rid, c->real_bounds);
             rect(c->real_bounds, {0, 0, 0, .1});
         }
-        if (rect_showing) {
+        if (rect_showing && false) {
             auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
             fixed.scale(s);
             fixed.round();
-            border(fixed, {1, 1, 1, .8}, 2 * s);
+            border(fixed, {1, 1, 1, .8}, 1);
         }
 
         hypriso->damage_entire(rid);
@@ -197,30 +236,23 @@ void actual_open_screenshot_tool() {
         }
     };
     tool->when_drag_start = [](Container *actual_root, Container *c) {
-        if (!showing) {
-            if (mode == 1) {
-                rect_showing = true;
-                rect_selection = Bounds(actual_root->mouse_current_x, actual_root->mouse_current_y, 
-                                        actual_root->mouse_current_x, actual_root->mouse_current_y);
-            }
+        if (mode == 1) {
+            rect_showing = true;
+            rect_selection = Bounds(actual_root->mouse_current_x, actual_root->mouse_current_y, 
+                                    actual_root->mouse_current_x, actual_root->mouse_current_y);
         }
     };
     tool->when_drag = [](Container *actual_root, Container *c) {
-        if (!showing) {
-            if (mode == 1) {
-                rect_selection = Bounds(rect_selection.x, rect_selection.y, 
-                                        actual_root->mouse_current_x, actual_root->mouse_current_y);
-                
-            }
+        if (mode == 1) {
+            rect_selection = Bounds(rect_selection.x, rect_selection.y, 
+                                    actual_root->mouse_current_x, actual_root->mouse_current_y);
+            
         }
     };
     tool->when_drag_end = [](Container *actual_root, Container *c) {
-        if (!showing) {
-            if (mode == 1) {
-                rect_selection = Bounds(rect_selection.x, rect_selection.y, 
-                                        actual_root->mouse_current_x, actual_root->mouse_current_y);
-                
-            }
+        if (mode == 1) {
+            rect_selection = Bounds(rect_selection.x, rect_selection.y, 
+                                    actual_root->mouse_current_x, actual_root->mouse_current_y);
         }
     };
     
@@ -231,17 +263,15 @@ void actual_open_screenshot_tool() {
             });
         }
         if (key == KEY_ENTER) {
-            if (!showing) {
-                if (mode == 1 && !pressed && rect_showing) {
-                    auto rid = hypriso->monitor_from_cursor();
-                    auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
-                    fixed.scale(scale(rid));
-                    hypriso->save_monitor_to_png(rid, "/tmp/out.png", fixed);
-                    notify("Saved to: /tmp/out.png");
-                    later_immediate([](Timer *) {
-                        screenshot_tool::close();
-                    });
-                }
+            if (mode == 1 && !pressed && rect_showing) {
+                auto rid = hypriso->monitor_from_cursor();
+                auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
+                fixed.scale(scale(rid));
+                hypriso->save_monitor_to_png(rid, "/tmp/out.png", fixed);
+                notify("Saved to: /tmp/out.png");
+                later_immediate([](Timer *) {
+                    screenshot_tool::close();
+                });
             }
         }
     };
