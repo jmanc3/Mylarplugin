@@ -388,9 +388,10 @@ void actual_open_screenshot_tool() {
             return;
         
         renderfix
-        if (showing && mode != 1) {
+        if (showing) {
             hypriso->draw_monitor(rid, c->real_bounds);
-            rect(c->real_bounds, {0, 0, 0, .1});
+            if (mode != 1)
+                rect(c->real_bounds, {0, 0, 0, .1});
         }
         if (rect_showing && false) {
             auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
