@@ -319,7 +319,6 @@ void actual_open_screenshot_tool() {
     {
         auto ch = label(type, "\uF407", "Rectangle");
         ch->when_clicked = paint {
-            hypriso->whitelist_on = false;
             mode = 1;
             setCursorImageUntilUnset("crosshair");
         };
@@ -433,6 +432,10 @@ void actual_open_screenshot_tool() {
         });
     };
     tool->when_drag_start = [](Container *actual_root, Container *c) {
+        if (mode == 0) {
+            mode = 1;
+            setCursorImageUntilUnset("crosshair");
+        }
         if (mode == 1) {
             rect_showing = true;
             rect_selection = Bounds(actual_root->mouse_current_x, actual_root->mouse_current_y, 
@@ -465,6 +468,14 @@ void actual_open_screenshot_tool() {
                 auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
                 fixed.scale(scale(rid));
                 hypriso->save_monitor_to_png(rid, "/tmp/out.png", fixed);
+                notify("Saved to: /tmp/out.png");
+                later_immediate([](Timer *) {
+                    screenshot_tool::close();
+                });
+            }
+            if (mode == 0 && !pressed) {
+                auto rid = hypriso->monitor_from_cursor();
+                hypriso->save_monitor_to_png(rid, "/tmp/out.png");
                 notify("Saved to: /tmp/out.png");
                 later_immediate([](Timer *) {
                     screenshot_tool::close();
