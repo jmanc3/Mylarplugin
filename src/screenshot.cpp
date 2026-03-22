@@ -421,8 +421,10 @@ void actual_open_screenshot_tool() {
                 
                 later_immediate([cid](Timer *) {
                     hypriso->screenshot_deco(cid);
-                    hypriso->save_window_to_png(cid, true, "/tmp/out.png");
-                    notify("Saved to: /tmp/out.png");
+                    later_immediate([cid](Timer *) {
+                        hypriso->save_window_to_png(cid, true, "/tmp/out.png");
+                        notify("Saved to: /tmp/out.png");
+                    });
                 });
             });
         }
