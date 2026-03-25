@@ -8,7 +8,7 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 static bool showing = true;
-static int mode = 0; // 1 rectangle, 2 window
+static int mode = 0; // 1 rectangle, 2 window, 3 colorpick
 
 Container *label(Container *parent, std::string icon, std::string text) {
     static float label_h = 20;
@@ -281,7 +281,7 @@ void actual_open_screenshot_tool() {
     };
     select_box->when_mouse_leaves_container = [](Container *actual_root, Container *c) {
         consume_event(actual_root, c);
-        if (mode == 1)
+        if (mode >= 1)
             setCursorImageUntilUnset("crosshair");
     };
     select_box->when_drag_start = [selection_drag_type_for_point, cursor_from_selection_drag](Container *actual_root, Container *c) {
@@ -332,6 +332,14 @@ void actual_open_screenshot_tool() {
             setCursorImageUntilUnset("crosshair");
         }; 
     }
+    {
+        auto ch = label(type, "\uECE9", "Colorpick");
+        ch->when_clicked = paint {
+            mode = 3;
+            setCursorImageUntilUnset("crosshair");
+        }; 
+    }
+    
     //label(type, "\uF408", "Freeform");
     
     tool->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
@@ -366,7 +374,7 @@ void actual_open_screenshot_tool() {
             final_w, final_h);
         type->real_bounds = type->wanted_bounds;
         layout(actual_root, type, type->real_bounds);
-        type->exists = showing && mode != 1;
+        type->exists = showing && mode != 1 && mode != 3;
 
         auto select_box = c->children[1];
         auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
@@ -389,14 +397,8 @@ void actual_open_screenshot_tool() {
         renderfix
         if (showing) {
             hypriso->draw_monitor(rid, c->real_bounds);
-            if (mode != 1)
+            if (mode != 1 && mode != 3)
                 rect(c->real_bounds, {0, 0, 0, .1});
-        }
-        if (rect_showing && false) {
-            auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
-            fixed.scale(s);
-            fixed.round();
-            border(fixed, {1, 1, 1, .8}, 1);
         }
 
         hypriso->damage_entire(rid);
@@ -427,6 +429,11 @@ void actual_open_screenshot_tool() {
                     });
                 });
             });
+        }
+        if (mode == 3) {
+            auto rid = hypriso->monitor_from_cursor();
+            RGBA color = hypriso->colorpick_monitor(rid, mouse());
+            notify(fz("{} {} {} {}", color.r, color.g, color.b, color.a));
         }
 
         later_immediate([](Timer *) {
@@ -479,6 +486,11 @@ void actual_open_screenshot_tool() {
                 auto rid = hypriso->monitor_from_cursor();
                 hypriso->save_monitor_to_png(rid, "/tmp/out.png");
                 notify("Saved to: /tmp/out.png");
+                later_immediate([](Timer *) {
+                    screenshot_tool::close();
+                });
+            }
+            if (mode == 3 && !pressed) {
                 later_immediate([](Timer *) {
                     screenshot_tool::close();
                 });

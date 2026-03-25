@@ -8487,6 +8487,63 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds regio
     Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", mon);
 }
 
+RGBA HyprIso::colorpick_monitor(int mon, Bounds mouse) {
+    RGBA color = {0, 0, 0, 1};
+
+    for (auto hm : hyprmonitors) {
+        if (!hm || hm->id != mon)
+            continue;
+
+        if (!hm->monfb || !hm->monfb->isAllocated()) {
+            Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} has no framebuffer", mon);
+            return color;
+        }
+
+        const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
+        const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
+        if (framebufferW <= 0 || framebufferH <= 0) {
+            Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
+            return color;
+        }
+
+        const Bounds monitorBounds = bounds_monitor(mon);
+        const float  sFactor       = scale(mon);
+        int          readX         = static_cast<int>(std::round((mouse.x - monitorBounds.x) * sFactor));
+        int          readY         = static_cast<int>(std::round((mouse.y - monitorBounds.y) * sFactor));
+
+        readX = std::clamp(readX, 0, framebufferW - 1);
+        readY = std::clamp(readY, 0, framebufferH - 1);
+
+        g_pHyprRenderer->makeEGLCurrent();
+
+        GLint previousReadFB = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
+
+        uint8_t pixel[4] = {0, 0, 0, 255};
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(readX, readY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+
+        const GLenum glErr = glGetError();
+        if (glErr != GL_NO_ERROR) {
+            Log::logger->log(Log::ERR, "colorpick_monitor: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
+            return color;
+        }
+
+        color.r = pixel[0] / 255.0;
+        color.g = pixel[1] / 255.0;
+        color.b = pixel[2] / 255.0;
+        color.a = pixel[3] / 255.0;
+        return color;
+    }
+
+    Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} not found", mon);
+    return color;
+}
+
 void HyprIso::draw_monitor(int mon, Bounds b) {
     for (auto hm : hyprmonitors) {
         if (hm->id != mon)

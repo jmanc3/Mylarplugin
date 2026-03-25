@@ -376,6 +376,7 @@ struct HyprIso {
     
     void screenshot_monitor(int mon);
     void save_monitor_to_png(int mon, std::string output_path, Bounds region = Bounds());
+    RGBA colorpick_monitor(int mon, Bounds mouse);
     
     void save_window_to_png(int cid, bool decorations, std::string output_path);
 

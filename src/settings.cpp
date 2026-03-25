@@ -809,6 +809,38 @@ static void fill_dock_settings(Container *root, Container *c) {
     });
 }
 
+static void fill_wallpaper_settings(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Wallpaper Settings");
+    
+    make_vert_space(padded_right, 10);
+    
+}
+
 
 static void fill_keyboard_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
@@ -1040,6 +1072,8 @@ void create_tab_option(Container *parent, std::string label) {
             fill_keyboard_settings(root, c);
         } else if (label == "Dock") {
             fill_dock_settings(root, c);
+        } else if (label == "Wallpaper") {
+            fill_wallpaper_settings(root, c);
         }
     };
 }
@@ -1054,6 +1088,7 @@ void fill_left(Container *left) {
     create_tab_option(left, "Audio");
     create_tab_option(left, "Wifi");
     create_tab_option(left, "Dock");
+    create_tab_option(left, "Wallpaper");
 }
 
 void fill_root(Container *root) {
