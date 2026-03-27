@@ -71,13 +71,6 @@ void actual_open_screenshot_tool() {
     consume_everything(tool);
 
     auto type = tool->child(::hbox, FILL_SPACE, FILL_SPACE);
-    type->when_paint = [](Container *actual_root, Container *c) {
-        auto root = get_rendering_root();
-        if (!root) return;
-        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        renderfix
-        rect(c->real_bounds, {1, 0, 0, 1});
-    };
     type->spacing = 20;
 
     static Bounds rect_selection;
@@ -90,6 +83,9 @@ void actual_open_screenshot_tool() {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        
+        if (stage != (int) STAGE::RENDER_PRE_CURSOR)
+            return;
         renderfix
         auto mb = bounds_monitor(rid);
         mb.scale(s);
@@ -333,7 +329,7 @@ void actual_open_screenshot_tool() {
         }; 
     }
     {
-        auto ch = label(type, "\uECE9", "Colorpick");
+        auto ch = label(type, "\uEF3C", "Colorpick");
         ch->when_clicked = paint {
             mode = 3;
             setCursorImageUntilUnset("crosshair");
@@ -397,6 +393,63 @@ void actual_open_screenshot_tool() {
         renderfix
         if (showing) {
             hypriso->draw_monitor(rid, c->real_bounds);
+            /*
+            if (mode == 3) {
+                auto br = bounds_monitor(rid);
+                auto mou = mouse();
+                const double preferredPreviewSize = 80.0 * s;
+                const double sampleSize           = 19.0;
+                const double monitorX             = br.x * s;
+                const double monitorY             = br.y * s;
+                const double monitorW             = br.w * s;
+                const double monitorH             = br.h * s;
+                const double mouseX               = mou.x * s;
+                const double mouseY               = mou.y * s;
+                const double previewSize          = std::min({preferredPreviewSize, monitorW, monitorH});
+                const double halfPreview          = previewSize * 0.5;
+
+                // Convert global cursor position into monitor-local framebuffer pixels.
+                const double mouseLocalX = (mou.x - br.x) * s;
+                const double mouseLocalY = (mou.y - br.y) * s;
+                const double fbW         = monitorW;
+                const double fbH         = monitorH;
+                const double halfSample  = sampleSize * 0.5;
+
+                // Keep UV sample size fixed and clamp origin so it never shrinks at edges.
+                const double uvX = std::clamp(mouseLocalX - halfSample, 0.0, std::max(0.0, fbW - sampleSize));
+                const double uvY = std::clamp(mouseLocalY - halfSample, 0.0, std::max(0.0, fbH - sampleSize));
+
+                // Center preview on cursor, but keep it fully inside the monitor.
+                const double drawX = std::clamp(mouseX - halfPreview, monitorX, std::max(monitorX, monitorX + monitorW - previewSize));
+                const double drawY = std::clamp(mouseY - halfPreview, monitorY, std::max(monitorY, monitorY + monitorH - previewSize));
+                Bounds       drawBounds{drawX, drawY, previewSize, previewSize};
+                drawBounds.round();
+
+                hypriso->draw_monitor(rid, drawBounds, {uvX, uvY, sampleSize, sampleSize});
+
+                // Border around the full zoom preview uses currently hovered pixel color.
+                RGBA hovered = hypriso->colorpick_monitor(rid, mou);
+                auto bb = drawBounds;
+                bb.shrink(std::max(1.0, std::round(1.0 * s)));
+                bb.round();
+                border(bb, hovered, std::max(1.0, std::round(1.0 * s)));
+
+                // Black border around the exact hovered source pixel inside the zoom preview.
+                const double clampedMouseLocalX = std::clamp(mouseLocalX, 0.0, std::max(0.0, fbW - 1.0));
+                const double clampedMouseLocalY = std::clamp(mouseLocalY, 0.0, std::max(0.0, fbH - 1.0));
+                const double samplePixelSize    = previewSize / sampleSize;
+                const double relX               = (clampedMouseLocalX - uvX) / sampleSize;
+                const double relY               = (clampedMouseLocalY - uvY) / sampleSize;
+                Bounds pixelBounds{
+                    drawBounds.x + relX * previewSize - samplePixelSize * 0.5,
+                    drawBounds.y + relY * previewSize - samplePixelSize * 0.5,
+                    samplePixelSize,
+                    samplePixelSize
+                };
+                pixelBounds.round();
+                border(pixelBounds, {0, 0, 0, 1}, 1);
+            }
+            */
             if (mode != 1 && mode != 3)
                 rect(c->real_bounds, {0, 0, 0, .1});
         }
@@ -433,7 +486,9 @@ void actual_open_screenshot_tool() {
         if (mode == 3) {
             auto rid = hypriso->monitor_from_cursor();
             RGBA color = hypriso->colorpick_monitor(rid, mouse());
-            notify(fz("{} {} {} {}", color.r, color.g, color.b, color.a));
+            auto out = fz("{:.2f}, {:.2f}, {:.2f}, {:.2f}", color.r, color.g, color.b, color.a);
+            system(fz("wl-copy \"{}\" &", out).c_str());
+            //notify();
         }
 
         later_immediate([](Timer *) {

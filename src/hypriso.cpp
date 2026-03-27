@@ -8544,7 +8544,7 @@ RGBA HyprIso::colorpick_monitor(int mon, Bounds mouse) {
     return color;
 }
 
-void HyprIso::draw_monitor(int mon, Bounds b) {
+void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
     for (auto hm : hyprmonitors) {
         if (hm->id != mon)
             continue;
@@ -8557,7 +8557,7 @@ void HyprIso::draw_monitor(int mon, Bounds b) {
         if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
             return; 
         }
-        AnyPass::AnyData anydata([hm, mon, b, clip, clipbox](AnyPass* pass) {
+        AnyPass::AnyData anydata([hm, mon, b, clip, clipbox, uvBounds](AnyPass* pass) {
             auto roundingPower = 2.0f;
             auto cornermask = 0;
             if (!hm->monfb)
@@ -8573,15 +8573,34 @@ void HyprIso::draw_monitor(int mon, Bounds b) {
             data.round = 0.0;
             data.roundingPower = roundingPower;
             data.a = 1.0;
+            data.noAA = true;
 
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                std::min(1.0, 1.0),
-                std::min(1.0, 1.0)
-            );
+            bool useCustomUV = uvBounds.x != 0 || uvBounds.y != 0 || uvBounds.w != 0 || uvBounds.h != 0;
+            if (useCustomUV) {
+                const double framebufferW = hm->monfb->m_size.x;
+                const double framebufferH = hm->monfb->m_size.y;
+                if (framebufferW > 0.0 && framebufferH > 0.0) {
+                    const double uvLeft   = std::clamp(uvBounds.x / framebufferW, 0.0, 1.0);
+                    const double uvTop    = std::clamp(uvBounds.y / framebufferH, 0.0, 1.0);
+                    const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
+                    const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
+
+                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
+                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
+                } else {
+                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+                }
+            } else {
+                g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+            }
             set_rounding(cornermask);
             if (clip)
                 g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+            tex->bind();
+            tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             g_pHyprOpenGL->renderTexture(tex, box, data);
             set_rounding(0);
             g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
