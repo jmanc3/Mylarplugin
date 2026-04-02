@@ -57,6 +57,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <filesystem>
 #include <poll.h>
+#include <sys/inotify.h>
 #include <unistd.h>
 
 #ifdef TRACY_ENABLE
@@ -3082,6 +3083,9 @@ void change_root_config_path(std::string path, bool force = true) {
 }
 
 static std::vector<PF *> polled;
+static int inotify_fd = -1;
+static PF* inotify_poll_pf = nullptr;
+static std::unordered_map<int, std::function<void(FileWatchUpdate)>> inotify_watchers;
 
 void HyprIso::end() {
 #ifdef TRACY_ENABLE
@@ -3092,10 +3096,23 @@ void HyprIso::end() {
     g_pHyprRenderer->m_renderPass.removeAllOfType("CTexPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CAnyPassElement");
     for (auto pf : polled) {
-        wl_event_source_remove(pf->source);
+        if (!pf)
+            continue;
+        if (pf->is_file_watcher) {
+            if (inotify_fd != -1)
+                inotify_rm_watch(inotify_fd, pf->fd);
+        } else if (pf->source) {
+            wl_event_source_remove(pf->source);
+        }
         delete pf;
     }
     polled.clear();
+    inotify_watchers.clear();
+    inotify_poll_pf = nullptr;
+    if (inotify_fd != -1) {
+        close(inotify_fd);
+        inotify_fd = -1;
+    }
     
     remove_request_listeners(); 
     // reset to default config
@@ -7662,6 +7679,120 @@ bool is_being_animating_to(float *value, float target) {
     return false;
 }
 
+static FileWatchUpdate to_file_watch_update(uint32_t mask) {
+    if (mask & (IN_DELETE_SELF | IN_MOVE_SELF | IN_IGNORED))
+        return FileWatchUpdate::REMOVED;
+    if (mask & (IN_MODIFY | IN_CLOSE_WRITE))
+        return FileWatchUpdate::UPDATED;
+    return FileWatchUpdate::OTHER;
+}
+
+int watch_file(const std::string& path, const std::function<void(FileWatchUpdate)>& on_update) {
+    if (path.empty() || !on_update)
+        return -1;
+
+    if (inotify_fd == -1) {
+        inotify_fd = inotify_init1(IN_NONBLOCK);
+        if (inotify_fd < 0)
+            return -1;
+    }
+
+    if (!inotify_poll_pf) {
+        const bool ok = poll_descriptor(inotify_fd, [](PF *) {
+            std::vector<char> buffer(4096);
+            while (true) {
+                const ssize_t len = read(inotify_fd, buffer.data(), buffer.size());
+                if (len < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
+                    return;
+                }
+                if (len == 0)
+                    break;
+
+                std::vector<int> toRemove;
+                ssize_t i = 0;
+                while (i < len) {
+                    auto* event = reinterpret_cast<inotify_event*>(&buffer[i]);
+                    if (event->wd >= 0) {
+                        const auto it = inotify_watchers.find(event->wd);
+                        if (it != inotify_watchers.end()) {
+                            const auto update = to_file_watch_update(event->mask);
+                            it->second(update);
+                            if (update == FileWatchUpdate::REMOVED)
+                                toRemove.push_back(event->wd);
+                        }
+                    }
+                    i += sizeof(inotify_event) + event->len;
+                }
+
+                for (const int wd : toRemove)
+                    remove_watch(wd);
+            }
+        }, nullptr, "inotify-file-watch");
+
+        if (!ok) {
+            close(inotify_fd);
+            inotify_fd = -1;
+            return -1;
+        }
+
+        inotify_poll_pf = polled.empty() ? nullptr : polled.back();
+    }
+
+    const int wd = inotify_add_watch(inotify_fd, path.c_str(), IN_MODIFY | IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF);
+    if (wd < 0)
+        return -1;
+
+    inotify_watchers[wd] = on_update;
+
+    auto* pf = new PF;
+    pf->fd = wd;
+    pf->name = path;
+    pf->is_file_watcher = true;
+    polled.push_back(pf);
+
+    return wd;
+}
+
+void remove_watch(int watch_descriptor) {
+    if (watch_descriptor < 0)
+        return;
+
+    if (inotify_fd != -1)
+        inotify_rm_watch(inotify_fd, watch_descriptor);
+
+    inotify_watchers.erase(watch_descriptor);
+
+    for (int i = static_cast<int>(polled.size()) - 1; i >= 0; --i) {
+        if (polled[i] && polled[i]->is_file_watcher && polled[i]->fd == watch_descriptor) {
+            delete polled[i];
+            polled.erase(polled.begin() + i);
+        }
+    }
+
+    if (inotify_watchers.empty()) {
+        if (inotify_poll_pf) {
+            if (inotify_poll_pf->source)
+                wl_event_source_remove(inotify_poll_pf->source);
+
+            for (int i = static_cast<int>(polled.size()) - 1; i >= 0; --i) {
+                if (polled[i] == inotify_poll_pf) {
+                    delete polled[i];
+                    polled.erase(polled.begin() + i);
+                    break;
+                }
+            }
+            inotify_poll_pf = nullptr;
+        }
+
+        if (inotify_fd != -1) {
+            close(inotify_fd);
+            inotify_fd = -1;
+        }
+    }
+}
+
 bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name) {
     auto pf = new PF;
     pf->fd = fd;
@@ -8684,5 +8815,3 @@ int HyprIso::window_from_mouse() {
     }
     return -1;
 };
-
-

@@ -560,9 +560,19 @@ struct PF {
     void *data = nullptr;
     std::function<void (PF *)> func = nullptr;
     bool remove = false;
+    bool is_file_watcher = false;
     wl_event_source *source = nullptr;
     std::string name;
 };
+
+enum class FileWatchUpdate {
+    UPDATED,
+    REMOVED,
+    OTHER
+};
+
+int watch_file(const std::string& path, const std::function<void(FileWatchUpdate)>& on_update);
+void remove_watch(int watch_descriptor);
 
 // On it's own thread
 bool poll_descriptor(int fd, std::function<void (PollingThread::WatchedFD *)> func, void *data, std::string name);

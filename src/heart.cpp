@@ -35,6 +35,7 @@
 #include <iterator>
 #include <filesystem>
 #include <fstream>
+#include <pulse/proplist.h>
 #include <sys/wait.h>
 #include <wayland-server-protocol.h>
 
@@ -915,6 +916,9 @@ static void on_monitor_closed(int id) {
     for (int i = actual_monitors.size() - 1; i >= 0; i--) {
         auto cid = *datum<int>(actual_monitors[i], "cid");
         if (cid == id) {
+            auto t = datum<TextureInfo>(actual_monitors[i], "bg_wall");
+            free_text_texture(t->id);
+            
             actual_monitors.erase(actual_monitors.begin() + i);
         }
     }
@@ -1772,6 +1776,36 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
     }
 }
 
+void watch_wallpaper_change() {
+    const char* home = std::getenv("HOME");
+    std::filesystem::path filepath =
+        std::filesystem::path(home) / ".config/mylar/wall.png";
+    static Timer *t = nullptr;
+    watch_file(filepath.string(), [](FileWatchUpdate update) {
+        if (update == FileWatchUpdate::UPDATED) {
+            if (!t) {
+                t = later(200, [](Timer *) {
+                    for (auto c : actual_monitors) {
+                        auto t = datum<TextureInfo>(c, "bg_wall");
+                        const char* home = std::getenv("HOME");
+                        std::filesystem::path filepath =
+                            std::filesystem::path(home) / ".config/mylar/wall.png";
+                        free_text_texture(t->id);
+                        *t = gen_texture_png(filepath);
+                    }
+                    
+                    damage_all();
+                    t = nullptr;
+                });
+            }
+        } else if (update == FileWatchUpdate::REMOVED) {
+            //notify("removed");
+        } else if (update == FileWatchUpdate::OTHER) {
+            //notify("other");
+        }
+    });
+}
+
 void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1855,6 +1889,8 @@ void heart::begin() {
         later_immediate([](Timer *) {
             damage_all();
         });
+
+        watch_wallpaper_change();
     });
 }
 
