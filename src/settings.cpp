@@ -841,6 +841,7 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
 
     make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
+        damage_all();
     });
 }
 
