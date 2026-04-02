@@ -63,6 +63,7 @@ struct ConfigSettings {
     bool meter_animations = false;
     bool prefer_pipewire_audio_backend = false;
     bool show_docks = true;
+    bool draw_wallpaper = true;
 };
 
 extern ConfigSettings *set;

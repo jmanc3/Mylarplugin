@@ -999,10 +999,12 @@ static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_POST_WALLPAPER) {
         for (auto m : actual_monitors) {
             if (*datum<int>(m, "cid") == current_monitor) {
-                TextureInfo info = *datum<TextureInfo>(m, "bg_wall");
-                auto b = bounds_monitor(current_monitor);
-                b.scale(scale(current_monitor));
-                draw_texture(info, b);
+                if (set->draw_wallpaper) {
+                    TextureInfo info = *datum<TextureInfo>(m, "bg_wall");
+                    auto b = bounds_monitor(current_monitor);
+                    b.scale(scale(current_monitor));
+                    draw_texture(info, b);
+                }
             }
         }
     }

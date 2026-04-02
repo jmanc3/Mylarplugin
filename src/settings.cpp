@@ -838,7 +838,10 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
     make_section_title(padded_right, "Wallpaper Settings");
     
     make_vert_space(padded_right, 10);
-    
+
+    make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
+        set->draw_wallpaper = c;
+    });
 }
 
 
