@@ -501,6 +501,7 @@ void set_window_corner_mask(int id, int cornermask);
 void free_text_texture(int id);
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color);
 TextureInfo gen_texture(std::string path, float h);
+TextureInfo gen_texture_png(std::string path);
 
 void draw_texture(TextureInfo info, int x, int y, float a = 1.0, float clip_w = 0.0);
 void draw_texture(TextureInfo info, Bounds b, float a = 1.0, float clip_w = 0.0);

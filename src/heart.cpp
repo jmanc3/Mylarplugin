@@ -900,6 +900,11 @@ static void on_monitor_open(int id) {
     heart::layout_containers();
     if (set->show_docks)
         dock::start(hypriso->monitor_name(id));
+    auto t = datum<TextureInfo>(c, "bg_wall");
+    const char* home = std::getenv("HOME");
+    std::filesystem::path filepath =
+        std::filesystem::path(home) / ".config/mylar/wall.png";
+    *t = gen_texture_png(filepath);
 
     later(10, [](Timer *) {
         damage_all();
@@ -991,6 +996,17 @@ static void on_render(int id, int stage) {
     int current_window = current_rendering_window();
     int active_id = current_window == -1 ? current_monitor : current_window;
 
+    if (stage == (int) STAGE::RENDER_POST_WALLPAPER) {
+        for (auto m : actual_monitors) {
+            if (*datum<int>(m, "cid") == current_monitor) {
+                TextureInfo info = *datum<TextureInfo>(m, "bg_wall");
+                auto b = bounds_monitor(current_monitor);
+                b.scale(scale(current_monitor));
+                draw_texture(info, b);
+            }
+        }
+    }
+
     for (auto r : actual_monitors) {
         auto cid = *datum<int>(r, "cid");
         //hypriso->damage_entire(cid);
@@ -1004,6 +1020,7 @@ static void on_render(int id, int stage) {
     }
     if (stage == (int) STAGE::RENDER_PRE_CURSOR) {
     }
+
 
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
         //rect({10, 10, 300, 300}, {0, 0, 0, 1}, 0, 15.0f, 2.0, true);

@@ -4018,6 +4018,13 @@ void load_icon_full_path(cairo_surface_t** surface, std::string path, int target
     }
 }
 
+void load_icon_full_path(cairo_surface_t** surface, std::string path) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    *surface = cairo_image_surface_create_from_png(path.c_str());
+}
+
 SP<CTexture> missingTexure(int size) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -4134,6 +4141,62 @@ TextureInfo gen_texture(std::string path, float h) {
     //log("gen texture");
     //notify("gen texture");
     auto tex = loadAsset(path, h);
+    if (tex.get()) {
+        auto t = new Texture;
+        t->texture = tex;
+        TextureInfo info;
+        info.id = unique_id++;
+        info.w = t->texture->m_size.x;
+        info.h = t->texture->m_size.y;
+        printf("generate pic: %d\n", info.id);
+        t->info = info;
+        hyprtextures.push_back(t);
+        return t->info;
+    }
+    return {};
+}
+
+SP<CTexture> loadAsset(const std::string& filename) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    cairo_surface_t* icon = nullptr;
+    load_icon_full_path(&icon, filename);
+    if (!icon)
+        return {};
+
+    const auto CAIROFORMAT = cairo_image_surface_get_format(icon);
+    auto       tex         = makeShared<CTexture>();
+
+    tex->allocate();
+    tex->m_size = {cairo_image_surface_get_width(icon), cairo_image_surface_get_height(icon)};
+
+    const GLint glIFormat = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB32F : GL_RGBA;
+    const GLint glFormat  = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB : GL_RGBA;
+    const GLint glType    = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_FLOAT : GL_UNSIGNED_BYTE;
+
+    const auto  DATA = cairo_image_surface_get_data(icon);
+    tex->bind();
+    tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    if (CAIROFORMAT != CAIRO_FORMAT_RGB96F) {
+        tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+        tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
+    }
+
+    glTexImage2D(GL_TEXTURE_2D, 0, glIFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
+
+    cairo_surface_destroy(icon);
+
+    return tex;
+}
+
+TextureInfo gen_texture_png(std::string path) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto tex = loadAsset(path);
     if (tex.get()) {
         auto t = new Texture;
         t->texture = tex;
@@ -8621,3 +8684,5 @@ int HyprIso::window_from_mouse() {
     }
     return -1;
 };
+
+
