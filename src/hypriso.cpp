@@ -4750,13 +4750,13 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
     static auto PSESSIONLOCKXRAY = CConfigValue<Hyprlang::INT>("misc:session_lock_xray");
 
     //g_pHyprRenderer->renderBackground(pMonitor);
-    g_pHyprOpenGL->clearWithTex();
+    //g_pHyprOpenGL->clearWithTex();
 
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND]) {
         g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
     }
 
-    //EMIT_HOOK_EVENT("render", RENDER_POST_WALLPAPER);
+    Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
 
     /*
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM]) {
