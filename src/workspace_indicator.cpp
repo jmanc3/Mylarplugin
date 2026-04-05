@@ -72,8 +72,15 @@ void workspace_indicator::on_change(int cid) {
             //render_drop_shadow(rid, 1, {0, 0, 0, 0.5}, h * .5, 2.0, sm);
 
             rect(larger, {.14, .14, .14, 1}, 0, 0.0, 2.0, true);
-            draw_colored_circ(larger.x + larger.h * .1, std::round(larger.y + larger.h * .5) - .5, std::round(larger.h * .5) + .5, {.14, .14, .14, 1}, .07);
-            draw_colored_circ(larger.x + larger.w -  larger.h * .1, std::round(larger.y + larger.h * .5) - .5, std::round(larger.h * .5) + .5, {.14, .14, .14, 1}, .07);
+            auto left = larger;
+            left.w = left.h;
+            left.x -= left.w * .5;
+            rect(left, {.14, .14, .14, 1}, 0, left.h * .5, 2.0, false);
+            
+            auto right = larger;
+            right.w = right.h;
+            right.x += larger.w - right.w * .5;
+            rect(right, {.14, .14, .14, 1}, 0, right.h * .5, 2.0, false);
         }
 
         float dot_w = std::round(4 * s);
