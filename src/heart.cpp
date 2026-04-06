@@ -1006,6 +1006,8 @@ static void on_render(int id, int stage) {
                 if (set->draw_wallpaper) {
                     TextureInfo info = *datum<TextureInfo>(m, "bg_wall");
                     auto b = bounds_monitor(current_monitor);
+                    b.x = 0;
+                    b.y = 0;
                     b.scale(scale(current_monitor));
                     draw_texture(info, b);
                 }
