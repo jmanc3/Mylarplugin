@@ -6,7 +6,9 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock.h"
+#include "portable-file-dialogs.h"
 
+#include <gtk/gtk.h>
 #include <thread>
 #include <fstream>
 #include <filesystem>
@@ -809,6 +811,46 @@ static void fill_dock_settings(Container *root, Container *c) {
     });
 }
 
+static void make_button(Container *parent, std::string text, std::function<void()> func) {
+    static float pad_amount = 11;
+    static float text_height = 11;
+    auto pad = parent->child(FILL_SPACE, FILL_SPACE);
+    pad->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        text_height = 11 * dpi;
+        pad_amount = 11 * dpi;
+        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        c->wanted_bounds.w = bounds.w + pad_amount * 2;
+        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+    };
+    pad->when_paint = [text](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        if (c->state.mouse_pressing) {
+            set_argb(cr, {.4, .4, .4, 1});
+        } else if (c->state.mouse_hovering) {
+            set_argb(cr, {.55, .55, .55, 1});
+        } else {
+            set_argb(cr, {.7, .7, .7, 1});
+        }
+        set_rect(cr, c->real_bounds);
+        cairo_fill(cr);
+        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, 
+            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
+            text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+    };
+   pad->when_clicked = [func](Container *root, Container *c) {
+       if (func) {
+           func();
+       }
+   };
+}
+
 static void fill_wallpaper_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -842,6 +884,30 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
     make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
         damage_all();
+    });
+
+    make_vert_space(padded_right, 4); 
+
+    make_button(padded_right, "Choose file", []() {
+        /*
+        static bool finding = false;
+        if (finding)
+            return;
+        finding = true;
+        std::thread t([]() {
+            */
+            // File open
+            auto f = pfd::open_file("Choose wallpaper", pfd::path::home(),
+                                    { "All Files", "*" },
+                                    pfd::opt::multiselect);
+            for (auto const &name : f.result())
+                notify(name);
+
+/*
+            finding = false;
+        });
+        t.detach();
+        */
     });
 }
 

@@ -173,7 +173,9 @@ struct Dock : UserData {
     MylarWindow *volume = nullptr;
 
     MylarWindow *extra = nullptr;
-    
+
+    MylarWindow *brightness = nullptr;
+
     Windows *collection = nullptr;
     bool first_fill = true;
     RawWindowSettings creation_settings;
@@ -1604,6 +1606,45 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     cairo_set_line_width(cr, stroke_width);
 }
 
+Container *make_self_sizing_label(Container *root, std::string text, int size, std::function<MylarWindow * (Dock *)> get_window) {
+    auto label = root->child(FILL_SPACE, FILL_SPACE);
+    label->pre_layout = [text, size, get_window](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        auto bounds = draw_text(cr, c, text, size * dpi, false);
+        c->wanted_bounds.h = bounds.h;
+    };
+    label->when_paint = [text, size, get_window](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, size * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
+    };
+    return label;
+}
+
+static void fill_brightness_container(Dock *dock) {
+    dock->brightness->root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->brightness->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->brightness->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+    auto parent = dock->brightness->root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto s = dock->brightness->raw_window->dpi;
+        c->wanted_pad = Bounds(8 * s, 8 * s, 8 * s, 8 * s);
+    };
+    
+    auto title = parent->child(FILL_SPACE, FILL_SPACE);
+    make_self_sizing_label(title, "Brightness", 12, [](Dock *d) { return d->brightness; });
+    auto slider = parent->child(FILL_SPACE, FILL_SPACE);
+}
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root;
@@ -1836,7 +1877,27 @@ static void fill_root(Container *root) {
             }
             set_brightness(brightness_data->value);
         };
+        brightness->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
 
+            RawWindowSettings settings = make_icon_anchored_popup_settings(
+                c, dpi, volume_popup_w, volume_popup_w * .26);
+
+            dock->brightness = open_mylar_popup(mylar, settings);
+            if (!dock->brightness)
+                return;
+            dock->brightness->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->brightness = nullptr;
+            };
+            dock->brightness->root->user_data = dock;
+            dock->brightness->root->wanted_bounds.w = FILL_SPACE;
+            dock->brightness->root->wanted_bounds.h = FILL_SPACE;
+            fill_brightness_container(dock);
+            windowing::redraw(dock->brightness->raw_window);
+        };
         brightness->user_data = brightness_data;
     }
 
@@ -2462,7 +2523,7 @@ static void paint_debug_us(Container *root, Container *c) {
 static int audio_container = 3824729; 
 static std::unordered_set<int> expanded_audio_pids;
 
-static Container *fill_out_slider(Container *c) {
+static Container *fill_out_volume_slider(Container *c) {
     static float dotr = 17;
     static float thickness = 8;
     c->when_paint = [](Container *root, Container *c) {
@@ -2681,7 +2742,7 @@ static Container *add_volume_option(Container *parent) {
     };
     
     auto slider = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
-    fill_out_slider(slider);
+    fill_out_volume_slider(slider);
     auto right_volume_text = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     right_volume_text->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
