@@ -1707,6 +1707,31 @@ Container *make_self_sizing_slider(Container *root,
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         on_value_change(c, scalar);
     };
+    slider->when_fine_scrolled = [get_value, on_value_change](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
+        auto value = get_value(c) * 100.0f;
+        if (came_from_touchpad) {
+            value += scroll_y * .25;
+        } else {
+            // When changing volume with mouse, round to next, 0, 5, 3, or 7
+            int full = std::round(value);
+            int last_digit;
+            do {
+                if (scroll_y > 0) {
+                    full++;
+                } else if (scroll_y < 0) {
+                    full--;
+                }
+                last_digit = full % 10;
+            } while (!(last_digit == 0 || last_digit == 5));
+            
+            value = ((double) full);
+        }
+        if (value > 100)
+           value = 100;
+        if (value < 0)
+           value = 0;
+        on_value_change(c, value * .01);
+    };
     return slider_parent;
 }
 
