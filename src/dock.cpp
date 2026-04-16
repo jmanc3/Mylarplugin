@@ -289,6 +289,17 @@ struct BrightnessData : UserData {
     float value = 50;
 };
 
+static void make_vert_space(Container *parent, int wanted_h, std::function<MylarWindow * (Dock *)> get_window) {
+    auto pad = parent->child(8, 8);
+    pad->pre_layout = [wanted_h, get_window](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        c->wanted_bounds.h = wanted_h * dpi;
+    };
+}
+
 static PangoLayout *
 get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeight weight, bool italic) {
 #ifdef TRACY_ENABLE
@@ -1606,6 +1617,99 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     cairo_set_line_width(cr, stroke_width);
 }
 
+Container *make_self_sizing_slider(Container *root, 
+                            std::function<std::string (Container *)> left_text,
+                            std::function<std::string (Container *)> right_text,
+                            std::function<void (Container *, float)> on_value_change,
+                            std::function<float (Container *)> get_value,
+                            std::function<MylarWindow * (Dock *)> get_window) {
+    static float height = 32;
+    auto slider_parent = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+    auto left = slider_parent->child(FILL_SPACE, FILL_SPACE);
+    auto slider = slider_parent->child(FILL_SPACE, FILL_SPACE);
+    auto right = slider_parent->child(FILL_SPACE, FILL_SPACE);
+
+    slider_parent->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        c->wanted_bounds.h = height * dpi;
+    };
+    left->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        c->wanted_bounds.h = height * dpi;
+        c->wanted_bounds.w = height * dpi;
+    };
+    left->when_paint = [left_text, get_window](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        auto left = left_text(c);
+        auto b = draw_text(cr, 0, 0, left, 12 * dpi, false, "Segoe Fluent Icons");
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
+            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, left, 12 * dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+    };
+    right->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        c->wanted_bounds.h = height * dpi;
+        c->wanted_bounds.w = height * dpi;
+    };
+    right->when_paint = [right_text, get_window](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        auto right = right_text(c);
+        auto b = draw_text(cr, 0, 0, right, 12 * dpi, false);
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
+            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, right, 12 * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
+    };
+    slider->when_paint = [get_window, get_value](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->cr;
+        
+        set_argb(cr, accent);
+        set_rect(cr, c->real_bounds);
+        cairo_fill(cr);
+
+        auto value = get_value(c);
+        set_argb(cr, {1, 1, 1, .5});
+        auto b = c->real_bounds;
+        b.w *= value;
+        set_rect(cr, b);
+        cairo_fill(cr);
+    };
+    slider->when_clicked = [on_value_change](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        on_value_change(c, scalar);
+    };
+    slider->when_drag_start = [on_value_change](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        on_value_change(c, scalar);
+    };
+    slider->when_drag = [on_value_change](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        on_value_change(c, scalar);
+    };
+    slider->when_drag_end = [on_value_change](Container *root, Container *c) {
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+        on_value_change(c, scalar);
+    };
+    return slider_parent;
+}
+
 Container *make_self_sizing_label(Container *root, std::string text, int size, std::function<MylarWindow * (Dock *)> get_window) {
     auto label = root->child(FILL_SPACE, FILL_SPACE);
     label->pre_layout = [text, size, get_window](Container *root, Container *c, const Bounds &b) {
@@ -1641,9 +1745,35 @@ static void fill_brightness_container(Dock *dock) {
         c->wanted_pad = Bounds(8 * s, 8 * s, 8 * s, 8 * s);
     };
     
-    auto title = parent->child(FILL_SPACE, FILL_SPACE);
-    make_self_sizing_label(title, "Brightness", 12, [](Dock *d) { return d->brightness; });
-    auto slider = parent->child(FILL_SPACE, FILL_SPACE);
+    make_self_sizing_label(parent, "Brightness", 12, [](Dock *d) { return d->brightness; });
+    
+    make_vert_space(parent, 4, [](Dock *d) { return d->brightness; });
+
+    struct SliderInfo : UserData {
+        float amount = 0;
+    };
+    auto slider = make_self_sizing_slider(parent, [](Container *c) {
+        auto slider = c->parent;
+        auto slider_info = (SliderInfo *) slider->user_data;
+        return "\uE706";
+    }, [](Container *c) {
+        auto slider = c->parent;
+        auto slider_info = (SliderInfo *) slider->user_data;
+        return std::to_string((int) std::round(slider_info->amount * 100));
+    }, [](Container *c, float amount) {
+        auto slider = c->parent;
+        auto slider_info = (SliderInfo *) slider->user_data;
+        slider_info->amount = std::max(0.0f, std::min(1.0f, amount));
+        set_brightness(std::round(slider_info->amount * 100.0f));
+    }, [](Container *c) {
+        auto slider = c->parent;
+        auto slider_info = (SliderInfo *) slider->user_data;
+        return slider_info->amount;
+    },
+    [](Dock *d) { return d->brightness; });
+    auto slider_info = new SliderInfo;
+    slider_info->amount = get_brightness() / 100.0f;
+    slider->user_data = slider_info;
 }
 
 static void fill_root(Container *root) {
@@ -1883,7 +2013,7 @@ static void fill_root(Container *root) {
             auto dpi = mylar->raw_window->dpi;
 
             RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, volume_popup_w, volume_popup_w * .26);
+                c, dpi, volume_popup_w, volume_popup_w * .23);
 
             dock->brightness = open_mylar_popup(mylar, settings);
             if (!dock->brightness)
