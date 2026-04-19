@@ -1755,6 +1755,80 @@ Container *make_self_sizing_label(Container *root, std::string text, int size, s
     return label;
 }
 
+static void fill_extra_container(Container *root) {
+    static auto get_window = [](Dock *dock) {
+        return dock->extra;
+    };
+    root->type = ::vbox;
+    root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto cr = window->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+    auto top = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+    static auto button_pad = 10;
+    for (int i = 0; i < 3; i++) {
+        auto l = top->child(FILL_SPACE, FILL_SPACE);
+        l->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dock = (Dock *) root->user_data;
+            auto window = get_window(dock);
+            auto s = window->raw_window->dpi;
+            c->wanted_pad = Bounds(button_pad * s, button_pad * s, button_pad * s, button_pad * s);
+        };
+        auto b = l->child(FILL_SPACE, FILL_SPACE);
+        b->when_paint = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto window = get_window(dock);
+            auto cr = window->raw_window->cr;
+            set_argb(cr, {0, 0, 0, .2});
+            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+            cairo_fill(cr);
+        };
+    } 
+
+    auto middle = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+    for (int i = 0; i < 3; i++) {
+        auto l = middle->child(FILL_SPACE, FILL_SPACE);
+        l->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dock = (Dock *) root->user_data;
+            auto window = get_window(dock);
+            auto s = window->raw_window->dpi;
+            c->wanted_pad = Bounds(button_pad * s, button_pad * s, button_pad * s, button_pad * s);
+        };
+        auto b = l->child(FILL_SPACE, FILL_SPACE);
+        b->when_paint = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto window = get_window(dock);
+            auto cr = window->raw_window->cr;
+            set_argb(cr, {0, 0, 0, .2});
+            if (c->state.mouse_hovering) {
+                set_argb(cr, {0, 0, 0, .4});
+            }
+            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+            cairo_fill(cr);
+        };
+    }    
+    
+    auto bottom = root->child(FILL_SPACE, FILL_SPACE);
+    bottom->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto s = window->raw_window->dpi;
+        c->wanted_bounds = Bounds(0, 0, FILL_SPACE, 60 * s);
+    };
+    bottom->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = get_window(dock);
+        auto cr = window->raw_window->cr;
+        set_argb(cr, {0, 0, 0, .2});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+}
+
 static void fill_brightness_container(Dock *dock) {
     dock->brightness->root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -1935,36 +2009,19 @@ static void fill_root(Container *root) {
 
     {
         auto extra = simple_dock_item(root, ICON("\ue70e"));
-        extra->when_clicked = paint {
+        extra->when_clicked = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 220, 140);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 370, 260);
 
             dock->extra = open_mylar_popup(mylar, settings);
             if (!dock->extra)
                 return;
             dock->extra->root->user_data = dock;
-            dock->extra->root->when_paint = [dock](Container *root, Container *c) {
-                auto cr = dock->extra->raw_window->cr;
-                set_argb(cr, {1, 1, 1, 1});
-                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
-                cairo_fill(cr);
-            };
-            dock->extra->root->when_clicked = paint {
-                main_thread([] {
-                    notify("clicked inside");
-                });
-            };
             auto extra_root = dock->extra->root;
-            ScrollPaneSettings pane_settings(1.0);
-            auto scroll = make_newscrollpane_as_child(extra_root, pane_settings, [](Container *root_not_scroll) {
-                auto dock = ((Dock *) root_not_scroll->user_data);
-                return DrawContext({dock->extra->raw_window->cr, dock->extra->raw_window->dpi, [dock]() {
-                    windowing::redraw(dock->extra->raw_window);
-                }});
-            });
+            fill_extra_container(extra_root);
 
             windowing::redraw(dock->extra->raw_window);
         };
