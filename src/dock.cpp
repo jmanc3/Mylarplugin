@@ -1778,14 +1778,30 @@ static void fill_extra_container(Container *root) {
             auto s = window->raw_window->dpi;
             c->wanted_pad = Bounds(button_pad * s, button_pad * s, button_pad * s, button_pad * s);
         };
+        static std::vector<std::string> argsa = {"\uE702", "\uE708", "\uE087"};
         auto b = l->child(FILL_SPACE, FILL_SPACE);
-        b->when_paint = [](Container *root, Container *c) {
+        b->when_paint = [i](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto window = get_window(dock);
             auto cr = window->raw_window->cr;
+            if (c->state.mouse_pressing || c->state.mouse_hovering) {
+                if (c->state.mouse_pressing) {
+                    set_argb(cr, {0, 0, 0, .2});
+                } else if (c->state.mouse_hovering) {
+                    set_argb(cr, {0, 0, 0, .1});
+                }
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+                cairo_fill(cr);
+            }
             set_argb(cr, {0, 0, 0, .2});
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
-            cairo_fill(cr);
+            cairo_stroke(cr);
+//static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
+
+            auto b = draw_text(cr, 0, 0, argsa[i], 36, false, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+            draw_text(cr, 
+                center_x(c, b.w), center_y(c, b.h),
+                argsa[i], 36, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
         };
     } 
 
@@ -1803,12 +1819,18 @@ static void fill_extra_container(Container *root) {
             auto dock = (Dock *) root->user_data;
             auto window = get_window(dock);
             auto cr = window->raw_window->cr;
-            set_argb(cr, {0, 0, 0, .2});
-            if (c->state.mouse_hovering) {
-                set_argb(cr, {0, 0, 0, .4});
+            if (c->state.mouse_pressing || c->state.mouse_hovering) {
+                if (c->state.mouse_pressing) {
+                    set_argb(cr, {0, 0, 0, .2});
+                } else if (c->state.mouse_hovering) {
+                    set_argb(cr, {0, 0, 0, .1});
+                }
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+                cairo_fill(cr);
             }
+            set_argb(cr, {0, 0, 0, .2});
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
-            cairo_fill(cr);
+            cairo_stroke(cr);
         };
     }    
     
