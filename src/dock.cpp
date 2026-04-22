@@ -1819,7 +1819,7 @@ static void fill_extra_container(Container *root) {
     } 
 
     auto middle = root->child(::hbox, FILL_SPACE, FILL_SPACE);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 1; i++) {
         auto l = middle->child(FILL_SPACE, FILL_SPACE);
         l->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
@@ -1827,8 +1827,9 @@ static void fill_extra_container(Container *root) {
             auto s = window->raw_window->dpi;
             c->wanted_pad = Bounds(button_pad * s, button_pad * s, button_pad * s, button_pad * s);
         };
+        static std::vector<std::string> argsa = {"\uEBC6", "\uE708", "\uE087"};
         auto b = l->child(FILL_SPACE, FILL_SPACE);
-        b->when_paint = [](Container *root, Container *c) {
+        b->when_paint = [i](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto window = get_window(dock);
             auto cr = window->raw_window->cr;
@@ -1844,6 +1845,11 @@ static void fill_extra_container(Container *root) {
             set_argb(cr, {0, 0, 0, .2});
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
             cairo_stroke(cr);
+
+            auto b = draw_text(cr, 0, 0, argsa[i], 36, false, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+            draw_text(cr, 
+                center_x(c, b.w), center_y(c, b.h),
+                argsa[i], 36, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
         };
     }    
     
