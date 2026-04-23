@@ -1819,7 +1819,7 @@ static void fill_extra_container(Container *root) {
     } 
 
     auto middle = root->child(::hbox, FILL_SPACE, FILL_SPACE);
-    for (int i = 0; i < 1; i++) {
+    for (int i = 0; i < 3; i++) {
         auto l = middle->child(FILL_SPACE, FILL_SPACE);
         l->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
@@ -1830,6 +1830,8 @@ static void fill_extra_container(Container *root) {
         static std::vector<std::string> argsa = {"\uEBC6", "\uE708", "\uE087"};
         auto b = l->child(FILL_SPACE, FILL_SPACE);
         b->when_paint = [i](Container *root, Container *c) {
+            if (i >= 1)
+                return;
             auto dock = (Dock *) root->user_data;
             auto window = get_window(dock);
             auto cr = window->raw_window->cr;
