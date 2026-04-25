@@ -176,6 +176,12 @@ struct Dock : UserData {
 
     MylarWindow *brightness = nullptr;
 
+    MylarWindow *wifi = nullptr;
+    
+    MylarWindow *bluetooth = nullptr;
+
+    MylarWindow *projection = nullptr;
+
     Windows *collection = nullptr;
     bool first_fill = true;
     RawWindowSettings creation_settings;
@@ -1872,6 +1878,16 @@ static void fill_extra_container(Container *root) {
     };
 }
 
+static void fill_wifi_container(Dock *dock) {
+    dock->wifi->root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->wifi->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->wifi->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+}
+
 static void fill_brightness_container(Dock *dock) {
     dock->brightness->root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -2107,6 +2123,27 @@ static void fill_root(Container *root) {
 
     {
         auto wifi = simple_dock_item(root, ICON("\uE701"));
+        wifi->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
+
+            RawWindowSettings settings = make_icon_anchored_popup_settings(
+                c, dpi, volume_popup_w, volume_popup_w * 1.6);
+
+            dock->wifi = open_mylar_popup(mylar, settings);
+            if (!dock->wifi)
+                return;
+            dock->wifi->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->wifi = nullptr;
+            };
+            dock->wifi->root->user_data = dock;
+            dock->wifi->root->wanted_bounds.w = FILL_SPACE;
+            dock->wifi->root->wanted_bounds.h = FILL_SPACE;
+            fill_wifi_container(dock);
+            windowing::redraw(dock->wifi->raw_window);
+        };
     }
 
     {
