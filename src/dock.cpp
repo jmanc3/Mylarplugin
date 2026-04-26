@@ -176,6 +176,8 @@ struct Dock : UserData {
 
     MylarWindow *brightness = nullptr;
 
+    MylarWindow *battery = nullptr;
+
     MylarWindow *wifi = nullptr;
     
     MylarWindow *bluetooth = nullptr;
@@ -1888,6 +1890,16 @@ static void fill_wifi_container(Dock *dock) {
     };
 }
 
+static void fill_battery_container(Dock *dock) {
+    dock->battery->root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->battery->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->battery->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+}
+
 static void fill_brightness_container(Dock *dock) {
     dock->brightness->root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -2297,7 +2309,29 @@ static void fill_root(Container *root) {
         }, []() {
             std::string charging_text = charging ? "+" : "-";
             return std::format("{}{}%", charging_text, (int) std::round(battery_level));
-        }) ;
+        });
+        battery->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
+
+            RawWindowSettings settings = make_icon_anchored_popup_settings(
+                c, dpi, volume_popup_w, volume_popup_w * .7);
+
+            dock->battery = open_mylar_popup(mylar, settings);
+            if (!dock->battery)
+                return;
+            dock->battery->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->battery = nullptr;
+            };
+            dock->battery->root->user_data = dock;
+            dock->battery->root->wanted_bounds.w = FILL_SPACE;
+            dock->battery->root->wanted_bounds.h = FILL_SPACE;
+            fill_battery_container(dock);
+            windowing::redraw(dock->battery->raw_window);
+        };
+        
         auto battery_data = new BatteryData;
         std::thread t([]() {
             battery_level = get_battery_level();
