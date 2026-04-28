@@ -2545,6 +2545,10 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:touchpad:disable_while_typing = false\n\n";
     }
 
+    /*if (set->monitor_setup) {
+
+    }*/
+
     if (hypriso->on_config_generated)
         hypriso->on_config_generated();
 

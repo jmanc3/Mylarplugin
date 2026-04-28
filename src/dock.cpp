@@ -1635,15 +1635,7 @@ static void fill_bluetooth_container(Dock *dock) {
     };
 }
 
-static void fill_projection_container(Dock *dock) {
-    dock->projection->root->when_paint = [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto cr = dock->projection->raw_window->cr;
-        set_argb(cr, {1, 1, 1, 1});
-        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->projection->raw_window->dpi, 1.0);
-        cairo_fill(cr);
-    };
-}
+static void fill_projection_container(Dock *dock);
 
 Container *make_self_sizing_slider(Container *root, 
                             std::function<std::string (Container *)> left_text,
@@ -1926,7 +1918,7 @@ static void fill_extra_container(Container *root) {
                     auto dpi = r->dpi;
                     auto c = container_by_name("extra", dock->window->root);
                     
-                    RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * 1.6);
+                    RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .79);
 
                     dock->projection = open_mylar_popup(mylar, settings);
                     if (!dock->projection)
@@ -3408,4 +3400,85 @@ void dock::change_in_audio() {
 
 void dock::change_in_battery() {
     
+}
+
+static void fill_projection_container(Dock *dock) {
+    dock->projection->root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->projection->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->projection->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+
+    auto root = dock->projection->root;
+    auto parent = root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto dpi = dock->projection->raw_window->dpi;
+        c->wanted_pad = Bounds(10 * dpi, 10 * dpi, 10 * dpi, 10 * dpi);
+        c->spacing = 10 * dpi;
+    };
+    make_self_sizing_label(parent, "Project", 12, [](Dock *d) {
+        return d->projection;
+    });
+    auto icon_label_create = [](Container *parent, std::string left, std::string right, bool left_bright, bool right_bright, std::string text, int size, RGBA color) {
+        auto label = parent->child(FILL_SPACE, FILL_SPACE);
+        label->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dock = (Dock *) root->user_data;
+            auto dpi = dock->projection->raw_window->dpi;
+            c->wanted_bounds.h = 40 * dpi;
+        };
+        label->when_paint = [text, size, color, left, right, left_bright, right_bright](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto dpi = dock->projection->raw_window->dpi;
+            auto cr = dock->projection->raw_window->cr;
+            auto bounds_text = draw_text(cr, 0, 0, text, size * dpi, false, mylar_font, -1, -1, color);
+            auto left_color = color;
+            auto right_color = color;
+            auto bounds_left = draw_text(cr, 0, 0, left, size * dpi, false, "Segoe Fluent Icons", -1, -1, left_color);
+            auto bounds_right = draw_text(cr, 0, 0, right, size * dpi, false, "Segoe Fluent Icons", -1, -1, right_color);
+            if (!left_bright)
+                left_color.a = .4;
+            if (!right_bright)
+                right_color.a = .4;
+
+            float xoff = c->real_bounds.x + 8 * dpi;
+
+            draw_text(cr, 
+                xoff, 
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds_left.h * .5, 
+                left, size * dpi, true, mylar_font, -1, -1, left_color);
+            
+            xoff += bounds_left.w;
+            
+            draw_text(cr, 
+                xoff, 
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds_right.h * .5, 
+                right, size * dpi, true, mylar_font, -1, -1, right_color);
+
+            xoff += bounds_right.w;
+
+            draw_text(cr, 
+                xoff + 8 * dpi, 
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds_text.h * .5, 
+                text, size * dpi, true, mylar_font, -1, -1, color);
+            
+            if (c->state.mouse_hovering) {
+                if (c->state.mouse_pressing) {
+                    set_argb(cr, RGBA(0, 0, 0, .4));
+                } else {
+                    set_argb(cr, RGBA(0, 0, 0, 1));
+                }
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 8 * dpi, std::round(1.0 * dpi));
+                cairo_stroke(cr);
+            }
+        };
+    };
+    // \uE7F7, laptop sun right, uE7F8 laptop empty, uE7F9 screen sun right, ue7FA screen sun left, ue7fb screen empty
+
+    icon_label_create(parent, "\uE7F7", "\uE7FB", true, false, "PC screen only", 12, RGBA(0, 0, 0, 1));
+    icon_label_create(parent, "\uE7F7", "\uE7F9", true, true, "Duplicate", 12, RGBA(0, 0, 0, 1));
+    icon_label_create(parent, "\uE7F7", "\uE7FA", true, true, "Extend", 12, RGBA(0, 0, 0, 1));
+    icon_label_create(parent, "\uE7F8", "\uE7F9", false, true, "Second screen only", 12, RGBA(0, 0, 0, 1));
 }
