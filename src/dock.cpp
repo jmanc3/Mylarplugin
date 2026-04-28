@@ -1635,6 +1635,16 @@ static void fill_bluetooth_container(Dock *dock) {
     };
 }
 
+static void fill_projection_container(Dock *dock) {
+    dock->projection->root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->projection->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->projection->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+}
+
 Container *make_self_sizing_slider(Container *root, 
                             std::function<std::string (Container *)> left_text,
                             std::function<std::string (Container *)> right_text,
@@ -1890,6 +1900,49 @@ static void fill_extra_container(Container *root) {
         };
         static std::vector<std::string> argsa = {"\uEBC6", "\uE708", "\uE087"};
         auto b = l->child(FILL_SPACE, FILL_SPACE);
+        if (i == 0) {
+            b->when_clicked = [](Container *root, Container *c) {
+                auto dock = (Dock *) root->user_data;
+                auto window = get_window(dock);
+                windowing::close_window(window->raw_window);
+
+                auto mylar = dock->window;
+                auto dpi = mylar->raw_window->dpi;
+
+                struct Reformed {
+                    MylarWindow *window = nullptr;
+                    Dock *dock = nullptr;
+                    float dpi = 1.0;
+                };
+                auto reformed = new Reformed;
+                reformed->dpi = dpi;
+                reformed->window = mylar;
+                reformed->dock = dock;
+
+                windowing::timer(dock->app, 40, [](void *data) {
+                    auto r = (Reformed *) data;
+                    auto mylar = r->window;
+                    auto dock = r->dock;
+                    auto dpi = r->dpi;
+                    auto c = container_by_name("extra", dock->window->root);
+                    
+                    RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * 1.6);
+
+                    dock->projection = open_mylar_popup(mylar, settings);
+                    if (!dock->projection)
+                        return;
+                    dock->projection->root->on_closed = [](Container* root) {
+                        auto dock = (Dock*)root->user_data;
+                        dock->projection = nullptr;
+                    };
+                    dock->projection->root->user_data = dock;
+                    dock->projection->root->wanted_bounds.w = FILL_SPACE;
+                    dock->projection->root->wanted_bounds.h = FILL_SPACE;
+                    fill_projection_container(dock);
+                    windowing::redraw(dock->projection->raw_window);
+                }, reformed);
+            };
+        }
         b->when_paint = [i](Container *root, Container *c) {
             if (i >= 1)
                 return;
