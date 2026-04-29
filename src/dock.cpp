@@ -169,7 +169,9 @@ struct Windows {
 struct Dock : UserData {
     RawApp *app = nullptr;
     MylarWindow *window = nullptr;
-    
+
+    MylarWindow *applications = nullptr;
+
     MylarWindow *volume = nullptr;
 
     MylarWindow *extra = nullptr;
@@ -1635,6 +1637,16 @@ static void fill_bluetooth_container(Dock *dock) {
     };
 }
 
+static void fill_applications_container(Dock *dock) {
+    dock->applications->root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->applications->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->applications->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+    };
+}
+
 static void fill_projection_container(Dock *dock);
 
 Container *make_self_sizing_slider(Container *root, 
@@ -2060,7 +2072,25 @@ static void fill_root(Container *root) {
     {
         auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
         super->when_clicked = paint {
-            system("wofi --show run &");
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
+
+            RawWindowSettings settings = make_icon_anchored_popup_settings(
+                c, dpi, volume_popup_w * 2.4, volume_popup_w * 1.9);
+
+            dock->applications = open_mylar_popup(mylar, settings);
+            if (!dock->applications)
+                return;
+            dock->applications->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->applications = nullptr;
+            };
+            dock->applications->root->user_data = dock;
+            dock->applications->root->wanted_bounds.w = FILL_SPACE;
+            dock->applications->root->wanted_bounds.h = FILL_SPACE;
+            fill_applications_container(dock);
+            windowing::redraw(dock->applications->raw_window);
         };
         super->after_paint = paint {
             return;
