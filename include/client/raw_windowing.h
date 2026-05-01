@@ -25,11 +25,21 @@ struct PolledFunction {
     std::function<void(PolledFunction f)> func = nullptr;
 };
 
+struct RawOutput {
+    int id = -1;
+    std::string name;
+    int32_t physical_height = -1;
+    int32_t physical_width  = -1;
+};
+
 struct RawApp {
     int id = -1;
     std::mutex mutex;
 
     void print_monitors();
+    
+    std::vector<RawOutput> monitor_names;
+    void update_monitor_information();
 };
 
 struct PositioningInfo {

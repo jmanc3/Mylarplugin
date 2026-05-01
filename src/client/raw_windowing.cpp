@@ -2189,6 +2189,18 @@ void windowing::close_app(RawApp *app) {
     write(ctx->wake_pipe[1], "x", 1);
 }
 
+void RawApp::update_monitor_information() {
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == id)
+            ctx = c;
+
+    monitor_names.clear();
+    
+    for (auto o : ctx->outputs) {
+        monitor_names.push_back({o->id, o->name, o->physical_width, o->physical_height});
+    }
+}
 
 void RawApp::print_monitors() {
     wl_context *ctx = nullptr;

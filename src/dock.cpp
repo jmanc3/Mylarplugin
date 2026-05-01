@@ -3579,7 +3579,11 @@ static void fill_projection_container(Dock *dock) {
             c->wanted_bounds.w = FILL_SPACE;
         };
     };
-    
+
+    dock->app->update_monitor_information();
+    for (auto m : dock->app->monitor_names) {
+        notify(fz("{} {} {}", m.name, m.physical_width, m.physical_height));
+    }
 
     flowpane(parent, {"All", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1"}, [](std::string option, bool selected) {
         notify(fz("{} {}", option, selected));
