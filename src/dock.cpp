@@ -2658,7 +2658,6 @@ void dock_start(std::string monitor_name) {
     auto dock = new Dock;
     dock->collection = new Windows;
     dock->app = windowing::open_app();
-    dock->app->print_monitors();
     RawWindowSettings settings;
     settings.pos.w = 0;
     settings.pos.h = 40;
@@ -3581,11 +3580,18 @@ static void fill_projection_container(Dock *dock) {
     };
 
     dock->app->update_monitor_information();
+    
+    static std::vector<std::string> mons;
+    mons.clear();
+    mons.push_back("All");
+
     for (auto m : dock->app->monitor_names) {
-        notify(fz("{} {} {}", m.name, m.physical_width, m.physical_height));
+        if (m.name != dock->creation_settings.monitor_name) {
+            mons.push_back(m.name);
+        }
     }
 
-    flowpane(parent, {"All", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1", "HDMI-1"}, [](std::string option, bool selected) {
+    flowpane(parent, mons, [](std::string option, bool selected) {
         notify(fz("{} {}", option, selected));
     }, [](Container *c) { return ((Dock *) c->user_data)->projection; });
 
@@ -3593,7 +3599,7 @@ static void fill_projection_container(Dock *dock) {
         return d->projection;
     });
 
-    flowpane(parent, {"All", "EDP-1"}, [](std::string option, bool selected) {
+    flowpane(parent, mons, [](std::string option, bool selected) {
         notify(fz("{} {}", option, selected));
     }, [](Container *c) { return ((Dock *) c->user_data)->projection; });
 
