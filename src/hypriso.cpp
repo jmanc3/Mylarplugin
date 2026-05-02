@@ -8819,3 +8819,19 @@ int HyprIso::window_from_mouse() {
     }
     return -1;
 };
+void validate_monitor_rules() {
+    // Remove monitor rules that are no longer valid, such as a rule that disables all monitors
+}
+
+void monitor_rule_mirror_from_to_toggle(std::string from, std::string to) {
+    // Make rule
+    // Check if possible and valid
+    // Add it
+    // Reload config
+    notify(fz("mirror to {} from {}", to, from));
+}
+
+void monitor_rule_disable_toggle(std::string from, std::string to) {
+    notify(fz("from {}, disable {}", from, to));
+}
+

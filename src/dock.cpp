@@ -1930,7 +1930,7 @@ static void fill_extra_container(Container *root) {
                     auto dpi = r->dpi;
                     auto c = container_by_name("extra", dock->window->root);
                     
-                    RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .79);
+                    RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .6);
 
                     dock->projection = open_mylar_popup(mylar, settings);
                     if (!dock->projection)
@@ -3514,7 +3514,7 @@ static void fill_projection_container(Dock *dock) {
         };
     };
 
-    auto flowpane = [](Container *parent, std::vector<std::string> options, std::function<void (std::string, bool)> on_clicked, std::function<MylarWindow * (Container *)> get_window) {
+    auto flowpane = [](Container *parent, std::vector<std::string> options, std::function<void (std::string)> on_clicked, std::function<MylarWindow * (Container *)> get_window) {
         auto label = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
         static float pad = 14;
         static float size = 12;
@@ -3524,6 +3524,10 @@ static void fill_projection_container(Dock *dock) {
             auto option = options[i];
             auto option_label = label->child(FILL_SPACE, FILL_SPACE);
             option_label->parent_bounds_limit_input_bounds = false;
+            option_label->name = option;
+            option_label->when_clicked = [on_clicked](Container *root, Container *c) {
+                on_clicked(c->name);
+            };
             option_label->when_paint = [get_window, option](Container *root, Container *c) {
                 auto dock = (Dock *) root->user_data;
                 auto mylar = get_window(root);
@@ -3584,29 +3588,36 @@ static void fill_projection_container(Dock *dock) {
     static std::vector<std::string> mons;
     mons.clear();
     mons.push_back("All");
+    auto ours = dock->creation_settings.monitor_name;
 
     for (auto m : dock->app->monitor_names) {
-        if (m.name != dock->creation_settings.monitor_name) {
+        if (m.name != ours) {
             mons.push_back(m.name);
         }
     }
 
-    flowpane(parent, mons, [](std::string option, bool selected) {
-        notify(fz("{} {}", option, selected));
+    flowpane(parent, mons, [ours](std::string option) {
+        main_thread([ours, option] {
+            monitor_rule_mirror_from_to_toggle(ours, option);
+        });
     }, [](Container *c) { return ((Dock *) c->user_data)->projection; });
 
     make_self_sizing_label(parent, "Disable other screens", 12, [](Dock *d) {
         return d->projection;
     });
 
-    flowpane(parent, mons, [](std::string option, bool selected) {
-        notify(fz("{} {}", option, selected));
+    flowpane(parent, mons, [ours](std::string option) {
+        main_thread([ours, option] {
+            monitor_rule_disable_toggle(ours, option);
+        });
     }, [](Container *c) { return ((Dock *) c->user_data)->projection; });
 
+    /*
     windowing::timer(dock->app, 10, [](void *userdata) {
         auto dock = (Dock *) userdata;
         auto dpi = dock->projection->raw_window->dpi;
         auto h = true_height(dock->projection->root);
         //windowing::set_popup_size(dock->projection->raw_window, dock->projection->root->real_bounds.w, h);
     }, dock);
+    */
 }

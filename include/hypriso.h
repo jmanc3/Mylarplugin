@@ -592,4 +592,6 @@ void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaS
 
 void gestures_reset();
 
+void monitor_rule_mirror_from_to_toggle(std::string from, std::string to);
+void monitor_rule_disable_toggle(std::string from, std::string to);
 #endif // hypriso_h_INCLUDED
