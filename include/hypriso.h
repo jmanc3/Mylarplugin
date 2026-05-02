@@ -50,6 +50,12 @@ struct PollingThread {
 
 extern PollingThread *polling_thread;
 
+struct MylarMonitorRule {
+    std::string name;
+    std::string mirrors;
+    bool disabled = false;
+};
+
 struct ConfigSettings {
     int version = 1;
     std::string touchpad_acceleration_curve = "Custom";
@@ -64,6 +70,8 @@ struct ConfigSettings {
     bool prefer_pipewire_audio_backend = false;
     bool show_docks = true;
     bool draw_wallpaper = true;
+
+    std::vector<MylarMonitorRule> monitor_rules;
 };
 
 extern ConfigSettings *set;
