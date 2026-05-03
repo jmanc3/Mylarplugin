@@ -51,9 +51,10 @@ struct PollingThread {
 extern PollingThread *polling_thread;
 
 struct MylarMonitorRule {
-    std::string name;
-    std::string mirrors;
+    std::string from;
+    std::string to;
     bool disabled = false;
+    bool mirrors = false;
 };
 
 struct ConfigSettings {

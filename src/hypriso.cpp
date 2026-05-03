@@ -2545,9 +2545,36 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:touchpad:disable_while_typing = false\n\n";
     }
 
-    /*if (set->monitor_setup) {
+    auto validate_monitor_rules = []() {
+        // First validate monitor rules such that,
+        // remove rules that don't do anything
+        std::vector<MylarMonitorRule> actual_rules;
+        for (auto hm : hyprmonitors)
+            actual_rules.push_back({hm->m->m_name, hm->m->m_name, false, false});
 
-    }*/
+        for (int i = set->monitor_rules.size() - 1; i >= 0; i--) {
+            auto rule = set->monitor_rules[i];
+            bool useless = !rule.disabled && !rule.mirrors;
+            bool monitor_exists = false;
+            for (auto r : actual_rules) {
+                if (r.from == rule.from) {
+                    monitor_exists = true;
+                }
+            }
+
+            useless = useless || !monitor_exists;
+
+            if (useless) {
+                set->monitor_rules.erase(set->monitor_rules.begin() + i);
+            }
+        }
+
+        // not all screens are disabled,
+        // monitors no longer plugged in get no rules applied to them
+        // 'all' is applied properly
+    };
+
+    validate_monitor_rules();
 
     if (hypriso->on_config_generated)
         hypriso->on_config_generated();
@@ -8819,19 +8846,24 @@ int HyprIso::window_from_mouse() {
     }
     return -1;
 };
-void validate_monitor_rules() {
-    // Remove monitor rules that are no longer valid, such as a rule that disables all monitors
-}
 
 void monitor_rule_mirror_from_to_toggle(std::string from, std::string to) {
-    // Make rule
-    // Check if possible and valid
-    // Add it
-    // Reload config
-    notify(fz("mirror to {} from {}", to, from));
+    for (auto rule : set->monitor_rules) {
+        if (rule.from == from && rule.to == to) {
+            rule.mirrors = !rule.mirrors;
+            return;
+        }
+    }
+    set->monitor_rules.push_back({from, to, false, true});
 }
 
 void monitor_rule_disable_toggle(std::string from, std::string to) {
-    notify(fz("from {}, disable {}", from, to));
+    for (auto rule : set->monitor_rules) {
+        if (rule.from == from && rule.to == to) {
+            rule.disabled = !rule.disabled;
+            return;
+        }
+    }
+    set->monitor_rules.push_back({from, to, true, false});
 }
 
