@@ -2550,8 +2550,8 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         // First validate monitor rules such that,
         // remove rules that don't do anything
         std::vector<MylarMonitorRule> actual_rules;
-        for (auto hm : hyprmonitors)
-            actual_rules.push_back({hm->m->m_name, hm->m->m_name, false, false});
+        for (auto hm : hypriso->all_monitors())
+            actual_rules.push_back({hm.from, hm.from, false, false});
 
         for (int i = set->monitor_rules.size() - 1; i >= 0; i--) {
             auto rule = set->monitor_rules[i];
@@ -8872,29 +8872,62 @@ int HyprIso::window_from_mouse() {
 };
 
 void monitor_rule_mirror_from_to_toggle(std::string from, std::string to) {
-    for (auto rule : set->monitor_rules) {
-        if (rule.from == from && rule.to == to) {
-            rule.mirrors = !rule.mirrors;
-            return;
+    defer({
+        later(100, [](Timer *) {
+            hypriso->generate_mylar_hyprland_config();
+        });
+    });
+    
+    for (int i = set->monitor_rules.size() - 1; i >= 0; i--) {
+        auto rule = set->monitor_rules[i];
+        if (rule.to == to) {
+            set->monitor_rules.erase(set->monitor_rules.begin() + i);
         }
     }
+
+    for (auto mon : hypriso->all_monitors())
+        if (mon.to == to)
+            if (mon.mirrors)
+                return;
+            
     set->monitor_rules.push_back({from, to, false, true});
-    later(100, [](Timer *) {
-        hypriso->generate_mylar_hyprland_config();
-    });
 }
 
 void monitor_rule_disable_toggle(std::string from, std::string to) {
-    for (auto rule : set->monitor_rules) {
-        if (rule.from == from && rule.to == to) {
-            rule.disabled = !rule.disabled;
-            return;
+    defer({
+        later(100, [](Timer *) {
+            hypriso->generate_mylar_hyprland_config();
+        });
+    });
+    
+    for (int i = set->monitor_rules.size() - 1; i >= 0; i--) {
+        auto rule = set->monitor_rules[i];
+        if (rule.to == to) {
+            set->monitor_rules.erase(set->monitor_rules.begin() + i);
         }
     }
+
+    for (auto mon : hypriso->all_monitors())
+        if (mon.to == to)
+            if (mon.disabled)
+                return;
+
     set->monitor_rules.push_back({from, to, true, false});
     dock::stop(to);
-    later(100, [](Timer *) {
-        hypriso->generate_mylar_hyprland_config();
-    });
+}
+
+std::vector<MylarMonitorRule> HyprIso::all_monitors() {
+    std::vector<MylarMonitorRule> monitors;
+    for (auto m : g_pCompositor->m_realMonitors) {
+        if (m->m_name == "FALLBACK")
+            continue;
+        MylarMonitorRule rule;
+        rule.from = m->m_name;
+        rule.to = m->m_name;
+        rule.disabled = m->m_activeMonitorRule.disabled;
+        rule.mirrors = !m->m_activeMonitorRule.mirrorOf.empty();
+        monitors.push_back(rule);
+    }
+    return monitors;
 }
 

@@ -329,6 +329,8 @@ struct HyprIso {
     std::string class_name(int id);
     std::string title_name(int id);
     std::string monitor_name(int id);
+
+    std::vector<MylarMonitorRule> all_monitors();
     
     void set_corner_rendering_mask_for_window(int id, int mask);
     

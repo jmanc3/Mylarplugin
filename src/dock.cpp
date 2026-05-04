@@ -1924,26 +1924,28 @@ static void fill_extra_container(Container *root) {
                 reformed->dock = dock;
 
                 windowing::timer(dock->app, 40, [](void *data) {
-                    auto r = (Reformed *) data;
-                    auto mylar = r->window;
-                    auto dock = r->dock;
-                    auto dpi = r->dpi;
-                    auto c = container_by_name("extra", dock->window->root);
-                    
-                    RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .6);
+                    main_thread([data]() {
+                        auto r = (Reformed *) data;
+                        auto mylar = r->window;
+                        auto dock = r->dock;
+                        auto dpi = r->dpi;
+                        auto c = container_by_name("extra", dock->window->root);
+                        
+                        RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .6);
 
-                    dock->projection = open_mylar_popup(mylar, settings);
-                    if (!dock->projection)
-                        return;
-                    dock->projection->root->on_closed = [](Container* root) {
-                        auto dock = (Dock*)root->user_data;
-                        dock->projection = nullptr;
-                    };
-                    dock->projection->root->user_data = dock;
-                    dock->projection->root->wanted_bounds.w = FILL_SPACE;
-                    dock->projection->root->wanted_bounds.h = FILL_SPACE;
-                    fill_projection_container(dock);
-                    windowing::redraw(dock->projection->raw_window);
+                        dock->projection = open_mylar_popup(mylar, settings);
+                        if (!dock->projection)
+                            return;
+                        dock->projection->root->on_closed = [](Container* root) {
+                            auto dock = (Dock*)root->user_data;
+                            dock->projection = nullptr;
+                        };
+                        dock->projection->root->user_data = dock;
+                        dock->projection->root->wanted_bounds.w = FILL_SPACE;
+                        dock->projection->root->wanted_bounds.h = FILL_SPACE;
+                        fill_projection_container(dock);
+                        windowing::redraw(dock->projection->raw_window);
+                    });
                 }, reformed);
             };
         }
@@ -3590,9 +3592,9 @@ static void fill_projection_container(Dock *dock) {
     mons.push_back("All");
     auto ours = dock->creation_settings.monitor_name;
 
-    for (auto m : dock->app->monitor_names) {
-        if (m.name != ours) {
-            mons.push_back(m.name);
+    for (auto m : hypriso->all_monitors()) {
+        if (m.from != ours) {
+            mons.push_back(m.from);
         }
     }
 
