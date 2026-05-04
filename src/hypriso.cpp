@@ -8,6 +8,7 @@
 
 #include "hypriso.h"
 #include "heart.h"
+#include "dock.h"
 
 #include <cstdint>
 #include <hyprland/src/SharedDefs.hpp>
@@ -2545,7 +2546,7 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
         base += "input:touchpad:disable_while_typing = false\n\n";
     }
 
-    auto validate_monitor_rules = []() {
+    auto validate_monitor_rules = [&base]() {
         // First validate monitor rules such that,
         // remove rules that don't do anything
         std::vector<MylarMonitorRule> actual_rules;
@@ -2566,6 +2567,29 @@ plugin:mylardesktop:sel_border_color = rgba(ffffff11)
 
             if (useless) {
                 set->monitor_rules.erase(set->monitor_rules.begin() + i);
+            }
+        }
+
+        for (auto &actual_rule : actual_rules) {
+            for (int i = set->monitor_rules.size() - 1; i >= 0; i--) {
+                auto rule = set->monitor_rules[i];
+                if (actual_rule.to == rule.to) {
+                    actual_rule.disabled = actual_rule.disabled || rule.disabled;
+                    actual_rule.mirrors = actual_rule.mirrors || rule.mirrors;
+                    actual_rule.from = rule.from;
+                }
+            }
+        }
+
+        for (auto &actual_rule : actual_rules) {
+            if (actual_rule.to != "All") {
+                bool mirrors = actual_rule.mirrors;
+                bool disabled = actual_rule.disabled;
+                if (disabled) {
+                    base += fz("monitor = {}, disabled\n\n", actual_rule.to);
+                } else if (mirrors) {
+                    base += fz("monitor={},preferred,auto,auto,mirror,{}\n\n", actual_rule.to, actual_rule.from);
+                }
             }
         }
 
@@ -8855,6 +8879,9 @@ void monitor_rule_mirror_from_to_toggle(std::string from, std::string to) {
         }
     }
     set->monitor_rules.push_back({from, to, false, true});
+    later(100, [](Timer *) {
+        hypriso->generate_mylar_hyprland_config();
+    });
 }
 
 void monitor_rule_disable_toggle(std::string from, std::string to) {
@@ -8865,5 +8892,9 @@ void monitor_rule_disable_toggle(std::string from, std::string to) {
         }
     }
     set->monitor_rules.push_back({from, to, true, false});
+    dock::stop(to);
+    later(100, [](Timer *) {
+        hypriso->generate_mylar_hyprland_config();
+    });
 }
 
