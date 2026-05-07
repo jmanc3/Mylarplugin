@@ -1931,7 +1931,7 @@ static void fill_extra_container(Container *root) {
                         auto dpi = r->dpi;
                         auto c = container_by_name("extra", dock->window->root);
                         
-                        RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .6);
+                        RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .5);
 
                         dock->projection = open_mylar_popup(mylar, settings);
                         if (!dock->projection)
@@ -1986,7 +1986,7 @@ static void fill_extra_container(Container *root) {
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto cr = window->raw_window->cr;
-        set_argb(cr, {0, 0, 0, .2});
+        set_argb(cr, {0, 0, 0, .08});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
         cairo_fill(cr);
     };
@@ -3520,7 +3520,7 @@ static void fill_projection_container(Dock *dock) {
         auto label = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
         static float pad = 14;
         static float size = 12;
-        static float rowh = 40;
+        static float rowh = 20;
         static RGBA color = RGBA(0, 0, 0, 1);
         for (int i = 0; i < options.size(); i++) {
             auto option = options[i];
@@ -3574,7 +3574,7 @@ static void fill_projection_container(Dock *dock) {
                 
                 auto option_label = c->children[i];
                 float visual_y = layout_yoff + (rowh * .5) * dpi - bounds_text.h * .5;
-                visual_y -= 10 * dpi;
+                visual_y -= 0 * dpi;
                 float visual_x = xoff += 10 * dpi;
                 option_label->real_bounds = Bounds(visual_x, visual_y, bounds_text.w, bounds_text.h);
                 option_label->real_bounds.grow(4 * dpi);
@@ -3589,7 +3589,7 @@ static void fill_projection_container(Dock *dock) {
     
     static std::vector<std::string> mons;
     mons.clear();
-    mons.push_back("All");
+    //mons.push_back("All");
     auto ours = dock->creation_settings.monitor_name;
 
     for (auto m : hypriso->all_monitors()) {
