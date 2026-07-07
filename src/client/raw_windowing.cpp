@@ -587,6 +587,8 @@ static void handle_fractional_scale_preferred_scale(
     uint32_t scale)
 {
     auto win = (wl_window *) data;
+    if (!win->rw)
+        return;
     win->current_fractional_scale = ((float) scale) / 120.0f;
     win->rw->dpi = win->current_fractional_scale;
     if (win->rw->on_scale_change)

@@ -49,6 +49,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     alsa
     libpipewire-0.3
     libpulse
+    gtk+-3.0
 )
 
 target_link_libraries(Mylardesktop PRIVATE rt PkgConfig::deps)

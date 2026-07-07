@@ -1716,6 +1716,7 @@ vec4 rounding(vec4 color) {
 )";
 
 void create_rounding_shader() {
+    return;
     const char* home = std::getenv("HOME");
     if (!home) {
         notify("$HOME environment variable not set");

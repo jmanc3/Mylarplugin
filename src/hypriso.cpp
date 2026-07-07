@@ -11,12 +11,14 @@
 #include "dock.h"
 
 #include <cstdint>
-#include <hyprland/src/SharedDefs.hpp>
+//#include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/devices/IKeyboard.hpp>
-#include <hyprland/src/debug/HyprDebugOverlay.hpp>
-#include <hyprland/src/debug/HyprNotificationOverlay.hpp>
-#include <hyprland/src/hyprerror/HyprError.hpp>
+#include <hyprland/src/config/shared/actions/ConfigActions.hpp>
+//#include <hyprland/src/debug/HyprDebugOverlay.hpp>
+// #include <hyprland/src/debug/HyprNotificationOverlay.hpp>
+// #include <hyprland/src/hyprerror/HyprError.hpp>
+// #include <hyprland/src/config/shared/actions/ConfigActions.cpp>
 
 #define private public
 #include <hyprland/src/render/OpenGL.hpp>
@@ -159,7 +161,7 @@ void* pRenderMonitor = nullptr;
 void* pRenderWorkspace = nullptr;
 void* pRenderWorkspaceWindows = nullptr;
 void* pRenderWorkspaceWindowsFullscreen = nullptr;
-typedef void (*tRenderWindow)(void *, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool decorate, eRenderPassMode, bool ignorePosition, bool standalone);
+typedef void (*tRenderWindow)(void *, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool decorate, Render::eRenderPassMode, bool ignorePosition, bool standalone);
 typedef void (*tRenderMonitor)(void *, PHLMONITOR pMonitor, bool commit);
 typedef void (*tRenderWorkspace)(void *, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp &, const CBox &geom);
 typedef void (*tRenderWorkspaceWindows)(void *, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp &);
@@ -308,15 +310,15 @@ struct HyprWindow {
     bool is_hidden = false; // used in show/hide desktop
     bool was_hidden = false; // used in show/hide desktop
 
-    CFramebuffer *fb = nullptr;
+    // CFramebuffer *fb = nullptr;
     Bounds w_bounds_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     
-    CFramebuffer *deco_fb = nullptr;
+    // CFramebuffer *deco_fb = nullptr;
     Bounds w_deco_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_decos_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 
-    CFramebuffer *min_fb = nullptr;
+    // CFramebuffer *min_fb = nullptr;
     Bounds w_min_mon;
     Bounds w_min_raw;
     Bounds w_min_size;
@@ -342,10 +344,10 @@ struct HyprMonitor {
     long creation_time = get_current_time_in_ms();
     bool first = true;
 
-    CFramebuffer *wallfb = nullptr;
+    // CFramebuffer *wallfb = nullptr;
     Bounds wall_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 
-    CFramebuffer *monfb = nullptr;
+    // CFramebuffer *monfb = nullptr;
     Bounds mon_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 };
 
@@ -362,7 +364,7 @@ static std::vector<HyprLayer *> hyprlayers;
 struct HyprWorkspaces {
     int id;
     PHLWORKSPACEREF w;
-    CFramebuffer *buffer = nullptr;
+    // CFramebuffer *buffer = nullptr;
 
     bool is_tiling = false;
 };
@@ -370,7 +372,7 @@ struct HyprWorkspaces {
 static std::vector<HyprWorkspaces *> hyprspaces;
 
 struct Texture {
-    SP<CTexture> texture;
+    //SP<CTexture> texture;
     TextureInfo info;
 };
 
@@ -417,12 +419,12 @@ static bool change_mask = true;
 static int surface_mask = 0;
 
 inline CFunctionHook* g_pOnUseShader = nullptr;
-typedef WP<CShader> (*origUseShader)(CHyprOpenGLImpl *, WP<CShader> prog);
+typedef WP<CShader> (*origUseShader)(Render::GL::CHyprOpenGLImpl *, WP<CShader> prog);
 WP<CShader> hook_onUseShader(void* thisptr, WP<CShader> prog) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto shader = (*(origUseShader)g_pOnUseShader->m_original)((CHyprOpenGLImpl *) thisptr, prog);
+    auto shader = (*(origUseShader)g_pOnUseShader->m_original)((Render::GL::CHyprOpenGLImpl *) thisptr, prog);
     if (change_mask) {
         GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
         glUniform1i(loc, surface_mask);
@@ -435,46 +437,46 @@ void set_rounding(int mask) {
     surface_mask = mask;
     return;
     //return; //possibly the slow bomb
-    if (!g_pHyprOpenGL || !g_pHyprOpenGL->m_shaders) {
+    if (!Render::GL::g_pHyprOpenGL || !Render::GL::g_pHyprOpenGL->m_shaders) {
         return;
     }
 
     // todo set shader mask to 3, and then to 0 afterwards
-    {
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_QUAD]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
-    { 
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_SHADOW]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
-    { 
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_BORDER1]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
-    { 
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_EXT]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
-    { 
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_CM_BORDER1]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
-    { 
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_PASSTHRURGBA]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
-    { 
-        auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_PASSTHRURGBA]);
-        GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
-        glUniform1i(loc, mask);
-    }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_QUAD]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_SHADOW]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_BORDER1]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_EXT]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_CM_BORDER1]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_PASSTHRURGBA]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
+    // {
+    //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[Render::SH_FRAG_PASSTHRURGBA]);
+    //     GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
+    //     glUniform1i(loc, mask);
+    // }
 }
 
 PHLWINDOW get_window_from_mouse() {
@@ -493,7 +495,7 @@ void HyprIso::overwrite_animation_speed(float speed) {
 #endif
  
     //const std::string& nodeName, int enabled, float speed, const std::string& bezier, const std::string& style = ""
-    g_pConfigManager->m_animationTree.setConfigForNode("zoomFactor", true, speed, "quick", "");
+    // g_pConfigManager->m_animationTree.setConfigForNode("zoomFactor", true, speed, "quick", "");
 }
 
 static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
@@ -750,50 +752,6 @@ SurfacePassInfo HyprIso::pass_info(int cid) {
     return SurfacePassInfo();
 }
 
-CSurfacePassElement::SRenderData collect_mdata(PHLWINDOW w) {
-    //CSurfacePassElement::SRenderData renderdata;
-    // m_data.pMonitor probably render mon
-    //auto current = g_pHyprOpenGL->m_renderData.currentWindow;
-    //
-    auto pWindow = w;
-    auto pMonitor = g_pHyprOpenGL->m_renderData.pMonitor;
-    if (!pMonitor) {
-        pMonitor = w->m_monitor;
-    }
-    const auto PWORKSPACE = pWindow->m_workspace;
-    const auto REALPOS = pWindow->m_realPosition->value() + (pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
-    
-    static auto time = Time::steadyNow();
-    CSurfacePassElement::SRenderData renderdata = {pMonitor, time};
-    CBox textureBox = {REALPOS.x, REALPOS.y, std::max(pWindow->m_realSize->value().x, 5.0), std::max(pWindow->m_realSize->value().y, 5.0)};
-
-    renderdata.w = textureBox.w;
-    renderdata.h = textureBox.h;
-    // m_data.w,h
-    renderdata.pWindow = w; // m_data.pWindow
-
-    renderdata.surface = pWindow->wlSurface()->resource(); // m_data.surface
-    // m_data.mainSurface
-    renderdata.pos.x = textureBox.x; // m_data.pos.x,y
-    renderdata.pos.y = textureBox.y;
-    renderdata.pos.x += pWindow->m_floatingOffset.x;
-    renderdata.pos.y += pWindow->m_floatingOffset.y;
-    renderdata.surfaceCounter = 0;
-    pWindow->wlSurface()->resource()->breadthfirst(
-        [&renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
-            // m_data.localPos
-            renderdata.localPos = offset;
-            renderdata.texture = s->m_current.texture;
-            renderdata.surface = s;
-            renderdata.mainSurface = s == pWindow->wlSurface()->resource();
-            renderdata.surfaceCounter++;
-            //notify(std::to_string(renderdata.surfaceCounter));
-        },
-        nullptr);
-
-    // m_data.squishOversized left default
-    return renderdata;
-}
 
 Bounds tobounds(CBox box);
 
@@ -1249,84 +1207,84 @@ void detect_x11_move_resize_requests() {
 }
 
 static void configHandleGradientDestroy(void** data) {
-    if (*data)
-        delete sc<CGradientValueData*>(*data);
+    // if (*data)
+        // delete sc<CGradientValueData*>(*data);
 }
 
 void ourRenderMonitor(PHLMONITOR pMonitor, bool commit);
 
-inline CFunctionHook* g_pRenderMonitorHook = nullptr;
-typedef void (*origRenderMonitorFunc)(CHyprRenderer *, PHLMONITOR pMonitor, bool commit);
-void hook_RenderMonitor(void* thisptr, PHLMONITOR pMonitor, bool commit) {
-    ourRenderMonitor(pMonitor, commit);
-    //(*(origRenderMonitorFunc)g_pRenderMonitorHook->m_original)((CHyprRenderer *)thisptr, pMonitor, commit);
-}
+// inline CFunctionHook* g_pRenderMonitorHook = nullptr;
+// typedef void (*origRenderMonitorFunc)(CHyprRenderer *, PHLMONITOR pMonitor, bool commit);
+// void hook_RenderMonitor(void* thisptr, PHLMONITOR pMonitor, bool commit) {
+//     ourRenderMonitor(pMonitor, commit);
+//     //(*(origRenderMonitorFunc)g_pRenderMonitorHook->m_original)((CHyprRenderer *)thisptr, pMonitor, commit);
+// }
 
 
 inline CFunctionHook* g_pRenderWindowHook = nullptr;
 
-typedef void (*origRenderWindowFunc)(CHyprRenderer *, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
+// typedef void (*origRenderWindowFunc)(CHyprRenderer *, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
 
-void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
-        for (auto hw : hyprwindows) {
-            if (hw->w == pWindow) {
-                bool found = false;
-                for (auto white : hypriso->render_whitelist) {
-                    if (white == hw->id) {
-                        found = true;
-                    }
-                }
-                if (!found) {
-                    if (!g_pHyprRenderer->m_bRenderingSnapshot) {
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    Hyprlang::INT* rounding_amount = nullptr;
-    int initial_value = 0;
-
-    Hyprlang::INT* border_size = nullptr;
-    int initial_border_size = 0;
-
-    Hyprlang::CConfigCustomValueType* active_border = nullptr; 
-    Hyprlang::CConfigCustomValueType* initial_active_border;
-    auto current = get_current_time_in_ms();
-    
-    for (auto hw : hyprwindows) {
-        if (hw->w == pWindow) {
-            if (current - hw->unminize_start < minimize_anim_time && hw->animate_to_dock)
-                return;
-        }
-        if (hw->w == pWindow && hw->no_rounding) {
-            {
-                Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:rounding");
-                rounding_amount = (Hyprlang::INT*)val->dataPtr();
-                initial_value = *rounding_amount;
-                *rounding_amount = 0;
-            }
-
-            Hyprlang::CConfigValue* val2 = g_pConfigManager->getHyprlangConfigValuePtr("general:border_size");
-            border_size = (Hyprlang::INT*)val2->dataPtr();
-            initial_border_size = *border_size;
-            *border_size = 0;
-        }
-    }
-    (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)((CHyprRenderer *) thisptr, pWindow, pMonitor, Time::steadyNow(), decorate, mode, ignorePosition, standalone);
-    if (rounding_amount) {
-        *rounding_amount = initial_value;
-        *border_size = initial_border_size;
-        //if (active_border) {
-            //active_border = initial_active_border;
-        //}
-    }
-}
+// void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
+//         for (auto hw : hyprwindows) {
+//             if (hw->w == pWindow) {
+//                 bool found = false;
+//                 for (auto white : hypriso->render_whitelist) {
+//                     if (white == hw->id) {
+//                         found = true;
+//                     }
+//                 }
+//                 if (!found) {
+//                     if (!g_pHyprRenderer->m_bRenderingSnapshot) {
+//                         return;
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     Hyprlang::INT* rounding_amount = nullptr;
+//     int initial_value = 0;
+//
+//     Hyprlang::INT* border_size = nullptr;
+//     int initial_border_size = 0;
+//
+//     Hyprlang::CConfigCustomValueType* active_border = nullptr;
+//     Hyprlang::CConfigCustomValueType* initial_active_border;
+//     auto current = get_current_time_in_ms();
+//
+//     for (auto hw : hyprwindows) {
+//         if (hw->w == pWindow) {
+//             if (current - hw->unminize_start < minimize_anim_time && hw->animate_to_dock)
+//                 return;
+//         }
+//         if (hw->w == pWindow && hw->no_rounding) {
+//             {
+//                 Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:rounding");
+//                 rounding_amount = (Hyprlang::INT*)val->dataPtr();
+//                 initial_value = *rounding_amount;
+//                 *rounding_amount = 0;
+//             }
+//
+//             Hyprlang::CConfigValue* val2 = g_pConfigManager->getHyprlangConfigValuePtr("general:border_size");
+//             border_size = (Hyprlang::INT*)val2->dataPtr();
+//             initial_border_size = *border_size;
+//             *border_size = 0;
+//         }
+//     }
+//     (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)((CHyprRenderer *) thisptr, pWindow, pMonitor, Time::steadyNow(), decorate, mode, ignorePosition, standalone);
+//     if (rounding_amount) {
+//         *rounding_amount = initial_value;
+//         *border_size = initial_border_size;
+//         //if (active_border) {
+//             //active_border = initial_active_border;
+//         //}
+//     }
+// }
 
 inline CFunctionHook* g_pWindowRoundingHook = nullptr;
 typedef float (*origWindowRoundingFunc)(Desktop::View::CWindow *);
@@ -1361,8 +1319,8 @@ void hook_render_functions() {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWindow");
         for (auto m : METHODS) {
             if (m.demangled.find("CHyprRenderer") != std::string::npos) {
-                g_pRenderWindowHook       = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderWindow);
-                g_pRenderWindowHook->hook();
+                // g_pRenderWindowHook       = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderWindow);
+                // g_pRenderWindowHook->hook();
                 pRenderWindow = m.address;
             }
         }
@@ -1379,8 +1337,8 @@ void hook_render_functions() {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderMonitor");
         for (auto m : METHODS) {
             if (m.demangled.find("CHyprRenderer") != std::string::npos) {
-                g_pRenderMonitorHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderMonitor);
-                g_pRenderMonitorHook->hook();
+                // g_pRenderMonitorHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderMonitor);
+                // g_pRenderMonitorHook->hook();
                 pRenderMonitor = m.address;
             }
         }
@@ -1388,24 +1346,24 @@ void hook_render_functions() {
     
 }
 
-inline CFunctionHook* g_pOnCircleNextHook = nullptr;
-typedef bool (*origOnCircleNextFunc)(void*, const IPointer::SButtonEvent&);
-SDispatchResult hook_onCircleNext(void* thisptr, std::string arg) {
-    // we don't call the original function because we want to remove it
-    return {};
-}
+// inline CFunctionHook* g_pOnCircleNextHook = nullptr;
+// typedef bool (*origOnCircleNextFunc)(void*, const IPointer::SButtonEvent&);
+// SDispatchResult hook_onCircleNext(void* thisptr, std::string arg) {
+//     // we don't call the original function because we want to remove it
+//     return {};
+// }
 
-void disable_default_alt_tab_behaviour() {
-    //return;
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "circleNext");
-        g_pOnCircleNextHook       = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_onCircleNext);
-        g_pOnCircleNextHook->hook();
-    }
-}
+// void disable_default_alt_tab_behaviour() {
+//     //return;
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     {
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "circleNext");
+//         g_pOnCircleNextHook       = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_onCircleNext);
+//         g_pOnCircleNextHook->hook();
+//     }
+// }
 
 void set_window_corner_mask(int id, int cornermask) {
 #ifdef TRACY_ENABLE
@@ -1488,55 +1446,56 @@ float HyprIso::get_varfloat(std::string target, float default_float) {
 }
 
 RGBA HyprIso::get_varcolor(std::string target, RGBA default_color) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //return default_color;
-    
-    auto confval = HyprlandAPI::getConfigValue(globals->api, target);
-    if (!confval)
-        return default_color;
-
-    auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
-    auto color = CHyprColor(**VAR);
-    return RGBA(color.r, color.g, color.b, color.a);         
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+    return default_color;
+//
+//     auto confval = HyprlandAPI::getConfigValue(globals->api, target);
+//     if (!confval)
+//         return default_color;
+//
+//     auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
+//     auto color = CHyprColor(**VAR);
+//     return RGBA(color.r, color.g, color.b, color.a);
+    //return RGBA(1, 0, 1, 1);
 }
 
 void HyprIso::create_config_variables() {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_bg_hovered_color", Hyprlang::INT{*configStringToInt("rgba(202020ff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_bg_pressed_color", Hyprlang::INT{*configStringToInt("rgba(111111ff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", Hyprlang::INT{*configStringToInt("rgba(dd1111ff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", Hyprlang::INT{*configStringToInt("rgba(880000ff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", Hyprlang::INT{*configStringToInt("rgba(ffffffff)")});
-
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_focused_color", Hyprlang::INT{*configStringToInt("rgba(000000ff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_unfocused_color", Hyprlang::INT{*configStringToInt("rgba(222222ff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_focused_text_color", Hyprlang::INT{*configStringToInt("rgba(ffffffff)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_unfocused_text_color", Hyprlang::INT{*configStringToInt("rgba(999999ff)")});
-    
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:thumb_to_position_time", Hyprlang::FLOAT{355});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:snap_helper_fade_in", Hyprlang::FLOAT{400});
-
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_ratio", Hyprlang::FLOAT{1.4375});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_text_h", Hyprlang::FLOAT{15});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_icon_h", Hyprlang::FLOAT{21});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_icon_h", Hyprlang::FLOAT{13});
-
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:resize_edge_size", Hyprlang::FLOAT{10});
-    
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock", Hyprlang::INT{3});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_color", Hyprlang::INT{*configStringToInt("rgba(00000088)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_active_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_press_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_hover_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_accent_color", Hyprlang::INT{*configStringToInt("rgba(ffffff88)")});
-
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-    HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_border_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_bg_hovered_color", Hyprlang::INT{*configStringToInt("rgba(202020ff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_bg_pressed_color", Hyprlang::INT{*configStringToInt("rgba(111111ff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", Hyprlang::INT{*configStringToInt("rgba(dd1111ff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", Hyprlang::INT{*configStringToInt("rgba(880000ff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", Hyprlang::INT{*configStringToInt("rgba(ffffffff)")});
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_focused_color", Hyprlang::INT{*configStringToInt("rgba(000000ff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_unfocused_color", Hyprlang::INT{*configStringToInt("rgba(222222ff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_focused_text_color", Hyprlang::INT{*configStringToInt("rgba(ffffffff)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_unfocused_text_color", Hyprlang::INT{*configStringToInt("rgba(999999ff)")});
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:thumb_to_position_time", Hyprlang::FLOAT{355});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:snap_helper_fade_in", Hyprlang::FLOAT{400});
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_ratio", Hyprlang::FLOAT{1.4375});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_text_h", Hyprlang::FLOAT{15});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_icon_h", Hyprlang::FLOAT{21});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_icon_h", Hyprlang::FLOAT{13});
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:resize_edge_size", Hyprlang::FLOAT{10});
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock", Hyprlang::INT{3});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_color", Hyprlang::INT{*configStringToInt("rgba(00000088)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_active_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_press_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_hover_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_accent_color", Hyprlang::INT{*configStringToInt("rgba(ffffff88)")});
+//
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_border_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
 }
 
 static void on_open_layer(PHLLS l) {
@@ -1658,25 +1617,25 @@ void HyprIso::create_callbacks() {
             hypriso->on_layer_change();
     });
     
-    static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
-        if (stage == eRenderStage::RENDER_PRE) {
-            #ifdef TRACY_ENABLE
-                FrameMarkStart("Render");
-            #endif        
-        }
-        if (hypriso->on_render) {
-            for (auto m : hyprmonitors) {
-                if (m->m == g_pHyprOpenGL->m_renderData.pMonitor) {
-                    hypriso->on_render(m->id, (int)stage);
-                }
-            }
-        }
-        if (stage == eRenderStage::RENDER_LAST_MOMENT) {
-            #ifdef TRACY_ENABLE
-                FrameMarkEnd("Render");
-            #endif
-        }
-    });
+    // static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
+    //     if (stage == eRenderStage::RENDER_PRE) {
+    //         #ifdef TRACY_ENABLE
+    //             FrameMarkStart("Render");
+    //         #endif
+    //     }
+    //     if (hypriso->on_render) {
+    //         for (auto m : hyprmonitors) {
+    //             if (m->m == Render::GL::g_pHyprOpenGL->m_renderData.pMonitor) {
+    //                 hypriso->on_render(m->id, (int)stage);
+    //             }
+    //         }
+    //     }
+    //     if (stage == eRenderStage::RENDER_LAST_MOMENT) {
+    //         #ifdef TRACY_ENABLE
+    //             FrameMarkEnd("Render");
+    //         #endif
+    //     }
+    // });
     
     static auto mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
         auto consume = false;
@@ -1718,10 +1677,10 @@ void HyprIso::create_callbacks() {
         if (hypriso->on_config_reload) {
             hypriso->on_config_reload();
             
-            Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("input:follow_mouse");
-            auto f = (Hyprlang::INT*)val->dataPtr();
-            //initial_value = *f;
-            *f = 2;
+            // Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("input:follow_mouse");
+            // auto f = (Hyprlang::INT*)val->dataPtr();
+            // //initial_value = *f;
+            // *f = 2;
         }
     });
 
@@ -1729,7 +1688,7 @@ void HyprIso::create_callbacks() {
         auto hs = new HyprWorkspaces;
         hs->w = e;
         hs->id = unique_id++;
-        hs->buffer = new CFramebuffer;
+        // hs->buffer = new CFramebuffer;
         hyprspaces.push_back(hs);
     }
 
@@ -1738,7 +1697,7 @@ void HyprIso::create_callbacks() {
         auto hs = new HyprWorkspaces;
         hs->w = s;
         hs->id = unique_id++;
-        hs->buffer = new CFramebuffer;
+        // hs->buffer = new CFramebuffer;
         hyprspaces.push_back(hs);
     });
 
@@ -1753,7 +1712,7 @@ void HyprIso::create_callbacks() {
                     remove = true;
                 }
                 if (remove) {
-                    delete hs->buffer;
+                    // delete hs->buffer;
                     hyprspaces.erase(hyprspaces.begin() + i);
                 }
             }
@@ -1838,16 +1797,16 @@ void hook_monitor_arrange() {
     }
 }
 
-inline CFunctionHook* g_pOnArrangeLayers = nullptr;
-typedef void (*origArrangeLayers)(CHyprRenderer *, const MONITORID& monitor);
-void hook_onArrangeLayers(void* thisptr, const MONITORID& monitor) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    auto spe = (CHyprRenderer *) thisptr;
-    (*(origArrangeLayers)g_pOnArrangeLayers->m_original)(spe, monitor);
-    //notify("dock added");
-}
+// inline CFunctionHook* g_pOnArrangeLayers = nullptr;
+// typedef void (*origArrangeLayers)(CHyprRenderer *, const MONITORID& monitor);
+// void hook_onArrangeLayers(void* thisptr, const MONITORID& monitor) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     auto spe = (CHyprRenderer *) thisptr;
+//     (*(origArrangeLayers)g_pOnArrangeLayers->m_original)(spe, monitor);
+//     //notify("dock added");
+// }
 
 void hook_dock_change() {
 #ifdef TRACY_ENABLE
@@ -2022,157 +1981,157 @@ static std::vector<float> zoomin = { 0, 0.05600000000000005, 0.10899999999999999
 
 bool rendered_splash_screen(CBox &monbox, PHLMONITORREF mon) {
     return false;
-    if (previously_seen_instance_signature == g_pCompositor->m_instanceSignature)
-        return false;
-    for (auto h : hyprmonitors) {
-        if (h->m == mon) {
-            auto current = get_current_time_in_ms();
-            long delta = current - h->creation_time;
-            if (h->first && delta > 2000) {
-                h->first = false;
-                const char* home = std::getenv("HOME");
-                if (home) {
-                    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/chime.wav";
-                    system(fz("mpv \"{}\" &", filepath.string()).c_str());
-                }
-            }
-            float scalar = (delta - 3000.0f) / 1000.0f;
-            if (scalar < 1.0) {
-                CBox box = {0, 0, h->m->m_transformedSize.x, h->m->m_transformedSize.x};
-                CHyprColor color = {1, 1, 1, .04f * (1.0f - pull(fadein, scalar))};
-                CHyprOpenGLImpl::SRectRenderData rectdata;
-                auto region = new CRegion(box);
-                rectdata.damage = region;
-                rectdata.blur = false;
-                rectdata.blurA = 1.0;
-                rectdata.round = 0;
-                rectdata.roundingPower = 2.0f;
-                rectdata.xray = false;
-                color = {0, 0, 0, 1.0f * (1.0f - pull(fadein, scalar))};
-                g_pHyprOpenGL->renderRect(box, color, rectdata);
-                /*auto pancake_scalar = pull(zoomin, scalar * 3);
-                auto sfactor = 200;
-                monbox.y += sfactor * (1.0f - pancake_scalar);
-                monbox.h -= sfactor * 2 * (1.0f - pancake_scalar);
-                */
-                monbox.scaleFromCenter(1.0 + (0.05 * (1.0 - pull(zoomin, scalar)))); 
-                hypriso->damage_entire(h->id);
-                return true;
-            }
-        }
-    }
+    // if (previously_seen_instance_signature == g_pCompositor->m_instanceSignature)
+    //     return false;
+    // for (auto h : hyprmonitors) {
+    //     if (h->m == mon) {
+    //         auto current = get_current_time_in_ms();
+    //         long delta = current - h->creation_time;
+    //         if (h->first && delta > 2000) {
+    //             h->first = false;
+    //             const char* home = std::getenv("HOME");
+    //             if (home) {
+    //                 std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/chime.wav";
+    //                 system(fz("mpv \"{}\" &", filepath.string()).c_str());
+    //             }
+    //         }
+    //         float scalar = (delta - 3000.0f) / 1000.0f;
+    //         if (scalar < 1.0) {
+    //             CBox box = {0, 0, h->m->m_transformedSize.x, h->m->m_transformedSize.x};
+    //             CHyprColor color = {1, 1, 1, .04f * (1.0f - pull(fadein, scalar))};
+    //             CHyprOpenGLImpl::SRectRenderData rectdata;
+    //             auto region = new CRegion(box);
+    //             rectdata.damage = region;
+    //             rectdata.blur = false;
+    //             rectdata.blurA = 1.0;
+    //             rectdata.round = 0;
+    //             rectdata.roundingPower = 2.0f;
+    //             rectdata.xray = false;
+    //             color = {0, 0, 0, 1.0f * (1.0f - pull(fadein, scalar))};
+    //             Render::GL::g_pHyprOpenGL->renderRect(box, color, rectdata);
+    //             /*auto pancake_scalar = pull(zoomin, scalar * 3);
+    //             auto sfactor = 200;
+    //             monbox.y += sfactor * (1.0f - pancake_scalar);
+    //             monbox.h -= sfactor * 2 * (1.0f - pancake_scalar);
+    //             */
+    //             monbox.scaleFromCenter(1.0 + (0.05 * (1.0 - pull(zoomin, scalar))));
+    //             hypriso->damage_entire(h->id);
+    //             return true;
+    //         }
+    //     }
+    // }
 
     return false;
 }
 
-void monitor_finish(CHyprOpenGLImpl *ptr) {
-    static auto PZOOMDISABLEAA = CConfigValue<Hyprlang::INT>("cursor:zoom_disable_aa");
+// void monitor_finish(CHyprOpenGLImpl *ptr) {
+//     static auto PZOOMDISABLEAA = CConfigValue<Hyprlang::INT>("cursor:zoom_disable_aa");
+//
+//     TRACY_GPU_ZONE("RenderEnd");
+//
+//     // end the render, copy the data to the main framebuffer
+//     if LIKELY (ptr->m_offloadedFramebuffer) {
+//         ptr->m_renderData.damage = ptr->m_renderData.finalDamage;
+//         ptr->pushMonitorTransformEnabled(true);
+//
+//         CBox monbox = {0, 0, ptr->m_renderData.pMonitor->m_transformedSize.x, ptr->m_renderData.pMonitor->m_transformedSize.y};
+//
+//         bool rendering_splash = false;
+//         if (!rendered_splash_screen(monbox, ptr->m_renderData.pMonitor)) {
+//             if LIKELY (g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && ptr->m_renderData.mouseZoomFactor == 1.0f)
+//                 ptr->m_renderData.pMonitor->m_zoomController.m_resetCameraState = true;
+//             ptr->m_renderData.pMonitor->m_zoomController.applyZoomTransform(monbox, ptr->m_renderData);
+//         } else {
+//             rendering_splash = true;
+//         }
+//
+//         ptr->m_applyFinalShader = !ptr->m_renderData.blockScreenShader;
+//         if UNLIKELY (ptr->m_renderData.mouseZoomFactor != 1.F && ptr->m_renderData.mouseZoomUseMouse && *PZOOMDISABLEAA)
+//             ptr->m_renderData.useNearestNeighbor = true;
+//
+//         if (rendering_splash)
+//             ptr->m_renderData.useNearestNeighbor = false;
+//
+//         // copy the damaged areas into the mirror buffer
+//         // we can't use the offloadFB for mirroring, as it contains artifacts from blurring
+//         if UNLIKELY (!ptr->m_renderData.pMonitor->m_mirrors.empty() && !ptr->m_fakeFrame)
+//             ptr->saveBufferForMirror(monbox);
+//
+//         ptr->m_renderData.outFB->bind();
+//         ptr->blend(false);
+//
+//         if LIKELY (ptr->m_finalScreenShader->program() < 1 && !g_pHyprRenderer->m_crashingInProgress)
+//             ptr->renderTexturePrimitive(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox);
+//         else
+//             ptr->renderTexture(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox, {});
+//
+//         ptr->blend(true);
+//
+//         ptr->m_renderData.useNearestNeighbor = false;
+//         ptr->m_applyFinalShader              = false;
+//         ptr->popMonitorTransformEnabled();
+//     }
+//
+//     // invalidate our render FBs to signal to the driver we don't need them anymore
+//     ptr->m_renderData.pCurrentMonData->mirrorFB.bind();
+//     ptr->m_renderData.pCurrentMonData->mirrorFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+//     ptr->m_renderData.pCurrentMonData->mirrorSwapFB.bind();
+//     ptr->m_renderData.pCurrentMonData->mirrorSwapFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+//     ptr->m_renderData.pCurrentMonData->offloadFB.bind();
+//     ptr->m_renderData.pCurrentMonData->offloadFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+//     ptr->m_renderData.pCurrentMonData->offMainFB.bind();
+//     ptr->m_renderData.pCurrentMonData->offMainFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
+//     // reset our data
+//     ptr->m_renderData.pMonitor.reset();
+//     ptr->m_renderData.mouseZoomFactor   = 1.f;
+//     ptr->m_renderData.mouseZoomUseMouse = true;
+//     ptr->m_renderData.blockScreenShader = false;
+//     ptr->m_renderData.currentFB         = nullptr;
+//     ptr->m_renderData.mainFB            = nullptr;
+//     ptr->m_renderData.outFB             = nullptr;
+//     ptr->popMonitorTransformEnabled();
+//
+//     // if we dropped to offMain, release it now.
+//     // if there is a plugin constantly using it, this might be a bit slow,
+//     // but I haven't seen a single plugin yet use these, so it's better to drop a bit of vram.
+//     if UNLIKELY (ptr->m_renderData.pCurrentMonData->offMainFB.isAllocated())
+//         ptr->m_renderData.pCurrentMonData->offMainFB.release();
+//
+//     static const auto GLDEBUG = CConfigValue<Hyprlang::INT>("debug:gl_debugging");
+//
+//     if (*GLDEBUG) {
+//     // check for gl errors
+//     const GLenum ERR = glGetError();
+//
+//         if UNLIKELY (ERR == GL_CONTEXT_LOST) /* We don't have infra to recover from this */
+//         RASSERT(false, "glGetError at Opengl::end() returned GL_CONTEXT_LOST. Cannot continue until proper GPU reset handling is implemented.");
+//     }
+// }
 
-    TRACY_GPU_ZONE("RenderEnd");
+// inline CFunctionHook* g_pOnMonitorEndHook = nullptr;
+// typedef void (*origMonitorEnd)(CHyprOpenGLImpl *);
+// void hook_onMonitorEnd(void* thisptr) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+// #ifdef FORK_WARN
+//     static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
+// #endif
+//     monitor_finish((CHyprOpenGLImpl *) thisptr);
+// }
 
-    // end the render, copy the data to the main framebuffer
-    if LIKELY (ptr->m_offloadedFramebuffer) {
-        ptr->m_renderData.damage = ptr->m_renderData.finalDamage;
-        ptr->pushMonitorTransformEnabled(true);
-
-        CBox monbox = {0, 0, ptr->m_renderData.pMonitor->m_transformedSize.x, ptr->m_renderData.pMonitor->m_transformedSize.y};
-
-        bool rendering_splash = false;
-        if (!rendered_splash_screen(monbox, ptr->m_renderData.pMonitor)) {
-            if LIKELY (g_pHyprRenderer->m_renderMode == RENDER_MODE_NORMAL && ptr->m_renderData.mouseZoomFactor == 1.0f)
-                ptr->m_renderData.pMonitor->m_zoomController.m_resetCameraState = true;
-            ptr->m_renderData.pMonitor->m_zoomController.applyZoomTransform(monbox, ptr->m_renderData);            
-        } else {
-            rendering_splash = true;
-        }
-
-        ptr->m_applyFinalShader = !ptr->m_renderData.blockScreenShader;
-        if UNLIKELY (ptr->m_renderData.mouseZoomFactor != 1.F && ptr->m_renderData.mouseZoomUseMouse && *PZOOMDISABLEAA)
-            ptr->m_renderData.useNearestNeighbor = true;
-        
-        if (rendering_splash)
-            ptr->m_renderData.useNearestNeighbor = false;
-
-        // copy the damaged areas into the mirror buffer
-        // we can't use the offloadFB for mirroring, as it contains artifacts from blurring
-        if UNLIKELY (!ptr->m_renderData.pMonitor->m_mirrors.empty() && !ptr->m_fakeFrame)
-            ptr->saveBufferForMirror(monbox);
-
-        ptr->m_renderData.outFB->bind();
-        ptr->blend(false);
-
-        if LIKELY (ptr->m_finalScreenShader->program() < 1 && !g_pHyprRenderer->m_crashingInProgress)
-            ptr->renderTexturePrimitive(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox);
-        else
-            ptr->renderTexture(ptr->m_renderData.pCurrentMonData->offloadFB.getTexture(), monbox, {});
-
-        ptr->blend(true);
-
-        ptr->m_renderData.useNearestNeighbor = false;
-        ptr->m_applyFinalShader              = false;
-        ptr->popMonitorTransformEnabled();
-    }
-
-    // invalidate our render FBs to signal to the driver we don't need them anymore
-    ptr->m_renderData.pCurrentMonData->mirrorFB.bind();
-    ptr->m_renderData.pCurrentMonData->mirrorFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
-    ptr->m_renderData.pCurrentMonData->mirrorSwapFB.bind();
-    ptr->m_renderData.pCurrentMonData->mirrorSwapFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
-    ptr->m_renderData.pCurrentMonData->offloadFB.bind();
-    ptr->m_renderData.pCurrentMonData->offloadFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
-    ptr->m_renderData.pCurrentMonData->offMainFB.bind();
-    ptr->m_renderData.pCurrentMonData->offMainFB.invalidate({GL_STENCIL_ATTACHMENT, GL_COLOR_ATTACHMENT0});
-    // reset our data
-    ptr->m_renderData.pMonitor.reset();
-    ptr->m_renderData.mouseZoomFactor   = 1.f;
-    ptr->m_renderData.mouseZoomUseMouse = true;
-    ptr->m_renderData.blockScreenShader = false;
-    ptr->m_renderData.currentFB         = nullptr;
-    ptr->m_renderData.mainFB            = nullptr;
-    ptr->m_renderData.outFB             = nullptr;
-    ptr->popMonitorTransformEnabled();
-
-    // if we dropped to offMain, release it now.
-    // if there is a plugin constantly using it, this might be a bit slow,
-    // but I haven't seen a single plugin yet use these, so it's better to drop a bit of vram.
-    if UNLIKELY (ptr->m_renderData.pCurrentMonData->offMainFB.isAllocated())
-        ptr->m_renderData.pCurrentMonData->offMainFB.release();
-
-    static const auto GLDEBUG = CConfigValue<Hyprlang::INT>("debug:gl_debugging");
-
-    if (*GLDEBUG) {
-    // check for gl errors
-    const GLenum ERR = glGetError();
-
-        if UNLIKELY (ERR == GL_CONTEXT_LOST) /* We don't have infra to recover from this */
-        RASSERT(false, "glGetError at Opengl::end() returned GL_CONTEXT_LOST. Cannot continue until proper GPU reset handling is implemented.");
-    }
-}
-
-inline CFunctionHook* g_pOnMonitorEndHook = nullptr;
-typedef void (*origMonitorEnd)(CHyprOpenGLImpl *);
-void hook_onMonitorEnd(void* thisptr) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-#ifdef FORK_WARN
-    static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
-#endif
-    monitor_finish((CHyprOpenGLImpl *) thisptr);
-}
-
-void hook_monitor_render() {
-    if (true) {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "end");
-        for (auto m : METHODS) {
-            if (m.demangled.find("CHyprOpenGLImpl::end") != std::string::npos) {
-                g_pOnMonitorEndHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onMonitorEnd);
-                g_pOnMonitorEndHook->hook();
-                break;
-            }
-        }
-    }
-}
+// void hook_monitor_render() {
+//     if (true) {
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "end");
+//         for (auto m : METHODS) {
+//             if (m.demangled.find("CHyprOpenGLImpl::end") != std::string::npos) {
+//                 g_pOnMonitorEndHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onMonitorEnd);
+//                 g_pOnMonitorEndHook->hook();
+//                 break;
+//             }
+//         }
+//     }
+// }
 
 std::string get_previous_instance_signature() {
     std::string previous = "";
@@ -2203,41 +2162,41 @@ std::string get_previous_instance_signature() {
     return previous; 
 }
 
-void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w);
+// void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w);
 
-inline CFunctionHook* g_pOnSetHiddenHook = nullptr;
-typedef void (*origSetHidden)(Desktop::View::CWindow *, bool);
-void hook_onSetHidden(void* thisptr, bool state) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-#ifdef FORK_WARN
-    static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
-#endif
-    auto w = (Desktop::View::CWindow *) thisptr;
-    for (auto hw : hyprwindows) {
-        if  (hw->w.get() == w) {
-            if (state) {
-                // set to hide
-                if (!hw->min_fb)
-                    hw->min_fb = new CFramebuffer;
-                screenshot_window_with_decos(hw->min_fb, hw->w);
-                hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
-                hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
-                hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
-                hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
-                hw->w_min_size.scale(w->m_monitor->m_scale);
-                hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
-                hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
-                hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
-            } else {
-                // set to show
-                hw->unminize_start = get_current_time_in_ms(); 
-            }
-        }
-    }
-    (*(origSetHidden)g_pOnSetHiddenHook->m_original)(w, state);
-}
+// inline CFunctionHook* g_pOnSetHiddenHook = nullptr;
+// typedef void (*origSetHidden)(Desktop::View::CWindow *, bool);
+// void hook_onSetHidden(void* thisptr, bool state) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+// #ifdef FORK_WARN
+//     static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
+// #endif
+//     auto w = (Desktop::View::CWindow *) thisptr;
+//     for (auto hw : hyprwindows) {
+//         if  (hw->w.get() == w) {
+//             if (state) {
+//                 // set to hide
+//                 if (!hw->min_fb)
+//                     hw->min_fb = new CFramebuffer;
+//                 screenshot_window_with_decos(hw->min_fb, hw->w);
+//                 hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
+//                 hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+//                 hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
+//                 hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
+//                 hw->w_min_size.scale(w->m_monitor->m_scale);
+//                 hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+//                 hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
+//                 hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
+//             } else {
+//                 // set to show
+//                 hw->unminize_start = get_current_time_in_ms();
+//             }
+//         }
+//     }
+//     (*(origSetHidden)g_pOnSetHiddenHook->m_original)(w, state);
+// }
 
 void hook_hidden_state_change() {
 #ifdef FORK_WARN
@@ -2247,8 +2206,8 @@ void hook_hidden_state_change() {
     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "setHidden");
     for (auto m : METHODS) {
         if (m.demangled.find("CWindow::setHidden") != std::string::npos) {
-            g_pOnSetHiddenHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSetHidden);
-            g_pOnSetHiddenHook->hook();
+            // g_pOnSetHiddenHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSetHidden);
+            // g_pOnSetHiddenHook->hook();
             break;
         }
     }
@@ -2616,58 +2575,58 @@ std::string conf_path() {
     #endif
 }
 
-inline CFunctionHook* g_pOnGetMainConfigPathHook = nullptr;
-typedef std::string (*origGetMainConfigPath)(CConfigManager *);
-std::string hook_onGetMainConfigPath(void* thisptr) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-#ifdef FORK_WARN
-    static_assert(false, "[Function Body] Make sure our `CConfigManager::getMainConfigPath` and Hyprland's are synced!");
-#endif
-    const char* home = std::getenv("HOME");
-    if (!home || return_default_config)
-        return (*(origGetMainConfigPath)g_pOnGetMainConfigPathHook->m_original)((CConfigManager *) thisptr);
+// inline CFunctionHook* g_pOnGetMainConfigPathHook = nullptr;
+// typedef std::string (*origGetMainConfigPath)(CConfigManager *);
+// std::string hook_onGetMainConfigPath(void* thisptr) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+// #ifdef FORK_WARN
+//     static_assert(false, "[Function Body] Make sure our `CConfigManager::getMainConfigPath` and Hyprland's are synced!");
+// #endif
+//     const char* home = std::getenv("HOME");
+//     if (!home || return_default_config)
+//         return (*(origGetMainConfigPath)g_pOnGetMainConfigPathHook->m_original)((CConfigManager *) thisptr);
+//
+//     std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
+//     std::filesystem::create_directories(filepath.parent_path());
+//
+//     {
+//         std::ofstream out(filepath, std::ios::trunc);
+//         out << default_conf() << std::endl;
+//     }
+//
+//     {
+//         std::filesystem::path f = std::filesystem::path(home) / ".config/mylar/user.conf";
+//         std::filesystem::create_directories(f.parent_path());
+//         if (!std::filesystem::exists(f)) {
+//             std::ofstream out(f, std::ios::trunc);
+//             out << std::endl << std::endl;
+//         }
+//     }
+//
+//     {
+//         std::filesystem::path f = std::filesystem::path(home) / ".config/mylar/debug_user.conf";
+//         std::filesystem::create_directories(f.parent_path());
+//         if (!std::filesystem::exists(f)) {
+//             std::ofstream out(f, std::ios::trunc);
+//             out << std::endl << std::endl;
+//         }
+//     }
+//
+//     return filepath.string();
+// }
 
-    std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
-    std::filesystem::create_directories(filepath.parent_path());
-    
-    {
-        std::ofstream out(filepath, std::ios::trunc);
-        out << default_conf() << std::endl;
-    }
-    
-    {
-        std::filesystem::path f = std::filesystem::path(home) / ".config/mylar/user.conf";
-        std::filesystem::create_directories(f.parent_path());
-        if (!std::filesystem::exists(f)) {
-            std::ofstream out(f, std::ios::trunc);
-            out << std::endl << std::endl;
-        }
-    }
-
-    {
-        std::filesystem::path f = std::filesystem::path(home) / ".config/mylar/debug_user.conf";
-        std::filesystem::create_directories(f.parent_path());
-        if (!std::filesystem::exists(f)) {
-            std::ofstream out(f, std::ios::trunc);
-            out << std::endl << std::endl;
-        }
-    }
-
-    return filepath.string();
-}
-
-void hook_default_config() {
-    static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "getMainConfigPath");
-    for (auto m : METHODS) {
-        if (m.demangled.find("CConfigManager::getMainConfigPath") != std::string::npos) {
-            g_pOnGetMainConfigPathHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onGetMainConfigPath);
-            g_pOnGetMainConfigPathHook->hook();
-            break;
-        }
-    }
-}
+// void hook_default_config() {
+//     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "getMainConfigPath");
+//     for (auto m : METHODS) {
+//         if (m.demangled.find("CConfigManager::getMainConfigPath") != std::string::npos) {
+//             g_pOnGetMainConfigPathHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onGetMainConfigPath);
+//             g_pOnGetMainConfigPathHook->hook();
+//             break;
+//         }
+//     }
+// }
 
 static SP<CShader> test_shader;
 
@@ -2760,61 +2719,61 @@ static void init_rect_quad() {
 }
 
 void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill) {
-    if (!test_shader) {
-        auto rendering_monitor = current_rendering_monitor();
-        auto dpi = scale(rendering_monitor);
-        r *= dpi;
-        rect({x - r * .5, y - r *.5, r, r}, col, 0, r * .43);
-        return;
-    }
-    AnyPass::AnyData anydata([x, y, r, col, edge, fill](AnyPass* pass) {
-        if (!test_shader || !test_shader->program())
-            return;
-
-        init_rect_quad();
-
-        glUseProgram(test_shader->program());
-
-        float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
-        float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
-        
-        auto newBox = CBox(x - r, y - r, r * 2, r * 2);
-        g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
-        {
-            // get transform
-            const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
-            Mat3x3     matrix    = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
-            Mat3x3     glMatrix  = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
-            glUniformMatrix3fv(
-                glGetUniformLocation(test_shader->program(), "uProj"),
-                1,
-                GL_TRUE,
-                glMatrix.getMatrix().data()
-            );
-        }
-
-        glUniform4f(
-            glGetUniformLocation(test_shader->program(), "uColor"),
-            col.r, col.g, col.b, col.a
-        );
-
-        glUniform1f(
-            glGetUniformLocation(test_shader->program(), "uEdge"),
-            edge
-        );
-
-        glUniform1f(
-            glGetUniformLocation(test_shader->program(), "uFill"),
-            fill
-        );
-        
-        glBindVertexArray(quadVAO);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        glBindVertexArray(0);
-
-        glUseProgram(0);
-    });
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    // if (!test_shader) {
+    //     auto rendering_monitor = current_rendering_monitor();
+    //     auto dpi = scale(rendering_monitor);
+    //     r *= dpi;
+    //     rect({x - r * .5, y - r *.5, r, r}, col, 0, r * .43);
+    //     return;
+    // }
+    // AnyPass::AnyData anydata([x, y, r, col, edge, fill](AnyPass* pass) {
+    //     if (!test_shader || !test_shader->program())
+    //         return;
+    //
+    //     init_rect_quad();
+    //
+    //     glUseProgram(test_shader->program());
+    //
+    //     float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
+    //     float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
+    //
+    //     auto newBox = CBox(x - r, y - r, r * 2, r * 2);
+    //     Render::GL::g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
+    //     {
+    //         // get transform
+    //         const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!Render::GL::g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
+    //         Mat3x3     matrix    = Render::GL::g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
+    //         Mat3x3     glMatrix  = Render::GL::g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
+    //         glUniformMatrix3fv(
+    //             glGetUniformLocation(test_shader->program(), "uProj"),
+    //             1,
+    //             GL_TRUE,
+    //             glMatrix.getMatrix().data()
+    //         );
+    //     }
+    //
+    //     glUniform4f(
+    //         glGetUniformLocation(test_shader->program(), "uColor"),
+    //         col.r, col.g, col.b, col.a
+    //     );
+    //
+    //     glUniform1f(
+    //         glGetUniformLocation(test_shader->program(), "uEdge"),
+    //         edge
+    //     );
+    //
+    //     glUniform1f(
+    //         glGetUniformLocation(test_shader->program(), "uFill"),
+    //         fill
+    //     );
+    //
+    //     glBindVertexArray(quadVAO);
+    //     glDrawArrays(GL_TRIANGLES, 0, 6);
+    //     glBindVertexArray(0);
+    //
+    //     glUseProgram(0);
+    // });
+    // g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 static void hook_use_shader() {
@@ -2899,9 +2858,9 @@ void HyprIso::create_hooks() {
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
     hook_use_shader();
-    hook_monitor_render();
+    // hook_monitor_render();
     hook_hidden_state_change();
-    hook_default_config();
+    // hook_default_config();
     hook_vec_to_win();
     //create_custom_shaders();
 }
@@ -3113,28 +3072,28 @@ bool HyprIso::alt_tabbable(int id) {
 }
 
 void change_root_config_path(std::string path, bool force = true) {
-    return_default_config = true;
-    auto default_path = g_pConfigManager->getMainConfigPath();
-    return_default_config = false;
-    if (!force) {
-        if (default_path.find(conf_path()) != std::string::npos) {
-            return;
-        }
-
-        /*
-        g_pConfigManager->m_firstExecRequests.clear();
-        g_pConfigManager->m_firstExecDispatched = false;
-        g_pConfigManager->m_isFirstLaunch = false;
- 
-        later(1000, [](Timer *) {
-            g_pConfigManager->m_firstExecDispatched = false;
-            g_pConfigManager->m_isFirstLaunch = false;
-            g_pConfigManager->dispatchExecOnce();
-        });
-        */
-    }
-
-    g_pConfigManager->m_config->changeRootPath(path.c_str());
+ //    return_default_config = true;
+ //    auto default_path = g_pConfigManager->getMainConfigPath();
+ //    return_default_config = false;
+ //    if (!force) {
+ //        if (default_path.find(conf_path()) != std::string::npos) {
+ //            return;
+ //        }
+ //
+ //        /*
+ //        g_pConfigManager->m_firstExecRequests.clear();
+ //        g_pConfigManager->m_firstExecDispatched = false;
+ //        g_pConfigManager->m_isFirstLaunch = false;
+ //
+ //        later(1000, [](Timer *) {
+ //            g_pConfigManager->m_firstExecDispatched = false;
+ //            g_pConfigManager->m_isFirstLaunch = false;
+ //            g_pConfigManager->dispatchExecOnce();
+ //        });
+ //        */
+ //    }
+ //
+ //    g_pConfigManager->m_config->changeRootPath(path.c_str());
 }
 
 static std::vector<PF *> polled;
@@ -3172,7 +3131,7 @@ void HyprIso::end() {
     remove_request_listeners(); 
     // reset to default config
     return_default_config = true;
-    change_root_config_path(g_pConfigManager->getMainConfigPath());
+    // change_root_config_path(g_pConfigManager->getMainConfigPath());
     //g_pConfigManager->reload();
     for (auto a : anims)
         delete a;
@@ -3198,79 +3157,79 @@ Bounds tobounds(CBox box) {
 }
 
 void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPower, bool blur, float blurA) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //return;
-    if (box.h <= 0 || box.w <= 0)
-        return;
-    bool clip = hypriso->clip;
-    Bounds clipbox = hypriso->clipbox;
-    if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
-        return; 
-    }
-    if (cornermask == 16)
-        round = 0;
-    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
- 
-        CHyprOpenGLImpl::SRectRenderData rectdata;
-        auto region = new CRegion(tocbox(box));
-        rectdata.damage        = nullptr;
-        rectdata.blur          = blur;
-        rectdata.blurA         = blurA;
-        rectdata.round         = std::round(round);
-        rectdata.roundingPower = roundingPower;
-
-        if (clip)
-            g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-        
-        // TODO: who is responsible for cleaning up this damage?
-        set_rounding(cornermask); // only top side
-        g_pHyprOpenGL->renderRect(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
-        set_rounding(0);
-        if (clip)
-            g_pHyprOpenGL->m_renderData.clipBox = CBox();
-    });
-    anydata.box = tocbox(box);
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     //return;
+//     if (box.h <= 0 || box.w <= 0)
+//         return;
+//     bool clip = hypriso->clip;
+//     Bounds clipbox = hypriso->clipbox;
+//     if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
+//         return;
+//     }
+//     if (cornermask == 16)
+//         round = 0;
+//     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//         CHyprOpenGLImpl::SRectRenderData rectdata;
+//         auto region = new CRegion(tocbox(box));
+//         rectdata.damage        = nullptr;
+//         rectdata.blur          = blur;
+//         rectdata.blurA         = blurA;
+//         rectdata.round         = std::round(round);
+//         rectdata.roundingPower = roundingPower;
+//
+//         if (clip)
+//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//
+//         // TODO: who is responsible for cleaning up this damage?
+//         set_rounding(cornermask); // only top side
+//         Render::GL::g_pHyprOpenGL->renderRect(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
+//         set_rounding(0);
+//         if (clip)
+//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+//     });
+//     anydata.box = tocbox(box);
+//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void border(Bounds box, RGBA color, float size, int cornermask, float round, float roundingPower, bool blur, float blurA) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //return;
-    if (box.h <= 0 || box.w <= 0)
-        return;
-    bool clip = hypriso->clip;
-    Bounds clipbox = hypriso->clipbox;
-    if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
-        return; 
-    }
-    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox, size](AnyPass* pass) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-        CHyprOpenGLImpl::SBorderRenderData rectdata;
-        rectdata.round         = round;
-        rectdata.outerRound    = round;
-        rectdata.borderSize    = size;
-        rectdata.roundingPower = roundingPower;
-
-        if (clip)
-            g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-        
-        set_rounding(cornermask); // only top side
-        g_pHyprOpenGL->renderBorder(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
-        set_rounding(0);
-        if (clip)
-            g_pHyprOpenGL->m_renderData.clipBox = CBox();
-    });
-    anydata.box = tocbox(box);
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     //return;
+//     if (box.h <= 0 || box.w <= 0)
+//         return;
+//     bool clip = hypriso->clip;
+//     Bounds clipbox = hypriso->clipbox;
+//     if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
+//         return;
+//     }
+//     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox, size](AnyPass* pass) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//         CHyprOpenGLImpl::SBorderRenderData rectdata;
+//         rectdata.round         = round;
+//         rectdata.outerRound    = round;
+//         rectdata.borderSize    = size;
+//         rectdata.roundingPower = roundingPower;
+//
+//         if (clip)
+//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//
+//         set_rounding(cornermask); // only top side
+//         Render::GL::g_pHyprOpenGL->renderBorder(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
+//         set_rounding(0);
+//         if (clip)
+//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+//     });
+//     anydata.box = tocbox(box);
+//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float size) {
@@ -3278,19 +3237,19 @@ void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float s
     ZoneScoped;
 #endif
  
-    AnyPass::AnyData anydata([box, color, rounding, roundingPower, size](AnyPass* pass) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
- 
-        if (Desktop::focusState()->window().get()) {
-            auto current = g_pHyprOpenGL->m_renderData.currentWindow;
-            g_pHyprOpenGL->m_renderData.currentWindow = Desktop::focusState()->window();
-            g_pHyprOpenGL->renderRoundedShadow(tocbox(box), rounding, roundingPower, size, CHyprColor(color.r, color.g, color.b, color.a), 1.0);
-            g_pHyprOpenGL->m_renderData.currentWindow = current;
-        }
-    });
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+//     AnyPass::AnyData anydata([box, color, rounding, roundingPower, size](AnyPass* pass) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//         if (Desktop::focusState()->window().get()) {
+//             auto current = Render::GL::g_pHyprOpenGL->m_renderData.currentWindow;
+//             Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = Desktop::focusState()->window();
+//             Render::GL::g_pHyprOpenGL->renderRoundedShadow(tocbox(box), rounding, roundingPower, size, CHyprColor(color.r, color.g, color.b, color.a), 1.0);
+//             Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = current;
+//         }
+//     });
+//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 
@@ -3360,13 +3319,13 @@ struct MylarBar : public IHyprWindowDecoration {
         //hypriso->damage_entire(m_window->m_monitorMovedFrom);
         //draw(m_window->m_monitor.lock(), 1.0);
     } 
-    bool onInputOnDeco(const eInputType, const Vector2D&, std::any = {}) { 
-        if (next_check) {
-            next_check = false;
-            return true;
-        }
-        return true; 
-    }
+    // bool onInputOnDeco(const eInputType, const Vector2D&, std::any = {}) {
+        // if (next_check) {
+            // next_check = false;
+            // return true;
+        // }
+        // return true;
+    // }
     eDecorationLayer getDecorationLayer() { return eDecorationLayer::DECORATION_LAYER_BOTTOM; }
     uint64_t getDecorationFlags() { return DECORATION_ALLOWS_MOUSE_INPUT; }
     std::string getDisplayName() { return "MylarBar"; }
@@ -3531,14 +3490,14 @@ int current_rendering_monitor() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    
-    if (auto m = g_pHyprOpenGL->m_renderData.pMonitor.lock()) {
-        for (auto hyprmonitor : hyprmonitors) {
-            if (hyprmonitor->m == m) {
-                return hyprmonitor->id;
-            }
-        } 
-    }
+
+    // if (auto m = Render::GL::g_pHyprOpenGL->m_renderData.pMonitor.lock()) {
+        // for (auto hyprmonitor : hyprmonitors) {
+            // if (hyprmonitor->m == m) {
+                // return hyprmonitor->id;
+            // }
+        // }
+    // }
     return -1;
 }
 
@@ -3547,13 +3506,13 @@ int current_rendering_window() {
     ZoneScoped;
 #endif
     
-    if (auto c = g_pHyprOpenGL->m_renderData.currentWindow.lock()) {
-        for (auto hyprwindow : hyprwindows) {
-            if (hyprwindow->w == c) {
-                return hyprwindow->id; 
-            }
-        }         
-    }
+    // if (auto c = Render::GL::g_pHyprOpenGL->m_renderData.currentWindow.lock()) {
+        // for (auto hyprwindow : hyprwindows) {
+            // if (hyprwindow->w == c) {
+                // return hyprwindow->id;
+            // }
+        // }
+    // }
     return -1;
 }
 
@@ -4097,85 +4056,85 @@ void load_icon_full_path(cairo_surface_t** surface, std::string path) {
     *surface = cairo_image_surface_create_from_png(path.c_str());
 }
 
-SP<CTexture> missingTexure(int size) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    SP<CTexture> tex = makeShared<CTexture>();
-    tex->allocate();
-
-    const auto CAIROSURFACE = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 512, 512);
-    const auto CAIRO        = cairo_create(CAIROSURFACE);
-
-    cairo_set_antialias(CAIRO, CAIRO_ANTIALIAS_NONE);
-    cairo_save(CAIRO);
-    cairo_set_source_rgba(CAIRO, 0, 0, 0, 1);
-    cairo_set_operator(CAIRO, CAIRO_OPERATOR_SOURCE);
-    cairo_paint(CAIRO);
-    cairo_set_source_rgba(CAIRO, 1, 0, 1, 1);
-    cairo_rectangle(CAIRO, 256, 0, 256, 256);
-    cairo_fill(CAIRO);
-    cairo_rectangle(CAIRO, 0, 256, 256, 256);
-    cairo_fill(CAIRO);
-    cairo_restore(CAIRO);
-
-    cairo_surface_flush(CAIROSURFACE);
-
-    tex->m_size = {512, 512};
-
-    // copy the data to an OpenGL texture we have
-    const GLint glFormat = GL_RGBA;
-    const GLint glType   = GL_UNSIGNED_BYTE;
-
-    const auto  DATA = cairo_image_surface_get_data(CAIROSURFACE);
-    tex->bind();
-    tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
-    tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
-    glTexImage2D(GL_TEXTURE_2D, 0, glFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
-
-    cairo_surface_destroy(CAIROSURFACE);
-    cairo_destroy(CAIRO);
-
-    return tex;
-}
-
-SP<CTexture> loadAsset(const std::string& filename, int target_size) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    cairo_surface_t* icon = nullptr;
-    load_icon_full_path(&icon, filename, target_size);
-    if (!icon)
-        return {};
-
-    const auto CAIROFORMAT = cairo_image_surface_get_format(icon);
-    auto       tex         = makeShared<CTexture>();
-
-    tex->allocate();
-    tex->m_size = {cairo_image_surface_get_width(icon), cairo_image_surface_get_height(icon)};
-
-    const GLint glIFormat = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB32F : GL_RGBA;
-    const GLint glFormat  = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB : GL_RGBA;
-    const GLint glType    = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_FLOAT : GL_UNSIGNED_BYTE;
-
-    const auto  DATA = cairo_image_surface_get_data(icon);
-    tex->bind();
-    tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    if (CAIROFORMAT != CAIRO_FORMAT_RGB96F) {
-        tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
-        tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
-    }
-
-    glTexImage2D(GL_TEXTURE_2D, 0, glIFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
-
-    cairo_surface_destroy(icon);
-
-    return tex;
-}
+// SP<CTexture> missingTexure(int size) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     SP<CTexture> tex = makeShared<CTexture>();
+//     tex->allocate();
+//
+//     const auto CAIROSURFACE = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 512, 512);
+//     const auto CAIRO        = cairo_create(CAIROSURFACE);
+//
+//     cairo_set_antialias(CAIRO, CAIRO_ANTIALIAS_NONE);
+//     cairo_save(CAIRO);
+//     cairo_set_source_rgba(CAIRO, 0, 0, 0, 1);
+//     cairo_set_operator(CAIRO, CAIRO_OPERATOR_SOURCE);
+//     cairo_paint(CAIRO);
+//     cairo_set_source_rgba(CAIRO, 1, 0, 1, 1);
+//     cairo_rectangle(CAIRO, 256, 0, 256, 256);
+//     cairo_fill(CAIRO);
+//     cairo_rectangle(CAIRO, 0, 256, 256, 256);
+//     cairo_fill(CAIRO);
+//     cairo_restore(CAIRO);
+//
+//     cairo_surface_flush(CAIROSURFACE);
+//
+//     tex->m_size = {512, 512};
+//
+//     // copy the data to an OpenGL texture we have
+//     const GLint glFormat = GL_RGBA;
+//     const GLint glType   = GL_UNSIGNED_BYTE;
+//
+//     const auto  DATA = cairo_image_surface_get_data(CAIROSURFACE);
+//     tex->bind();
+//     tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+//     tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+//     tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+//     tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
+//     glTexImage2D(GL_TEXTURE_2D, 0, glFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
+//
+//     cairo_surface_destroy(CAIROSURFACE);
+//     cairo_destroy(CAIRO);
+//
+//     return tex;
+// }
+//
+// SP<CTexture> loadAsset(const std::string& filename, int target_size) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     cairo_surface_t* icon = nullptr;
+//     load_icon_full_path(&icon, filename, target_size);
+//     if (!icon)
+//         return {};
+//
+//     const auto CAIROFORMAT = cairo_image_surface_get_format(icon);
+//     auto       tex         = makeShared<CTexture>();
+//
+//     tex->allocate();
+//     tex->m_size = {cairo_image_surface_get_width(icon), cairo_image_surface_get_height(icon)};
+//
+//     const GLint glIFormat = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB32F : GL_RGBA;
+//     const GLint glFormat  = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB : GL_RGBA;
+//     const GLint glType    = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_FLOAT : GL_UNSIGNED_BYTE;
+//
+//     const auto  DATA = cairo_image_surface_get_data(icon);
+//     tex->bind();
+//     tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+//     tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+//
+//     if (CAIROFORMAT != CAIRO_FORMAT_RGB96F) {
+//         tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+//         tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
+//     }
+//
+//     glTexImage2D(GL_TEXTURE_2D, 0, glIFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
+//
+//     cairo_surface_destroy(icon);
+//
+//     return tex;
+// }
 
 void free_text_texture(int id) {
 #ifdef TRACY_ENABLE
@@ -4184,7 +4143,7 @@ void free_text_texture(int id) {
     for (int i = 0; i < hyprtextures.size(); i++) {
         auto h = hyprtextures[i];
         if (h->info.id == id) {
-            h->texture.reset();
+            // h->texture.reset();
             printf("free: %d\n", h->info.id);
             hyprtextures.erase(hyprtextures.begin() + i);
             delete h;
@@ -4212,135 +4171,169 @@ TextureInfo gen_texture(std::string path, float h) {
 #endif
     //log("gen texture");
     //notify("gen texture");
-    auto tex = loadAsset(path, h);
-    if (tex.get()) {
-        auto t = new Texture;
-        t->texture = tex;
-        TextureInfo info;
-        info.id = unique_id++;
-        info.w = t->texture->m_size.x;
-        info.h = t->texture->m_size.y;
-        printf("generate pic: %d\n", info.id);
-        t->info = info;
-        hyprtextures.push_back(t);
-        return t->info;
-    }
+    // auto tex = loadAsset(path, h);
+    // if (tex.get()) {
+    //     auto t = new Texture;
+    //     t->texture = tex;
+    //     TextureInfo info;
+    //     info.id = unique_id++;
+    //     info.w = t->texture->m_size.x;
+    //     info.h = t->texture->m_size.y;
+    //     printf("generate pic: %d\n", info.id);
+    //     t->info = info;
+    //     hyprtextures.push_back(t);
+    //     return t->info;
+    // }
     return {};
 }
 
-SP<CTexture> loadAsset(const std::string& filename) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    cairo_surface_t* icon = nullptr;
-    load_icon_full_path(&icon, filename);
-    if (!icon)
-        return {};
-
-    const auto CAIROFORMAT = cairo_image_surface_get_format(icon);
-    auto       tex         = makeShared<CTexture>();
-
-    tex->allocate();
-    tex->m_size = {cairo_image_surface_get_width(icon), cairo_image_surface_get_height(icon)};
-
-    const GLint glIFormat = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB32F : GL_RGBA;
-    const GLint glFormat  = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB : GL_RGBA;
-    const GLint glType    = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_FLOAT : GL_UNSIGNED_BYTE;
-
-    const auto  DATA = cairo_image_surface_get_data(icon);
-    tex->bind();
-    tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
-    if (CAIROFORMAT != CAIRO_FORMAT_RGB96F) {
-        tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
-        tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
-    }
-
-    glTexImage2D(GL_TEXTURE_2D, 0, glIFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
-
-    cairo_surface_destroy(icon);
-
-    return tex;
-}
+// SP<CTexture> loadAsset(const std::string& filename) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     cairo_surface_t* icon = nullptr;
+//     load_icon_full_path(&icon, filename);
+//     if (!icon)
+//         return {};
+//
+//     const auto CAIROFORMAT = cairo_image_surface_get_format(icon);
+//     auto       tex         = makeShared<CTexture>();
+//
+//     tex->allocate();
+//     tex->m_size = {cairo_image_surface_get_width(icon), cairo_image_surface_get_height(icon)};
+//
+//     const GLint glIFormat = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB32F : GL_RGBA;
+//     const GLint glFormat  = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB : GL_RGBA;
+//     const GLint glType    = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_FLOAT : GL_UNSIGNED_BYTE;
+//
+//     const auto  DATA = cairo_image_surface_get_data(icon);
+//     tex->bind();
+//     tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+//     tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+//
+//     if (CAIROFORMAT != CAIRO_FORMAT_RGB96F) {
+//         tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+//         tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
+//     }
+//
+//     glTexImage2D(GL_TEXTURE_2D, 0, glIFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
+//
+//     cairo_surface_destroy(icon);
+//
+//     return tex;
+// }
 
 TextureInfo gen_texture_png(std::string path) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    auto tex = loadAsset(path);
-    if (tex.get()) {
-        auto t = new Texture;
-        t->texture = tex;
-        TextureInfo info;
-        info.id = unique_id++;
-        info.w = t->texture->m_size.x;
-        info.h = t->texture->m_size.y;
-        printf("generate pic: %d\n", info.id);
-        t->info = info;
-        hyprtextures.push_back(t);
-        return t->info;
-    }
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     auto tex = loadAsset(path);
+//     if (tex.get()) {
+//         auto t = new Texture;
+//         t->texture = tex;
+//         TextureInfo info;t std::string& filename) {
+// // #ifdef TRACY_ENABLE
+// //     ZoneScoped;
+// // #endif
+// //     cairo_surface_t* icon = nullptr;
+// //     load_icon_full_path(&icon, filename);
+// //     if (!icon)
+// //         return {};
+// //
+// //     const auto CAIROFORMAT = cairo_image_surface_get_format(icon);
+// //     auto       tex         = makeShared<CTexture>();
+// //
+// //     tex->allocate();
+// //     tex->m_size = {cairo_image_surface_get_width(icon), cairo_image_surface_get_height(icon)};
+// //
+// //     const GLint glIFormat = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB32F : GL_RGBA;
+// //     const GLint glFormat  = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_RGB : GL_RGBA;
+// //     const GLint glType    = CAIROFORMAT == CAIRO_FORMAT_RGB96F ? GL_FLOAT : GL_UNSIGNED_BYTE;
+// //
+// //     const auto  DATA = cairo_image_surface_get_data(icon);
+// //     tex->bind();
+// //     tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+// //     tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+// //
+// //     if (CAIROFORMAT != CAIRO_FORMAT_RGB96F) {
+// //         tex->setTexParameter(GL_TEXTURE_SWIZZLE_R, GL_BLUE);
+// //         tex->setTexParameter(GL_TEXTURE_SWIZZLE_B, GL_RED);
+// //     }
+// //
+// //     glTexImage2D(GL_TEXTURE_2D, 0, glIFormat, tex->m_size.x, tex->m_size.y, 0, glFormat, glType, DATA);
+// //
+// //     cairo_surface_destroy(icon);
+// //
+// //     return tex;
+// // }
+//         info.id = unique_id++;
+//         info.w = t->texture->m_size.x;
+//         info.h = t->texture->m_size.y;
+//         printf("generate pic: %d\n", info.id);
+//         t->info = info;
+//         hyprtextures.push_back(t);
+//         return t->info;
+//     }
     return {};
 }
 
 TextureInfo gen_gradient_texture(RGBA center, RGBA edge, float wh) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-
-    const int size = static_cast<int>(wh);
-    if (size <= 0)
-        return {};
-
-    // Create Cairo surface
-    cairo_surface_t* surface =
-        cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
-    cairo_t* cr = cairo_create(surface);
-
-    // Clear surface
-    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-
-    // Create radial gradient
-    cairo_pattern_t* pattern = cairo_pattern_create_radial(
-        size / 2.0, size / 2.0, 0.0,
-        size / 2.0, size / 2.0, size / 2.0);
-
-    cairo_pattern_add_color_stop_rgba(
-        pattern, 0.0,
-        center.r, center.g, center.b, center.a);
-
-    cairo_pattern_add_color_stop_rgba(
-        pattern, 1.0,
-        edge.r, edge.g, edge.b, edge.a);
-
-    // Draw gradient
-    cairo_set_source(cr, pattern);
-    cairo_arc(cr, size / 2.0, size / 2.0, size / 2.0, 0, 2 * M_PI);
-    cairo_fill(cr);
-
-    cairo_pattern_destroy(pattern);
-    cairo_destroy(cr);
-
-    // Upload to OpenGL
-    auto tex = g_pHyprOpenGL->texFromCairo(surface);
-    cairo_surface_destroy(surface);
-
-    if (!tex.get())
-        return {};
-
-    auto t = new Texture;
-    t->texture = tex;
-
-    TextureInfo info;
-    info.id = unique_id++;
-    info.w = t->texture->m_size.x;
-    info.h = t->texture->m_size.y;
-
-    t->info = info;
-    hyprtextures.push_back(t);
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//     const int size = static_cast<int>(wh);
+//     if (size <= 0)
+//         return {};
+//
+//     // Create Cairo surface
+//     cairo_surface_t* surface =
+//         cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+//     cairo_t* cr = cairo_create(surface);
+//
+//     // Clear surface
+//     cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+//     cairo_paint(cr);
+//     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+//
+//     // Create radial gradient
+//     cairo_pattern_t* pattern = cairo_pattern_create_radial(
+//         size / 2.0, size / 2.0, 0.0,
+//         size / 2.0, size / 2.0, size / 2.0);
+//
+//     cairo_pattern_add_color_stop_rgba(
+//         pattern, 0.0,
+//         center.r, center.g, center.b, center.a);
+//
+//     cairo_pattern_add_color_stop_rgba(
+//         pattern, 1.0,
+//         edge.r, edge.g, edge.b, edge.a);
+//
+//     // Draw gradient
+//     cairo_set_source(cr, pattern);
+//     cairo_arc(cr, size / 2.0, size / 2.0, size / 2.0, 0, 2 * M_PI);
+//     cairo_fill(cr);
+//
+//     cairo_pattern_destroy(pattern);
+//     cairo_destroy(cr);
+//
+//     // Upload to OpenGL
+//     auto tex = Render::GL::g_pHyprOpenGL->texFromCairo(surface);
+//     cairo_surface_destroy(surface);
+//
+//     if (!tex.get())
+//         return {};
+//
+//     auto t = new Texture;
+//     t->texture = tex;
+//
+     TextureInfo info;
+//     info.id = unique_id++;
+//     info.w = t->texture->m_size.x;
+//     info.h = t->texture->m_size.y;
+//
+//     t->info = info;
+//     hyprtextures.push_back(t);
 
     return info;
 }
@@ -4351,19 +4344,20 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
 #endif
     //log("gen text texture");
     //notify("gen text");
-    auto tex = g_pHyprOpenGL->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
-    if (tex.get()) {
-        auto t = new Texture;
-        t->texture = tex;
-        TextureInfo info;
-        info.id = unique_id++;
-        info.w = t->texture->m_size.x;
-        info.h = t->texture->m_size.y;
-        t->info = info;
-        hyprtextures.push_back(t);
-        printf("generate text: %d\n", info.id);
-        return t->info;
-    }
+
+    // auto tex = Render::GL::g_pHyprOpenGL->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
+    // if (tex.get()) {
+    //     auto t = new Texture;
+    //     t->texture = tex;
+    //     TextureInfo info;renderText
+    //     info.id = unique_id++;
+    //     info.w = t->texture->m_size.x;
+    //     info.h = t->texture->m_size.y;
+    //     t->info = info;
+    //     hyprtextures.push_back(t);
+    //     printf("generate text: %d\n", info.id);
+    //     return t->info;
+    // }
     return {};
 }
 
@@ -4371,39 +4365,39 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    bool clip = hypriso->clip;
-    CBox clipbox = tocbox(hypriso->clipbox);
-    CBox cb = tocbox(b);
-    if (clip_w != 0.0) {
-        cb.w = clip_w;
-        if (!clip) {
-            clip = true;
-            clipbox = cb;
-        }
-        //clipbox.w = (cb.x - clipbox.x) + clip_w;
-    }
-    if (clip && !clipbox.overlaps(cb)) {
-        return; 
-    }
-
-    for (auto t : hyprtextures) {
-       if (t->info.id == info.id && t->texture) {
-            auto tex = t->texture;
-            AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
-                //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
-                CHyprOpenGLImpl::STextureRenderData data;
-                data.a = a;
-                if (clip)
-                    g_pHyprOpenGL->m_renderData.clipBox = cb.intersection(clipbox);
-                    //g_pHyprOpenGL->m_renderData.clipBox = clipbox.intersection(cb);
-                g_pHyprOpenGL->renderTexture(tex, tocbox(b), data);
-                if (clip)
-                    g_pHyprOpenGL->m_renderData.clipBox = CBox();
-            });
-            g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-            break;
-       }
-    }
+    // bool clip = hypriso->clip;
+    // CBox clipbox = tocbox(hypriso->clipbox);
+    // CBox cb = tocbox(b);
+    // if (clip_w != 0.0) {
+    //     cb.w = clip_w;
+    //     if (!clip) {
+    //         clip = true;
+    //         clipbox = cb;
+    //     }
+    //     //clipbox.w = (cb.x - clipbox.x) + clip_w;
+    // }
+    // if (clip && !clipbox.overlaps(cb)) {
+    //     return;
+    // }
+    //
+    // for (auto t : hyprtextures) {
+    //    if (t->info.id == info.id && t->texture) {
+    //         auto tex = t->texture;
+    //         AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
+    //             //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
+    //             CHyprOpenGLImpl::STextureRenderData data;
+    //             data.a = a;
+    //             if (clip)
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = cb.intersection(clipbox);
+    //                 //g_pHyprOpenGL->m_renderData.clipBox = clipbox.intersection(cb);
+    //             Render::GL::g_pHyprOpenGL->renderTexture(tex, tocbox(b), data);
+    //             if (clip)
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+    //         });
+    //         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    //         break;
+    //    }
+    // }
 }
 
 void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
@@ -4412,7 +4406,7 @@ void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
 #endif
     for (auto t : hyprtextures) {
        if (t->info.id == info.id) {
-           draw_texture(info, {(float) x, (float) y, t->texture->m_size.x, t->texture->m_size.y}, a, clip_w);
+           // draw_texture(info, {(float) x, (float) y, t->texture->m_size.x, t->texture->m_size.y}, a, clip_w);
            return;
        }
     }
@@ -4473,7 +4467,8 @@ void close_window(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            g_pCompositor->closeWindow(hw->w);
+            // Actions::closeWindow(hw->w);
+            // g_pCompositor->closeWindow(hw->w);
         }
     }
 }
@@ -4566,6 +4561,49 @@ void HyprIso::set_hidden(int id, bool state, bool animate_to_dock) {
     }
 }
 
+static void updateRelativeCursorCoords() {
+    static auto PNOWARPS = CConfigValue<Config::INTEGER>("cursor:no_warps");
+
+    if (*PNOWARPS)
+        return;
+
+    if (Desktop::focusState()->window())
+        Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->m_position;
+}
+
+
+static void switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool forceFSCycle = false) {
+    static auto PFOLLOWMOUSE = CConfigValue<Config::INTEGER>("input:follow_mouse");
+    static auto PNOWARPS     = CConfigValue<Config::INTEGER>("cursor:no_warps");
+
+    const auto  PLASTWINDOW = Desktop::focusState()->window();
+
+    if (PWINDOWTOCHANGETO == PLASTWINDOW || !PWINDOWTOCHANGETO)
+        return;
+
+    g_pInputManager->unconstrainMouse();
+
+    if (PLASTWINDOW && PLASTWINDOW->m_workspace == PWINDOWTOCHANGETO->m_workspace && PLASTWINDOW->isFullscreen())
+        Desktop::focusState()->fullWindowFocus(PWINDOWTOCHANGETO, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD, nullptr, forceFSCycle);
+    else {
+        updateRelativeCursorCoords();
+        Desktop::focusState()->fullWindowFocus(PWINDOWTOCHANGETO, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_SOFT, nullptr, forceFSCycle);
+        PWINDOWTOCHANGETO->warpCursor();
+
+        if (*PNOWARPS == 0 || *PFOLLOWMOUSE < 2) {
+            g_pInputManager->m_forcedFocus = PWINDOWTOCHANGETO;
+            g_pInputManager->simulateMouseMovement();
+            g_pInputManager->m_forcedFocus.reset();
+        }
+
+        if (PLASTWINDOW && PLASTWINDOW->m_monitor != PWINDOWTOCHANGETO->m_monitor) {
+            const auto PNEWMON = PWINDOWTOCHANGETO->m_monitor.lock();
+            Desktop::focusState()->rawMonitorFocus(PNEWMON);
+        }
+    }
+}
+
+
 void HyprIso::bring_to_front(int id, bool focus) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -4574,7 +4612,7 @@ void HyprIso::bring_to_front(int id, bool focus) {
         if (hw->id == id) {
             g_pCompositor->changeWindowZOrder(hw->w, true);
             if (focus)
-                g_pKeybindManager->switchToWindow(hw->w, true);
+                switchToWindow(hw->w, true);
         }
     }
 }
@@ -4770,28 +4808,28 @@ Timer* later_immediate(const std::function<void(Timer*)>& fn) {
     return later(1, fn);
 }
 
-void screenshot_monitor(CFramebuffer* buffer, PHLMONITOR m) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    if (!buffer || !pRenderMonitor)
-        return;
-    if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-        return;
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    g_pHyprRenderer->makeEGLCurrent();
-    buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-    g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
-    g_pHyprRenderer->m_bRenderingSnapshot = true;
-    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-    g_pHyprOpenGL->m_renderData.pMonitor = m;
-    (*(tRenderMonitor)pRenderMonitor)(g_pHyprRenderer.get(), m, false);
-    g_pHyprOpenGL->m_renderData.pMonitor  = m;
-    g_pHyprOpenGL->m_renderData.outFB     = buffer;
-    g_pHyprOpenGL->m_renderData.currentFB = buffer;
-    g_pHyprRenderer->endRender();
-    g_pHyprRenderer->m_bRenderingSnapshot = false;
-}
+// void screenshot_monitor(CFramebuffer* buffer, PHLMONITOR m) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     if (!buffer || !pRenderMonitor)
+//         return;
+//     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
+//         return;
+//     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+//     g_pHyprRenderer->makeEGLCurrent();
+//     buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+//     g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
+//     g_pHyprRenderer->m_bRenderingSnapshot = true;
+//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
+//     Render::GL::g_pHyprOpenGL->m_renderData.pMonitor = m;
+//     (*(tRenderMonitor)pRenderMonitor)(g_pHyprRenderer.get(), m, false);
+//     Render::GL::g_pHyprOpenGL->m_renderData.pMonitor  = m;
+//     Render::GL::g_pHyprOpenGL->m_renderData.outFB     = buffer;
+//     Render::GL::g_pHyprOpenGL->m_renderData.currentFB = buffer;
+//     g_pHyprRenderer->endRender();
+//     g_pHyprRenderer->m_bRenderingSnapshot = false;
+// }
 
 
 void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Vector2D& translate, const float& scale) {
@@ -4808,10 +4846,10 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
     //g_pHyprOpenGL->clearWithTex();
 
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND]) {
-        g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
+        // g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
     }
 
-    Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
+    // Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
 
     /*
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM]) {
@@ -4828,25 +4866,25 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
     */
 }
 
-void actual_screenshot_wallpaper(CFramebuffer* buffer, PHLMONITOR m) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    if (!buffer || !pRenderMonitor)
-        return;
-    if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-        return;
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    g_pHyprRenderer->makeEGLCurrent();
-    buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-    g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
-    g_pHyprOpenGL->clear(CHyprColor(0, 0, 1, 1)); // JIC
-
-    const auto NOW = Time::steadyNow();
-    render_wallpaper(m, NOW, {0.0, 0.0}, 1.0);
-    
-    g_pHyprRenderer->endRender();
-}
+// void actual_screenshot_wallpaper(CFramebuffer* buffer, PHLMONITOR m) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     if (!buffer || !pRenderMonitor)
+//         return;
+//     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
+//         return;
+//     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+//     g_pHyprRenderer->makeEGLCurrent();
+//     buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+//     g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
+//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 1, 1)); // JIC
+//
+//     const auto NOW = Time::steadyNow();
+//     render_wallpaper(m, NOW, {0.0, 0.0}, 1.0);
+//
+//     g_pHyprRenderer->endRender();
+// }
 
 HyprWindow *get_window(PHLWINDOW w) {
     for (auto hw : hyprwindows) {
@@ -4863,454 +4901,454 @@ HyprWindow *get_window(PHLWINDOW w) {
 // The main difference being these functions 'g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);'
 // Don't know why they're required to make this work but oh well, it works now
 //
-void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACE startedOn, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    auto pMonitor = m;
-    if (!pMonitor)
-        return;
-    
-    if (!startedOn || !w || !m)
-        return;
-
-    g_pHyprRenderer->makeEGLCurrent();
-
-    CBox monbox = {{0, 0}, pMonitor->m_pixelSize};
-
-    auto image = buffer;
-
-    if (image->m_size != monbox.size()) {
-        image->release();
-        image->alloc(monbox.w, monbox.h, pMonitor->m_output->state->state().drmFormat);
-    }
-
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    g_pHyprRenderer->beginRender(pMonitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, image);
-
-    g_pHyprOpenGL->clear(CHyprColor{0, 0, 0, 1.0});
-
-    const auto   PWORKSPACE = w.lock();
-
-    PHLWORKSPACE openSpecial = pMonitor->m_activeSpecialWorkspace;
-    if (openSpecial)
-        pMonitor->m_activeSpecialWorkspace.reset();
-
-    startedOn->m_visible = false;
-
-    if (PWORKSPACE) {
-        pMonitor->m_activeWorkspace = PWORKSPACE;
-        g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
-        PWORKSPACE->m_visible = true;
-
-        if (PWORKSPACE == startedOn)
-            pMonitor->m_activeSpecialWorkspace = openSpecial;
-
-        g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
-
-        PWORKSPACE->m_visible = false;
-        g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
-
-        if (PWORKSPACE == startedOn)
-            pMonitor->m_activeSpecialWorkspace.reset();
-    } else
-        g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
-
-    g_pHyprOpenGL->m_renderData.blockScreenShader = true;
-    g_pHyprRenderer->endRender();
-
-    pMonitor->m_activeSpecialWorkspace = openSpecial;
-    pMonitor->m_activeWorkspace        = startedOn;
-    startedOn->m_visible               = true;
-    g_pDesktopAnimationManager->startAnimation(startedOn, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
-}
-
-void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    // we trust the window is valid.
-    const auto PMONITOR = pWindow->m_monitor.lock();
-
-    if (!PMONITOR || !PMONITOR->m_output || PMONITOR->m_pixelSize.x <= 0 || PMONITOR->m_pixelSize.y <= 0)
-        return;
-
-    if (!g_pHyprRenderer->shouldRenderWindow(pWindow))
-        return; // ignore, window is not being rendered
-
-    // we need to "damage" the entire monitor
-    // so that we render the entire window
-    // this is temporary, doesn't mess with the actual damage
-    CRegion      fakeDamage{0, 0, PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y};
-
-    PHLWINDOWREF ref{pWindow};
-
-    g_pHyprRenderer->makeEGLCurrent();
-
-    //const auto PFRAMEBUFFER = &g_pHyprOpenGL->m_windowFramebuffers[ref];
-
-    PFRAMEBUFFER->alloc(PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-
-    g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, PFRAMEBUFFER);
-
-    g_pHyprRenderer->m_bRenderingSnapshot = true;
-
-    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-
-    g_pHyprRenderer->renderWindow(pWindow, PMONITOR, Time::steadyNow(), true, RENDER_PASS_ALL, true);
-
-    g_pHyprRenderer->endRender();
-
-    g_pHyprRenderer->m_bRenderingSnapshot = false;
-}
-
-void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
-#ifdef FORK_WARN
-//void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
-    static_assert(true, "[Function Body] Make sure our `CHyprRenderer::renderWindow` and Hyprland's are synced!");
-#endif
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    if (pWindow->m_fadingOut) {
-        if (pMonitor == pWindow->m_monitor) // TODO: fix this
-            g_pHyprRenderer->renderSnapshot(pWindow);
-        return;
-    }
-
-    if (!pWindow->m_isMapped)
-        return;
-
-    TRACY_GPU_ZONE("RenderWindow");
-
-    const auto                       PWORKSPACE = pWindow->m_workspace;
-    const auto                       REALPOS    = pWindow->m_realPosition->value() + (pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
-    static auto                      PDIMAROUND = CConfigValue<Hyprlang::FLOAT>("decoration:dim_around");
-
-    CSurfacePassElement::SRenderData renderdata = {pMonitor, time};
-    CBox                             textureBox = {REALPOS.x, REALPOS.y, std::max(pWindow->m_realSize->value().x, 5.0), std::max(pWindow->m_realSize->value().y, 5.0)};
-
-    renderdata.pos.x = textureBox.x;
-    renderdata.pos.y = textureBox.y;
-    renderdata.w     = textureBox.w;
-    renderdata.h     = textureBox.h;
-
-    if (ignorePosition) {
-        renderdata.pos.x = pMonitor->m_position.x;
-        renderdata.pos.y = pMonitor->m_position.y;
-    } else {
-        const bool ANR = pWindow->isNotResponding();
-        if (ANR && pWindow->m_notRespondingTint->goal() != 0.2F)
-            *pWindow->m_notRespondingTint = 0.2F;
-        else if (!ANR && pWindow->m_notRespondingTint->goal() != 0.F)
-            *pWindow->m_notRespondingTint = 0.F;
-    }
-
-    //if (standalone)
-        //decorate = false;
-
-    // whether to use m_fMovingToWorkspaceAlpha, only if fading out into an invisible ws
-    const bool USE_WORKSPACE_FADE_ALPHA = pWindow->m_monitorMovedFrom != -1 && (!PWORKSPACE || !PWORKSPACE->isVisible());
-
-    renderdata.surface   = pWindow->wlSurface()->resource();
-    renderdata.dontRound = pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
-    renderdata.fadeAlpha = pWindow->m_alpha->value() * (pWindow->m_pinned || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
-        (USE_WORKSPACE_FADE_ALPHA ? pWindow->m_movingToWorkspaceAlpha->value() : 1.F) * pWindow->m_movingFromWorkspaceAlpha->value();
-    renderdata.alpha         = pWindow->m_activeInactiveAlpha->value();
-    renderdata.decorate      = decorate && !pWindow->m_X11DoesntWantBorders && !pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
-    renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->rounding() * pMonitor->m_scale;
-    renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->roundingPower();
-    //renderdata.blur          = !standalone && g_pHyprRenderer->shouldBlur(pWindow);
-    renderdata.blur          = false;
-    renderdata.pWindow       = pWindow;
-
-    if (standalone) {
-        renderdata.alpha     = 1.f;
-        renderdata.fadeAlpha = 1.f;
-    }
-
-    // apply opaque
-    if (pWindow->m_ruleApplicator->opaque().valueOrDefault())
-        renderdata.alpha = 1.f;
-
-    renderdata.pWindow = pWindow;
-
-    // for plugins
-    g_pHyprOpenGL->m_renderData.currentWindow = pWindow;
-
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOW);
-
-    const auto fullAlpha = renderdata.alpha * renderdata.fadeAlpha;
-
-    if (*PDIMAROUND && pWindow->m_ruleApplicator->dimAround().valueOrDefault() && !g_pHyprRenderer->m_bRenderingSnapshot && mode != RENDER_PASS_POPUP) {
-        CBox                        monbox = {0, 0, g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.x, g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.y};
-        CRectPassElement::SRectData data;
-        data.color = CHyprColor(0, 0, 0, *PDIMAROUND * fullAlpha);
-        data.box   = monbox;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
-    }
-
-    renderdata.pos.x += pWindow->m_floatingOffset.x;
-    renderdata.pos.y += pWindow->m_floatingOffset.y;
-
-    // if window is floating and we have a slide animation, clip it to its full bb
-    if (!ignorePosition && pWindow->m_isFloating && !pWindow->isFullscreen() && PWORKSPACE->m_renderOffset->isBeingAnimated() && !pWindow->m_pinned) {
-        CRegion rg =
-            pWindow->getFullWindowBoundingBox().translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->m_floatingOffset).scale(pMonitor->m_scale);
-        renderdata.clipBox = rg.getExtents();
-    }
-
-    // render window decorations first, if not fullscreen full
-    if (mode == RENDER_PASS_ALL || mode == RENDER_PASS_MAIN) {
-
-        const bool TRANSFORMERSPRESENT = !pWindow->m_transformers.empty();
-
-        if (TRANSFORMERSPRESENT) {
-            g_pHyprOpenGL->bindOffMain();
-
-            for (auto const& t : pWindow->m_transformers) {
-                t->preWindowRender(&renderdata);
-            }
-        }
-
-        if (renderdata.decorate) {
-            for (auto const& wd : pWindow->m_windowDecorations) {
-                if (wd->getDecorationLayer() != DECORATION_LAYER_BOTTOM)
-                    continue;
-
-                wd->draw(pMonitor, fullAlpha);
-            }
-
-            for (auto const& wd : pWindow->m_windowDecorations) {
-                if (wd->getDecorationLayer() != DECORATION_LAYER_UNDER)
-                    continue;
-
-                wd->draw(pMonitor, fullAlpha);
-            }
-        }
-
-        static auto PXWLUSENN = CConfigValue<Hyprlang::INT>("xwayland:use_nearest_neighbor");
-        if ((pWindow->m_isX11 && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
-            renderdata.useNearestNeighbor = true;
-
-        if (pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
-            CBox wb = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
-            wb.scale(pMonitor->m_scale).round();
-            CRectPassElement::SRectData data;
-            data.color = CHyprColor(0, 0, 0, 0);
-            data.box   = wb;
-            data.round = renderdata.dontRound ? 0 : renderdata.rounding - 1;
-            data.blur  = true;
-            data.blurA = renderdata.fadeAlpha;
-            data.xray  = g_pHyprOpenGL->shouldUseNewBlurOptimizations(nullptr, pWindow);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
-            renderdata.blur = false;
-        }
-
-        renderdata.surfaceCounter = 0;
-        pWindow->wlSurface()->resource()->breadthfirst(
-            [&renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
-                if (!s->m_current.texture)
-                    return;
-
-                if (s->m_current.size.x < 1 || s->m_current.size.y < 1)
-                    return;
-
-                renderdata.localPos    = offset;
-                renderdata.texture     = s->m_current.texture;
-                renderdata.surface     = s;
-                renderdata.mainSurface = s == pWindow->wlSurface()->resource();
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
-                renderdata.surfaceCounter++;
-            },
-            nullptr);
-
-        renderdata.useNearestNeighbor = false;
-
-        if (renderdata.decorate) {
-            for (auto const& wd : pWindow->m_windowDecorations) {
-                if (wd->getDecorationLayer() != DECORATION_LAYER_OVER)
-                    continue;
-
-                wd->draw(pMonitor, fullAlpha);
-            }
-        }
-
-        if (TRANSFORMERSPRESENT) {
-            CFramebuffer* last = g_pHyprOpenGL->m_renderData.currentFB;
-            for (auto const& t : pWindow->m_transformers) {
-                last = t->transform(last);
-            }
-
-            g_pHyprOpenGL->bindBackOnMain();
-            g_pHyprOpenGL->renderOffToMain(last);
-        }
-    }
-
-    g_pHyprOpenGL->m_renderData.clipBox = CBox();
-
-    if (mode == RENDER_PASS_ALL || mode == RENDER_PASS_POPUP) {
-        if (!pWindow->m_isX11) {
-            CBox geom = pWindow->m_xdgSurface->m_current.geometry;
-
-            renderdata.pos -= geom.pos();
-            renderdata.dontRound       = true; // don't round popups
-            renderdata.pMonitor        = pMonitor;
-            renderdata.squishOversized = false; // don't squish popups
-            renderdata.popup           = true;
-
-            static CConfigValue PBLURIGNOREA = CConfigValue<Hyprlang::FLOAT>("decoration:blur:popups_ignorealpha");
-
-            renderdata.blur = g_pHyprRenderer->shouldBlur(pWindow->m_popupHead);
-
-            if (renderdata.blur) {
-                renderdata.discardMode |= DISCARD_ALPHA;
-                renderdata.discardOpacity = *PBLURIGNOREA;
-            }
-
-            if (pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
-                renderdata.useNearestNeighbor = true;
-
-            renderdata.surfaceCounter = 0;
-
-            pWindow->m_popupHead->breadthfirst(
-                [&renderdata](WP<Desktop::View::CPopup> popup, void* data) {
-                    if (popup->m_fadingOut) {
-                        g_pHyprRenderer->renderSnapshot(popup);
-                        return;
-                    }
-
-                    if (!popup->aliveAndVisible())
-                        return;
-
-                    const auto     pos    = popup->coordsRelativeToParent();
-                    const Vector2D oldPos = renderdata.pos;
-                    renderdata.pos += pos;
-                    renderdata.fadeAlpha = popup->m_alpha->value();
-
-                    popup->wlSurface()->resource()->breadthfirst(
-                        [&renderdata](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
-                            if (!s->m_current.texture)
-                                return;
-
-                            if (s->m_current.size.x < 1 || s->m_current.size.y < 1)
-                                return;
-
-                            renderdata.localPos    = offset;
-                            renderdata.texture     = s->m_current.texture;
-                            renderdata.surface     = s;
-                            renderdata.mainSurface = false;
-                            g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
-                            renderdata.surfaceCounter++;
-                        },
-                        data);
-
-                    renderdata.pos = oldPos;
-                },
-                &renderdata);
-
-            renderdata.alpha = 1.F;
-        }
-
-        if (decorate) {
-            for (auto const& wd : pWindow->m_windowDecorations) {
-                if (wd->getDecorationLayer() != DECORATION_LAYER_OVERLAY)
-                    continue;
-
-                wd->draw(pMonitor, fullAlpha);
-            }
-        }
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_POST_WINDOW);
-
-    g_pHyprOpenGL->m_renderData.currentWindow.reset();
-}
-
-void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    if (!buffer || !pRenderWindow || !w)
-        return;
-    const auto m = w->m_monitor.lock();
-    if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-        return;
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-
-    g_pHyprRenderer->makeEGLCurrent();
-
-    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(w, false);
-    buffer->alloc(m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x, m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y, DRM_FORMAT_ABGR8888);
-    g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
-
-    g_pHyprRenderer->m_bRenderingSnapshot = true;
-    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-
-    auto fo = w->m_floatingOffset;
-    auto before = w->m_hidden;
-    w->m_hidden = false;
-
-    ourRenderWindow(w, m, Time::steadyNow(), true, RENDER_PASS_ALL, false, true);
-    w->m_hidden = before;
-    
-    w->m_floatingOffset = fo;
-
-    g_pHyprRenderer->endRender();
-
-    g_pHyprRenderer->m_bRenderingSnapshot = false;
-}
-
-void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    
-    //return;
-    if (!pRenderWindow || !w.get())
-        return;
-    const auto m = w->m_monitor.lock();
-    if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-        return;
-    if (include_decorations) {
-        bool h = w->m_hidden;
-        w->m_hidden = false;
-        screenshot_window_with_decos(hw->deco_fb, w);
-       //m->m_scale 
-        hw->w_decos_size = tobounds(w->getFullWindowBoundingBox());
-        hw->w_decos_size.scale(m->m_scale);
-        hw->w_deco_raw = tobounds(w->getFullWindowBoundingBox());
-        auto tex = hw->deco_fb->getTexture();
-        glActiveTexture(GL_TEXTURE0);
-        tex->bind();
-        glGenerateMipmap(tex->m_target);
-
-        w->m_hidden = h;
-
-        return;
-    }
-
-    // we need to "damage" the entire monitor
-    // so that we render the entire window
-    // this is temporary, doesnt mess with the actual damage
-    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    g_pHyprRenderer->makeEGLCurrent();
-    hw->fb->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-    g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, hw->fb);
-    g_pHyprRenderer->m_bRenderingSnapshot = true;
-    g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-    auto const NOW = Time::steadyNow();
-    (*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, RENDER_PASS_MAIN, true, true);
-    g_pHyprRenderer->endRender();
-    g_pHyprRenderer->m_bRenderingSnapshot = false;
-
-    hw->w_size = Bounds(0, 0, (w->m_realSize->value().x * m->m_scale), (w->m_realSize->value().y * m->m_scale));
-    hw->w_bounds_raw = Bounds(0, 0, (w->m_realSize->value().x), (w->m_realSize->value().y));
-    auto tex = hw->fb->getTexture();
-    glActiveTexture(GL_TEXTURE0);
-    tex->bind();
-    glGenerateMipmap(tex->m_target);
-}
+// void screenshot_workspace(CFramebuffer* buffer, PHLWORKSPACE startedOn, PHLWORKSPACEREF w, PHLMONITOR m, bool include_cursor) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     auto pMonitor = m;
+//     if (!pMonitor)
+//         return;
+//
+//     if (!startedOn || !w || !m)
+//         return;
+//
+//     g_pHyprRenderer->makeEGLCurrent();
+//
+//     CBox monbox = {{0, 0}, pMonitor->m_pixelSize};
+//
+//     auto image = buffer;
+//
+//     if (image->m_size != monbox.size()) {
+//         image->release();
+//         image->alloc(monbox.w, monbox.h, pMonitor->m_output->state->state().drmFormat);
+//     }
+//
+//     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+//     g_pHyprRenderer->beginRender(pMonitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, image);
+//
+//     Render::GL::g_pHyprOpenGL->clear(CHyprColor{0, 0, 0, 1.0});
+//
+//     const auto   PWORKSPACE = w.lock();
+//
+//     PHLWORKSPACE openSpecial = pMonitor->m_activeSpecialWorkspace;
+//     if (openSpecial)
+//         pMonitor->m_activeSpecialWorkspace.reset();
+//
+//     startedOn->m_visible = false;
+//
+//     if (PWORKSPACE) {
+//         pMonitor->m_activeWorkspace = PWORKSPACE;
+//         g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+//         PWORKSPACE->m_visible = true;
+//
+//         if (PWORKSPACE == startedOn)
+//             pMonitor->m_activeSpecialWorkspace = openSpecial;
+//
+//         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+//
+//         PWORKSPACE->m_visible = false;
+//         g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
+//
+//         if (PWORKSPACE == startedOn)
+//             pMonitor->m_activeSpecialWorkspace.reset();
+//     } else
+//         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+//
+//     Render::GL::g_pHyprOpenGL->m_renderData.blockScreenShader = true;
+//     g_pHyprRenderer->endRender();
+//
+//     pMonitor->m_activeSpecialWorkspace = openSpecial;
+//     pMonitor->m_activeWorkspace        = startedOn;
+//     startedOn->m_visible               = true;
+//     g_pDesktopAnimationManager->startAnimation(startedOn, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+// }
+
+// void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     // we trust the window is valid.
+//     const auto PMONITOR = pWindow->m_monitor.lock();
+//
+//     if (!PMONITOR || !PMONITOR->m_output || PMONITOR->m_pixelSize.x <= 0 || PMONITOR->m_pixelSize.y <= 0)
+//         return;
+//
+//     if (!g_pHyprRenderer->shouldRenderWindow(pWindow))
+//         return; // ignore, window is not being rendered
+//
+//     // we need to "damage" the entire monitor
+//     // so that we render the entire window
+//     // this is temporary, doesn't mess with the actual damage
+//     CRegion      fakeDamage{0, 0, PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y};
+//
+//     PHLWINDOWREF ref{pWindow};
+//
+//     g_pHyprRenderer->makeEGLCurrent();
+//
+//     //const auto PFRAMEBUFFER = &g_pHyprOpenGL->m_windowFramebuffers[ref];
+//
+//     PFRAMEBUFFER->alloc(PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+//
+//     g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, PFRAMEBUFFER);
+//
+//     g_pHyprRenderer->m_bRenderingSnapshot = true;
+//
+//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
+//
+//     g_pHyprRenderer->renderWindow(pWindow, PMONITOR, Time::steadyNow(), true, RENDER_PASS_ALL, true);
+//
+//     g_pHyprRenderer->endRender();
+//
+//     g_pHyprRenderer->m_bRenderingSnapshot = false;
+// }
+
+// void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+// #ifdef FORK_WARN
+// //void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
+//     static_assert(true, "[Function Body] Make sure our `CHyprRenderer::renderWindow` and Hyprland's are synced!");
+// #endif
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     if (pWindow->m_fadingOut) {
+//         if (pMonitor == pWindow->m_monitor) // TODO: fix this
+//             g_pHyprRenderer->renderSnapshot(pWindow);
+//         return;
+//     }
+//
+//     if (!pWindow->m_isMapped)
+//         return;
+//
+//     TRACY_GPU_ZONE("RenderWindow");
+//
+//     const auto                       PWORKSPACE = pWindow->m_workspace;
+//     const auto                       REALPOS    = pWindow->m_realPosition->value() + (pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
+//     static auto                      PDIMAROUND = CConfigValue<Hyprlang::FLOAT>("decoration:dim_around");
+//
+//     CSurfacePassElement::SRenderData renderdata = {pMonitor, time};
+//     CBox                             textureBox = {REALPOS.x, REALPOS.y, std::max(pWindow->m_realSize->value().x, 5.0), std::max(pWindow->m_realSize->value().y, 5.0)};
+//
+//     renderdata.pos.x = textureBox.x;
+//     renderdata.pos.y = textureBox.y;
+//     renderdata.w     = textureBox.w;
+//     renderdata.h     = textureBox.h;
+//
+//     if (ignorePosition) {
+//         renderdata.pos.x = pMonitor->m_position.x;
+//         renderdata.pos.y = pMonitor->m_position.y;
+//     } else {
+//         const bool ANR = pWindow->isNotResponding();
+//         if (ANR && pWindow->m_notRespondingTint->goal() != 0.2F)
+//             *pWindow->m_notRespondingTint = 0.2F;
+//         else if (!ANR && pWindow->m_notRespondingTint->goal() != 0.F)
+//             *pWindow->m_notRespondingTint = 0.F;
+//     }
+//
+//     //if (standalone)
+//         //decorate = false;
+//
+//     // whether to use m_fMovingToWorkspaceAlpha, only if fading out into an invisible ws
+//     const bool USE_WORKSPACE_FADE_ALPHA = pWindow->m_monitorMovedFrom != -1 && (!PWORKSPACE || !PWORKSPACE->isVisible());
+//
+//     renderdata.surface   = pWindow->wlSurface()->resource();
+//     renderdata.dontRound = pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
+//     renderdata.fadeAlpha = pWindow->m_alpha->value() * (pWindow->m_pinned || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
+//         (USE_WORKSPACE_FADE_ALPHA ? pWindow->m_movingToWorkspaceAlpha->value() : 1.F) * pWindow->m_movingFromWorkspaceAlpha->value();
+//     renderdata.alpha         = pWindow->m_activeInactiveAlpha->value();
+//     renderdata.decorate      = decorate && !pWindow->m_X11DoesntWantBorders && !pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
+//     renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->rounding() * pMonitor->m_scale;
+//     renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->roundingPower();
+//     //renderdata.blur          = !standalone && g_pHyprRenderer->shouldBlur(pWindow);
+//     renderdata.blur          = false;
+//     renderdata.pWindow       = pWindow;
+//
+//     if (standalone) {
+//         renderdata.alpha     = 1.f;
+//         renderdata.fadeAlpha = 1.f;
+//     }
+//
+//     // apply opaque
+//     if (pWindow->m_ruleApplicator->opaque().valueOrDefault())
+//         renderdata.alpha = 1.f;
+//
+//     renderdata.pWindow = pWindow;
+//
+//     // for plugins
+//     Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = pWindow;
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOW);
+//
+//     const auto fullAlpha = renderdata.alpha * renderdata.fadeAlpha;
+//
+//     if (*PDIMAROUND && pWindow->m_ruleApplicator->dimAround().valueOrDefault() && !g_pHyprRenderer->m_bRenderingSnapshot && mode != RENDER_PASS_POPUP) {
+//         CBox                        monbox = {0, 0, Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.x, Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.y};
+//         CRectPassElement::SRectData data;
+//         data.color = CHyprColor(0, 0, 0, *PDIMAROUND * fullAlpha);
+//         data.box   = monbox;
+//         g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+//     }
+//
+//     renderdata.pos.x += pWindow->m_floatingOffset.x;
+//     renderdata.pos.y += pWindow->m_floatingOffset.y;
+//
+//     // if window is floating and we have a slide animation, clip it to its full bb
+//     if (!ignorePosition && pWindow->m_isFloating && !pWindow->isFullscreen() && PWORKSPACE->m_renderOffset->isBeingAnimated() && !pWindow->m_pinned) {
+//         CRegion rg =
+//             pWindow->getFullWindowBoundingBox().translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->m_floatingOffset).scale(pMonitor->m_scale);
+//         renderdata.clipBox = rg.getExtents();
+//     }
+//
+//     // render window decorations first, if not fullscreen full
+//     if (mode == RENDER_PASS_ALL || mode == RENDER_PASS_MAIN) {
+//
+//         const bool TRANSFORMERSPRESENT = !pWindow->m_transformers.empty();
+//
+//         if (TRANSFORMERSPRESENT) {
+//             Render::GL::g_pHyprOpenGL->bindOffMain();
+//
+//             for (auto const& t : pWindow->m_transformers) {
+//                 t->preWindowRender(&renderdata);
+//             }
+//         }
+//
+//         if (renderdata.decorate) {
+//             for (auto const& wd : pWindow->m_windowDecorations) {
+//                 if (wd->getDecorationLayer() != DECORATION_LAYER_BOTTOM)
+//                     continue;
+//
+//                 wd->draw(pMonitor, fullAlpha);
+//             }
+//
+//             for (auto const& wd : pWindow->m_windowDecorations) {
+//                 if (wd->getDecorationLayer() != DECORATION_LAYER_UNDER)
+//                     continue;
+//
+//                 wd->draw(pMonitor, fullAlpha);
+//             }
+//         }
+//
+//         static auto PXWLUSENN = CConfigValue<Hyprlang::INT>("xwayland:use_nearest_neighbor");
+//         if ((pWindow->m_isX11 && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
+//             renderdata.useNearestNeighbor = true;
+//
+//         if (pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
+//             CBox wb = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
+//             wb.scale(pMonitor->m_scale).round();
+//             CRectPassElement::SRectData data;
+//             data.color = CHyprColor(0, 0, 0, 0);
+//             data.box   = wb;
+//             data.round = renderdata.dontRound ? 0 : renderdata.rounding - 1;
+//             data.blur  = true;
+//             data.blurA = renderdata.fadeAlpha;
+//             data.xray  = Render::GL::g_pHyprOpenGL->shouldUseNewBlurOptimizations(nullptr, pWindow);
+//             g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+//             renderdata.blur = false;
+//         }
+//
+//         renderdata.surfaceCounter = 0;
+//         pWindow->wlSurface()->resource()->breadthfirst(
+//             [&renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
+//                 if (!s->m_current.texture)
+//                     return;
+//
+//                 if (s->m_current.size.x < 1 || s->m_current.size.y < 1)
+//                     return;
+//
+//                 renderdata.localPos    = offset;
+//                 renderdata.texture     = s->m_current.texture;
+//                 renderdata.surface     = s;
+//                 renderdata.mainSurface = s == pWindow->wlSurface()->resource();
+//                 g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+//                 renderdata.surfaceCounter++;
+//             },
+//             nullptr);
+//
+//         renderdata.useNearestNeighbor = false;
+//
+//         if (renderdata.decorate) {
+//             for (auto const& wd : pWindow->m_windowDecorations) {
+//                 if (wd->getDecorationLayer() != DECORATION_LAYER_OVER)
+//                     continue;
+//
+//                 wd->draw(pMonitor, fullAlpha);
+//             }
+//         }
+//
+//         if (TRANSFORMERSPRESENT) {
+//             CFramebuffer* last = Render::GL::g_pHyprOpenGL->m_renderData.currentFB;
+//             for (auto const& t : pWindow->m_transformers) {
+//                 last = t->transform(last);
+//             }
+//
+//             Render::GL::g_pHyprOpenGL->bindBackOnMain();
+//             Render::GL::g_pHyprOpenGL->renderOffToMain(last);
+//         }
+//     }
+//
+//     Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+//
+//     if (mode == RENDER_PASS_ALL || mode == RENDER_PASS_POPUP) {
+//         if (!pWindow->m_isX11) {
+//             CBox geom = pWindow->m_xdgSurface->m_current.geometry;
+//
+//             renderdata.pos -= geom.pos();
+//             renderdata.dontRound       = true; // don't round popups
+//             renderdata.pMonitor        = pMonitor;
+//             renderdata.squishOversized = false; // don't squish popups
+//             renderdata.popup           = true;
+//
+//             static CConfigValue PBLURIGNOREA = CConfigValue<Hyprlang::FLOAT>("decoration:blur:popups_ignorealpha");
+//
+//             renderdata.blur = g_pHyprRenderer->shouldBlur(pWindow->m_popupHead);
+//
+//             if (renderdata.blur) {
+//                 renderdata.discardMode |= DISCARD_ALPHA;
+//                 renderdata.discardOpacity = *PBLURIGNOREA;
+//             }
+//
+//             if (pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
+//                 renderdata.useNearestNeighbor = true;
+//
+//             renderdata.surfaceCounter = 0;
+//
+//             pWindow->m_popupHead->breadthfirst(
+//                 [&renderdata](WP<Desktop::View::CPopup> popup, void* data) {
+//                     if (popup->m_fadingOut) {
+//                         g_pHyprRenderer->renderSnapshot(popup);
+//                         return;
+//                     }
+//
+//                     if (!popup->aliveAndVisible())
+//                         return;
+//
+//                     const auto     pos    = popup->coordsRelativeToParent();
+//                     const Vector2D oldPos = renderdata.pos;
+//                     renderdata.pos += pos;
+//                     renderdata.fadeAlpha = popup->m_alpha->value();
+//
+//                     popup->wlSurface()->resource()->breadthfirst(
+//                         [&renderdata](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
+//                             if (!s->m_current.texture)
+//                                 return;
+//
+//                             if (s->m_current.size.x < 1 || s->m_current.size.y < 1)
+//                                 return;
+//
+//                             renderdata.localPos    = offset;
+//                             renderdata.texture     = s->m_current.texture;
+//                             renderdata.surface     = s;
+//                             renderdata.mainSurface = false;
+//                             g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+//                             renderdata.surfaceCounter++;
+//                         },
+//                         data);
+//
+//                     renderdata.pos = oldPos;
+//                 },
+//                 &renderdata);
+//
+//             renderdata.alpha = 1.F;
+//         }
+//
+//         if (decorate) {
+//             for (auto const& wd : pWindow->m_windowDecorations) {
+//                 if (wd->getDecorationLayer() != DECORATION_LAYER_OVERLAY)
+//                     continue;
+//
+//                 wd->draw(pMonitor, fullAlpha);
+//             }
+//         }
+//     }
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_POST_WINDOW);
+//
+//     Render::GL::g_pHyprOpenGL->m_renderData.currentWindow.reset();
+// }
+
+// void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     if (!buffer || !pRenderWindow || !w)
+//         return;
+//     const auto m = w->m_monitor.lock();
+//     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
+//         return;
+//     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+//
+//     g_pHyprRenderer->makeEGLCurrent();
+//
+//     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(w, false);
+//     buffer->alloc(m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x, m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y, DRM_FORMAT_ABGR8888);
+//     g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
+//
+//     g_pHyprRenderer->m_bRenderingSnapshot = true;
+//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
+//
+//     auto fo = w->m_floatingOffset;
+//     auto before = w->m_hidden;
+//     w->m_hidden = false;
+//
+//     ourRenderWindow(w, m, Time::steadyNow(), true, RENDER_PASS_ALL, false, true);
+//     w->m_hidden = before;
+//
+//     w->m_floatingOffset = fo;
+//
+//     g_pHyprRenderer->endRender();
+//
+//     g_pHyprRenderer->m_bRenderingSnapshot = false;
+// }
+
+// void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//     //return;
+//     if (!pRenderWindow || !w.get())
+//         return;
+//     const auto m = w->m_monitor.lock();
+//     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
+//         return;
+//     if (include_decorations) {
+//         bool h = w->m_hidden;
+//         w->m_hidden = false;
+//         screenshot_window_with_decos(hw->deco_fb, w);
+//        //m->m_scale
+//         hw->w_decos_size = tobounds(w->getFullWindowBoundingBox());
+//         hw->w_decos_size.scale(m->m_scale);
+//         hw->w_deco_raw = tobounds(w->getFullWindowBoundingBox());
+//         auto tex = hw->deco_fb->getTexture();
+//         glActiveTexture(GL_TEXTURE0);
+//         tex->bind();
+//         glGenerateMipmap(tex->m_target);
+//
+//         w->m_hidden = h;
+//
+//         return;
+//     }
+//
+//     // we need to "damage" the entire monitor
+//     // so that we render the entire window
+//     // this is temporary, doesnt mess with the actual damage
+//     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+//     g_pHyprRenderer->makeEGLCurrent();
+//     hw->fb->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+//     g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, hw->fb);
+//     g_pHyprRenderer->m_bRenderingSnapshot = true;
+//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
+//     auto const NOW = Time::steadyNow();
+//     (*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, RENDER_PASS_MAIN, true, true);
+//     g_pHyprRenderer->endRender();
+//     g_pHyprRenderer->m_bRenderingSnapshot = false;
+//
+//     hw->w_size = Bounds(0, 0, (w->m_realSize->value().x * m->m_scale), (w->m_realSize->value().y * m->m_scale));
+//     hw->w_bounds_raw = Bounds(0, 0, (w->m_realSize->value().x), (w->m_realSize->value().y));
+//     auto tex = hw->fb->getTexture();
+//     glActiveTexture(GL_TEXTURE0);
+//     tex->bind();
+//     glGenerateMipmap(tex->m_target);
+// }
 
 void HyprIso::screenshot_all() {
 #ifdef TRACY_ENABLE
@@ -5318,16 +5356,16 @@ void HyprIso::screenshot_all() {
 #endif
     for (auto w : g_pCompositor->m_windows) {
         bool has_mylar_bar = false;
-        for (const auto &decos : w->m_windowDecorations) 
+        for (const auto &decos : w->m_windowDecorations)
             if (decos->getDisplayName() == "MylarBar")
                 has_mylar_bar = true;
-            
+
         if (true) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w) {
-                    if (!hw->fb)
-                        hw->fb = new CFramebuffer;
-                    screenshot_window(hw, w, false);
+                    // if (!hw->fb)
+                        // hw->fb = new CFramebuffer;
+                    // screenshot_window(hw, w, false);
                 }
             }
         }
@@ -5347,9 +5385,9 @@ void HyprIso::screenshot(int id) {
         if (true) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w && hw->id == id) {
-                    if (!hw->fb)
-                        hw->fb = new CFramebuffer;
-                    screenshot_window(hw, w, false);
+                    // if (!hw->fb)
+                        // hw->fb = new CFramebuffer;
+                    // screenshot_window(hw, w, false);
                 }
             }
         }
@@ -5362,62 +5400,62 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
 #endif
  
     //return;
-    for (auto hs : hyprspaces) {
-        if (hs->id == id) {
-            if (!hs->buffer->isAllocated())
-                continue;
-            //notify("draw space " + std::to_string(id));
-            bool clip = hypriso->clip;
-            Bounds clipbox = hypriso->clipbox;
-            if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
-                return; 
-            }
-            AnyPass::AnyData anydata([b, hs, rounding, alpha, clip, clipbox](AnyPass* pass) {
-    #ifdef TRACY_ENABLE
-        ZoneScoped;
-    #endif
-     
-                //notify("draw");
-                auto roundingPower = 2.0f;
-                auto cornermask = 0;
-                auto tex = hs->buffer->getTexture();
-                //notify(std::to_string(hs->w->m_id) + " " + std::to_string((unsigned long long) hs->buffer));
-                
-                auto box = tocbox(b);
-
-                CHyprOpenGLImpl::STextureRenderData data;
-                data.allowCustomUV = true;
-
-                data.round = rounding;
-                data.a = alpha;
-                data.noAA = true;
-                data.roundingPower = roundingPower;
-                g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                    std::min(1.0, 1.0),
-                    std::min(1.0, 1.0)
-                );
-                set_rounding(cornermask);
-                if (clip)
-                    g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-                
-                auto before = g_pHyprOpenGL->m_renderData.useNearestNeighbor;
-                g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-                tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-
-                g_pHyprOpenGL->renderTexture(tex, box, data);
-                g_pHyprOpenGL->m_renderData.useNearestNeighbor = before;
-                
-                if (clip)
-                    g_pHyprOpenGL->m_renderData.clipBox = CBox();
-                set_rounding(0);
-                
-                g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-                g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-            });
-            g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-        }
-    }
+    // for (auto hs : hyprspaces) {
+    //     if (hs->id == id) {
+    //         if (!hs->buffer->isAllocated())
+    //             continue;
+    //         //notify("draw space " + std::to_string(id));
+    //         bool clip = hypriso->clip;
+    //         Bounds clipbox = hypriso->clipbox;
+    //         if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+    //             return;
+    //         }
+    //         AnyPass::AnyData anydata([b, hs, rounding, alpha, clip, clipbox](AnyPass* pass) {
+    // #ifdef TRACY_ENABLE
+    //     ZoneScoped;
+    // #endif
+    //
+    //             //notify("draw");
+    //             auto roundingPower = 2.0f;
+    //             auto cornermask = 0;
+    //             auto tex = hs->buffer->getTexture();
+    //             //notify(std::to_string(hs->w->m_id) + " " + std::to_string((unsigned long long) hs->buffer));
+    //
+    //             auto box = tocbox(b);
+    //
+    //             CHyprOpenGLImpl::STextureRenderData data;
+    //             data.allowCustomUV = true;
+    //
+    //             data.round = rounding;
+    //             data.a = alpha;
+    //             data.noAA = true;
+    //             data.roundingPower = roundingPower;
+    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+    //                 std::min(1.0, 1.0),
+    //                 std::min(1.0, 1.0)
+    //             );
+    //             set_rounding(cornermask);
+    //             if (clip)
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+    //
+    //             auto before = Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor;
+    //             Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+    //             tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+    //
+    //             Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+    //             Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = before;
+    //
+    //             if (clip)
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+    //             set_rounding(0);
+    //
+    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //         });
+    //         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    //     }
+    // }
 };
 
 void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
@@ -5426,56 +5464,56 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
 #endif
  
     //return;
-    for (auto hm : hyprmonitors) {
-        if (hm->id != mon)
-            continue;
-        if (!hm->wallfb)
-            continue;
-        if (!hm->wallfb->getTexture())
-            return;
-        bool clip = hypriso->clip;
-        Bounds clipbox = hypriso->clipbox;
-        if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
-            return; 
-        }
-        AnyPass::AnyData anydata([hm, mon, b, rounding, alpha, clip, clipbox](AnyPass* pass) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-             //notify("draw");
-            auto roundingPower = 2.0f;
-            auto cornermask = 0;
-            if (!hm->wallfb)
-                return;
-            auto tex = hm->wallfb->getTexture();
-            if (!tex)
-                return;
-            auto box = tocbox(b);
-
-            CHyprOpenGLImpl::STextureRenderData data;
-            data.allowCustomUV = true;
-
-            data.round = rounding;
-            data.roundingPower = roundingPower;
-            data.a = alpha;
-
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                std::min(1.0, 1.0),
-                std::min(1.0, 1.0)
-            );
-            set_rounding(cornermask);
-            if (clip)
-                g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-            g_pHyprOpenGL->renderTexture(tex, box, data);
-            set_rounding(0);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-            if (clip)
-                g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
-        });
-        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    }
+//     for (auto hm : hyprmonitors) {
+//         if (hm->id != mon)
+//             continue;
+//         if (!hm->wallfb)
+//             continue;
+//         if (!hm->wallfb->getTexture())
+//             return;
+//         bool clip = hypriso->clip;
+//         Bounds clipbox = hypriso->clipbox;
+//         if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+//             return;
+//         }
+//         AnyPass::AnyData anydata([hm, mon, b, rounding, alpha, clip, clipbox](AnyPass* pass) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//              //notify("draw");
+//             auto roundingPower = 2.0f;
+//             auto cornermask = 0;
+//             if (!hm->wallfb)
+//                 return;
+//             auto tex = hm->wallfb->getTexture();
+//             if (!tex)
+//                 return;
+//             auto box = tocbox(b);
+//
+//             CHyprOpenGLImpl::STextureRenderData data;
+//             data.allowCustomUV = true;
+//
+//             data.round = rounding;
+//             data.roundingPower = roundingPower;
+//             data.a = alpha;
+//
+//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+//                 std::min(1.0, 1.0),
+//                 std::min(1.0, 1.0)
+//             );
+//             set_rounding(cornermask);
+//             if (clip)
+//                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//             Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+//             set_rounding(0);
+//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+//             if (clip)
+//                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+//         });
+//         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+//     }
 };
 
 void HyprIso::screenshot_wallpaper(int mon) {
@@ -5484,9 +5522,9 @@ void HyprIso::screenshot_wallpaper(int mon) {
 #endif
    for (auto hm : hyprmonitors) {
        if (hm->id == mon) {
-           if (!hm->wallfb)
-               hm->wallfb = new CFramebuffer;
-           actual_screenshot_wallpaper(hm->wallfb, hm->m);
+           // if (!hm->wallfb)
+           //     hm->wallfb = new CFramebuffer;
+           // actual_screenshot_wallpaper(hm->wallfb, hm->m);
            hm->wall_size = Bounds(hm->m->m_position.x, hm->m->m_position.y, 
                hm->m->m_pixelSize.x, hm->m->m_pixelSize.y);
        }
@@ -5509,14 +5547,14 @@ void HyprIso::screenshot_space(int mon, int id) {
     
     for (auto hs : hyprspaces) {
         if (hs->id == id) {
-            if (!hs->buffer)
-                hs->buffer = new CFramebuffer;
-            
-            screenshot_workspace(hs->buffer, startedOn.lock(), hs->w, hs->w->m_monitor.lock(), false);
-            auto tex = hs->buffer->getTexture();
-            glActiveTexture(GL_TEXTURE0);
-            tex->bind();
-            glGenerateMipmap(tex->m_target);
+            // if (!hs->buffer)
+            //     hs->buffer = new CFramebuffer;
+            //
+            // screenshot_workspace(hs->buffer, startedOn.lock(), hs->w, hs->w->m_monitor.lock(), false);
+            // auto tex = hs->buffer->getTexture();
+            // glActiveTexture(GL_TEXTURE0);
+            // tex->bind();
+            // glGenerateMipmap(tex->m_target);
             break;
         }
     }
@@ -5529,13 +5567,13 @@ void HyprIso::screenshot_deco(int id) {
     for (auto w : g_pCompositor->m_windows) {
         for (auto hw : hyprwindows) {
             if (hw->w == w && hw->id == id) {
-                if (!hw->deco_fb)
-                    hw->deco_fb = new CFramebuffer;
-                screenshot_window(hw, w, true);
-                auto tex = hw->deco_fb->getTexture();
-                glActiveTexture(GL_TEXTURE0);
-                tex->bind();
-                glGenerateMipmap(tex->m_target);
+                // if (!hw->deco_fb)
+                //     hw->deco_fb = new CFramebuffer;
+                // screenshot_window(hw, w, true);
+                // auto tex = hw->deco_fb->getTexture();
+                // glActiveTexture(GL_TEXTURE0);
+                // tex->bind();
+                // glGenerateMipmap(tex->m_target);
             }
         }
     }
@@ -5557,46 +5595,46 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
 #endif
  
     // return;
-    for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (hw->fb && hw->fb->isAllocated()) {
-                bool clip = this->clip;
-                Bounds clipbox = this->clipbox;
-                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask, alpha, clip, clipbox](AnyPass* pass) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
- 
-                    auto tex = hw->fb->getTexture();
-                    auto box = tocbox(b);
-                    CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = true;
-                    data.round = rounding;
-                    data.roundingPower = roundingPower;
-                    data.a = alpha;
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                        std::min(hw->w_size.w / hw->fb->m_size.x, 1.0), 
-                        std::min(hw->w_size.h / hw->fb->m_size.y, 1.0) 
-                    );
-                    if (clip)
-                        g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-                    g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-
-                    set_rounding(cornermask);
-                    g_pHyprOpenGL->renderTexture(tex, box, data);
-                    set_rounding(0);
-                    
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-                    if (clip)
-                        g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
-                });
-                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-            }
-        }
-    }
+//     for (auto hw : hyprwindows) {
+//         if (hw->id == id) {
+//             if (hw->fb && hw->fb->isAllocated()) {
+//                 bool clip = this->clip;
+//                 Bounds clipbox = this->clipbox;
+//                 AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask, alpha, clip, clipbox](AnyPass* pass) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//                     auto tex = hw->fb->getTexture();
+//                     auto box = tocbox(b);
+//                     CHyprOpenGLImpl::STextureRenderData data;
+//                     data.allowCustomUV = true;
+//                     data.round = rounding;
+//                     data.roundingPower = roundingPower;
+//                     data.a = alpha;
+//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+//                         std::min(hw->w_size.w / hw->fb->m_size.x, 1.0),
+//                         std::min(hw->w_size.h / hw->fb->m_size.y, 1.0)
+//                     );
+//                     if (clip)
+//                         Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//                     Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+//                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+//
+//                     set_rounding(cornermask);
+//                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+//                     set_rounding(0);
+//
+//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+//                     if (clip)
+//                         Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+//                 });
+//                 g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+//             }
+//         }
+//     }
 }
 
 void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float roundingPower, int cornermask) {
@@ -5604,31 +5642,31 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
     ZoneScoped;
 #endif
     // return;
-    for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (hw->deco_fb && hw->deco_fb->isAllocated()) {
-                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
-                    auto tex = hw->deco_fb->getTexture();
-                    auto box = tocbox(b);
-                    CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = true;
-                    data.round = rounding;
-                    data.roundingPower = roundingPower;
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                        std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0), 
-                        std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0) 
-                    );
-                    set_rounding(cornermask);
-                    g_pHyprOpenGL->renderTexture(tex, box, data);
-                    set_rounding(0);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-                });
-                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-            }
-        }
-    }
+    // for (auto hw : hyprwindows) {
+    //     if (hw->id == id) {
+    //         if (hw->deco_fb && hw->deco_fb->isAllocated()) {
+    //             AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
+    //                 auto tex = hw->deco_fb->getTexture();
+    //                 auto box = tocbox(b);
+    //                 CHyprOpenGLImpl::STextureRenderData data;
+    //                 data.allowCustomUV = true;
+    //                 data.round = rounding;
+    //                 data.roundingPower = roundingPower;
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+    //                     std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
+    //                     std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
+    //                 );
+    //                 set_rounding(cornermask);
+    //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+    //                 set_rounding(0);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //             });
+    //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    //         }
+    //     }
+    // }
 }
 
 Bounds lerp(Bounds start, Bounds end, float scalar) {
@@ -5649,39 +5687,39 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (hw->min_fb && hw->min_fb->isAllocated()) {
-                if (!hw->animate_to_dock)
-                    return;
-                AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
-                    auto tex = hw->min_fb->getTexture();
-                    auto sss = hw->w_min_mon;
-                    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
-                    Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
-                    auto lerped = lerp(bounds, b, scalar);
-                    if (!hw->w->m_hidden)
-                        lerped = lerp(b, bounds, scalar);
-                    auto box = tocbox(lerped);
-                    CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = false;
-                    data.round = 0.0;
-                    if (hw->w->m_hidden) {
-                        data.a = 1.0 - easeIn(scalar);
-                    } else {
-                        data.a = scalar;
-                    }
-                    data.roundingPower = 2.0;
-                    g_pHyprOpenGL->renderTexture(tex, box, data);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-                });
-                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-                
-                //border(hw->w_min_size, {1, 0, 0, 1}, 10);
-            }
-        }
-    }
+    // for (auto hw : hyprwindows) {
+    //     if (hw->id == id) {
+    //         if (hw->min_fb && hw->min_fb->isAllocated()) {
+    //             if (!hw->animate_to_dock)
+    //                 return;
+    //             AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
+    //                 auto tex = hw->min_fb->getTexture();
+    //                 auto sss = hw->w_min_mon;
+    //                 auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
+    //                 Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
+    //                 auto lerped = lerp(bounds, b, scalar);
+    //                 if (!hw->w->m_hidden)
+    //                     lerped = lerp(b, bounds, scalar);
+    //                 auto box = tocbox(lerped);
+    //                 CHyprOpenGLImpl::STextureRenderData data;
+    //                 data.allowCustomUV = false;
+    //                 data.round = 0.0;
+    //                 if (hw->w->m_hidden) {
+    //                     data.a = 1.0 - easeIn(scalar);
+    //                 } else {
+    //                     data.a = scalar;
+    //                 }
+    //                 data.roundingPower = 2.0;
+    //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //             });
+    //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    //
+    //             //border(hw->w_min_size, {1, 0, 0, 1}, 10);
+    //         }
+    //     }
+    // }
 }
 
 void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roundingPower, int cornermask) {
@@ -5689,31 +5727,31 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
     ZoneScoped;
 #endif
     // return;
-    for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (hw->deco_fb && hw->deco_fb->isAllocated()) {
-                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
-                    auto tex = hw->deco_fb->getTexture();
-                    auto box = tocbox(b);
-                    CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = true;
-                    data.round = rounding;
-                    data.roundingPower = roundingPower;
-                    //g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                    //g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-                        //std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0), 
-                        //std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0) 
-                    //);
-                    set_rounding(cornermask);
-                    g_pHyprOpenGL->renderTexture(tex, box, data);
-                    set_rounding(0);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-                });
-                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-            }
-        }
-    }
+    // for (auto hw : hyprwindows) {
+    //     if (hw->id == id) {
+    //         if (hw->deco_fb && hw->deco_fb->isAllocated()) {
+    //             AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
+    //                 auto tex = hw->deco_fb->getTexture();
+    //                 auto box = tocbox(b);
+    //                 CHyprOpenGLImpl::STextureRenderData data;
+    //                 data.allowCustomUV = true;
+    //                 data.round = rounding;
+    //                 data.roundingPower = roundingPower;
+    //                 //g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //                 //g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+    //                     //std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
+    //                     //std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
+    //                 //);
+    //                 set_rounding(cornermask);
+    //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+    //                 set_rounding(0);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //             });
+    //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    //         }
+    //     }
+    // }
 }
 
 
@@ -5721,19 +5759,19 @@ void HyprIso::set_zoom_factor(float amount, bool instant) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_factor");
-    auto zoom_amount = (Hyprlang::FLOAT*)val->dataPtr();
-    *zoom_amount = amount;
-
-    for (auto const& m : g_pCompositor->m_monitors) {
-        if (m->m_cursorZoom) {
-            if (instant)
-                m->m_cursorZoom->setValueAndWarp(amount);
-            else 
-                *(m->m_cursorZoom) = amount;
-            g_layoutManager->recalculateMonitor(m);
-        }
-    }    
+    // Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_factor");
+    // auto zoom_amount = (Hyprlang::FLOAT*)val->dataPtr();
+    // *zoom_amount = amount;
+    //
+    // for (auto const& m : g_pCompositor->m_monitors) {
+    //     if (m->m_cursorZoom) {
+    //         if (instant)
+    //             m->m_cursorZoom->setValueAndWarp(amount);
+    //         else
+    //             *(m->m_cursorZoom) = amount;
+    //         g_layoutManager->recalculateMonitor(m);
+    //     }
+    // }
 }
 
 int HyprIso::parent(int id) {
@@ -5779,24 +5817,11 @@ void HyprIso::hide_desktop() {
     }
 }
 
-static void updateRelativeCursorCoords() {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    static auto PNOWARPS = CConfigValue<Hyprlang::INT>("cursor:no_warps");
-
-    if (*PNOWARPS)
-        return;
-
-    if (Desktop::focusState()->window())
-        Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->m_position;
-}
-
 void HyprIso::move_to_workspace(int workspace, bool follow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    g_pKeybindManager->changeworkspace(std::to_string(workspace));
+    // g_pKeybindManager->changeworkspace(std::to_string(workspace));
 }
 
 void HyprIso::move_to_workspace_id(int workspace) {
@@ -5805,7 +5830,7 @@ void HyprIso::move_to_workspace_id(int workspace) {
 #endif
     for (auto s : hyprspaces) {
         if (s->id == workspace) {
-            g_pKeybindManager->changeworkspace(std::to_string(s->w->m_id));
+            // g_pKeybindManager->changeworkspace(std::to_string(s->w->m_id));
         }
     }
 }
@@ -5835,112 +5860,112 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    PHLWINDOW PWINDOW;
-    for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            PWINDOW = hw->w;
-            break;
-        }
-    }
-
-    if (!PWINDOW)
-        return;
-    
-    if (follow) {
-        std::string args = std::to_string(workspace);
-
-        const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
-        if (WORKSPACEID == WORKSPACE_INVALID) {
-            Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
-            return;
-        }
-
-        if (WORKSPACEID == PWINDOW->workspaceID()) {
-            Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
-            return;
-        }
-
-        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
-        PHLMONITOR pMonitor   = nullptr;
-        const auto POLDWS     = PWINDOW->m_workspace;
-
-        updateRelativeCursorCoords();
-
-        g_pHyprRenderer->damageWindow(PWINDOW);
-
-        if (pWorkspace) {
-            const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-            pMonitor = pWorkspace->m_monitor.lock();
-            Desktop::focusState()->rawMonitorFocus(pMonitor);
-            g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
-        } else {
-            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
-            pMonitor   = pWorkspace->m_monitor.lock();
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-        }
-
-        POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
-
-        if (pWorkspace->m_isSpecialWorkspace)
-            pMonitor->setSpecialWorkspace(pWorkspace);
-        else if (POLDWS->m_isSpecialWorkspace)
-            POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
-
-        pMonitor->changeWorkspace(pWorkspace);
-
-        Desktop::focusState()->fullWindowFocus(PWINDOW, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
-        PWINDOW->warpCursor();
-    } else {
-        std::string args = std::to_string(workspace);
-        
-        const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
-        if (WORKSPACEID == WORKSPACE_INVALID) {
-            Log::logger->log(Log::ERR, "Error in moveActiveToWorkspaceSilent, invalid value");
-            return;
-        }
-
-        if (WORKSPACEID == PWINDOW->workspaceID())
-            return;
-
-        g_pHyprRenderer->damageWindow(PWINDOW);
-
-        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
-        const auto OLDMIDDLE  = PWINDOW->middle();
-
-        if (pWorkspace) {
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-        } else {
-            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-        }
-
-        if (PWINDOW == Desktop::focusState()->window()) {
-            if (const auto PATCOORDS =
-                    g_pCompositor->vectorToWindowUnified(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
-                PATCOORDS)
-                Desktop::focusState()->fullWindowFocus(PATCOORDS, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
-            else
-                g_pInputManager->refocus();
-        }
-
-        return;
-    }
+    // PHLWINDOW PWINDOW;
+    // for (auto hw : hyprwindows) {
+    //     if (hw->id == id) {
+    //         PWINDOW = hw->w;
+    //         break;
+    //     }
+    // }
+    //
+    // if (!PWINDOW)
+    //     return;
+    //
+    // if (follow) {
+    //     std::string args = std::to_string(workspace);
+    //
+    //     const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
+    //     if (WORKSPACEID == WORKSPACE_INVALID) {
+    //         Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
+    //         return;
+    //     }
+    //
+    //     if (WORKSPACEID == PWINDOW->workspaceID()) {
+    //         Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
+    //         return;
+    //     }
+    //
+    //     auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+    //     PHLMONITOR pMonitor   = nullptr;
+    //     const auto POLDWS     = PWINDOW->m_workspace;
+    //
+    //     updateRelativeCursorCoords();
+    //
+    //     g_pHyprRenderer->damageWindow(PWINDOW);
+    //
+    //     if (pWorkspace) {
+    //         const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
+    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+    //         pMonitor = pWorkspace->m_monitor.lock();
+    //         Desktop::focusState()->rawMonitorFocus(pMonitor);
+    //         g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
+    //     } else {
+    //         pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+    //         pMonitor   = pWorkspace->m_monitor.lock();
+    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+    //     }
+    //
+    //     POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
+    //
+    //     if (pWorkspace->m_isSpecialWorkspace)
+    //         pMonitor->setSpecialWorkspace(pWorkspace);
+    //     else if (POLDWS->m_isSpecialWorkspace)
+    //         POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
+    //
+    //     pMonitor->changeWorkspace(pWorkspace);
+    //
+    //     Desktop::focusState()->fullWindowFocus(PWINDOW, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    //     PWINDOW->warpCursor();
+    // } else {
+    //     std::string args = std::to_string(workspace);
+    //
+    //     const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
+    //     if (WORKSPACEID == WORKSPACE_INVALID) {
+    //         Log::logger->log(Log::ERR, "Error in moveActiveToWorkspaceSilent, invalid value");
+    //         return;
+    //     }
+    //
+    //     if (WORKSPACEID == PWINDOW->workspaceID())
+    //         return;
+    //
+    //     g_pHyprRenderer->damageWindow(PWINDOW);
+    //
+    //     auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+    //     const auto OLDMIDDLE  = PWINDOW->middle();
+    //
+    //     if (pWorkspace) {
+    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+    //     } else {
+    //         pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+    //     }
+    //
+    //     if (PWINDOW == Desktop::focusState()->window()) {
+    //         if (const auto PATCOORDS =
+    //                 g_pCompositor->vectorToWindowUnified(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
+    //             PATCOORDS)
+    //             Desktop::focusState()->fullWindowFocus(PATCOORDS, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    //         else
+    //             g_pInputManager->refocus();
+    //     }
+    //
+    //     return;
+    // }
 }
 
 void HyprIso::reload() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    const char* home = std::getenv("HOME");
-    if (home) {
-        std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
-        change_root_config_path(filepath, false);
-    }
-    
-    g_pConfigManager->reload(); 
-    for (auto w : g_pCompositor->m_windows)
-        w->updateDecorationValues();
+    // const char* home = std::getenv("HOME");
+    // if (home) {
+    //     std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
+    //     change_root_config_path(filepath, false);
+    // }
+    //
+    // g_pConfigManager->reload();
+    // for (auto w : g_pCompositor->m_windows)
+    //     w->updateDecorationValues();
     //g_pHyprOpenGL->initShaders();
 }
 
@@ -5949,7 +5974,7 @@ void HyprIso::add_float_rule() {
     ZoneScoped;
 #endif
     return;
-    g_pConfigManager->handleWindowrule("windowrule", "fmatch:class:.*, float on");
+    // g_pConfigManager->handleWindowrule("windowrule", "fmatch:class:.*, float on");
 }
 
 void HyprIso::overwrite_defaults() {
@@ -5984,16 +6009,16 @@ void HyprIso::overwrite_defaults() {
         *target = .4696;
     }
     */
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_rigid");
-        auto target = (Hyprlang::INT*)val->dataPtr();
-        *target = false;
-    }
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_disable_aa");
-        auto target = (Hyprlang::INT*)val->dataPtr();
-        *target = true;
-    }
+    // {
+    //     Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_rigid");
+    //     auto target = (Hyprlang::INT*)val->dataPtr();
+    //     *target = false;
+    // }
+    // {
+    //     Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_disable_aa");
+    //     auto target = (Hyprlang::INT*)val->dataPtr();
+    //     *target = true;
+    // }
 
     //g_pConfigManager->handleWindowRule("windowrulev2", "float, class:.*");
 }
@@ -6676,85 +6701,85 @@ void mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vec
 */
 
 void renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    PHLWINDOW lastWindow;
-
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
-
-    std::vector<PHLWINDOWREF> windows, fadingOut, pinned;
-    windows.reserve(g_pCompositor->m_windows.size());
-
-    // collect renderable windows
-    for (auto const& w : g_pCompositor->m_windows) {
-        if (w->isHidden() || (!w->m_isMapped && !w->m_fadingOut))
-            continue;
-        if (!g_pHyprRenderer->shouldRenderWindow(w, pMonitor))
-            continue;
-
-        windows.emplace_back(w);
-    }
-
-    // categorize + interleave
-    for (auto& wref : windows) {
-        auto w = wref.lock();
-        if (!w)
-            continue;
-
-        // pinned go to separate pass (still above everything)
-        if (w->m_pinned) {
-            pinned.emplace_back(w);
-            continue;
-        }
-
-        // some things may force us to ignore the special/not special disparity
-        const bool IGNORE_SPECIAL_CHECK = w->m_monitorMovedFrom != -1 &&
-                                          (w->m_workspace && !w->m_workspace->isVisible());
-
-        if (!IGNORE_SPECIAL_CHECK && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
-            continue;
-
-        if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
-            continue; // special on another monitor drawn elsewhere
-
-        // last window drawn after others
-        if (w == Desktop::focusState()->window()) {
-            lastWindow = w;
-            continue;
-        }
-
-        if (w->m_fadingOut) {
-            fadingOut.emplace_back(w);
-            continue;
-        }
-
-        // main pass (interleaved tiled/floating)
-        g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_MAIN);
-
-        // popup directly after main
-        g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_POPUP);
-    }
-
-    // render last focused window after the rest
-    if (lastWindow) {
-        g_pHyprRenderer->renderWindow(lastWindow, pMonitor, time, true, RENDER_PASS_MAIN);
-        g_pHyprRenderer->renderWindow(lastWindow, pMonitor, time, true, RENDER_PASS_POPUP);
-    }
-
-    // fading out (tiled or floating) — after main windows
-    for (auto& wref : fadingOut) {
-        auto w = wref.lock();
-        if (w)
-            g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_MAIN);
-    }
-
-    // pinned last, above everything
-    for (auto& wref : pinned) {
-        auto w = wref.lock();
-        if (w)
-            g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
-    }
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     PHLWINDOW lastWindow;
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
+//
+//     std::vector<PHLWINDOWREF> windows, fadingOut, pinned;
+//     windows.reserve(g_pCompositor->m_windows.size());
+//
+//     // collect renderable windows
+//     for (auto const& w : g_pCompositor->m_windows) {
+//         if (w->isHidden() || (!w->m_isMapped && !w->m_fadingOut))
+//             continue;
+//         if (!g_pHyprRenderer->shouldRenderWindow(w, pMonitor))
+//             continue;
+//
+//         windows.emplace_back(w);
+//     }
+//
+//     // categorize + interleave
+//     for (auto& wref : windows) {
+//         auto w = wref.lock();
+//         if (!w)
+//             continue;
+//
+//         // pinned go to separate pass (still above everything)
+//         if (w->m_pinned) {
+//             pinned.emplace_back(w);
+//             continue;
+//         }
+//
+//         // some things may force us to ignore the special/not special disparity
+//         const bool IGNORE_SPECIAL_CHECK = w->m_monitorMovedFrom != -1 &&
+//                                           (w->m_workspace && !w->m_workspace->isVisible());
+//
+//         if (!IGNORE_SPECIAL_CHECK && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+//             continue;
+//
+//         if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
+//             continue; // special on another monitor drawn elsewhere
+//
+//         // last window drawn after others
+//         if (w == Desktop::focusState()->window()) {
+//             lastWindow = w;
+//             continue;
+//         }
+//
+//         if (w->m_fadingOut) {
+//             fadingOut.emplace_back(w);
+//             continue;
+//         }
+//
+//         // main pass (interleaved tiled/floating)
+//         g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_MAIN);
+//
+//         // popup directly after main
+//         g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_POPUP);
+//     }
+//
+//     // render last focused window after the rest
+//     if (lastWindow) {
+//         g_pHyprRenderer->renderWindow(lastWindow, pMonitor, time, true, RENDER_PASS_MAIN);
+//         g_pHyprRenderer->renderWindow(lastWindow, pMonitor, time, true, RENDER_PASS_POPUP);
+//     }
+//
+//     // fading out (tiled or floating) — after main windows
+//     for (auto& wref : fadingOut) {
+//         auto w = wref.lock();
+//         if (w)
+//             g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_MAIN);
+//     }
+//
+//     // pinned last, above everything
+//     for (auto& wref : pinned) {
+//         auto w = wref.lock();
+//         if (w)
+//             g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
+//     }
 }
 
 // for interleaving tiled and floating windows
@@ -6762,17 +6787,17 @@ void renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const 
 //PHLWINDOW CCompositor::vectorToWindowUnified(const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow) {
 //void CHyprRenderer::renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
 
-inline CFunctionHook* g_pOnRenderWorkspaceWindows = nullptr;
-typedef void (*origRenderWorkspaceWindows)(CHyprRenderer *, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time);
-void hook_onRenderWorkspaceWindows(void* thisptr,  PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-
-    //auto chr = (CHyprRenderer *) thisptr;
-    //(*(origRenderWorkspaceWindows)g_pOnRenderWorkspaceWindows->m_original)(chr, pMonitor, pWorkspace, time);
-    renderWorkspaceWindows(pMonitor, pWorkspace, time);
-}
+// inline CFunctionHook* g_pOnRenderWorkspaceWindows = nullptr;
+// typedef void (*origRenderWorkspaceWindows)(CHyprRenderer *, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time);
+// void hook_onRenderWorkspaceWindows(void* thisptr,  PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//     //auto chr = (CHyprRenderer *) thisptr;
+//     //(*(origRenderWorkspaceWindows)g_pOnRenderWorkspaceWindows->m_original)(chr, pMonitor, pWorkspace, time);
+//     renderWorkspaceWindows(pMonitor, pWorkspace, time);
+// }
 
 inline CFunctionHook* g_pOnVectorToWindowUnified = nullptr;
 typedef PHLWINDOW (*origVectorToWindowUnified)(CCompositor *, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow);
@@ -7032,305 +7057,305 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
     ds->m_lastWindowBoxWithDecos = g_pDecorationPositioner->getBoxWithIncludedDecos(pWindow);
 }
 
-void drawShadowInternal(const CBox& box, int round, float roundingPower, int range, CHyprColor color, float a, bool sharp) {
-    static auto PSHADOWSHARP = sharp;
+// void drawShadowInternal(const CBox& box, int round, float roundingPower, int range, CHyprColor color, float a, bool sharp) {
+//     static auto PSHADOWSHARP = sharp;
+//
+//     if (box.w < 1 || box.h < 1)
+//         return;
+//
+//     Render::GL::g_pHyprOpenGL->blend(true);
+//
+//     color.a *= a;
+//
+//     if (PSHADOWSHARP)
+//         Render::GL::g_pHyprOpenGL->renderRect(box, color, {.round = round, .roundingPower = roundingPower});
+//     else
+//         Render::GL::g_pHyprOpenGL->renderRoundedShadow(box, round, roundingPower, range, color, 1.F);
+// }
 
-    if (box.w < 1 || box.h < 1)
-        return;
+// void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha) {
+//     for (const auto& cmd : commands)
+//         if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
+//             return;
+//
+//     AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass* pass) {
+//         static CFramebuffer matteFB;
+//         static CFramebuffer alphaFB;
+//
+//         const int w = info.w;
+//         const int h = info.h;
+//
+//         // TODO a matte should be passed in instead because if multiple people use this function the size is bound to be different
+//         matteFB.alloc(w, h, DRM_FORMAT_ABGR8888);
+//         alphaFB.alloc(w, h, DRM_FORMAT_ABGR8888);
+//
+//         // Save current FB
+//         auto* LASTFB = Render::GL::g_pHyprOpenGL->m_renderData.currentFB;
+//
+//         // 1. Render matte
+//         matteFB.bind();
+//         Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // transparent
+//
+//         for (const auto& cmd : commands) {
+//             CBox box = {
+//                 cmd.bounds.x - x,
+//                 cmd.bounds.y - y,
+//                 cmd.bounds.w,
+//                 cmd.bounds.h
+//             };
+//             if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
+//                 continue;
+//
+//             if (cmd.type == 1) {
+//                 CHyprOpenGLImpl::SBorderRenderData opts;
+//                 opts.round = cmd.roundness;
+//                 opts.borderSize = cmd.thickness;
+//                 // border
+//                 auto col = CHyprColor(1, 1, 1, 1);
+//                 GLint prevSrcRGB, prevDstRGB;
+//                 GLint prevSrcAlpha, prevDstAlpha;
+//                 GLboolean prevBlendEnabled;
+//                 if (cmd.invert) {
+//                     col = CHyprColor(0, 0, 0, 0);
+//
+//                     glGetBooleanv(GL_BLEND, &prevBlendEnabled);
+//
+//                     glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
+//                     glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
+//                     glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
+//                     glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
+//                     glBlendFunc(GL_ONE, GL_ZERO);
+//                 }
+//                 Render::GL::g_pHyprOpenGL->renderBorder(
+//                     box,
+//                     col,
+//                     opts
+//                 );
+//                 if (cmd.invert) {
+//                     glBlendFuncSeparate(
+//                         prevSrcRGB,
+//                         prevDstRGB,
+//                         prevSrcAlpha,
+//                         prevDstAlpha
+//                     );
+//                 }
+//             } else if (cmd.type == 2) {
+//                 CHyprOpenGLImpl::SRectRenderData opts;
+//                 opts.round = cmd.roundness;
+//                 // rect
+//                 auto col = CHyprColor(1, 1, 1, 1);
+//                 GLint prevSrcRGB, prevDstRGB;
+//                 GLint prevSrcAlpha, prevDstAlpha;
+//                 GLboolean prevBlendEnabled;
+//                 if (cmd.invert) {
+//                     col = CHyprColor(0, 0, 0, 0);
+//
+//                     glGetBooleanv(GL_BLEND, &prevBlendEnabled);
+//
+//                     glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
+//                     glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
+//                     glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
+//                     glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
+//                     glBlendFunc(GL_ONE, GL_ZERO);
+//                 }
+//                 Render::GL::g_pHyprOpenGL->renderRect(
+//                     box,
+//                     col,
+//                     opts
+//                 );
+//                 if (cmd.invert) {
+//                     glBlendFuncSeparate(
+//                         prevSrcRGB,
+//                         prevDstRGB,
+//                         prevSrcAlpha,
+//                         prevDstAlpha
+//                     );
+//                 }
+//             }
+//         }
+//
+//         alphaFB.bind();
+//
+//         CRegion texDamage{Render::GL::g_pHyprOpenGL->m_renderData.damage};
+//         CHyprOpenGLImpl::STextureRenderData data;
+//         data.damage = &texDamage;
+//
+//         SP<CTexture> tex;
+//         for (auto t : hyprtextures) {
+//             if (t->info.id == info.id) {
+//                 tex = t->texture;
+//                 break;
+//             }
+//         }
+//
+//         // 2. Render texture using matte
+//         CBox outbox = CBox(0, 0, w, h);
+//         Render::GL::g_pHyprOpenGL->renderTextureMatte(
+//             tex,
+//             outbox,
+//             matteFB
+//         );
+//
+//         // Restore previous FB
+//         LASTFB->bind();
+//
+//         outbox = CBox(x, y, w, h);
+//         data.a = alpha;
+//         Render::GL::g_pHyprOpenGL->renderTexture(
+//             alphaFB.getTexture(),
+//             outbox,
+//             data
+//         );
+//     });
+//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+//
+// }
 
-    g_pHyprOpenGL->blend(true);
+// void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, bool clip = false, CBox clipbox = CBox()) {
+//     RASSERT(Render::GL::g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
+//     RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
+//
+//     TRACY_GPU_ZONE("RenderTextureMatte");
+//
+//     if (Render::GL::g_pHyprOpenGL->m_renderData.damage.empty())
+//         return;
+//
+//     CBox newBox = box;
+//     Render::GL::g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
+//
+//     // get transform
+//     const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!Render::GL::g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
+//     Mat3x3     matrix    = Render::GL::g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
+//     Mat3x3     glMatrix  = Render::GL::g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
+//
+//     //auto shader = &g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE];
+//     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE]);
+//
+//     //g_pHyprOpenGL->useProgram(shader->program);
+//     shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
+//     shader->setUniformInt(SHADER_TEX, 0);
+//     shader->setUniformInt(SHADER_ALPHA_MATTE, 1);
+//
+//     glActiveTexture(GL_TEXTURE0);
+//     tex->bind();
+//
+//     glActiveTexture(GL_TEXTURE0 + 1);
+//     auto matteTex = matte.getTexture();
+//     matteTex->bind();
+//
+//     glBindVertexArray(shader->getUniformLocation(SHADER_SHADER_VAO));
+//
+//     if (clip) {
+//         Render::GL::g_pHyprOpenGL->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {
+//             auto rect = CBox(RECT.x1, RECT.y1, RECT.x2 - RECT.x1, RECT.y2 - RECT.y1).round();
+//             rect = rect.intersection(clipbox);
+//             Render::GL::g_pHyprOpenGL->scissor(rect);
+//             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+//         });
+//     } else {
+//         Render::GL::g_pHyprOpenGL->m_renderData.damage.forEachRect([](const auto& RECT) {
+//             Render::GL::g_pHyprOpenGL->scissor(&RECT);
+//             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+//         });
+//     }
+//
+//     Render::GL::g_pHyprOpenGL->scissor(nullptr);
+//     glBindVertexArray(0);
+//     tex->unbind();
+// }
 
-    color.a *= a;
-
-    if (PSHADOWSHARP)
-        g_pHyprOpenGL->renderRect(box, color, {.round = round, .roundingPower = roundingPower});
-    else
-        g_pHyprOpenGL->renderRoundedShadow(box, round, roundingPower, range, color, 1.F);
-}
-
-void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha) {
-    for (const auto& cmd : commands)
-        if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
-            return;
-
-    AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass* pass) {
-        static CFramebuffer matteFB;
-        static CFramebuffer alphaFB;
-
-        const int w = info.w;
-        const int h = info.h;
-
-        // TODO a matte should be passed in instead because if multiple people use this function the size is bound to be different
-        matteFB.alloc(w, h, DRM_FORMAT_ABGR8888);
-        alphaFB.alloc(w, h, DRM_FORMAT_ABGR8888);
-
-        // Save current FB
-        auto* LASTFB = g_pHyprOpenGL->m_renderData.currentFB;
-
-        // 1. Render matte
-        matteFB.bind();
-        g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // transparent
-
-        for (const auto& cmd : commands) {
-            CBox box = {
-                cmd.bounds.x - x,
-                cmd.bounds.y - y,
-                cmd.bounds.w,
-                cmd.bounds.h
-            };
-            if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
-                continue;
-
-            if (cmd.type == 1) {
-                CHyprOpenGLImpl::SBorderRenderData opts;
-                opts.round = cmd.roundness;
-                opts.borderSize = cmd.thickness;
-                // border
-                auto col = CHyprColor(1, 1, 1, 1);
-                GLint prevSrcRGB, prevDstRGB;
-                GLint prevSrcAlpha, prevDstAlpha;
-                GLboolean prevBlendEnabled;
-                if (cmd.invert) {
-                    col = CHyprColor(0, 0, 0, 0);
-
-                    glGetBooleanv(GL_BLEND, &prevBlendEnabled);
-
-                    glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
-                    glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
-                    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
-                    glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
-                    glBlendFunc(GL_ONE, GL_ZERO);
-                }
-                g_pHyprOpenGL->renderBorder(
-                    box,
-                    col,
-                    opts
-                );
-                if (cmd.invert) {
-                    glBlendFuncSeparate(
-                        prevSrcRGB,
-                        prevDstRGB,
-                        prevSrcAlpha,
-                        prevDstAlpha
-                    );
-                }
-            } else if (cmd.type == 2) {
-                CHyprOpenGLImpl::SRectRenderData opts;
-                opts.round = cmd.roundness;
-                // rect
-                auto col = CHyprColor(1, 1, 1, 1);
-                GLint prevSrcRGB, prevDstRGB;
-                GLint prevSrcAlpha, prevDstAlpha;
-                GLboolean prevBlendEnabled;
-                if (cmd.invert) {
-                    col = CHyprColor(0, 0, 0, 0);
-
-                    glGetBooleanv(GL_BLEND, &prevBlendEnabled);
-
-                    glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
-                    glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
-                    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
-                    glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
-                    glBlendFunc(GL_ONE, GL_ZERO);
-                }
-                g_pHyprOpenGL->renderRect(
-                    box,
-                    col,
-                    opts
-                );
-                if (cmd.invert) {
-                    glBlendFuncSeparate(
-                        prevSrcRGB,
-                        prevDstRGB,
-                        prevSrcAlpha,
-                        prevDstAlpha
-                    );
-                }
-            }
-        }
-
-        alphaFB.bind();
-
-        CRegion texDamage{g_pHyprOpenGL->m_renderData.damage};
-        CHyprOpenGLImpl::STextureRenderData data;
-        data.damage = &texDamage;
-
-        SP<CTexture> tex;
-        for (auto t : hyprtextures) {
-            if (t->info.id == info.id) {
-                tex = t->texture;
-                break;
-            }
-        }
-
-        // 2. Render texture using matte
-        CBox outbox = CBox(0, 0, w, h);
-        g_pHyprOpenGL->renderTextureMatte(
-            tex,
-            outbox,
-            matteFB
-        );
-
-        // Restore previous FB
-        LASTFB->bind();
-
-        outbox = CBox(x, y, w, h);
-        data.a = alpha;
-        g_pHyprOpenGL->renderTexture(
-            alphaFB.getTexture(),
-            outbox,
-            data
-        );
-    });
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    
-}
-
-void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, bool clip = false, CBox clipbox = CBox()) {
-    RASSERT(g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
-    RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
-
-    TRACY_GPU_ZONE("RenderTextureMatte");
-
-    if (g_pHyprOpenGL->m_renderData.damage.empty())
-        return;
-
-    CBox newBox = box;
-    g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
-
-    // get transform
-    const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
-    Mat3x3     matrix    = g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
-    Mat3x3     glMatrix  = g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
-
-    //auto shader = &g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE];
-    auto shader = g_pHyprOpenGL->useShader(g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE]);
-
-    //g_pHyprOpenGL->useProgram(shader->program);
-    shader->setUniformMatrix3fv(SHADER_PROJ, 1, GL_TRUE, glMatrix.getMatrix());
-    shader->setUniformInt(SHADER_TEX, 0);
-    shader->setUniformInt(SHADER_ALPHA_MATTE, 1);
-
-    glActiveTexture(GL_TEXTURE0);
-    tex->bind();
-
-    glActiveTexture(GL_TEXTURE0 + 1);
-    auto matteTex = matte.getTexture();
-    matteTex->bind();
-
-    glBindVertexArray(shader->getUniformLocation(SHADER_SHADER_VAO));
-
-    if (clip) {
-        g_pHyprOpenGL->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {
-            auto rect = CBox(RECT.x1, RECT.y1, RECT.x2 - RECT.x1, RECT.y2 - RECT.y1).round();
-            rect = rect.intersection(clipbox);
-            g_pHyprOpenGL->scissor(rect);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        });
-    } else {
-        g_pHyprOpenGL->m_renderData.damage.forEachRect([](const auto& RECT) {
-            g_pHyprOpenGL->scissor(&RECT);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        });
-    }
-
-    g_pHyprOpenGL->scissor(nullptr);
-    glBindVertexArray(0);
-    tex->unbind();
-}
-
-void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROUNDINGBASE, float ROUNDINGPOWER, CBox fullBox, int range, bool sharp) {
-    bool clip = hypriso->clip;
-    clip = false;
-    Bounds clipbox = hypriso->clipbox;
-    if (clip && !tocbox(clipbox).overlaps(fullBox)) {
-        return; 
-    }
-    AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp, clip, clipbox](AnyPass* pass) {
-        set_rounding(0);
-        CHyprColor m_realShadowColor = CHyprColor(b.r, b.g, b.b, b.a);
-        if (g_pCompositor->m_windows.empty())
-            return;
-        PHLWINDOW fake_window = g_pCompositor->m_windows[0]; // there is a faulty assert that exists that would otherwise be hit without a fake window target
-        static auto PSHADOWSIZE = range;
-        const auto ROUNDING = ROUNDINGBASE;
-        auto allBox = fullBox;
-        allBox.expand(PSHADOWSIZE);
-        allBox.round();
-        
-        if (fullBox.width < 1 || fullBox.height < 1)
-            return; // don't draw invisible shadows
-
-        g_pHyprOpenGL->scissor(nullptr);
-        auto before_window = g_pHyprOpenGL->m_renderData.currentWindow;
-        g_pHyprOpenGL->m_renderData.currentWindow = fake_window;
-
-        // we'll take the liberty of using this as it should not be used rn
-        CFramebuffer& alphaFB = g_pHyprOpenGL->m_renderData.pCurrentMonData->mirrorFB;
-        CFramebuffer& alphaSwapFB = g_pHyprOpenGL->m_renderData.pCurrentMonData->mirrorSwapFB;
-        auto* LASTFB = g_pHyprOpenGL->m_renderData.currentFB;
-
-        CRegion saveDamage = g_pHyprOpenGL->m_renderData.damage;
-
-        g_pHyprOpenGL->m_renderData.damage = allBox;
-        g_pHyprOpenGL->m_renderData.damage.subtract(fullBox.copy().expand(-ROUNDING)).intersect(saveDamage);
-        g_pHyprOpenGL->m_renderData.renderModif.applyToRegion(g_pHyprOpenGL->m_renderData.damage);
-
-        alphaFB.bind();
-
-        // build the matte
-        // 10-bit formats have dogshit alpha channels, so we have to use the matte to its fullest.
-        // first, clear region of interest with black (fully transparent)
-        g_pHyprOpenGL->renderRect(allBox, CHyprColor(0, 0, 0, 1), {.round = 0});
-
-        // render white shadow with the alpha of the shadow color (otherwise we clear with alpha later and shit it to 2 bit)
-        drawShadowInternal(allBox, ROUNDING, ROUNDINGPOWER, PSHADOWSIZE, CHyprColor(1, 1, 1, m_realShadowColor.a), a, sharp);
-
-        // render black window box ("clip")
-        g_pHyprOpenGL->renderRect(fullBox, CHyprColor(0, 0, 0, 1.0), {.round = (int) (ROUNDING), .roundingPower = ROUNDINGPOWER});
-
-        alphaSwapFB.bind();
-
-        // alpha swap just has the shadow color. It will be the "texture" to render.
-        g_pHyprOpenGL->renderRect(allBox, m_realShadowColor.stripA(), {.round = 0});
-
-        LASTFB->bind();
-
-        CBox monbox = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
-
-        g_pHyprOpenGL->pushMonitorTransformEnabled(true);
-        g_pHyprOpenGL->setRenderModifEnabled(false);
-        
-        renderTextureMatte(alphaSwapFB.getTexture(), monbox, alphaFB, clip, tocbox(clipbox));
-
-        g_pHyprOpenGL->setRenderModifEnabled(true);
-        g_pHyprOpenGL->popMonitorTransformEnabled();
-
-        g_pHyprOpenGL->m_renderData.damage = saveDamage;
-
-        g_pHyprOpenGL->m_renderData.currentWindow = before_window;
-    });
-    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-}
+// void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROUNDINGBASE, float ROUNDINGPOWER, CBox fullBox, int range, bool sharp) {
+//     bool clip = hypriso->clip;
+//     clip = false;
+//     Bounds clipbox = hypriso->clipbox;
+//     if (clip && !tocbox(clipbox).overlaps(fullBox)) {
+//         return;
+//     }
+//     AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp, clip, clipbox](AnyPass* pass) {
+//         set_rounding(0);
+//         CHyprColor m_realShadowColor = CHyprColor(b.r, b.g, b.b, b.a);
+//         if (g_pCompositor->m_windows.empty())
+//             return;
+//         PHLWINDOW fake_window = g_pCompositor->m_windows[0]; // there is a faulty assert that exists that would otherwise be hit without a fake window target
+//         static auto PSHADOWSIZE = range;
+//         const auto ROUNDING = ROUNDINGBASE;
+//         auto allBox = fullBox;
+//         allBox.expand(PSHADOWSIZE);
+//         allBox.round();
+//
+//         if (fullBox.width < 1 || fullBox.height < 1)
+//             return; // don't draw invisible shadows
+//
+//         Render::GL::g_pHyprOpenGL->scissor(nullptr);
+//         auto before_window = Render::GL::g_pHyprOpenGL->m_renderData.currentWindow;
+//         Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = fake_window;
+//
+//         // we'll take the liberty of using this as it should not be used rn
+//         CFramebuffer& alphaFB = Render::GL::g_pHyprOpenGL->m_renderData.pCurrentMonData->mirrorFB;
+//         CFramebuffer& alphaSwapFB = Render::GL::g_pHyprOpenGL->m_renderData.pCurrentMonData->mirrorSwapFB;
+//         auto* LASTFB = Render::GL::g_pHyprOpenGL->m_renderData.currentFB;
+//
+//         CRegion saveDamage = Render::GL::g_pHyprOpenGL->m_renderData.damage;
+//
+//         Render::GL::g_pHyprOpenGL->m_renderData.damage = allBox;
+//         Render::GL::g_pHyprOpenGL->m_renderData.damage.subtract(fullBox.copy().expand(-ROUNDING)).intersect(saveDamage);
+//         Render::GL::g_pHyprOpenGL->m_renderData.renderModif.applyToRegion(Render::GL::g_pHyprOpenGL->m_renderData.damage);
+//
+//         alphaFB.bind();
+//
+//         // build the matte
+//         // 10-bit formats have dogshit alpha channels, so we have to use the matte to its fullest.
+//         // first, clear region of interest with black (fully transparent)
+//         Render::GL::g_pHyprOpenGL->renderRect(allBox, CHyprColor(0, 0, 0, 1), {.round = 0});
+//
+//         // render white shadow with the alpha of the shadow color (otherwise we clear with alpha later and shit it to 2 bit)
+//         drawShadowInternal(allBox, ROUNDING, ROUNDINGPOWER, PSHADOWSIZE, CHyprColor(1, 1, 1, m_realShadowColor.a), a, sharp);
+//
+//         // render black window box ("clip")
+//         Render::GL::g_pHyprOpenGL->renderRect(fullBox, CHyprColor(0, 0, 0, 1.0), {.round = (int) (ROUNDING), .roundingPower = ROUNDINGPOWER});
+//
+//         alphaSwapFB.bind();
+//
+//         // alpha swap just has the shadow color. It will be the "texture" to render.
+//         Render::GL::g_pHyprOpenGL->renderRect(allBox, m_realShadowColor.stripA(), {.round = 0});
+//
+//         LASTFB->bind();
+//
+//         CBox monbox = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+//
+//         Render::GL::g_pHyprOpenGL->pushMonitorTransformEnabled(true);
+//         Render::GL::g_pHyprOpenGL->setRenderModifEnabled(false);
+//
+//         renderTextureMatte(alphaSwapFB.getTexture(), monbox, alphaFB, clip, tocbox(clipbox));
+//
+//         Render::GL::g_pHyprOpenGL->setRenderModifEnabled(true);
+//         Render::GL::g_pHyprOpenGL->popMonitorTransformEnabled();
+//
+//         Render::GL::g_pHyprOpenGL->m_renderData.damage = saveDamage;
+//
+//         Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = before_window;
+//     });
+//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+// }
 
 void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, float ROUNDINGPOWER, Bounds fullB, float size) {
-    PHLMONITOR pMonitor;
-    for (auto hm : hyprmonitors) {
-        if (hm->id == mon) {
-            pMonitor = hm->m;
-        }
-    }
-    if (!pMonitor)
-        return;
-    CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
-    static auto PSHADOWSIZE = CConfigValue<Hyprlang::INT>("decoration:shadow:range");
-    static auto PSHADOWSCALE = CConfigValue<Hyprlang::FLOAT>("decoration:shadow:scale");
-
-    if (size != 0) {
-        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), size, false);
-    } else {
-        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), *PSHADOWSIZE, false);
-    }
+    // PHLMONITOR pMonitor;
+    // for (auto hm : hyprmonitors) {
+    //     if (hm->id == mon) {
+    //         pMonitor = hm->m;
+    //     }
+    // }
+    // if (!pMonitor)
+    //     return;
+    // CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
+    // static auto PSHADOWSIZE = CConfigValue<Hyprlang::INT>("decoration:shadow:range");
+    // static auto PSHADOWSCALE = CConfigValue<Hyprlang::FLOAT>("decoration:shadow:scale");
+    //
+    // if (size != 0) {
+    //     drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), size, false);
+    // } else {
+    //     drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), *PSHADOWSIZE, false);
+    // }
 }
 
 
@@ -7565,11 +7590,11 @@ bool HyprIso::is_floating(int cid) {
 }
 
 void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func) {
-    HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {
-        SDispatchResult result;
-        result.success = func(in);
-        return result;
-    });
+    // HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {
+    //     SDispatchResult result;
+    //     result.success = func(in);
+    //     return result;
+    // });
 }
 
 
@@ -8130,7 +8155,7 @@ Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
 {
     Hyprlang::CParseResult result;
 
-    CConstVarList data(RHS);
+    Hyprutils::String::CConstVarList data(RHS);
     size_t fingerCount = 0;
     eTrackpadGestureDirection direction = TRACKPAD_GESTURE_DIR_NONE;
 
@@ -8205,271 +8230,271 @@ void add_mylar_gesture() {
 }
 
 void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
-    auto p = g_pHyprRenderer.get();
-    static std::chrono::high_resolution_clock::time_point renderStart        = std::chrono::high_resolution_clock::now();
-    static std::chrono::high_resolution_clock::time_point renderStartOverlay = std::chrono::high_resolution_clock::now();
-    static std::chrono::high_resolution_clock::time_point endRenderOverlay   = std::chrono::high_resolution_clock::now();
-
-    static auto                                           PDEBUGOVERLAY       = CConfigValue<Hyprlang::INT>("debug:overlay");
-    static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
-    static auto                                           PDAMAGEBLINK        = CConfigValue<Hyprlang::INT>("debug:damage_blink");
-    static auto                                           PSOLDAMAGE          = CConfigValue<Hyprlang::INT>("debug:render_solitary_wo_damage");
-    static auto                                           PVFR                = CConfigValue<Hyprlang::INT>("misc:vfr");
-
-    static int                                            damageBlinkCleanup = 0; // because double-buffered
-
-    const float                                           ZOOMFACTOR = pMonitor->m_cursorZoom->value();
-
-    if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
-        Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
-        return;
-    }
-
-    if (!*PDAMAGEBLINK)
-        damageBlinkCleanup = 0;
-
-    if (*PDEBUGOVERLAY == 1) {
-        renderStart = std::chrono::high_resolution_clock::now();
-        g_pDebugOverlay->frameData(pMonitor);
-    }
-
-    if (!g_pCompositor->m_sessionActive)
-        return;
-
-    if (g_pAnimationManager)
-        g_pAnimationManager->frameTick();
-
-    if (pMonitor->m_id == p->m_mostHzMonitor->m_id ||
-        *PVFR == 1) { // unfortunately with VFR we don't have the guarantee mostHz is going to be updated all the time, so we have to ignore that
-
-        g_pConfigManager->dispatchExecOnce(); // We exec-once when at least one monitor starts refreshing, meaning stuff has init'd
-
-        if (g_pConfigManager->m_wantsMonitorReload)
-            g_pConfigManager->performMonitorReload();
-    }
-
-    if (pMonitor->m_scheduledRecalc) {
-        pMonitor->m_scheduledRecalc = false;
-        if (pMonitor->m_activeWorkspace) // might be missing (mirror)
-            pMonitor->m_activeWorkspace->m_space->recalculate();
-    }
-
-    if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
-        return;
-
-    // tearing and DS first
-    bool shouldTear = pMonitor->updateTearing();
-
-    if (pMonitor->attemptDirectScanout()) {
-        pMonitor->m_directScanoutIsActive = true;
-        return;
-    } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive) {
-        Log::logger->log(Log::DEBUG, "Left a direct scanout.");
-        pMonitor->m_lastScanout.reset();
-        pMonitor->m_directScanoutIsActive = false;
-
-        // reset DRM format, but only if needed since it might modeset
-        if (pMonitor->m_output->state->state().drmFormat != pMonitor->m_prevDrmFormat)
-            pMonitor->m_output->state->setFormat(pMonitor->m_prevDrmFormat);
-
-        pMonitor->m_drmFormat = pMonitor->m_prevDrmFormat;
-    }
-
-    Event::bus()->m_events.render.pre.emit(pMonitor);
-
-    const auto NOW = Time::steadyNow();
-
-    // check the damage
-    bool hasChanged = pMonitor->m_output->needsFrame || pMonitor->m_damage.hasChanged();
-
-    if (!hasChanged && *PDAMAGETRACKINGMODE != DAMAGE_TRACKING_NONE && pMonitor->m_forceFullFrames == 0 && damageBlinkCleanup == 0)
-        return;
-
-    if (*PDAMAGETRACKINGMODE == -1) {
-        Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
-        return;
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
-
-    pMonitor->m_renderingActive = true;
-
-    // we need to cleanup fading out when rendering the appropriate context
-    g_pCompositor->cleanupFadingOut(pMonitor->m_id);
-
-    // TODO: this is getting called with extents being 0,0,0,0 should it be?
-    // potentially can save on resources.
-
-    TRACY_GPU_ZONE("Render");
-
-    static bool zoomLock = false;
-    if (zoomLock && ZOOMFACTOR == 1.f) {
-        g_pPointerManager->unlockSoftwareAll();
-        zoomLock = false;
-    } else if (!zoomLock && ZOOMFACTOR != 1.f) {
-        g_pPointerManager->lockSoftwareAll();
-        zoomLock = true;
-    }
-
-    if (pMonitor == g_pCompositor->getMonitorFromCursor())
-        g_pHyprOpenGL->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
-    else
-        g_pHyprOpenGL->m_renderData.mouseZoomFactor = 1.f;
-
-    if (pMonitor->m_zoomAnimProgress->value() != 1) {
-        g_pHyprOpenGL->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
-        g_pHyprOpenGL->m_renderData.mouseZoomUseMouse  = false;
-        g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
-    }
-
-    CRegion damage, finalDamage;
-    if (!p->beginRender(pMonitor, damage, RENDER_MODE_NORMAL)) {
-        Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
-        return;
-    }
-
-    // if we have no tracking or full tracking, invalidate the entire monitor
-    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
-        damage = {0, 0, sc<int>(pMonitor->m_transformedSize.x) * 10.0, sc<int>(pMonitor->m_transformedSize.y) * 10.0};
-
-    finalDamage = damage;
-
-    // update damage in renderdata as we modified it
-    g_pHyprOpenGL->setDamage(damage, finalDamage);
-
-    if (pMonitor->m_forceFullFrames > 0) {
-        pMonitor->m_forceFullFrames -= 1;
-        if (pMonitor->m_forceFullFrames > 10)
-            pMonitor->m_forceFullFrames = 0;
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_BEGIN);
-
-    bool renderCursor = true;
-
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
-        p->renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, RENDER_PASS_MAIN /* solitary = no popups */);
-    else if (!finalDamage.empty()) {
-        if (pMonitor->isMirror()) {
-            g_pHyprOpenGL->blend(false);
-            g_pHyprOpenGL->renderMirrored();
-            g_pHyprOpenGL->blend(true);
-            Event::bus()->m_events.render.stage.emit(RENDER_POST_MIRROR);
-            renderCursor = false;
-        } else {
-            CBox renderBox = {0, 0, sc<double>(pMonitor->m_pixelSize.x), sc<double>(pMonitor->m_pixelSize.y)};
-            p->renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
-
-            p->renderLockscreen(pMonitor, NOW, renderBox);
-
-            if (pMonitor == Desktop::focusState()->monitor()) {
-                g_pHyprNotificationOverlay->draw(pMonitor);
-                g_pHyprError->draw();
-            }
-
-            // for drawing the debug overlay
-            if (pMonitor == g_pCompositor->m_monitors.front() && *PDEBUGOVERLAY == 1) {
-                renderStartOverlay = std::chrono::high_resolution_clock::now();
-                g_pDebugOverlay->draw();
-                endRenderOverlay = std::chrono::high_resolution_clock::now();
-            }
-
-            if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
-                CRectPassElement::SRectData data;
-                data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
-                data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
-                p->m_renderPass.add(makeUnique<CRectPassElement>(data));
-                damageBlinkCleanup = 1;
-            } else if (*PDAMAGEBLINK) {
-                damageBlinkCleanup++;
-                if (damageBlinkCleanup > 3)
-                    damageBlinkCleanup = 0;
-            }
-        }
-    } else if (!pMonitor->isMirror()) {
-        p->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
-        if (pMonitor->m_activeSpecialWorkspace)
-            p->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
-    }
-
-    renderCursor = renderCursor && p->shouldRenderCursor();
-    
-    Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
-
-    if (renderCursor) {
-        TRACY_GPU_ZONE("RenderCursor");
-        g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, g_pHyprOpenGL->m_renderData.damage);
-    }
-
-    Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
-
-    if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
-        // render the DPMS black if we are animating
-        CRectPassElement::SRectData data;
-        data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
-        data.color = Colors::BLACK.modifyA(pMonitor->m_dpmsBlackOpacity->value());
-        p->m_renderPass.add(makeUnique<CRectPassElement>(data));
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
-
-    p->endRender();
-
-    TRACY_GPU_COLLECT;
-
-    CRegion    frameDamage{g_pHyprOpenGL->m_renderData.damage};
-
-    const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
-    frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
-
-    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR)
-        frameDamage.add(0, 0, sc<int>(pMonitor->m_transformedSize.x), sc<int>(pMonitor->m_transformedSize.y));
-
-    if (*PDAMAGEBLINK)
-        frameDamage.add(damage);
-
-    if (!pMonitor->m_mirrors.empty())
-        p->damageMirrorsWith(pMonitor, frameDamage);
-
-    pMonitor->m_renderingActive = false;
-
-    Event::bus()->m_events.render.stage.emit(RENDER_POST);
-
-    pMonitor->m_output->state->addDamage(frameDamage);
-    pMonitor->m_output->state->setPresentationMode(shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE :
-                                                                Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC);
-
-    if (commit)
-        p->commitPendingAndDoExplicitSync(pMonitor);
-
-    if (shouldTear)
-        pMonitor->m_tearingState.busy = true;
-
-    if (*PDAMAGEBLINK || *PVFR == 0 || pMonitor->m_pendingFrame)
-        g_pCompositor->scheduleFrameForMonitor(pMonitor, Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
-
-    pMonitor->m_pendingFrame = false;
-
-    if (*PDEBUGOVERLAY == 1) {
-        const float durationUs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - renderStart).count() / 1000.f;
-        g_pDebugOverlay->renderData(pMonitor, durationUs);
-
-        if (pMonitor == g_pCompositor->m_monitors.front()) {
-            const float noOverlayUs = durationUs - std::chrono::duration_cast<std::chrono::nanoseconds>(endRenderOverlay - renderStartOverlay).count() / 1000.f;
-            g_pDebugOverlay->renderDataNoOverlay(pMonitor, noOverlayUs);
-        } else
-            g_pDebugOverlay->renderDataNoOverlay(pMonitor, durationUs);
-    }
+    // auto p = g_pHyprRenderer.get();
+    // static std::chrono::high_resolution_clock::time_point renderStart        = std::chrono::high_resolution_clock::now();
+    // static std::chrono::high_resolution_clock::time_point renderStartOverlay = std::chrono::high_resolution_clock::now();
+    // static std::chrono::high_resolution_clock::time_point endRenderOverlay   = std::chrono::high_resolution_clock::now();
+    //
+    // static auto                                           PDEBUGOVERLAY       = CConfigValue<Hyprlang::INT>("debug:overlay");
+    // static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
+    // static auto                                           PDAMAGEBLINK        = CConfigValue<Hyprlang::INT>("debug:damage_blink");
+    // static auto                                           PSOLDAMAGE          = CConfigValue<Hyprlang::INT>("debug:render_solitary_wo_damage");
+    // static auto                                           PVFR                = CConfigValue<Hyprlang::INT>("misc:vfr");
+    //
+    // static int                                            damageBlinkCleanup = 0; // because double-buffered
+    //
+    // const float                                           ZOOMFACTOR = pMonitor->m_cursorZoom->value();
+    //
+    // if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
+    //     Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
+    //     return;
+    // }
+    //
+    // if (!*PDAMAGEBLINK)
+    //     damageBlinkCleanup = 0;
+    //
+    // if (*PDEBUGOVERLAY == 1) {
+    //     renderStart = std::chrono::high_resolution_clock::now();
+    //     g_pDebugOverlay->frameData(pMonitor);
+    // }
+    //
+    // if (!g_pCompositor->m_sessionActive)
+    //     return;
+    //
+    // if (g_pAnimationManager)
+    //     g_pAnimationManager->frameTick();
+    //
+    // if (pMonitor->m_id == p->m_mostHzMonitor->m_id ||
+    //     *PVFR == 1) { // unfortunately with VFR we don't have the guarantee mostHz is going to be updated all the time, so we have to ignore that
+    //
+    //     g_pConfigManager->dispatchExecOnce(); // We exec-once when at least one monitor starts refreshing, meaning stuff has init'd
+    //
+    //     if (g_pConfigManager->m_wantsMonitorReload)
+    //         g_pConfigManager->performMonitorReload();
+    // }
+    //
+    // if (pMonitor->m_scheduledRecalc) {
+    //     pMonitor->m_scheduledRecalc = false;
+    //     if (pMonitor->m_activeWorkspace) // might be missing (mirror)
+    //         pMonitor->m_activeWorkspace->m_space->recalculate();
+    // }
+    //
+    // if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
+    //     return;
+    //
+    // // tearing and DS first
+    // bool shouldTear = pMonitor->updateTearing();
+    //
+    // if (pMonitor->attemptDirectScanout()) {
+    //     pMonitor->m_directScanoutIsActive = true;
+    //     return;
+    // } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive) {
+    //     Log::logger->log(Log::DEBUG, "Left a direct scanout.");
+    //     pMonitor->m_lastScanout.reset();
+    //     pMonitor->m_directScanoutIsActive = false;
+    //
+    //     // reset DRM format, but only if needed since it might modeset
+    //     if (pMonitor->m_output->state->state().drmFormat != pMonitor->m_prevDrmFormat)
+    //         pMonitor->m_output->state->setFormat(pMonitor->m_prevDrmFormat);
+    //
+    //     pMonitor->m_drmFormat = pMonitor->m_prevDrmFormat;
+    // }
+    //
+    // Event::bus()->m_events.render.pre.emit(pMonitor);
+    //
+    // const auto NOW = Time::steadyNow();
+    //
+    // // check the damage
+    // bool hasChanged = pMonitor->m_output->needsFrame || pMonitor->m_damage.hasChanged();
+    //
+    // if (!hasChanged && *PDAMAGETRACKINGMODE != DAMAGE_TRACKING_NONE && pMonitor->m_forceFullFrames == 0 && damageBlinkCleanup == 0)
+    //     return;
+    //
+    // if (*PDAMAGETRACKINGMODE == -1) {
+    //     Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
+    //     return;
+    // }
+    //
+    // Event::bus()->m_events.render.stage.emit(RENDER_PRE);
+    //
+    // pMonitor->m_renderingActive = true;
+    //
+    // // we need to cleanup fading out when rendering the appropriate context
+    // g_pCompositor->cleanupFadingOut(pMonitor->m_id);
+    //
+    // // TODO: this is getting called with extents being 0,0,0,0 should it be?
+    // // potentially can save on resources.
+    //
+    // TRACY_GPU_ZONE("Render");
+    //
+    // static bool zoomLock = false;
+    // if (zoomLock && ZOOMFACTOR == 1.f) {
+    //     g_pPointerManager->unlockSoftwareAll();
+    //     zoomLock = false;
+    // } else if (!zoomLock && ZOOMFACTOR != 1.f) {
+    //     g_pPointerManager->lockSoftwareAll();
+    //     zoomLock = true;
+    // }
+    //
+    // if (pMonitor == g_pCompositor->getMonitorFromCursor())
+    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
+    // else
+    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomFactor = 1.f;
+    //
+    // if (pMonitor->m_zoomAnimProgress->value() != 1) {
+    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
+    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomUseMouse  = false;
+    //     Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+    // }
+    //
+    // CRegion damage, finalDamage;
+    // if (!p->beginRender(pMonitor, damage, RENDER_MODE_NORMAL)) {
+    //     Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
+    //     return;
+    // }
+    //
+    // // if we have no tracking or full tracking, invalidate the entire monitor
+    // if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
+    //     damage = {0, 0, sc<int>(pMonitor->m_transformedSize.x) * 10.0, sc<int>(pMonitor->m_transformedSize.y) * 10.0};
+    //
+    // finalDamage = damage;
+    //
+    // // update damage in renderdata as we modified it
+    // Render::GL::g_pHyprOpenGL->setDamage(damage, finalDamage);
+    //
+    // if (pMonitor->m_forceFullFrames > 0) {
+    //     pMonitor->m_forceFullFrames -= 1;
+    //     if (pMonitor->m_forceFullFrames > 10)
+    //         pMonitor->m_forceFullFrames = 0;
+    // }
+    //
+    // Event::bus()->m_events.render.stage.emit(RENDER_BEGIN);
+    //
+    // bool renderCursor = true;
+    //
+    // if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+    //     p->renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, RENDER_PASS_MAIN /* solitary = no popups */);
+    // else if (!finalDamage.empty()) {
+    //     if (pMonitor->isMirror()) {
+    //         Render::GL::g_pHyprOpenGL->blend(false);
+    //         Render::GL::g_pHyprOpenGL->renderMirrored();
+    //         Render::GL::g_pHyprOpenGL->blend(true);
+    //         Event::bus()->m_events.render.stage.emit(RENDER_POST_MIRROR);
+    //         renderCursor = false;
+    //     } else {
+    //         CBox renderBox = {0, 0, sc<double>(pMonitor->m_pixelSize.x), sc<double>(pMonitor->m_pixelSize.y)};
+    //         p->renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
+    //
+    //         p->renderLockscreen(pMonitor, NOW, renderBox);
+    //
+    //         if (pMonitor == Desktop::focusState()->monitor()) {
+    //             g_pHyprNotificationOverlay->draw(pMonitor);
+    //             g_pHyprError->draw();
+    //         }
+    //
+    //         // for drawing the debug overlay
+    //         if (pMonitor == g_pCompositor->m_monitors.front() && *PDEBUGOVERLAY == 1) {
+    //             renderStartOverlay = std::chrono::high_resolution_clock::now();
+    //             g_pDebugOverlay->draw();
+    //             endRenderOverlay = std::chrono::high_resolution_clock::now();
+    //         }
+    //
+    //         if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
+    //             CRectPassElement::SRectData data;
+    //             data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+    //             data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
+    //             p->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    //             damageBlinkCleanup = 1;
+    //         } else if (*PDAMAGEBLINK) {
+    //             damageBlinkCleanup++;
+    //             if (damageBlinkCleanup > 3)
+    //                 damageBlinkCleanup = 0;
+    //         }
+    //     }
+    // } else if (!pMonitor->isMirror()) {
+    //     p->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
+    //     if (pMonitor->m_activeSpecialWorkspace)
+    //         p->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
+    // }
+    //
+    // renderCursor = renderCursor && p->shouldRenderCursor();
+    //
+    // Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
+    //
+    // if (renderCursor) {
+    //     TRACY_GPU_ZONE("RenderCursor");
+    //     g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, Render::GL::g_pHyprOpenGL->m_renderData.damage);
+    // }
+    //
+    // Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
+    //
+    // if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
+    //     // render the DPMS black if we are animating
+    //     CRectPassElement::SRectData data;
+    //     data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+    //     data.color = Colors::BLACK.modifyA(pMonitor->m_dpmsBlackOpacity->value());
+    //     p->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    // }
+    //
+    // Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
+    //
+    // p->endRender();
+    //
+    // TRACY_GPU_COLLECT;
+    //
+    // CRegion    frameDamage{Render::GL::g_pHyprOpenGL->m_renderData.damage};
+    //
+    // const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
+    // frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
+    //
+    // if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR)
+    //     frameDamage.add(0, 0, sc<int>(pMonitor->m_transformedSize.x), sc<int>(pMonitor->m_transformedSize.y));
+    //
+    // if (*PDAMAGEBLINK)
+    //     frameDamage.add(damage);
+    //
+    // if (!pMonitor->m_mirrors.empty())
+    //     p->damageMirrorsWith(pMonitor, frameDamage);
+    //
+    // pMonitor->m_renderingActive = false;
+    //
+    // Event::bus()->m_events.render.stage.emit(RENDER_POST);
+    //
+    // pMonitor->m_output->state->addDamage(frameDamage);
+    // pMonitor->m_output->state->setPresentationMode(shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE :
+    //                                                             Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC);
+    //
+    // if (commit)
+    //     p->commitPendingAndDoExplicitSync(pMonitor);
+    //
+    // if (shouldTear)
+    //     pMonitor->m_tearingState.busy = true;
+    //
+    // if (*PDAMAGEBLINK || *PVFR == 0 || pMonitor->m_pendingFrame)
+    //     g_pCompositor->scheduleFrameForMonitor(pMonitor, Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
+    //
+    // pMonitor->m_pendingFrame = false;
+    //
+    // if (*PDEBUGOVERLAY == 1) {
+    //     const float durationUs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - renderStart).count() / 1000.f;
+    //     g_pDebugOverlay->renderData(pMonitor, durationUs);
+    //
+    //     if (pMonitor == g_pCompositor->m_monitors.front()) {
+    //         const float noOverlayUs = durationUs - std::chrono::duration_cast<std::chrono::nanoseconds>(endRenderOverlay - renderStartOverlay).count() / 1000.f;
+    //         g_pDebugOverlay->renderDataNoOverlay(pMonitor, noOverlayUs);
+    //     } else
+    //         g_pDebugOverlay->renderDataNoOverlay(pMonitor, durationUs);
+    // }
 }
 
 
 void HyprIso::screenshot_monitor(int mon) {
     for (auto h : hyprmonitors) {
         if (h->id == mon) {
-            if (!h->monfb)
-                h->monfb = new CFramebuffer;
+            // if (!h->monfb)
+                // h->monfb = new CFramebuffer;
             PHLWORKSPACEREF startedOn = h->m->m_activeWorkspace;
-            screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
+            // screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
             h->mon_size.y = h->m->m_pixelSize.x;
             h->mon_size.x = h->m->m_pixelSize.y;
         }
@@ -8477,388 +8502,388 @@ void HyprIso::screenshot_monitor(int mon) {
 }
 
 void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_path) {
-    for (auto hm : hyprwindows) {
-        if (!hm || hm->id != cid)
-            continue;
-
-        if (!hm->deco_fb || !hm->deco_fb->isAllocated()) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", cid);
-            return;
-        }
-
-        const int w = static_cast<int>(hm->deco_fb->m_size.x);
-        const int h = static_cast<int>(hm->deco_fb->m_size.y);
-        if (w <= 0 || h <= 0) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", cid, w, h);
-            return;
-        }
-
-        g_pHyprRenderer->makeEGLCurrent();
-
-        GLint previousReadFB = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->deco_fb->getFBID());
-
-        const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
-        auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
-        glPixelStorei(GL_PACK_ALIGNMENT, 4);
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
-
-        const GLenum glErr = glGetError();
-        if (glErr != GL_NO_ERROR) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", cid, static_cast<int>(glErr));
-            return;
-        }
-
-        std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, cid, outputPath = std::move(output_path)]() mutable {
-            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
-            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
-            auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
-            std::memset(cairoPixels.get(), 0, cairoPixelsSize);
-
-            // Convert + flip vertically in ONE pass.
-            for (int y = 0; y < h; ++y) {
-                auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
-                const int srcY = y;
-
-                for (int x = 0; x < w; ++x) {
-                    const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
-
-                    const uint8_t r = rgbaPixels[src + 0];
-                    const uint8_t g = rgbaPixels[src + 1];
-                    const uint8_t b = rgbaPixels[src + 2];
-                    const uint8_t a = rgbaPixels[src + 3];
-
-                    // Premultiply alpha for Cairo ARGB32.
-                    const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
-                    const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
-                    const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
-
-                    dst[x] = (static_cast<uint32_t>(a) << 24) |
-                             (pr << 16) |
-                             (pg << 8)  |
-                             pb;
-                }
-            }
-
-            cairo_surface_t* surface = cairo_image_surface_create_for_data(
-                cairoPixels.get(),
-                CAIRO_FORMAT_ARGB32,
-                w,
-                h,
-                cairoStride
-            );
-
-            if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", cid);
-                cairo_surface_destroy(surface);
-                return;
-            }
-
-            std::filesystem::path outPath(outputPath);
-            std::error_code ec;
-
-            if (outPath.has_parent_path())
-                std::filesystem::create_directories(outPath.parent_path(), ec);
-
-            if (ec) {
-                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
-                cairo_surface_destroy(surface);
-                return;
-            }
-
-            const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
-            cairo_surface_destroy(surface);
-
-            if (writeStatus != CAIRO_STATUS_SUCCESS) {
-                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, cid);
-                return;
-            }
-        });
-
-        t.detach();
-
-        return;
-    }
-
-    Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
+    // for (auto hm : hyprwindows) {
+    //     if (!hm || hm->id != cid)
+    //         continue;
+    //
+    //     if (!hm->deco_fb || !hm->deco_fb->isAllocated()) {
+    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", cid);
+    //         return;
+    //     }
+    //
+    //     const int w = static_cast<int>(hm->deco_fb->m_size.x);
+    //     const int h = static_cast<int>(hm->deco_fb->m_size.y);
+    //     if (w <= 0 || h <= 0) {
+    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", cid, w, h);
+    //         return;
+    //     }
+    //
+    //     g_pHyprRenderer->makeEGLCurrent();
+    //
+    //     GLint previousReadFB = 0;
+    //     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->deco_fb->getFBID());
+    //
+    //     const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
+    //     auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
+    //     glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    //     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
+    //     glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    //
+    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+    //
+    //     const GLenum glErr = glGetError();
+    //     if (glErr != GL_NO_ERROR) {
+    //         Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", cid, static_cast<int>(glErr));
+    //         return;
+    //     }
+    //
+    //     std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, cid, outputPath = std::move(output_path)]() mutable {
+    //         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
+    //         const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
+    //         auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
+    //         std::memset(cairoPixels.get(), 0, cairoPixelsSize);
+    //
+    //         // Convert + flip vertically in ONE pass.
+    //         for (int y = 0; y < h; ++y) {
+    //             auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
+    //             const int srcY = y;
+    //
+    //             for (int x = 0; x < w; ++x) {
+    //                 const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
+    //
+    //                 const uint8_t r = rgbaPixels[src + 0];
+    //                 const uint8_t g = rgbaPixels[src + 1];
+    //                 const uint8_t b = rgbaPixels[src + 2];
+    //                 const uint8_t a = rgbaPixels[src + 3];
+    //
+    //                 // Premultiply alpha for Cairo ARGB32.
+    //                 const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
+    //                 const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
+    //                 const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
+    //
+    //                 dst[x] = (static_cast<uint32_t>(a) << 24) |
+    //                          (pr << 16) |
+    //                          (pg << 8)  |
+    //                          pb;
+    //             }
+    //         }
+    //
+    //         cairo_surface_t* surface = cairo_image_surface_create_for_data(
+    //             cairoPixels.get(),
+    //             CAIRO_FORMAT_ARGB32,
+    //             w,
+    //             h,
+    //             cairoStride
+    //         );
+    //
+    //         if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", cid);
+    //             cairo_surface_destroy(surface);
+    //             return;
+    //         }
+    //
+    //         std::filesystem::path outPath(outputPath);
+    //         std::error_code ec;
+    //
+    //         if (outPath.has_parent_path())
+    //             std::filesystem::create_directories(outPath.parent_path(), ec);
+    //
+    //         if (ec) {
+    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
+    //             cairo_surface_destroy(surface);
+    //             return;
+    //         }
+    //
+    //         const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
+    //         cairo_surface_destroy(surface);
+    //
+    //         if (writeStatus != CAIRO_STATUS_SUCCESS) {
+    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, cid);
+    //             return;
+    //         }
+    //     });
+    //
+    //     t.detach();
+    //
+    //     return;
+    // }
+    //
+    // Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
 }
 
 void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds region) {
-    for (auto hm : hyprmonitors) {
-        if (!hm || hm->id != mon)
-            continue;
-
-        if (!hm->monfb || !hm->monfb->isAllocated()) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", mon);
-            return;
-        }
-
-        const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
-        const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
-        if (framebufferW <= 0 || framebufferH <= 0) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
-            return;
-        }
-
-        int readX = 0;
-        int readY = 0;
-        int readW = framebufferW;
-        int readH = framebufferH;
-
-        if (!(region.w == 0 && region.h == 0)) {
-            if (region.w <= 0 || region.h <= 0) {
-                Log::logger->log(
-                    Log::ERR,
-                    "save_monitor_to_png: monitor {} crop region has invalid size {}x{}",
-                    mon, region.w, region.h
-                );
-                return;
-            }
-
-            const int regionLeft   = static_cast<int>(std::floor(region.x));
-            const int regionTop    = static_cast<int>(std::floor(region.y));
-            const int regionRight  = static_cast<int>(std::ceil(region.x + region.w));
-            const int regionBottom = static_cast<int>(std::ceil(region.y + region.h));
-
-            readX = std::max(0, regionLeft);
-            readY = std::max(0, regionTop);
-            const int clampedRight  = std::min(framebufferW, regionRight);
-            const int clampedBottom = std::min(framebufferH, regionBottom);
-
-            readW = clampedRight - readX;
-            readH = clampedBottom - readY;
-
-            if (readW <= 0 || readH <= 0) {
-                Log::logger->log(
-                    Log::ERR,
-                    "save_monitor_to_png: monitor {} crop region ({}, {}, {}, {}) is outside framebuffer {}x{}",
-                    mon, region.x, region.y, region.w, region.h, framebufferW, framebufferH
-                );
-                return;
-            }
-        }
-
-        g_pHyprRenderer->makeEGLCurrent();
-
-        GLint previousReadFB = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
-
-        const size_t rgbaPixelsSize = static_cast<size_t>(readW) * readH * 4;
-        auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(readX, readY, readW, readH, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
-        glPixelStorei(GL_PACK_ALIGNMENT, 4);
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
-
-        const GLenum glErr = glGetError();
-        if (glErr != GL_NO_ERROR) {
-            Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
-            return;
-        }
-
-        std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, outputPath = std::move(output_path)]() mutable {
-            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
-            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
-            auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
-            std::memset(cairoPixels.get(), 0, cairoPixelsSize);
-
-            // Convert + flip vertically in ONE pass.
-            for (int y = 0; y < readH; ++y) {
-                auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
-                const int srcY = y;
-
-                for (int x = 0; x < readW; ++x) {
-                    const size_t src = (static_cast<size_t>(srcY) * readW + x) * 4;
-
-                    const uint8_t r = rgbaPixels[src + 0];
-                    const uint8_t g = rgbaPixels[src + 1];
-                    const uint8_t b = rgbaPixels[src + 2];
-                    const uint8_t a = rgbaPixels[src + 3];
-
-                    // Premultiply alpha for Cairo ARGB32.
-                    const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
-                    const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
-                    const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
-
-                    dst[x] = (static_cast<uint32_t>(a) << 24) |
-                             (pr << 16) |
-                             (pg << 8)  |
-                             pb;
-                }
-            }
-
-            cairo_surface_t* surface = cairo_image_surface_create_for_data(
-                cairoPixels.get(),
-                CAIRO_FORMAT_ARGB32,
-                readW,
-                readH,
-                cairoStride
-            );
-
-            if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", mon);
-                cairo_surface_destroy(surface);
-                return;
-            }
-
-            std::filesystem::path outPath(outputPath);
-            std::error_code ec;
-
-            if (outPath.has_parent_path())
-                std::filesystem::create_directories(outPath.parent_path(), ec);
-
-            if (ec) {
-                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
-                cairo_surface_destroy(surface);
-                return;
-            }
-
-            const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
-            cairo_surface_destroy(surface);
-
-            if (writeStatus != CAIRO_STATUS_SUCCESS) {
-                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, mon);
-                return;
-            }
-        });
-
-        t.detach();
-
-        return;
-    }
-
-    Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", mon);
+    // for (auto hm : hyprmonitors) {
+    //     if (!hm || hm->id != mon)
+    //         continue;
+    //
+    //     if (!hm->monfb || !hm->monfb->isAllocated()) {
+    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", mon);
+    //         return;
+    //     }
+    //
+    //     const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
+    //     const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
+    //     if (framebufferW <= 0 || framebufferH <= 0) {
+    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
+    //         return;
+    //     }
+    //
+    //     int readX = 0;
+    //     int readY = 0;
+    //     int readW = framebufferW;
+    //     int readH = framebufferH;
+    //
+    //     if (!(region.w == 0 && region.h == 0)) {
+    //         if (region.w <= 0 || region.h <= 0) {
+    //             Log::logger->log(
+    //                 Log::ERR,
+    //                 "save_monitor_to_png: monitor {} crop region has invalid size {}x{}",
+    //                 mon, region.w, region.h
+    //             );
+    //             return;
+    //         }
+    //
+    //         const int regionLeft   = static_cast<int>(std::floor(region.x));
+    //         const int regionTop    = static_cast<int>(std::floor(region.y));
+    //         const int regionRight  = static_cast<int>(std::ceil(region.x + region.w));
+    //         const int regionBottom = static_cast<int>(std::ceil(region.y + region.h));
+    //
+    //         readX = std::max(0, regionLeft);
+    //         readY = std::max(0, regionTop);
+    //         const int clampedRight  = std::min(framebufferW, regionRight);
+    //         const int clampedBottom = std::min(framebufferH, regionBottom);
+    //
+    //         readW = clampedRight - readX;
+    //         readH = clampedBottom - readY;
+    //
+    //         if (readW <= 0 || readH <= 0) {
+    //             Log::logger->log(
+    //                 Log::ERR,
+    //                 "save_monitor_to_png: monitor {} crop region ({}, {}, {}, {}) is outside framebuffer {}x{}",
+    //                 mon, region.x, region.y, region.w, region.h, framebufferW, framebufferH
+    //             );
+    //             return;
+    //         }
+    //     }
+    //
+    //     g_pHyprRenderer->makeEGLCurrent();
+    //
+    //     GLint previousReadFB = 0;
+    //     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
+    //
+    //     const size_t rgbaPixelsSize = static_cast<size_t>(readW) * readH * 4;
+    //     auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
+    //     glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    //     glReadPixels(readX, readY, readW, readH, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
+    //     glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    //
+    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+    //
+    //     const GLenum glErr = glGetError();
+    //     if (glErr != GL_NO_ERROR) {
+    //         Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
+    //         return;
+    //     }
+    //
+    //     std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, outputPath = std::move(output_path)]() mutable {
+    //         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
+    //         const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
+    //         auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
+    //         std::memset(cairoPixels.get(), 0, cairoPixelsSize);
+    //
+    //         // Convert + flip vertically in ONE pass.
+    //         for (int y = 0; y < readH; ++y) {
+    //             auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
+    //             const int srcY = y;
+    //
+    //             for (int x = 0; x < readW; ++x) {
+    //                 const size_t src = (static_cast<size_t>(srcY) * readW + x) * 4;
+    //
+    //                 const uint8_t r = rgbaPixels[src + 0];
+    //                 const uint8_t g = rgbaPixels[src + 1];
+    //                 const uint8_t b = rgbaPixels[src + 2];
+    //                 const uint8_t a = rgbaPixels[src + 3];
+    //
+    //                 // Premultiply alpha for Cairo ARGB32.
+    //                 const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
+    //                 const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
+    //                 const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
+    //
+    //                 dst[x] = (static_cast<uint32_t>(a) << 24) |
+    //                          (pr << 16) |
+    //                          (pg << 8)  |
+    //                          pb;
+    //             }
+    //         }
+    //
+    //         cairo_surface_t* surface = cairo_image_surface_create_for_data(
+    //             cairoPixels.get(),
+    //             CAIRO_FORMAT_ARGB32,
+    //             readW,
+    //             readH,
+    //             cairoStride
+    //         );
+    //
+    //         if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", mon);
+    //             cairo_surface_destroy(surface);
+    //             return;
+    //         }
+    //
+    //         std::filesystem::path outPath(outputPath);
+    //         std::error_code ec;
+    //
+    //         if (outPath.has_parent_path())
+    //             std::filesystem::create_directories(outPath.parent_path(), ec);
+    //
+    //         if (ec) {
+    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
+    //             cairo_surface_destroy(surface);
+    //             return;
+    //         }
+    //
+    //         const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
+    //         cairo_surface_destroy(surface);
+    //
+    //         if (writeStatus != CAIRO_STATUS_SUCCESS) {
+    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, mon);
+    //             return;
+    //         }
+    //     });
+    //
+    //     t.detach();
+    //
+    //     return;
+    // }
+    //
+    // Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", mon);
 }
 
 RGBA HyprIso::colorpick_monitor(int mon, Bounds mouse) {
     RGBA color = {0, 0, 0, 1};
-
-    for (auto hm : hyprmonitors) {
-        if (!hm || hm->id != mon)
-            continue;
-
-        if (!hm->monfb || !hm->monfb->isAllocated()) {
-            Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} has no framebuffer", mon);
-            return color;
-        }
-
-        const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
-        const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
-        if (framebufferW <= 0 || framebufferH <= 0) {
-            Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
-            return color;
-        }
-
-        const Bounds monitorBounds = bounds_monitor(mon);
-        const float  sFactor       = scale(mon);
-        int          readX         = static_cast<int>(std::round((mouse.x - monitorBounds.x) * sFactor));
-        int          readY         = static_cast<int>(std::round((mouse.y - monitorBounds.y) * sFactor));
-
-        readX = std::clamp(readX, 0, framebufferW - 1);
-        readY = std::clamp(readY, 0, framebufferH - 1);
-
-        g_pHyprRenderer->makeEGLCurrent();
-
-        GLint previousReadFB = 0;
-        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
-
-        uint8_t pixel[4] = {0, 0, 0, 255};
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(readX, readY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-        glPixelStorei(GL_PACK_ALIGNMENT, 4);
-
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
-
-        const GLenum glErr = glGetError();
-        if (glErr != GL_NO_ERROR) {
-            Log::logger->log(Log::ERR, "colorpick_monitor: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
-            return color;
-        }
-
-        color.r = pixel[0] / 255.0;
-        color.g = pixel[1] / 255.0;
-        color.b = pixel[2] / 255.0;
-        color.a = pixel[3] / 255.0;
-        return color;
-    }
-
-    Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} not found", mon);
+    //
+    // for (auto hm : hyprmonitors) {
+    //     if (!hm || hm->id != mon)
+    //         continue;
+    //
+    //     if (!hm->monfb || !hm->monfb->isAllocated()) {
+    //         Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} has no framebuffer", mon);
+    //         return color;
+    //     }
+    //
+    //     const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
+    //     const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
+    //     if (framebufferW <= 0 || framebufferH <= 0) {
+    //         Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
+    //         return color;
+    //     }
+    //
+    //     const Bounds monitorBounds = bounds_monitor(mon);
+    //     const float  sFactor       = scale(mon);
+    //     int          readX         = static_cast<int>(std::round((mouse.x - monitorBounds.x) * sFactor));
+    //     int          readY         = static_cast<int>(std::round((mouse.y - monitorBounds.y) * sFactor));
+    //
+    //     readX = std::clamp(readX, 0, framebufferW - 1);
+    //     readY = std::clamp(readY, 0, framebufferH - 1);
+    //
+    //     g_pHyprRenderer->makeEGLCurrent();
+    //
+    //     GLint previousReadFB = 0;
+    //     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
+    //
+    //     uint8_t pixel[4] = {0, 0, 0, 255};
+    //     glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    //     glReadPixels(readX, readY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    //     glPixelStorei(GL_PACK_ALIGNMENT, 4);
+    //
+    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+    //
+    //     const GLenum glErr = glGetError();
+    //     if (glErr != GL_NO_ERROR) {
+    //         Log::logger->log(Log::ERR, "colorpick_monitor: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
+    //         return color;
+    //     }
+    //
+    //     color.r = pixel[0] / 255.0;
+    //     color.g = pixel[1] / 255.0;
+    //     color.b = pixel[2] / 255.0;
+    //     color.a = pixel[3] / 255.0;
+    //     return color;
+    // }
+    //
+    // Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} not found", mon);
     return color;
 }
 
 void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
-    for (auto hm : hyprmonitors) {
-        if (hm->id != mon)
-            continue;
-        if (!hm->monfb)
-            continue;
-        if (!hm->monfb->getTexture())
-            return;
-        bool clip = hypriso->clip;
-        Bounds clipbox = hypriso->clipbox;
-        if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
-            return; 
-        }
-        AnyPass::AnyData anydata([hm, mon, b, clip, clipbox, uvBounds](AnyPass* pass) {
-            auto roundingPower = 2.0f;
-            auto cornermask = 0;
-            if (!hm->monfb)
-                return;
-            auto tex = hm->monfb->getTexture();
-            if (!tex)
-                return;
-            auto box = tocbox(b);
-
-            CHyprOpenGLImpl::STextureRenderData data;
-            data.allowCustomUV = true;
-
-            data.round = 0.0;
-            data.roundingPower = roundingPower;
-            data.a = 1.0;
-            data.noAA = true;
-
-            bool useCustomUV = uvBounds.x != 0 || uvBounds.y != 0 || uvBounds.w != 0 || uvBounds.h != 0;
-            if (useCustomUV) {
-                const double framebufferW = hm->monfb->m_size.x;
-                const double framebufferH = hm->monfb->m_size.y;
-                if (framebufferW > 0.0 && framebufferH > 0.0) {
-                    const double uvLeft   = std::clamp(uvBounds.x / framebufferW, 0.0, 1.0);
-                    const double uvTop    = std::clamp(uvBounds.y / framebufferH, 0.0, 1.0);
-                    const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
-                    const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
-
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
-                } else {
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                    g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
-                }
-            } else {
-                g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
-            }
-            set_rounding(cornermask);
-            if (clip)
-                g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-            tex->bind();
-            tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            g_pHyprOpenGL->renderTexture(tex, box, data);
-            set_rounding(0);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-            g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-            if (clip)
-                g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
-        });
-        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    }
+    // for (auto hm : hyprmonitors) {
+    //     if (hm->id != mon)
+    //         continue;
+    //     if (!hm->monfb)
+    //         continue;
+    //     if (!hm->monfb->getTexture())
+    //         return;
+    //     bool clip = hypriso->clip;
+    //     Bounds clipbox = hypriso->clipbox;
+    //     if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+    //         return;
+    //     }
+    //     AnyPass::AnyData anydata([hm, mon, b, clip, clipbox, uvBounds](AnyPass* pass) {
+    //         auto roundingPower = 2.0f;
+    //         auto cornermask = 0;
+    //         if (!hm->monfb)
+    //             return;
+    //         auto tex = hm->monfb->getTexture();
+    //         if (!tex)
+    //             return;
+    //         auto box = tocbox(b);
+    //
+    //         CHyprOpenGLImpl::STextureRenderData data;
+    //         data.allowCustomUV = true;
+    //
+    //         data.round = 0.0;
+    //         data.roundingPower = roundingPower;
+    //         data.a = 1.0;
+    //         data.noAA = true;
+    //
+    //         bool useCustomUV = uvBounds.x != 0 || uvBounds.y != 0 || uvBounds.w != 0 || uvBounds.h != 0;
+    //         if (useCustomUV) {
+    //             const double framebufferW = hm->monfb->m_size.x;
+    //             const double framebufferH = hm->monfb->m_size.y;
+    //             if (framebufferW > 0.0 && framebufferH > 0.0) {
+    //                 const double uvLeft   = std::clamp(uvBounds.x / framebufferW, 0.0, 1.0);
+    //                 const double uvTop    = std::clamp(uvBounds.y / framebufferH, 0.0, 1.0);
+    //                 const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
+    //                 const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
+    //
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
+    //             } else {
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+    //             }
+    //         } else {
+    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+    //         }
+    //         set_rounding(cornermask);
+    //         if (clip)
+    //             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+    //         tex->bind();
+    //         tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    //         tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    //         Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+    //         set_rounding(0);
+    //         Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //         Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //         if (clip)
+    //             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+    //     });
+    //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    // }
 }
 
 int HyprIso::window_from_mouse() {
@@ -8924,8 +8949,8 @@ std::vector<MylarMonitorRule> HyprIso::all_monitors() {
         MylarMonitorRule rule;
         rule.from = m->m_name;
         rule.to = m->m_name;
-        rule.disabled = m->m_activeMonitorRule.disabled;
-        rule.mirrors = !m->m_activeMonitorRule.mirrorOf.empty();
+        // rule.disabled = m->m_activeMonitorRule.disabled;
+        // rule.mirrors = !m->m_activeMonitorRule.mirrorOf.empty();
         monitors.push_back(rule);
     }
     return monitors;
