@@ -378,7 +378,7 @@ struct Texture {
 
 static std::vector<Texture *> hyprtextures;
 
-class AnyPass : public IPassElement {
+class AnyPass final : public IPassElement {
 public:
     struct AnyData {
         std::function<void(AnyPass*)> draw = nullptr;
@@ -409,7 +409,10 @@ public:
     //virtual std::optional<CBox> boundingBox() {
         //return {};
     //}
-    
+    ePassElementType type() override {
+        return EK_CUSTOM;
+    }
+
     virtual const char* passName() {
         return "CAnyPassElement";
     }
@@ -2628,152 +2631,11 @@ std::string conf_path() {
 //     }
 // }
 
-static SP<CShader> test_shader;
-
-static const char* RECT_VERT_SHADER = R"GLSL(
-#version 330 core
-
-layout (location = 0) in vec2 aPos;
-
-uniform mat3 uProj;
-
-out vec2 vPos;
-
-void main() {
-    vPos = aPos;
-    gl_Position = vec4(uProj * vec3(aPos, 1.0), 1.0);
-}
-)GLSL";
-
-static const char* RECT_FRAG_SHADER = R"GLSL(
-#version 330 core
-
-out vec4 FragColor;
-uniform vec4 uColor;
-uniform float uEdge;
-uniform float uFill;
-
-in vec2 vPos;
-
-void main() {
-    vec2 uv = vPos * 2.0 - 1.0;
-
-    float thickness = uFill;
-    thickness += uEdge;
-    
-    float distance = 1.0 - length(uv);
-    vec4 col = vec4(smoothstep(0.0, uEdge, distance));
-    col *= vec4(smoothstep(thickness, thickness - uEdge, distance));
-
-    FragColor = col * uColor;
-}
-)GLSL";
-
-static void create_custom_shaders() {
-    test_shader = makeShared<CShader>();
-
-    GLuint prog = test_shader->createProgram(
-        RECT_VERT_SHADER,
-        RECT_FRAG_SHADER,
-        true,
-        true
-    );
-
-    test_shader->m_program = prog;
-}
-
-static GLuint quadVAO = 0;
-static GLuint quadVBO = 0;
-
-static void init_rect_quad() {
-    if (quadVAO)
-        return;
-
-    float vertices[] = {
-        // aPos (0..1)
-        0.f, 0.f,
-        1.f, 0.f,
-        1.f, 1.f,
-
-        0.f, 0.f,
-        1.f, 1.f,
-        0.f, 1.f
-    };
-
-    glGenVertexArrays(1, &quadVAO);
-    glGenBuffers(1, &quadVBO);
-
-    glBindVertexArray(quadVAO);
-    glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(
-        0, 2, GL_FLOAT, GL_FALSE,
-        2 * sizeof(float),
-        (void*)0
-    );
-
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-}
-
 void draw_colored_circ(float x, float y, float r, RGBA col, float edge, float fill) {
-    // if (!test_shader) {
-    //     auto rendering_monitor = current_rendering_monitor();
-    //     auto dpi = scale(rendering_monitor);
-    //     r *= dpi;
-    //     rect({x - r * .5, y - r *.5, r, r}, col, 0, r * .43);
-    //     return;
-    // }
-    // AnyPass::AnyData anydata([x, y, r, col, edge, fill](AnyPass* pass) {
-    //     if (!test_shader || !test_shader->program())
-    //         return;
-    //
-    //     init_rect_quad();
-    //
-    //     glUseProgram(test_shader->program());
-    //
-    //     float W = g_pCompositor->m_monitors[0]->m_pixelSize.x;
-    //     float H = g_pCompositor->m_monitors[0]->m_pixelSize.y;
-    //
-    //     auto newBox = CBox(x - r, y - r, r * 2, r * 2);
-    //     Render::GL::g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
-    //     {
-    //         // get transform
-    //         const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!Render::GL::g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
-    //         Mat3x3     matrix    = Render::GL::g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
-    //         Mat3x3     glMatrix  = Render::GL::g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
-    //         glUniformMatrix3fv(
-    //             glGetUniformLocation(test_shader->program(), "uProj"),
-    //             1,
-    //             GL_TRUE,
-    //             glMatrix.getMatrix().data()
-    //         );
-    //     }
-    //
-    //     glUniform4f(
-    //         glGetUniformLocation(test_shader->program(), "uColor"),
-    //         col.r, col.g, col.b, col.a
-    //     );
-    //
-    //     glUniform1f(
-    //         glGetUniformLocation(test_shader->program(), "uEdge"),
-    //         edge
-    //     );
-    //
-    //     glUniform1f(
-    //         glGetUniformLocation(test_shader->program(), "uFill"),
-    //         fill
-    //     );
-    //
-    //     glBindVertexArray(quadVAO);
-    //     glDrawArrays(GL_TRIANGLES, 0, 6);
-    //     glBindVertexArray(0);
-    //
-    //     glUseProgram(0);
-    // });
-    // g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    auto rendering_monitor = current_rendering_monitor();
+    auto dpi = scale(rendering_monitor);
+    r *= dpi;
+    rect({x - r * .5, y - r *.5, r, r}, col, 0, r * .43);
 }
 
 static void hook_use_shader() {
@@ -3194,14 +3056,14 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
 //         rectdata.roundingPower = roundingPower;
 //
 //         if (clip)
-//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
 //
 //         // TODO: who is responsible for cleaning up this damage?
 //         set_rounding(cornermask); // only top side
 //         Render::GL::g_pHyprOpenGL->renderRect(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
 //         set_rounding(0);
 //         if (clip)
-//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+//             g_pHyprRenderer->m_renderData.clipBox = CBox();
 //     });
 //     anydata.box = tocbox(box);
 //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
@@ -3242,13 +3104,13 @@ void border(Bounds box, RGBA color, float size, int cornermask, float round, flo
 //         rectdata.roundingPower = roundingPower;
 //
 //         if (clip)
-//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
 //
 //         set_rounding(cornermask); // only top side
 //         Render::GL::g_pHyprOpenGL->renderBorder(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
 //         set_rounding(0);
 //         if (clip)
-//             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+//             g_pHyprRenderer->m_renderData.clipBox = CBox();
 //     });
 //     anydata.box = tocbox(box);
 //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
@@ -3265,10 +3127,10 @@ void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float s
 // #endif
 //
 //         if (Desktop::focusState()->window().get()) {
-//             auto current = Render::GL::g_pHyprOpenGL->m_renderData.currentWindow;
-//             Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = Desktop::focusState()->window();
+//             auto current = g_pHyprRenderer->m_renderData.currentWindow;
+//             g_pHyprRenderer->m_renderData.currentWindow = Desktop::focusState()->window();
 //             Render::GL::g_pHyprOpenGL->renderRoundedShadow(tocbox(box), rounding, roundingPower, size, CHyprColor(color.r, color.g, color.b, color.a), 1.0);
-//             Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = current;
+//             g_pHyprRenderer->m_renderData.currentWindow = current;
 //         }
 //     });
 //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
@@ -4165,7 +4027,7 @@ void free_text_texture(int id) {
     for (int i = 0; i < hyprtextures.size(); i++) {
         auto h = hyprtextures[i];
         if (h->info.id == id) {
-            // h->texture.reset();
+            h->texture.reset();
             printf("free: %d\n", h->info.id);
             hyprtextures.erase(hyprtextures.begin() + i);
             delete h;
@@ -4367,19 +4229,19 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
     //log("gen text texture");
     //notify("gen text");
 
-    // auto tex = Render::GL::g_pHyprOpenGL->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
-    // if (tex.get()) {
-    //     auto t = new Texture;
-    //     t->texture = tex;
-    //     TextureInfo info;renderText
-    //     info.id = unique_id++;
-    //     info.w = t->texture->m_size.x;
-    //     info.h = t->texture->m_size.y;
-    //     t->info = info;
-    //     hyprtextures.push_back(t);
-    //     printf("generate text: %d\n", info.id);
-    //     return t->info;
-    // }
+    auto tex = g_pHyprRenderer->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
+    if (tex.get()) {
+        auto t = new Texture;
+        t->texture = tex;
+        TextureInfo info;
+        info.id = unique_id++;
+        info.w = t->texture->m_size.x;
+        info.h = t->texture->m_size.y;
+        t->info = info;
+        hyprtextures.push_back(t);
+        printf("generate text: %d\n", info.id);
+        return t->info;
+    }
     return {};
 }
 
@@ -4387,39 +4249,55 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // bool clip = hypriso->clip;
-    // CBox clipbox = tocbox(hypriso->clipbox);
-    // CBox cb = tocbox(b);
-    // if (clip_w != 0.0) {
-    //     cb.w = clip_w;
-    //     if (!clip) {
-    //         clip = true;
-    //         clipbox = cb;
-    //     }
-    //     //clipbox.w = (cb.x - clipbox.x) + clip_w;
-    // }
-    // if (clip && !clipbox.overlaps(cb)) {
-    //     return;
-    // }
-    //
-    // for (auto t : hyprtextures) {
-    //    if (t->info.id == info.id && t->texture) {
-    //         auto tex = t->texture;
-    //         AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
-    //             //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
-    //             CHyprOpenGLImpl::STextureRenderData data;
-    //             data.a = a;
-    //             if (clip)
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = cb.intersection(clipbox);
-    //                 //g_pHyprOpenGL->m_renderData.clipBox = clipbox.intersection(cb);
-    //             Render::GL::g_pHyprOpenGL->renderTexture(tex, tocbox(b), data);
-    //             if (clip)
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
-    //         });
-    //         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    //         break;
-    //    }
-    // }
+	CTexPassElement::SRenderData texData;
+	bool found = false;
+    for (auto t : hyprtextures) {
+       if (t->info.id == info.id && t->texture) {
+            auto tex = t->texture;
+        	texData.tex = tex;
+        	found = true;
+       }
+    }
+    if (!found)
+        return;
+    texData.a = a;
+	texData.box = tocbox(b);
+	g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(texData));
+/*
+    bool clip = hypriso->clip;
+    CBox clipbox = tocbox(hypriso->clipbox);
+    CBox cb = tocbox(b);
+    if (clip_w != 0.0) {
+        cb.w = clip_w;
+        if (!clip) {
+            clip = true;
+            clipbox = cb;
+        }
+        //clipbox.w = (cb.x - clipbox.x) + clip_w;
+    }
+    if (clip && !clipbox.overlaps(cb)) {
+        return;
+    }
+
+    for (auto t : hyprtextures) {
+       if (t->info.id == info.id && t->texture) {
+            auto tex = t->texture;
+            AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
+                //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
+                Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+                data.a = a;
+                if (clip)
+                    g_pHyprRenderer->m_renderData.clipBox = cb.intersection(clipbox);
+                    //g_pHyprOpenGL->m_renderData.clipBox = clipbox.intersection(cb);
+                Render::GL::g_pHyprOpenGL->renderTexture(tex, tocbox(b), data);
+                if (clip)
+                    g_pHyprRenderer->m_renderData.clipBox = CBox();
+            });
+            g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+            break;
+       }
+    }
+*/
 }
 
 void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
@@ -4428,7 +4306,7 @@ void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
 #endif
     for (auto t : hyprtextures) {
        if (t->info.id == info.id) {
-           // draw_texture(info, {(float) x, (float) y, t->texture->m_size.x, t->texture->m_size.y}, a, clip_w);
+           draw_texture(info, {(float) x, (float) y, t->texture->m_size.x, t->texture->m_size.y}, a, clip_w);
            return;
        }
     }
@@ -4845,11 +4723,11 @@ Timer* later_immediate(const std::function<void(Timer*)>& fn) {
 //     g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, buffer);
 //     g_pHyprRenderer->m_bRenderingSnapshot = true;
 //     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-//     Render::GL::g_pHyprOpenGL->m_renderData.pMonitor = m;
+//     g_pHyprRenderer->m_renderData.pMonitor = m;
 //     (*(tRenderMonitor)pRenderMonitor)(g_pHyprRenderer.get(), m, false);
-//     Render::GL::g_pHyprOpenGL->m_renderData.pMonitor  = m;
-//     Render::GL::g_pHyprOpenGL->m_renderData.outFB     = buffer;
-//     Render::GL::g_pHyprOpenGL->m_renderData.currentFB = buffer;
+//     g_pHyprRenderer->m_renderData.pMonitor  = m;
+//     g_pHyprRenderer->m_renderData.outFB     = buffer;
+//     g_pHyprRenderer->m_renderData.currentFB = buffer;
 //     g_pHyprRenderer->endRender();
 //     g_pHyprRenderer->m_bRenderingSnapshot = false;
 // }
@@ -4977,7 +4855,7 @@ HyprWindow *get_window(PHLWINDOW w) {
 //     } else
 //         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
 //
-//     Render::GL::g_pHyprOpenGL->m_renderData.blockScreenShader = true;
+//     g_pHyprRenderer->m_renderData.blockScreenShader = true;
 //     g_pHyprRenderer->endRender();
 //
 //     pMonitor->m_activeSpecialWorkspace = openSpecial;
@@ -5097,14 +4975,14 @@ HyprWindow *get_window(PHLWINDOW w) {
 //     renderdata.pWindow = pWindow;
 //
 //     // for plugins
-//     Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = pWindow;
+//     g_pHyprRenderer->m_renderData.currentWindow = pWindow;
 //
 //     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOW);
 //
 //     const auto fullAlpha = renderdata.alpha * renderdata.fadeAlpha;
 //
 //     if (*PDIMAROUND && pWindow->m_ruleApplicator->dimAround().valueOrDefault() && !g_pHyprRenderer->m_bRenderingSnapshot && mode != RENDER_PASS_POPUP) {
-//         CBox                        monbox = {0, 0, Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.x, Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transformedSize.y};
+//         CBox                        monbox = {0, 0, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.x, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.y};
 //         CRectPassElement::SRectData data;
 //         data.color = CHyprColor(0, 0, 0, *PDIMAROUND * fullAlpha);
 //         data.box   = monbox;
@@ -5198,7 +5076,7 @@ HyprWindow *get_window(PHLWINDOW w) {
 //         }
 //
 //         if (TRANSFORMERSPRESENT) {
-//             CFramebuffer* last = Render::GL::g_pHyprOpenGL->m_renderData.currentFB;
+//             CFramebuffer* last = g_pHyprRenderer->m_renderData.currentFB;
 //             for (auto const& t : pWindow->m_transformers) {
 //                 last = t->transform(last);
 //             }
@@ -5208,7 +5086,7 @@ HyprWindow *get_window(PHLWINDOW w) {
 //         }
 //     }
 //
-//     Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+//     g_pHyprRenderer->m_renderData.clipBox = CBox();
 //
 //     if (mode == RENDER_PASS_ALL || mode == RENDER_PASS_POPUP) {
 //         if (!pWindow->m_isX11) {
@@ -5285,7 +5163,7 @@ HyprWindow *get_window(PHLWINDOW w) {
 //
 //     Event::bus()->m_events.render.stage.emit(RENDER_POST_WINDOW);
 //
-//     Render::GL::g_pHyprOpenGL->m_renderData.currentWindow.reset();
+//     g_pHyprRenderer->m_renderData.currentWindow.reset();
 // }
 
 // void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w) {
@@ -5453,28 +5331,28 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
     //             data.a = alpha;
     //             data.noAA = true;
     //             data.roundingPower = roundingPower;
-    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+    //             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
     //                 std::min(1.0, 1.0),
     //                 std::min(1.0, 1.0)
     //             );
     //             set_rounding(cornermask);
     //             if (clip)
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+    //                 g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
     //
-    //             auto before = Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor;
-    //             Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+    //             auto before = g_pHyprRenderer->m_renderData.useNearestNeighbor;
+    //             g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
     //             tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
     //
     //             Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //             Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = before;
+    //             g_pHyprRenderer->m_renderData.useNearestNeighbor = before;
     //
     //             if (clip)
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = CBox();
+    //                 g_pHyprRenderer->m_renderData.clipBox = CBox();
     //             set_rounding(0);
     //
-    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
     //         });
     //         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     //     }
@@ -5520,20 +5398,20 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
 //             data.roundingPower = roundingPower;
 //             data.a = alpha;
 //
-//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+//             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+//             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
 //                 std::min(1.0, 1.0),
 //                 std::min(1.0, 1.0)
 //             );
 //             set_rounding(cornermask);
 //             if (clip)
-//                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+//                 g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
 //             Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
 //             set_rounding(0);
-//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-//             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+//             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+//             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
 //             if (clip)
-//                 Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+//                 g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
 //         });
 //         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 //     }
@@ -5635,24 +5513,24 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
 //                     data.round = rounding;
 //                     data.roundingPower = roundingPower;
 //                     data.a = alpha;
-//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+//                     g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+//                     g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
 //                         std::min(hw->w_size.w / hw->fb->m_size.x, 1.0),
 //                         std::min(hw->w_size.h / hw->fb->m_size.y, 1.0)
 //                     );
 //                     if (clip)
-//                         Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
-//                     Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+//                         g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
+//                     g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
 //                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 //
 //                     set_rounding(cornermask);
 //                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
 //                     set_rounding(0);
 //
-//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-//                     Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+//                     g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+//                     g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
 //                     if (clip)
-//                         Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+//                         g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
 //                 });
 //                 g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 //             }
@@ -5675,16 +5553,16 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
     //                 data.allowCustomUV = true;
     //                 data.round = rounding;
     //                 data.roundingPower = roundingPower;
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
     //                     std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
     //                     std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
     //                 );
     //                 set_rounding(cornermask);
     //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
     //                 set_rounding(0);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
     //             });
     //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     //         }
@@ -5734,8 +5612,8 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
     //                 }
     //                 data.roundingPower = 2.0;
     //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
     //             });
     //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     //
@@ -5768,8 +5646,8 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
     //                 set_rounding(cornermask);
     //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
     //                 set_rounding(0);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
     //             });
     //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     //         }
@@ -7113,7 +6991,7 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 //         alphaFB.alloc(w, h, DRM_FORMAT_ABGR8888);
 //
 //         // Save current FB
-//         auto* LASTFB = Render::GL::g_pHyprOpenGL->m_renderData.currentFB;
+//         auto* LASTFB = g_pHyprRenderer->m_renderData.currentFB;
 //
 //         // 1. Render matte
 //         matteFB.bind();
@@ -7199,7 +7077,7 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 //
 //         alphaFB.bind();
 //
-//         CRegion texDamage{Render::GL::g_pHyprOpenGL->m_renderData.damage};
+//         CRegion texDamage{g_pHyprRenderer->m_renderData.damage};
 //         CHyprOpenGLImpl::STextureRenderData data;
 //         data.damage = &texDamage;
 //
@@ -7235,21 +7113,21 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 // }
 
 // void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, bool clip = false, CBox clipbox = CBox()) {
-//     RASSERT(Render::GL::g_pHyprOpenGL->m_renderData.pMonitor, "Tried to render texture without begin()!");
+//     RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
 //     RASSERT((tex->m_texID > 0), "Attempted to draw nullptr texture!");
 //
 //     TRACY_GPU_ZONE("RenderTextureMatte");
 //
-//     if (Render::GL::g_pHyprOpenGL->m_renderData.damage.empty())
+//     if (g_pHyprRenderer->m_renderData.damage.empty())
 //         return;
 //
 //     CBox newBox = box;
-//     Render::GL::g_pHyprOpenGL->m_renderData.renderModif.applyToBox(newBox);
+//     g_pHyprRenderer->m_renderData.renderModif.applyToBox(newBox);
 //
 //     // get transform
-//     const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!Render::GL::g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : Render::GL::g_pHyprOpenGL->m_renderData.pMonitor->m_transform));
-//     Mat3x3     matrix    = Render::GL::g_pHyprOpenGL->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
-//     Mat3x3     glMatrix  = Render::GL::g_pHyprOpenGL->m_renderData.projection.copy().multiply(matrix);
+//     const auto TRANSFORM = Math::wlTransformToHyprutils(Math::invertTransform(!Render::GL::g_pHyprOpenGL->m_monitorTransformEnabled ? WL_OUTPUT_TRANSFORM_NORMAL : g_pHyprRenderer->m_renderData.pMonitor->m_transform));
+//     Mat3x3     matrix    = g_pHyprRenderer->m_renderData.monitorProjection.projectBox(newBox, TRANSFORM, newBox.rot);
+//     Mat3x3     glMatrix  = g_pHyprRenderer->m_renderData.projection.copy().multiply(matrix);
 //
 //     //auto shader = &g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE];
 //     auto shader = Render::GL::g_pHyprOpenGL->useShader(Render::GL::g_pHyprOpenGL->m_shaders->frag[SH_FRAG_MATTE]);
@@ -7269,14 +7147,14 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 //     glBindVertexArray(shader->getUniformLocation(SHADER_SHADER_VAO));
 //
 //     if (clip) {
-//         Render::GL::g_pHyprOpenGL->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {
+//         g_pHyprRenderer->m_renderData.damage.forEachRect([&clipbox](const auto& RECT) {
 //             auto rect = CBox(RECT.x1, RECT.y1, RECT.x2 - RECT.x1, RECT.y2 - RECT.y1).round();
 //             rect = rect.intersection(clipbox);
 //             Render::GL::g_pHyprOpenGL->scissor(rect);
 //             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 //         });
 //     } else {
-//         Render::GL::g_pHyprOpenGL->m_renderData.damage.forEachRect([](const auto& RECT) {
+//         g_pHyprRenderer->m_renderData.damage.forEachRect([](const auto& RECT) {
 //             Render::GL::g_pHyprOpenGL->scissor(&RECT);
 //             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 //         });
@@ -7310,19 +7188,19 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 //             return; // don't draw invisible shadows
 //
 //         Render::GL::g_pHyprOpenGL->scissor(nullptr);
-//         auto before_window = Render::GL::g_pHyprOpenGL->m_renderData.currentWindow;
-//         Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = fake_window;
+//         auto before_window = g_pHyprRenderer->m_renderData.currentWindow;
+//         g_pHyprRenderer->m_renderData.currentWindow = fake_window;
 //
 //         // we'll take the liberty of using this as it should not be used rn
-//         CFramebuffer& alphaFB = Render::GL::g_pHyprOpenGL->m_renderData.pCurrentMonData->mirrorFB;
-//         CFramebuffer& alphaSwapFB = Render::GL::g_pHyprOpenGL->m_renderData.pCurrentMonData->mirrorSwapFB;
-//         auto* LASTFB = Render::GL::g_pHyprOpenGL->m_renderData.currentFB;
+//         CFramebuffer& alphaFB = g_pHyprRenderer->m_renderData.pCurrentMonData->mirrorFB;
+//         CFramebuffer& alphaSwapFB = g_pHyprRenderer->m_renderData.pCurrentMonData->mirrorSwapFB;
+//         auto* LASTFB = g_pHyprRenderer->m_renderData.currentFB;
 //
-//         CRegion saveDamage = Render::GL::g_pHyprOpenGL->m_renderData.damage;
+//         CRegion saveDamage = g_pHyprRenderer->m_renderData.damage;
 //
-//         Render::GL::g_pHyprOpenGL->m_renderData.damage = allBox;
-//         Render::GL::g_pHyprOpenGL->m_renderData.damage.subtract(fullBox.copy().expand(-ROUNDING)).intersect(saveDamage);
-//         Render::GL::g_pHyprOpenGL->m_renderData.renderModif.applyToRegion(Render::GL::g_pHyprOpenGL->m_renderData.damage);
+//         g_pHyprRenderer->m_renderData.damage = allBox;
+//         g_pHyprRenderer->m_renderData.damage.subtract(fullBox.copy().expand(-ROUNDING)).intersect(saveDamage);
+//         g_pHyprRenderer->m_renderData.renderModif.applyToRegion(g_pHyprRenderer->m_renderData.damage);
 //
 //         alphaFB.bind();
 //
@@ -7354,9 +7232,9 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 //         Render::GL::g_pHyprOpenGL->setRenderModifEnabled(true);
 //         Render::GL::g_pHyprOpenGL->popMonitorTransformEnabled();
 //
-//         Render::GL::g_pHyprOpenGL->m_renderData.damage = saveDamage;
+//         g_pHyprRenderer->m_renderData.damage = saveDamage;
 //
-//         Render::GL::g_pHyprOpenGL->m_renderData.currentWindow = before_window;
+//         g_pHyprRenderer->m_renderData.currentWindow = before_window;
 //     });
 //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 // }
@@ -8360,14 +8238,14 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
     // }
     //
     // if (pMonitor == g_pCompositor->getMonitorFromCursor())
-    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
+    //     g_pHyprRenderer->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
     // else
-    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomFactor = 1.f;
+    //     g_pHyprRenderer->m_renderData.mouseZoomFactor = 1.f;
     //
     // if (pMonitor->m_zoomAnimProgress->value() != 1) {
-    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
-    //     Render::GL::g_pHyprOpenGL->m_renderData.mouseZoomUseMouse  = false;
-    //     Render::GL::g_pHyprOpenGL->m_renderData.useNearestNeighbor = false;
+    //     g_pHyprRenderer->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
+    //     g_pHyprRenderer->m_renderData.mouseZoomUseMouse  = false;
+    //     g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
     // }
     //
     // CRegion damage, finalDamage;
@@ -8446,7 +8324,7 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
     //
     // if (renderCursor) {
     //     TRACY_GPU_ZONE("RenderCursor");
-    //     g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, Render::GL::g_pHyprOpenGL->m_renderData.damage);
+    //     g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, g_pHyprRenderer->m_renderData.damage);
     // }
     //
     // Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
@@ -8465,7 +8343,7 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
     //
     // TRACY_GPU_COLLECT;
     //
-    // CRegion    frameDamage{Render::GL::g_pHyprOpenGL->m_renderData.damage};
+    // CRegion    frameDamage{g_pHyprRenderer->m_renderData.damage};
     //
     // const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
     // frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
@@ -8882,28 +8760,28 @@ void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
     //                 const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
     //                 const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
     //
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
     //             } else {
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //                 Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
     //             }
     //         } else {
-    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //             Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+    //             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+    //             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
     //         }
     //         set_rounding(cornermask);
     //         if (clip)
-    //             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(clipbox);
+    //             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
     //         tex->bind();
     //         tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     //         tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     //         Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
     //         set_rounding(0);
-    //         Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //         Render::GL::g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+    //         g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+    //         g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
     //         if (clip)
-    //             Render::GL::g_pHyprOpenGL->m_renderData.clipBox = tocbox(Bounds());
+    //             g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
     //     });
     //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     // }

@@ -264,8 +264,6 @@ TextureInfo *get_cached_texture(Container *root_with_scale, Container *container
     auto rid = *datum<int>(root_with_scale, "cid");
     auto s = scale(rid);
     TextureInfo *info = datum<TextureInfo>(container_texture_saved_on, needle);
-    //notify(needle + "                                                  ");
-    //notify(needle + " " + std::to_string(info->id));
     
     int h = std::round(wanted_h * s);
 
@@ -536,7 +534,6 @@ void create_titlebar(Container *root, Container *parent) {
     titlebar->when_drag_start = paint {
         if (c->state.mouse_button_pressed != BTN_LEFT)
             return;
-        //notify("title drag start");
         auto client = first_above_of(c, TYPE::CLIENT);
         auto cid = *datum<int>(client, "cid");
         if (hypriso->is_fullscreen(cid))  
@@ -578,8 +575,6 @@ void create_titlebar(Container *root, Container *parent) {
         auto client = first_above_of(c, TYPE::CLIENT);
         assert(client);
         bool snapped = *datum<bool>(client, "snapped");
-        //notify(fz("mouse {:.2f} {:.2f}                                           ", mouse().x, mouse().y));
-        //notify(fz("{:.2f} {:.2f}                                           ", c->real_bounds.x, c->real_bounds.y));
 
         if (snapped) {
             paint_button(root, c, "max_snapped", "\ue923");
@@ -654,19 +649,6 @@ void titlebar::on_window_closed(int id) {
 
 static void draw_text(std::string text, int x, int y) {
     return;
-    TextureInfo first_info;
-    {
-        first_info = gen_text_texture("Monospace", text, 40, {0, 0, 0, 1});
-        rect(Bounds(x, y, (double) first_info.w, (double) first_info.h), {1, 0, 1, 1});
-        draw_texture(first_info, x + 3, y + 4);
-        free_text_texture(first_info.id);
-    }
-    {
-        auto info = gen_text_texture("Monospace", text, 40, {1, 1, 1, 1});
-        draw_texture(info, x, y);
-        free_text_texture(info.id);
-    }
-    
 }
 
 void titlebar::on_draw_decos(std::string name, int monitor, int id, float a) {
