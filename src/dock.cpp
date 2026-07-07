@@ -656,6 +656,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
 
 static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff, std::string full_icon_path) {
     main_thread([cid, startoff, cw, uuid, pin, dpi, yoff, full_icon_path] {
+        notify(full_icon_path);
         auto m = mouse();
         std::vector<PopOption> root;
         auto stacking_rule = pin->stacking_rule;
