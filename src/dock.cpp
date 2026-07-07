@@ -471,7 +471,7 @@ Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, boo
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, center_x(c, logical.width), center_y(c, logical.height));
+        cairo_move_to(cr, std::round(center_x(c, logical.width)), std::round(center_y(c, logical.height)));
         pango_cairo_show_layout(cr, layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);

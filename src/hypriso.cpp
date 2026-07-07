@@ -372,7 +372,7 @@ struct HyprWorkspaces {
 static std::vector<HyprWorkspaces *> hyprspaces;
 
 struct Texture {
-    //SP<CTexture> texture;
+    SP<Render::ITexture> texture;
     TextureInfo info;
 };
 
@@ -1617,25 +1617,25 @@ void HyprIso::create_callbacks() {
             hypriso->on_layer_change();
     });
     
-    // static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
-    //     if (stage == eRenderStage::RENDER_PRE) {
-    //         #ifdef TRACY_ENABLE
-    //             FrameMarkStart("Render");
-    //         #endif
-    //     }
-    //     if (hypriso->on_render) {
-    //         for (auto m : hyprmonitors) {
-    //             if (m->m == Render::GL::g_pHyprOpenGL->m_renderData.pMonitor) {
-    //                 hypriso->on_render(m->id, (int)stage);
-    //             }
-    //         }
-    //     }
-    //     if (stage == eRenderStage::RENDER_LAST_MOMENT) {
-    //         #ifdef TRACY_ENABLE
-    //             FrameMarkEnd("Render");
-    //         #endif
-    //     }
-    // });
+    static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
+        if (stage == eRenderStage::RENDER_PRE) {
+            #ifdef TRACY_ENABLE
+                FrameMarkStart("Render");
+            #endif
+        }
+        if (hypriso->on_render) {
+            for (auto m : hyprmonitors) {
+                if (m->m == g_pHyprRenderer->m_renderData.pMonitor) {
+                    hypriso->on_render(m->id, (int)stage);
+                }
+            }
+        }
+        if (stage == eRenderStage::RENDER_LAST_MOMENT) {
+            #ifdef TRACY_ENABLE
+                FrameMarkEnd("Render");
+            #endif
+        }
+    });
     
     static auto mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
         auto consume = false;
@@ -3157,6 +3157,16 @@ Bounds tobounds(CBox box) {
 }
 
 void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPower, bool blur, float blurA) {
+    if (box.h <= 0 || box.w <= 0)
+        return;
+    CRectPassElement::SRectData rect;
+    rect.box = tocbox(box);
+    rect.color = CHyprColor(color.r, color.g, color.b, color.a);
+    rect.round = round;
+    rect.roundingPower = roundingPower;
+    rect.blur = blur;
+    rect.blurA = blurA;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(rect));    
 // #ifdef TRACY_ENABLE
 //     ZoneScoped;
 // #endif
@@ -3198,6 +3208,18 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
 }
 
 void border(Bounds box, RGBA color, float size, int cornermask, float round, float roundingPower, bool blur, float blurA) {
+    if (box.h <= 0 || box.w <= 0)
+        return;
+    CBorderPassElement::SBorderData rectdata;
+    rectdata.grad1         = CHyprColor(color.r, color.g, color.b, color.a);
+    rectdata.grad2         = CHyprColor(color.r, color.g, color.b, color.a);
+    rectdata.box           = tocbox(box);
+    rectdata.round         = round;
+    rectdata.outerRound    = round;
+    rectdata.borderSize    = size;
+    rectdata.roundingPower = roundingPower;
+    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(rectdata));
+
 // #ifdef TRACY_ENABLE
 //     ZoneScoped;
 // #endif
@@ -3491,13 +3513,13 @@ int current_rendering_monitor() {
     ZoneScoped;
 #endif
 
-    // if (auto m = Render::GL::g_pHyprOpenGL->m_renderData.pMonitor.lock()) {
-        // for (auto hyprmonitor : hyprmonitors) {
-            // if (hyprmonitor->m == m) {
-                // return hyprmonitor->id;
-            // }
-        // }
-    // }
+    if (auto m = g_pHyprRenderer->m_renderData.pMonitor.lock()) {
+        for (auto hyprmonitor : hyprmonitors) {
+            if (hyprmonitor->m == m) {
+                return hyprmonitor->id;
+            }
+        }
+    }
     return -1;
 }
 
@@ -3506,13 +3528,13 @@ int current_rendering_window() {
     ZoneScoped;
 #endif
     
-    // if (auto c = Render::GL::g_pHyprOpenGL->m_renderData.currentWindow.lock()) {
-        // for (auto hyprwindow : hyprwindows) {
-            // if (hyprwindow->w == c) {
-                // return hyprwindow->id;
-            // }
-        // }
-    // }
+    if (auto c = g_pHyprRenderer->m_renderData.currentWindow.lock()) {
+        for (auto hyprwindow : hyprwindows) {
+            if (hyprwindow->w == c) {
+                return hyprwindow->id;
+            }
+        }
+    }
     return -1;
 }
 
@@ -4467,7 +4489,8 @@ void close_window(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            // Actions::closeWindow(hw->w);
+            hw->w->sendClose();
+            //closeWindow(hw->w);
             // g_pCompositor->closeWindow(hw->w);
         }
     }
