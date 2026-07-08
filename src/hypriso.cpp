@@ -106,7 +106,9 @@
 #include <hyprland/src/protocols/ServerDecorationKDE.hpp>
 #include <hyprland/src/protocols/XDGDecoration.hpp>
 #include <hyprland/src/protocols/XDGShell.hpp>
+#define protected public
 #include <hyprland/src/render/Renderer.hpp>
+#undef protected
 #include <hyprland/src/managers/KeybindManager.hpp>
 
 #include <hyprland/src/managers/input/InputManager.hpp>
@@ -311,6 +313,7 @@ struct HyprWindow {
     bool was_hidden = false; // used in show/hide desktop
 
     // CFramebuffer *fb = nullptr;
+    SP<Render::IFramebuffer> fb = nullptr;
     Bounds w_bounds_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     
@@ -595,9 +598,7 @@ bool HyprIso::requested_client_side_decorations(int cid) {
  
         /*for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
             if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface) {
-                //notify(std::to_string((int) s->m_mostRecentlyRequested));
                 if (s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT) {
-                    notify(fz("1 {}", class_name(hw->id)));
                     return true;
                 }
             }
@@ -606,7 +607,6 @@ bool HyprIso::requested_client_side_decorations(int cid) {
             if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource && b->m_resource == w->m_xdgSurface->m_toplevel->m_resource) {
                 if (b->mostRecentlyRequested == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
                     return true;
-                    notify("2");
                 }
             }
         }
@@ -726,7 +726,6 @@ void on_open_monitor(PHLMONITOR m) {
     hm->m = m;
     hyprmonitors.push_back(hm);
     hypriso->on_monitor_open(hm->id);
-    //notify("monitor open");
 }
 
 void on_close_monitor(PHLMONITOR m) {
@@ -768,7 +767,6 @@ void hook_onSurfacePassDraw(void* thisptr, const CRegion& damage) {
     auto  spe = (CSurfacePassElement *) thisptr;
 
     auto window = spe->m_data.pWindow;
-    //notify("alo");
     int cornermask = 0;
     for (auto hw: hyprwindows) {
         if (hw->w == window) {
@@ -790,7 +788,6 @@ void fix_window_corner_rendering() {
     // TODO: check if m.address is same as set_rounding even though signature is SurfacePassElement
     for (auto m : METHODS) {
         if (m.signature.find("SurfacePassElement") != std::string::npos) {
-            //notify(m.demangled);
             g_pOnSurfacePassDraw = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSurfacePassDraw);
             g_pOnSurfacePassDraw->hook();
             return;
@@ -893,7 +890,6 @@ Vector2D hook_OnRMS(void* thisptr) {
     ZoneScoped;
 #endif
     //recheck_csd_for_all_wayland_windows();
-    //notify("min");
     return Vector2D(4, 4);
     //return (*(origOnRMS)g_pOnRMS->m_original)(thisptr);
 }
@@ -923,7 +919,6 @@ void recheck_csd_for_all_wayland_windows() {
             bool remove_csd = false;
             for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
                 if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface) {
-                    //notify(std::to_string((int) s->m_mostRecentlyRequested));
                     if (s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT) {
                         remove_csd = true;
                     }
@@ -966,13 +961,11 @@ uint32_t hook_OnKDECSD(void* thisptr) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //notify(fz("hook"));
 
     auto ptr = (CServerDecorationKDE *) thisptr;
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
             if (s->m_surf == hw->w->m_xdgSurface) {
-                //notify(fz("hook_OnKDECSD {}", hypriso->class_name(hw->id)));
                 break;
             }
         }
@@ -989,13 +982,10 @@ uint32_t hook_OnKDERequestCSD(void* thisptr, uint32_t mode) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //notify("ehllo");
-    //notify(fz("mode {}", mode));
     //recheck_csd_for_all_wayland_windows();
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
             if (s->m_surf == hw->w->m_xdgSurface) {
-                //notify(fz("hook_OnKDERequestCSD {} {}", hypriso->class_name(hw->id), mode));
                 break;
             }
         }
@@ -1010,13 +1000,11 @@ uint32_t hook_OnKDEReleaseCSD(void* thisptr) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //notify(fz("released"));
 
     //recheck_csd_for_all_wayland_windows();
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
             if (s->m_surf == hw->w->m_xdgSurface) {
-                //notify(fz("hook_OnKDEReleaseCSD {}", hypriso->class_name(hw->id)));
                 break;
             }
         }
@@ -1040,7 +1028,6 @@ void detect_csd_request_change() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //notify("detect");
     // hook xdg and kde csd request mode, then set timeout for 25 ms, 5 times which checks and updates csd for current windows based on most recent requests
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeDefaultModeCSD");
@@ -1511,7 +1498,6 @@ static void on_open_layer(PHLLS l) {
     }
     auto hl = new HyprLayer;
     hl->id = unique_id++;
-    //notify(fz("{} {}", l->m_layer, hl->id));
     hl->l = l;
     //log(fz("{} {} {} {} {} {}", l->m_position.x, l->m_position.y, l->m_realSize->goal().x, l->m_realSize->goal().y, l->m_realPosition->goal().x, l->m_realPosition->goal().y));
     hyprlayers.push_back(hl);
@@ -1754,7 +1740,6 @@ void hook_onArrangeMonitors(void* thisptr) {
 #endif
     auto spe = (CCompositor *) thisptr;
     (*(origArrangeMonitors) g_pOnArrangeMonitors->m_original)(spe);
-    //notify("Some change in monitors");
     // Go through all and check any that no longer exist or that need to exist
 
     //return;
@@ -1808,7 +1793,6 @@ void hook_monitor_arrange() {
 // #endif
 //     auto spe = (CHyprRenderer *) thisptr;
 //     (*(origArrangeLayers)g_pOnArrangeLayers->m_original)(spe, monitor);
-//     //notify("dock added");
 // }
 
 void hook_dock_change() {
@@ -1820,8 +1804,6 @@ void hook_dock_change() {
     // TODO: check if m.address is same as set_rounding even though signature is SurfacePassElement
     for (auto m : METHODS) {
         if (m.signature.find("CHyprRenderer") != std::string::npos) {
-            //notify(m.demangled);
-            //notify(m.demangled);
             //g_pOnArrangeLayers = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onArrangeLayers);
             //g_pOnArrangeLayers->hook();
             return;
@@ -2671,7 +2653,6 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
 #endif
     auto win = (*(origVecToWinSurf)g_pOnVecToWinSurf->m_original)((CCompositor *) thisptr, vc, m, sl);
     if (hypriso->whitelist_on || !hypriso->render_whitelist.empty()) {
-        notify("none");
         return nullptr;
     }
     return win;
@@ -4036,7 +4017,6 @@ TextureInfo gen_texture(std::string path, float h) {
     ZoneScoped;
 #endif
     //log("gen texture");
-    //notify("gen texture");
     auto tex = loadAsset(path, h);
     if (tex) {
         auto t = new Texture;
@@ -4209,7 +4189,6 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
     ZoneScoped;
 #endif
     //log("gen text texture");
-    //notify("gen text");
 
     auto tex = g_pHyprRenderer->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
     if (tex.get()) {
@@ -5182,56 +5161,55 @@ HyprWindow *get_window(PHLWINDOW w) {
 //     g_pHyprRenderer->m_bRenderingSnapshot = false;
 // }
 
-// void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//
-//     //return;
-//     if (!pRenderWindow || !w.get())
-//         return;
-//     const auto m = w->m_monitor.lock();
-//     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-//         return;
-//     if (include_decorations) {
-//         bool h = w->m_hidden;
-//         w->m_hidden = false;
-//         screenshot_window_with_decos(hw->deco_fb, w);
-//        //m->m_scale
-//         hw->w_decos_size = tobounds(w->getFullWindowBoundingBox());
-//         hw->w_decos_size.scale(m->m_scale);
-//         hw->w_deco_raw = tobounds(w->getFullWindowBoundingBox());
-//         auto tex = hw->deco_fb->getTexture();
-//         glActiveTexture(GL_TEXTURE0);
-//         tex->bind();
-//         glGenerateMipmap(tex->m_target);
-//
-//         w->m_hidden = h;
-//
-//         return;
-//     }
-//
-//     // we need to "damage" the entire monitor
-//     // so that we render the entire window
-//     // this is temporary, doesnt mess with the actual damage
-//     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-//     g_pHyprRenderer->makeEGLCurrent();
-//     hw->fb->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-//     g_pHyprRenderer->beginRender(m, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, hw->fb);
-//     g_pHyprRenderer->m_bRenderingSnapshot = true;
-//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-//     auto const NOW = Time::steadyNow();
-//     (*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, RENDER_PASS_MAIN, true, true);
-//     g_pHyprRenderer->endRender();
-//     g_pHyprRenderer->m_bRenderingSnapshot = false;
-//
-//     hw->w_size = Bounds(0, 0, (w->m_realSize->value().x * m->m_scale), (w->m_realSize->value().y * m->m_scale));
-//     hw->w_bounds_raw = Bounds(0, 0, (w->m_realSize->value().x), (w->m_realSize->value().y));
-//     auto tex = hw->fb->getTexture();
-//     glActiveTexture(GL_TEXTURE0);
-//     tex->bind();
-//     glGenerateMipmap(tex->m_target);
-// }
+void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+//return;
+    //if (!pRenderWindow || !w.get())
+    if (!w.get())
+        return;
+    const auto m = w->m_monitor.lock();
+    if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
+        return;
+    if (include_decorations) {
+       //  bool h = w->m_hidden;
+       //  w->m_hidden = false;
+       //  screenshot_window_with_decos(hw->deco_fb, w);
+       // //m->m_scale
+       //  hw->w_decos_size = tobounds(w->getFullWindowBoundingBox());
+       //  hw->w_decos_size.scale(m->m_scale);
+       //  hw->w_deco_raw = tobounds(w->getFullWindowBoundingBox());
+       //  auto tex = hw->deco_fb->getTexture();
+       //  glActiveTexture(GL_TEXTURE0);
+       //  tex->bind();
+       //  glGenerateMipmap(tex->m_target);
+       //  w->m_hidden = h;
+       //  return;
+    }
+    // we need to "damage" the entire monitor
+    // so that we render the entire window
+    // this is temporary, doesnt mess with the actual damage
+    CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
+    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+    // hw->fb = g_pHyprRenderer->createTexture();
+    // hw->fb = g_pHyprRenderer->createFB();
+    hw->fb->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+    g_pHyprRenderer->beginRender(m, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, hw->fb);
+    g_pHyprRenderer->m_bRenderingSnapshot = true;
+    // Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
+    auto const NOW = Time::steadyNow();
+    g_pHyprRenderer->renderWindow(w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
+    //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
+    g_pHyprRenderer->endRender();
+    g_pHyprRenderer->m_bRenderingSnapshot = false;
+    hw->w_size = Bounds(0, 0, (w->m_realSize->value().x * m->m_scale), (w->m_realSize->value().y * m->m_scale));
+    hw->w_bounds_raw = Bounds(0, 0, (w->m_realSize->value().x), (w->m_realSize->value().y));
+    auto tex = hw->fb->getTexture();
+    glActiveTexture(GL_TEXTURE0);
+    tex->bind();
+    glGenerateMipmap(tex->m_texID);
+}
 
 void HyprIso::screenshot_all() {
 #ifdef TRACY_ENABLE
@@ -5246,9 +5224,9 @@ void HyprIso::screenshot_all() {
         if (true) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w) {
-                    // if (!hw->fb)
-                        // hw->fb = new CFramebuffer;
-                    // screenshot_window(hw, w, false);
+                    if (!hw->fb)
+                        hw->fb = g_pHyprRenderer->createFB();
+                    screenshot_window(hw, w, false);
                 }
             }
         }
@@ -5268,9 +5246,9 @@ void HyprIso::screenshot(int id) {
         if (true) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w && hw->id == id) {
-                    // if (!hw->fb)
-                        // hw->fb = new CFramebuffer;
-                    // screenshot_window(hw, w, false);
+                    if (!hw->fb)
+                        hw->fb = g_pHyprRenderer->createFB();
+                    screenshot_window(hw, w, false);
                 }
             }
         }
@@ -5452,7 +5430,7 @@ void HyprIso::screenshot_deco(int id) {
             if (hw->w == w && hw->id == id) {
                 // if (!hw->deco_fb)
                 //     hw->deco_fb = new CFramebuffer;
-                // screenshot_window(hw, w, true);
+                screenshot_window(hw, w, true);
                 // auto tex = hw->deco_fb->getTexture();
                 // glActiveTexture(GL_TEXTURE0);
                 // tex->bind();
@@ -5468,7 +5446,7 @@ Bounds HyprIso::thumbnail_size(int id) {
             return hw->w_bounds_raw;
         }
     }
-    return {1, 1, 1, 1};
+    return {800, 600, 800, 600};
 }
 
 // Will stretch the thumbnail if the aspect ratio passed in is different from thumbnail
@@ -5476,7 +5454,22 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
- 
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            if (hw->fb && hw->fb->isAllocated()) {
+                auto tex = hw->fb->getTexture();
+
+                CTexPassElement::SRenderData texData;
+                texData.tex = tex;
+                texData.a = alpha;
+                texData.round = rounding;
+                texData.roundingPower = roundingPower;
+                texData.box = tocbox(b);
+                g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(texData));
+            }
+        }
+    }
+
     // return;
 //     for (auto hw : hyprwindows) {
 //         if (hw->id == id) {
@@ -7473,11 +7466,22 @@ bool HyprIso::is_floating(int cid) {
 }
 
 void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func) {
-    // HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {
-    //     SDispatchResult result;
-    //     result.success = func(in);
-    //     return result;
-    // });
+	HyprlandAPI::registerHyprCtlCommand(
+        globals->api,
+        SHyprCtlCommand{
+            .name  = command,
+            .exact = false,
+            .fn    = [func](eHyprCtlOutputFormat format, std::string args) -> std::string {
+                func(args);
+                return "ok";
+            }
+        }
+    );
+    /*HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {
+        SDispatchResult result;
+        result.success = func(in);
+        return result;
+    });*/
 }
 
 

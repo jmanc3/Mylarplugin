@@ -590,9 +590,12 @@ static void handle_fractional_scale_preferred_scale(
     if (!win->rw)
         return;
     win->current_fractional_scale = ((float) scale) / 120.0f;
-    win->rw->dpi = win->current_fractional_scale;
-    if (win->rw->on_scale_change)
-        win->rw->on_scale_change(win->rw, win->rw->dpi);
+
+    if (win->rw) {
+        win->rw->dpi = win->current_fractional_scale;
+        if (win->rw->on_scale_change)
+            win->rw->on_scale_change(win->rw, win->rw->dpi);
+    }
 
     win->resize_next = true;
 
@@ -604,7 +607,8 @@ static void handle_fractional_scale_preferred_scale(
 
     wl_surface_commit(win->surface);
 
-    windowing::redraw(win->rw);
+    if (win->rw)
+        windowing::redraw(win->rw);
 }
 
 static const wp_fractional_scale_v1_listener fractional_scale_listener = {

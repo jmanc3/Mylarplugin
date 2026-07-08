@@ -11,6 +11,7 @@ static float full = 1100;
 static void paint_cover(Container *actual_root, Container *c) {
     auto root = get_rendering_root();
     if (!root) return;
+    damage_all();
     
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
  

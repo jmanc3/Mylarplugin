@@ -220,7 +220,7 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
         for (auto c : actual_root->children) {
             if (c->custom_type == (int)TYPE::ALT_TAB) {
                 if (!bounds_contains(c->real_bounds, x, y)) {
-                    alt_tab::close(true); 
+                    alt_tab::close(true);
                 }
             }
         }
@@ -396,7 +396,7 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
     }
     bool alt_showing = alt_tab::showing();
     if (!alt_held && alt_showing) {
-       alt_tab::close(true); 
+       alt_tab::close(true);
     }
     
     if (key == KEY_TAB && state == 0) {
@@ -1531,7 +1531,7 @@ void do_snap(SnapPosition pos) {
 } 
 
 void add_hyprctl_dispatchers() {
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:overview_open_or_show_desktop", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_overview_open_or_show_desktop", [](std::string in) {
         if (!overview::is_showing())
             if (hypriso->whitelist_on) {
                 hypriso->whitelist_on = false;
@@ -1544,7 +1544,7 @@ void add_hyprctl_dispatchers() {
             overview::open(hypriso->monitor_from_cursor()); 
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:overview_close_or_hide_desktop", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_overview_close_or_hide_desktop", [](std::string in) {
         if (overview::is_showing()) {
             overview::close(); 
             return true;
@@ -1560,55 +1560,55 @@ void add_hyprctl_dispatchers() {
         return true;
     });
 
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_start", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_dock_start", [](std::string in) {
         for (auto m : actual_monitors) {
             auto mid = *datum<int>(m, "cid");
             dock::start(hypriso->monitor_name(mid));
         }
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:dock_stop", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_dock_stop", [](std::string in) {
         dock::stop();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:toggle_layout", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_toggle_layout", [](std::string in) {
         toggle_layout();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:screenshot_tool", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_screenshot_tool", [](std::string in) {
         screenshot_tool::open();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_left", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_snap_left", [](std::string in) {
         do_snap(SnapPosition::LEFT);
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_right", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_snap_right", [](std::string in) {
         do_snap(SnapPosition::RIGHT);
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_up", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_snap_up", [](std::string in) {
         do_snap(SnapPosition::MAX);
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:snap_down", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_snap_down", [](std::string in) {
         do_snap(SnapPosition::NONE);
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:init", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_init", [](std::string in) {
         hypriso->login_animation();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:toggle_dock_merge", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_toggle_dock_merge", [](std::string in) {
         dock::toggle_dock_merge();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:desktop_hide", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_desktop_hide", [](std::string in) {
         hypriso->whitelist_on = true;
         damage_all();
         return true;
     });
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:desktop_show", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_desktop_show", [](std::string in) {
         hypriso->whitelist_on = false;
         damage_all();
         return true;
@@ -1616,7 +1616,7 @@ void add_hyprctl_dispatchers() {
 
 
 
-    hypriso->add_hyprctl_dispatcher("plugin:mylar:right_click_active", [](std::string in) {
+    hypriso->add_hyprctl_dispatcher("plugin_mylar_right_click_active", [](std::string in) {
         for (auto m : actual_root->children) {
             if (m->custom_type == (int) TYPE::CLIENT) {
                 auto cid = *datum<int>(m, "cid");
