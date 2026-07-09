@@ -70,12 +70,12 @@ void draw_text(std::string text, int x, int y);
 void apply_restore_info(int id);
 
 static RGBA color_sel_color() {
-    static RGBA default_color("00000088");
+    static RGBA default_color("0085e625");
     return hypriso->get_varcolor("plugin:mylardesktop:sel_color", default_color);
 }
 
 static RGBA color_sel_border_color() {
-    static RGBA default_color("00000088");
+    static RGBA default_color("0085e6ff");
     return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
 }
 
