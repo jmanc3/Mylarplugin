@@ -1328,7 +1328,7 @@ void hook_render_functions() {
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderMonitor");
         for (auto m : METHODS) {
-            if (m.demangled.find("CHyprRenderer") != std::string::npos) {
+            if (m.demangled.find("IHyprRenderer") != std::string::npos) {
                 // g_pRenderMonitorHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderMonitor);
                 // g_pRenderMonitorHook->hook();
                 pRenderMonitor = m.address;
@@ -4190,8 +4190,6 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    //log("gen text texture");
-
     auto tex = g_pHyprRenderer->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
     if (tex.get()) {
         auto t = new Texture;
@@ -4202,7 +4200,6 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
         info.h = t->texture->m_size.y;
         t->info = info;
         hyprtextures.push_back(t);
-        printf("generate text: %d\n", info.id);
         return t->info;
     }
     return {};
@@ -4212,21 +4209,6 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-	CTexPassElement::SRenderData texData;
-	bool found = false;
-    for (auto t : hyprtextures) {
-       if (t->info.id == info.id && t->texture) {
-            auto tex = t->texture;
-        	texData.tex = tex;
-        	found = true;
-       }
-    }
-    if (!found)
-        return;
-    texData.a = a;
-	texData.box = tocbox(b);
-	g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(texData));
-/*
     bool clip = hypriso->clip;
     CBox clipbox = tocbox(hypriso->clipbox);
     CBox cb = tocbox(b);
@@ -4243,7 +4225,7 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
     }
 
     for (auto t : hyprtextures) {
-       if (t->info.id == info.id && t->texture) {
+        if (t->info.id == info.id && t->texture) {
             auto tex = t->texture;
             AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass) {
                 //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
@@ -4258,9 +4240,8 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
             });
             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
             break;
-       }
+        }
     }
-*/
 }
 
 void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
@@ -4713,7 +4694,7 @@ void render_wallpaper(PHLMONITOR pMonitor, const Time::steady_tp& time, const Ve
         g_pHyprRenderer->renderLayer(ls.lock(), pMonitor, time);
     }
 
-    // Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
+    Event::bus()->m_events.render.stage.emit(RENDER_POST_WALLPAPER);
 
     /*
     for (auto const& ls : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM]) {
@@ -5328,69 +5309,52 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
     for (auto hm : hyprmonitors) {
         if (hm->id != mon)
             continue;
-        if (hm->wallfb && hm->wallfb->isAllocated()) {
-            auto tex = hm->wallfb->getTexture();
-
-            CTexPassElement::SRenderData texData;
-            texData.tex = tex;
-            texData.a = alpha;
-            texData.round = rounding;
-            texData.roundingPower = 2.0f;
-            texData.box = tocbox(b);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(texData));
+        if (!hm->wallfb)
+            continue;
+        if (!hm->wallfb->getTexture())
+            return;
+        bool clip = hypriso->clip;
+        Bounds clipbox = hypriso->clipbox;
+        if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+            return;
         }
+        AnyPass::AnyData anydata([hm, mon, b, rounding, alpha, clip, clipbox](AnyPass* pass) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+             //notify("draw");
+            auto roundingPower = 2.0f;
+            auto cornermask = 0;
+            if (!hm->wallfb)
+                return;
+            auto tex = hm->wallfb->getTexture();
+            if (!tex)
+                return;
+            auto box = tocbox(b);
+
+            Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+            data.allowCustomUV = true;
+
+            data.round = rounding;
+            data.roundingPower = roundingPower;
+            data.a = alpha;
+
+            data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+            data.primarySurfaceUVBottomRight = Vector2D(
+                std::min(1.0, 1.0),
+                std::min(1.0, 1.0)
+            );
+            set_rounding(cornermask);
+            if (clip)
+                g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
+            Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+            set_rounding(0);
+
+            if (clip)
+                g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
+        });
+        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
     }
-    //return;
-//     for (auto hm : hyprmonitors) {
-//         if (hm->id != mon)
-//             continue;
-//         if (!hm->wallfb)
-//             continue;
-//         if (!hm->wallfb->getTexture())
-//             return;
-//         bool clip = hypriso->clip;
-//         Bounds clipbox = hypriso->clipbox;
-//         if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
-//             return;
-//         }
-//         AnyPass::AnyData anydata([hm, mon, b, rounding, alpha, clip, clipbox](AnyPass* pass) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//              //notify("draw");
-//             auto roundingPower = 2.0f;
-//             auto cornermask = 0;
-//             if (!hm->wallfb)
-//                 return;
-//             auto tex = hm->wallfb->getTexture();
-//             if (!tex)
-//                 return;
-//             auto box = tocbox(b);
-//
-//             CHyprOpenGLImpl::STextureRenderData data;
-//             data.allowCustomUV = true;
-//
-//             data.round = rounding;
-//             data.roundingPower = roundingPower;
-//             data.a = alpha;
-//
-//             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-//             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-//                 std::min(1.0, 1.0),
-//                 std::min(1.0, 1.0)
-//             );
-//             set_rounding(cornermask);
-//             if (clip)
-//                 g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
-//             Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-//             set_rounding(0);
-//             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-//             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-//             if (clip)
-//                 g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
-//         });
-//         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-//     }
 };
 
 void HyprIso::screenshot_wallpaper(int mon) {
