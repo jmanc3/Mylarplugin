@@ -1215,68 +1215,68 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit);
 
 inline CFunctionHook* g_pRenderWindowHook = nullptr;
 
-// typedef void (*origRenderWindowFunc)(CHyprRenderer *, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone);
+typedef void (*origRenderWindowFunc)(Render::IHyprRenderer *, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, Render::eRenderPassMode mode, bool ignorePosition, bool standalone);
 
-// void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//     if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
-//         for (auto hw : hyprwindows) {
-//             if (hw->w == pWindow) {
-//                 bool found = false;
-//                 for (auto white : hypriso->render_whitelist) {
-//                     if (white == hw->id) {
-//                         found = true;
-//                     }
-//                 }
-//                 if (!found) {
-//                     if (!g_pHyprRenderer->m_bRenderingSnapshot) {
-//                         return;
-//                     }
-//                 }
-//             }
-//         }
-//     }
-//
-//     Hyprlang::INT* rounding_amount = nullptr;
-//     int initial_value = 0;
-//
-//     Hyprlang::INT* border_size = nullptr;
-//     int initial_border_size = 0;
-//
-//     Hyprlang::CConfigCustomValueType* active_border = nullptr;
-//     Hyprlang::CConfigCustomValueType* initial_active_border;
-//     auto current = get_current_time_in_ms();
-//
-//     for (auto hw : hyprwindows) {
-//         if (hw->w == pWindow) {
-//             if (current - hw->unminize_start < minimize_anim_time && hw->animate_to_dock)
-//                 return;
-//         }
-//         if (hw->w == pWindow && hw->no_rounding) {
-//             {
-//                 Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:rounding");
-//                 rounding_amount = (Hyprlang::INT*)val->dataPtr();
-//                 initial_value = *rounding_amount;
-//                 *rounding_amount = 0;
-//             }
-//
-//             Hyprlang::CConfigValue* val2 = g_pConfigManager->getHyprlangConfigValuePtr("general:border_size");
-//             border_size = (Hyprlang::INT*)val2->dataPtr();
-//             initial_border_size = *border_size;
-//             *border_size = 0;
-//         }
-//     }
-//     (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)((CHyprRenderer *) thisptr, pWindow, pMonitor, Time::steadyNow(), decorate, mode, ignorePosition, standalone);
-//     if (rounding_amount) {
-//         *rounding_amount = initial_value;
-//         *border_size = initial_border_size;
-//         //if (active_border) {
-//             //active_border = initial_active_border;
-//         //}
-//     }
-// }
+void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, Render::eRenderPassMode mode, bool ignorePosition, bool standalone) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
+        for (auto hw : hyprwindows) {
+            if (hw->w == pWindow) {
+                bool found = false;
+                for (auto white : hypriso->render_whitelist) {
+                    if (white == hw->id) {
+                        found = true;
+                    }
+                }
+                if (!found) {
+                    if (!g_pHyprRenderer->m_bRenderingSnapshot) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    Hyprlang::INT* rounding_amount = nullptr;
+    int initial_value = 0;
+
+    Hyprlang::INT* border_size = nullptr;
+    int initial_border_size = 0;
+
+    Hyprlang::CConfigCustomValueType* active_border = nullptr;
+    Hyprlang::CConfigCustomValueType* initial_active_border;
+    auto current = get_current_time_in_ms();
+
+    for (auto hw : hyprwindows) {
+        if (hw->w == pWindow) {
+            if (current - hw->unminize_start < minimize_anim_time && hw->animate_to_dock)
+                return;
+        }
+        if (hw->w == pWindow && hw->no_rounding) {
+            {
+                // Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:rounding");
+                // rounding_amount = (Hyprlang::INT*)val->dataPtr();
+                // initial_value = *rounding_amount;
+                // *rounding_amount = 0;
+            }
+
+            // Hyprlang::CConfigValue* val2 = g_pConfigManager->getHyprlangConfigValuePtr("general:border_size");
+            // border_size = (Hyprlang::INT*)val2->dataPtr();
+            // initial_border_size = *border_size;
+            // *border_size = 0;
+        }
+    }
+    (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)((Render::IHyprRenderer *) thisptr, pWindow, pMonitor, Time::steadyNow(), decorate, mode, ignorePosition, standalone);
+    if (rounding_amount) {
+        *rounding_amount = initial_value;
+        *border_size = initial_border_size;
+        //if (active_border) {
+            //active_border = initial_active_border;
+        //}
+    }
+}
 
 inline CFunctionHook* g_pWindowRoundingHook = nullptr;
 typedef float (*origWindowRoundingFunc)(Desktop::View::CWindow *);
@@ -1311,8 +1311,8 @@ void hook_render_functions() {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWindow");
         for (auto m : METHODS) {
             if (m.demangled.find("IHyprRenderer") != std::string::npos) {
-                // g_pRenderWindowHook       = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderWindow);
-                // g_pRenderWindowHook->hook();
+                g_pRenderWindowHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_RenderWindow);
+                g_pRenderWindowHook->hook();
                 pRenderWindow = m.address;
             }
         }
@@ -4723,7 +4723,7 @@ void actual_screenshot_wallpaper(SP<Render::IFramebuffer> buffer, PHLMONITOR m) 
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
     buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
     g_pHyprRenderer->beginRender(m, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, buffer);
-    // Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 1, 1)); // JIC
+    glClearColor(0, 0, 0, 1);
 
     const auto NOW = Time::steadyNow();
     render_wallpaper(m, NOW, {0.0, 0.0}, 1.0);
@@ -5179,7 +5179,7 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
     hw->fb->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
     g_pHyprRenderer->beginRender(m, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, hw->fb);
     g_pHyprRenderer->m_bRenderingSnapshot = true;
-    // Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
+    glClearColor(0, 0, 0, 0);
     auto const NOW = Time::steadyNow();
     g_pHyprRenderer->renderWindow(w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
     //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
