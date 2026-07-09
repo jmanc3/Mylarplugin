@@ -3002,101 +3002,87 @@ Bounds tobounds(CBox box) {
 }
 
 void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPower, bool blur, float blurA) {
+    // if (box.h <= 0 || box.w <= 0)
+    //     return;
+    // CRectPassElement::SRectData rect;
+    // rect.box = tocbox(box);
+    // rect.color = CHyprColor(color.r, color.g, color.b, color.a);
+    // rect.round = round;
+    // rect.roundingPower = roundingPower;
+    // rect.blur = blur;
+    // rect.blurA = blurA;
+    // g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(rect));
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //return;
     if (box.h <= 0 || box.w <= 0)
         return;
-    CRectPassElement::SRectData rect;
-    rect.box = tocbox(box);
-    rect.color = CHyprColor(color.r, color.g, color.b, color.a);
-    rect.round = round;
-    rect.roundingPower = roundingPower;
-    rect.blur = blur;
-    rect.blurA = blurA;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(rect));    
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//     //return;
-//     if (box.h <= 0 || box.w <= 0)
-//         return;
-//     bool clip = hypriso->clip;
-//     Bounds clipbox = hypriso->clipbox;
-//     if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
-//         return;
-//     }
-//     if (cornermask == 16)
-//         round = 0;
-//     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//
-//         CHyprOpenGLImpl::SRectRenderData rectdata;
-//         auto region = new CRegion(tocbox(box));
-//         rectdata.damage        = nullptr;
-//         rectdata.blur          = blur;
-//         rectdata.blurA         = blurA;
-//         rectdata.round         = std::round(round);
-//         rectdata.roundingPower = roundingPower;
-//
-//         if (clip)
-//             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
-//
-//         // TODO: who is responsible for cleaning up this damage?
-//         set_rounding(cornermask); // only top side
-//         Render::GL::g_pHyprOpenGL->renderRect(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
-//         set_rounding(0);
-//         if (clip)
-//             g_pHyprRenderer->m_renderData.clipBox = CBox();
-//     });
-//     anydata.box = tocbox(box);
-//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    bool clip = hypriso->clip;
+    Bounds clipbox = hypriso->clipbox;
+    if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
+        return;
+    }
+    if (cornermask == 16)
+        round = 0;
+    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+
+        Render::GL::CHyprOpenGLImpl::SRectRenderData rectdata;
+        auto region = new CRegion(tocbox(box));
+        rectdata.damage        = nullptr;
+        rectdata.blur          = blur;
+        rectdata.blurA         = blurA;
+        rectdata.round         = std::round(round);
+        rectdata.roundingPower = roundingPower;
+
+        if (clip)
+            g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
+
+        // TODO: who is responsible for cleaning up this damage?
+        set_rounding(cornermask); // only top side
+        Render::GL::g_pHyprOpenGL->renderRect(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
+        set_rounding(0);
+        if (clip)
+            g_pHyprRenderer->m_renderData.clipBox = CBox();
+    });
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void border(Bounds box, RGBA color, float size, int cornermask, float round, float roundingPower, bool blur, float blurA) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //return;
     if (box.h <= 0 || box.w <= 0)
         return;
-    CBorderPassElement::SBorderData rectdata;
-    rectdata.grad1         = CHyprColor(color.r, color.g, color.b, color.a);
-    rectdata.grad2         = CHyprColor(color.r, color.g, color.b, color.a);
-    rectdata.box           = tocbox(box);
-    rectdata.round         = round;
-    rectdata.outerRound    = round;
-    rectdata.borderSize    = size;
-    rectdata.roundingPower = roundingPower;
-    g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(rectdata));
+    bool clip = hypriso->clip;
+    Bounds clipbox = hypriso->clipbox;
+    if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
+        return;
+    }
+    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox, size](AnyPass* pass) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    Render::GL::CHyprOpenGLImpl::SBorderRenderData rectdata;
+        rectdata.round         = round;
+        rectdata.outerRound    = round;
+        rectdata.borderSize    = size;
+        rectdata.roundingPower = roundingPower;
 
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//     //return;
-//     if (box.h <= 0 || box.w <= 0)
-//         return;
-//     bool clip = hypriso->clip;
-//     Bounds clipbox = hypriso->clipbox;
-//     if (clip && !tocbox(clipbox).overlaps(tocbox(box))) {
-//         return;
-//     }
-//     AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox, size](AnyPass* pass) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//         CHyprOpenGLImpl::SBorderRenderData rectdata;
-//         rectdata.round         = round;
-//         rectdata.outerRound    = round;
-//         rectdata.borderSize    = size;
-//         rectdata.roundingPower = roundingPower;
-//
-//         if (clip)
-//             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
-//
-//         set_rounding(cornermask); // only top side
-//         Render::GL::g_pHyprOpenGL->renderBorder(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
-//         set_rounding(0);
-//         if (clip)
-//             g_pHyprRenderer->m_renderData.clipBox = CBox();
-//     });
-//     anydata.box = tocbox(box);
-//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+        if (clip)
+            g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
+
+        set_rounding(cornermask); // only top side
+        Render::GL::g_pHyprOpenGL->renderBorder(tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
+        set_rounding(0);
+        if (clip)
+            g_pHyprRenderer->m_renderData.clipBox = CBox();
+    });
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float size) {
