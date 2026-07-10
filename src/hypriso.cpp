@@ -6891,141 +6891,145 @@ void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
 // }
 
 void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha) {
-//     for (const auto& cmd : commands)
-//         if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
-//             return;
-//
-//     AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass* pass) {
-//         static CFramebuffer matteFB;
-//         static CFramebuffer alphaFB;
-//
-//         const int w = info.w;
-//         const int h = info.h;
-//
-//         // TODO a matte should be passed in instead because if multiple people use this function the size is bound to be different
-//         matteFB.alloc(w, h, DRM_FORMAT_ABGR8888);
-//         alphaFB.alloc(w, h, DRM_FORMAT_ABGR8888);
-//
-//         // Save current FB
-//         auto* LASTFB = g_pHyprRenderer->m_renderData.currentFB;
-//
-//         // 1. Render matte
-//         matteFB.bind();
-//         Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // transparent
-//
-//         for (const auto& cmd : commands) {
-//             CBox box = {
-//                 cmd.bounds.x - x,
-//                 cmd.bounds.y - y,
-//                 cmd.bounds.w,
-//                 cmd.bounds.h
-//             };
-//             if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
-//                 continue;
-//
-//             if (cmd.type == 1) {
-//                 CHyprOpenGLImpl::SBorderRenderData opts;
-//                 opts.round = cmd.roundness;
-//                 opts.borderSize = cmd.thickness;
-//                 // border
-//                 auto col = CHyprColor(1, 1, 1, 1);
-//                 GLint prevSrcRGB, prevDstRGB;
-//                 GLint prevSrcAlpha, prevDstAlpha;
-//                 GLboolean prevBlendEnabled;
-//                 if (cmd.invert) {
-//                     col = CHyprColor(0, 0, 0, 0);
-//
-//                     glGetBooleanv(GL_BLEND, &prevBlendEnabled);
-//
-//                     glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
-//                     glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
-//                     glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
-//                     glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
-//                     glBlendFunc(GL_ONE, GL_ZERO);
-//                 }
-//                 Render::GL::g_pHyprOpenGL->renderBorder(
-//                     box,
-//                     col,
-//                     opts
-//                 );
-//                 if (cmd.invert) {
-//                     glBlendFuncSeparate(
-//                         prevSrcRGB,
-//                         prevDstRGB,
-//                         prevSrcAlpha,
-//                         prevDstAlpha
-//                     );
-//                 }
-//             } else if (cmd.type == 2) {
-//                 CHyprOpenGLImpl::SRectRenderData opts;
-//                 opts.round = cmd.roundness;
-//                 // rect
-//                 auto col = CHyprColor(1, 1, 1, 1);
-//                 GLint prevSrcRGB, prevDstRGB;
-//                 GLint prevSrcAlpha, prevDstAlpha;
-//                 GLboolean prevBlendEnabled;
-//                 if (cmd.invert) {
-//                     col = CHyprColor(0, 0, 0, 0);
-//
-//                     glGetBooleanv(GL_BLEND, &prevBlendEnabled);
-//
-//                     glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
-//                     glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
-//                     glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
-//                     glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
-//                     glBlendFunc(GL_ONE, GL_ZERO);
-//                 }
-//                 Render::GL::g_pHyprOpenGL->renderRect(
-//                     box,
-//                     col,
-//                     opts
-//                 );
-//                 if (cmd.invert) {
-//                     glBlendFuncSeparate(
-//                         prevSrcRGB,
-//                         prevDstRGB,
-//                         prevSrcAlpha,
-//                         prevDstAlpha
-//                     );
-//                 }
-//             }
-//         }
-//
-//         alphaFB.bind();
-//
-//         CRegion texDamage{g_pHyprRenderer->m_renderData.damage};
-//         CHyprOpenGLImpl::STextureRenderData data;
-//         data.damage = &texDamage;
-//
-//         SP<CTexture> tex;
-//         for (auto t : hyprtextures) {
-//             if (t->info.id == info.id) {
-//                 tex = t->texture;
-//                 break;
-//             }
-//         }
-//
-//         // 2. Render texture using matte
-//         CBox outbox = CBox(0, 0, w, h);
-//         Render::GL::g_pHyprOpenGL->renderTextureMatte(
-//             tex,
-//             outbox,
-//             matteFB
-//         );
-//
-//         // Restore previous FB
-//         LASTFB->bind();
-//
-//         outbox = CBox(x, y, w, h);
-//         data.a = alpha;
-//         Render::GL::g_pHyprOpenGL->renderTexture(
-//             alphaFB.getTexture(),
-//             outbox,
-//             data
-//         );
-//     });
-//     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-//
+    for (const auto &cmd: commands)
+        if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
+            return;
+
+    AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass *pass) {
+        static SP<Render::IFramebuffer> matteFB = g_pHyprRenderer->createFB();
+        static SP<Render::IFramebuffer> alphaFB = g_pHyprRenderer->createFB();
+
+        const int w = info.w;
+        const int h = info.h;
+
+        if (w == 0 || h == 0)
+            return;
+
+        // TODO a matte should be passed in instead because if multiple people use this function the size is bound to be different
+        matteFB->alloc(w, h, DRM_FORMAT_ABGR8888);
+        alphaFB->alloc(w, h, DRM_FORMAT_ABGR8888);
+
+        // Save current FB
+        auto LASTFB = g_pHyprRenderer->m_renderData.currentFB->getTexture();
+        // g_pHyprRenderer
+
+        // 1. Render matte
+        matteFB->bind();
+        glClearColor(0, 0, 0, 0);
+        // Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // transparent
+
+        for (const auto &cmd: commands) {
+            CBox box = {
+                cmd.bounds.x - x,
+                cmd.bounds.y - y,
+                cmd.bounds.w,
+                cmd.bounds.h
+            };
+            if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
+                continue;
+
+            if (cmd.type == 1) {
+                Render::GL::CHyprOpenGLImpl::SBorderRenderData opts;
+                opts.round = cmd.roundness;
+                opts.borderSize = cmd.thickness;
+                // border
+                auto col = CHyprColor(1, 1, 1, 1);
+                GLint prevSrcRGB, prevDstRGB;
+                GLint prevSrcAlpha, prevDstAlpha;
+                GLboolean prevBlendEnabled;
+                if (cmd.invert) {
+                    col = CHyprColor(0, 0, 0, 0);
+
+                    glGetBooleanv(GL_BLEND, &prevBlendEnabled);
+
+                    glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
+                    glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
+                    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
+                    glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
+                    glBlendFunc(GL_ONE, GL_ZERO);
+                }
+                Render::GL::g_pHyprOpenGL->renderBorder(
+                    box,
+                    col,
+                    opts
+                );
+                if (cmd.invert) {
+                    glBlendFuncSeparate(
+                        prevSrcRGB,
+                        prevDstRGB,
+                        prevSrcAlpha,
+                        prevDstAlpha
+                    );
+                }
+            } else if (cmd.type == 2) {
+                Render::GL::CHyprOpenGLImpl::SRectRenderData opts;
+                opts.round = cmd.roundness;
+                // rect
+                auto col = CHyprColor(1, 1, 1, 1);
+                GLint prevSrcRGB, prevDstRGB;
+                GLint prevSrcAlpha, prevDstAlpha;
+                GLboolean prevBlendEnabled;
+                if (cmd.invert) {
+                    col = CHyprColor(0, 0, 0, 0);
+
+                    glGetBooleanv(GL_BLEND, &prevBlendEnabled);
+
+                    glGetIntegerv(GL_BLEND_SRC_RGB, &prevSrcRGB);
+                    glGetIntegerv(GL_BLEND_DST_RGB, &prevDstRGB);
+                    glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevSrcAlpha);
+                    glGetIntegerv(GL_BLEND_DST_ALPHA, &prevDstAlpha);
+                    glBlendFunc(GL_ONE, GL_ZERO);
+                }
+                Render::GL::g_pHyprOpenGL->renderRect(
+                    box,
+                    col,
+                    opts
+                );
+                if (cmd.invert) {
+                    glBlendFuncSeparate(
+                        prevSrcRGB,
+                        prevDstRGB,
+                        prevSrcAlpha,
+                        prevDstAlpha
+                    );
+                }
+            }
+        }
+
+        alphaFB->bind();
+
+        CRegion texDamage{g_pHyprRenderer->m_renderData.damage};
+        Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+        data.damage = &texDamage;
+
+        SP<Render::ITexture> tex;
+        for (auto t: hyprtextures) {
+            if (t->info.id == info.id) {
+                tex = t->texture;
+                break;
+            }
+        }
+
+        // 2. Render texture using matte
+        CBox outbox = CBox(0, 0, w, h);
+        Render::GL::g_pHyprOpenGL->renderTextureMatte(
+            tex,
+            outbox,
+            matteFB
+        );
+
+        // Restore previous FB
+        LASTFB->bind();
+
+        outbox = CBox(x, y, w, h);
+        data.a = alpha;
+        Render::GL::g_pHyprOpenGL->renderTexture(
+            alphaFB->getTexture(),
+            outbox,
+            data
+        );
+    });
+    g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
 // void renderTextureMatte(SP<CTexture> tex, const CBox& box, CFramebuffer& matte, bool clip = false, CBox clipbox = CBox()) {
