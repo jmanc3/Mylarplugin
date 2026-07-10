@@ -120,6 +120,7 @@
 #include <hyprland/src/errorOverlay/Overlay.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
 #include <hyprland/src/debug/Overlay.hpp>
+#include <hyprland/src/config/shared/animation/AnimationTree.hpp>
 
 #undef private
 
@@ -507,7 +508,7 @@ void HyprIso::overwrite_animation_speed(float speed) {
 #endif
  
     //const std::string& nodeName, int enabled, float speed, const std::string& bezier, const std::string& style = ""
-    // g_pConfigManager->m_animationTree.setConfigForNode("zoomFactor", true, speed, "quick", "");
+    Config::animationTree()->setConfigForNode("zoomFactor", true, speed, "quick", "");
 }
 
 static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
