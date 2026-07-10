@@ -5631,97 +5631,97 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // PHLWINDOW PWINDOW;
-    // for (auto hw : hyprwindows) {
-    //     if (hw->id == id) {
-    //         PWINDOW = hw->w;
-    //         break;
-    //     }
-    // }
-    //
-    // if (!PWINDOW)
-    //     return;
-    //
-    // if (follow) {
-    //     std::string args = std::to_string(workspace);
-    //
-    //     const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
-    //     if (WORKSPACEID == WORKSPACE_INVALID) {
-    //         Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
-    //         return;
-    //     }
-    //
-    //     if (WORKSPACEID == PWINDOW->workspaceID()) {
-    //         Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
-    //         return;
-    //     }
-    //
-    //     auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
-    //     PHLMONITOR pMonitor   = nullptr;
-    //     const auto POLDWS     = PWINDOW->m_workspace;
-    //
-    //     updateRelativeCursorCoords();
-    //
-    //     g_pHyprRenderer->damageWindow(PWINDOW);
-    //
-    //     if (pWorkspace) {
-    //         const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
-    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-    //         pMonitor = pWorkspace->m_monitor.lock();
-    //         Desktop::focusState()->rawMonitorFocus(pMonitor);
-    //         g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
-    //     } else {
-    //         pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
-    //         pMonitor   = pWorkspace->m_monitor.lock();
-    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-    //     }
-    //
-    //     POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
-    //
-    //     if (pWorkspace->m_isSpecialWorkspace)
-    //         pMonitor->setSpecialWorkspace(pWorkspace);
-    //     else if (POLDWS->m_isSpecialWorkspace)
-    //         POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
-    //
-    //     pMonitor->changeWorkspace(pWorkspace);
-    //
-    //     Desktop::focusState()->fullWindowFocus(PWINDOW, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
-    //     PWINDOW->warpCursor();
-    // } else {
-    //     std::string args = std::to_string(workspace);
-    //
-    //     const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
-    //     if (WORKSPACEID == WORKSPACE_INVALID) {
-    //         Log::logger->log(Log::ERR, "Error in moveActiveToWorkspaceSilent, invalid value");
-    //         return;
-    //     }
-    //
-    //     if (WORKSPACEID == PWINDOW->workspaceID())
-    //         return;
-    //
-    //     g_pHyprRenderer->damageWindow(PWINDOW);
-    //
-    //     auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
-    //     const auto OLDMIDDLE  = PWINDOW->middle();
-    //
-    //     if (pWorkspace) {
-    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-    //     } else {
-    //         pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
-    //         g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
-    //     }
-    //
-    //     if (PWINDOW == Desktop::focusState()->window()) {
-    //         if (const auto PATCOORDS =
-    //                 g_pCompositor->vectorToWindowUnified(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
-    //             PATCOORDS)
-    //             Desktop::focusState()->fullWindowFocus(PATCOORDS, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
-    //         else
-    //             g_pInputManager->refocus();
-    //     }
-    //
-    //     return;
-    // }
+    PHLWINDOW PWINDOW;
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            PWINDOW = hw->w;
+            break;
+        }
+    }
+
+    if (!PWINDOW)
+        return;
+
+    if (follow) {
+        std::string args = std::to_string(workspace);
+
+        const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
+        if (WORKSPACEID == WORKSPACE_INVALID) {
+            Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
+            return;
+        }
+
+        if (WORKSPACEID == PWINDOW->workspaceID()) {
+            Log::logger->log(Log::DEBUG, "Not moving to workspace because it didn't change.");
+            return;
+        }
+
+        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+        PHLMONITOR pMonitor   = nullptr;
+        const auto POLDWS     = PWINDOW->m_workspace;
+
+        updateRelativeCursorCoords();
+
+        g_pHyprRenderer->damageWindow(PWINDOW);
+
+        if (pWorkspace) {
+            const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
+            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+            pMonitor = pWorkspace->m_monitor.lock();
+            Desktop::focusState()->rawMonitorFocus(pMonitor);
+            g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
+        } else {
+            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+            pMonitor   = pWorkspace->m_monitor.lock();
+            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+        }
+
+        POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
+
+        if (pWorkspace->m_isSpecialWorkspace)
+            pMonitor->setSpecialWorkspace(pWorkspace);
+        else if (POLDWS->m_isSpecialWorkspace)
+            POLDWS->m_monitor.lock()->setSpecialWorkspace(nullptr);
+
+        pMonitor->changeWorkspace(pWorkspace);
+
+        Desktop::focusState()->fullWindowFocus(PWINDOW, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+        PWINDOW->warpCursor();
+    } else {
+        std::string args = std::to_string(workspace);
+
+        const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
+        if (WORKSPACEID == WORKSPACE_INVALID) {
+            Log::logger->log(Log::ERR, "Error in moveActiveToWorkspaceSilent, invalid value");
+            return;
+        }
+
+        if (WORKSPACEID == PWINDOW->workspaceID())
+            return;
+
+        g_pHyprRenderer->damageWindow(PWINDOW);
+
+        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+        const auto OLDMIDDLE  = PWINDOW->middle();
+
+        if (pWorkspace) {
+            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+        } else {
+            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+        }
+
+        if (PWINDOW == Desktop::focusState()->window()) {
+            if (const auto PATCOORDS =
+                    g_pCompositor->vectorToWindowUnified(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
+                PATCOORDS)
+                Desktop::focusState()->fullWindowFocus(PATCOORDS, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+            else
+                g_pInputManager->refocus();
+        }
+
+        return;
+    }
 }
 
 void HyprIso::reload() {
