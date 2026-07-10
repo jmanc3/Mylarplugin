@@ -1785,26 +1785,20 @@ void watch_wallpaper_change() {
         std::filesystem::path(home) / ".config/mylar/wall.png";
     static Timer *t = nullptr;
     watch_file(filepath.string(), [](FileWatchUpdate update) {
-        if (update == FileWatchUpdate::UPDATED) {
-            if (!t) {
-                t = later(200, [](Timer *) {
-                    for (auto c : actual_monitors) {
-                        auto t = datum<TextureInfo>(c, "bg_wall");
-                        const char* home = std::getenv("HOME");
-                        std::filesystem::path filepath =
-                            std::filesystem::path(home) / ".config/mylar/wall.png";
-                        free_text_texture(t->id);
-                        *t = gen_texture_png(filepath);
-                    }
-                    
-                    damage_all();
-                    t = nullptr;
-                });
-            }
-        } else if (update == FileWatchUpdate::REMOVED) {
-            //notify("removed");
-        } else if (update == FileWatchUpdate::OTHER) {
-            //notify("other");
+        if (!t) {
+            t = later(1000, [](Timer *) {
+                for (auto c : actual_monitors) {
+                    auto t = datum<TextureInfo>(c, "bg_wall");
+                    const char* home = std::getenv("HOME");
+                    std::filesystem::path filepath =
+                        std::filesystem::path(home) / ".config/mylar/wall.png";
+                    free_text_texture(t->id);
+                    *t = gen_texture_png(filepath);
+                }
+                
+                damage_all();
+                t = nullptr;
+            });
         }
     });
 }

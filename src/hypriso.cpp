@@ -7592,13 +7592,13 @@ int watch_file(const std::string& path, const std::function<void(FileWatchUpdate
 
         inotify_poll_pf = polled.empty() ? nullptr : polled.back();
     }
-
     const int wd = inotify_add_watch(inotify_fd, path.c_str(), IN_MODIFY | IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF);
     if (wd < 0)
         return -1;
 
     inotify_watchers[wd] = on_update;
 
+    notify("added");
     auto* pf = new PF;
     pf->fd = wd;
     pf->name = path;
