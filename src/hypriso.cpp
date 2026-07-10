@@ -5174,64 +5174,62 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
- 
-    //return;
-    // for (auto hs : hyprspaces) {
-    //     if (hs->id == id) {
-    //         if (!hs->buffer->isAllocated())
-    //             continue;
-    //         //notify("draw space " + std::to_string(id));
-    //         bool clip = hypriso->clip;
-    //         Bounds clipbox = hypriso->clipbox;
-    //         if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
-    //             return;
-    //         }
-    //         AnyPass::AnyData anydata([b, hs, rounding, alpha, clip, clipbox](AnyPass* pass) {
-    // #ifdef TRACY_ENABLE
-    //     ZoneScoped;
-    // #endif
-    //
-    //             //notify("draw");
-    //             auto roundingPower = 2.0f;
-    //             auto cornermask = 0;
-    //             auto tex = hs->buffer->getTexture();
-    //             //notify(std::to_string(hs->w->m_id) + " " + std::to_string((unsigned long long) hs->buffer));
-    //
-    //             auto box = tocbox(b);
-    //
-    //             CHyprOpenGLImpl::STextureRenderData data;
-    //             data.allowCustomUV = true;
-    //
-    //             data.round = rounding;
-    //             data.a = alpha;
-    //             data.noAA = true;
-    //             data.roundingPower = roundingPower;
-    //             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-    //                 std::min(1.0, 1.0),
-    //                 std::min(1.0, 1.0)
-    //             );
-    //             set_rounding(cornermask);
-    //             if (clip)
-    //                 g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
-    //
-    //             auto before = g_pHyprRenderer->m_renderData.useNearestNeighbor;
-    //             g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
-    //             tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-    //
-    //             Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //             g_pHyprRenderer->m_renderData.useNearestNeighbor = before;
-    //
-    //             if (clip)
-    //                 g_pHyprRenderer->m_renderData.clipBox = CBox();
-    //             set_rounding(0);
-    //
-    //             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-    //         });
-    //         g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    //     }
-    // }
+    for (auto hs : hyprspaces) {
+        if (hs->id == id) {
+            if (!hs->buffer->isAllocated())
+                continue;
+            //notify("draw space " + std::to_string(id));
+            bool clip = hypriso->clip;
+            Bounds clipbox = hypriso->clipbox;
+            if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+                return;
+            }
+            AnyPass::AnyData anydata([b, hs, rounding, alpha, clip, clipbox](AnyPass* pass) {
+    #ifdef TRACY_ENABLE
+        ZoneScoped;
+    #endif
+
+                //notify("draw");
+                auto roundingPower = 2.0f;
+                auto cornermask = 0;
+                auto tex = hs->buffer->getTexture();
+                //notify(std::to_string(hs->w->m_id) + " " + std::to_string((unsigned long long) hs->buffer));
+
+                auto box = tocbox(b);
+
+                Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+                data.allowCustomUV = true;
+
+                data.round = rounding;
+                data.a = alpha;
+                data.noAA = true;
+                data.roundingPower = roundingPower;
+                g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+                    std::min(1.0, 1.0),
+                    std::min(1.0, 1.0)
+                );
+                set_rounding(cornermask);
+                if (clip)
+                    g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
+
+                auto before = g_pHyprRenderer->m_renderData.useNearestNeighbor;
+                g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
+                tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+
+                Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+                g_pHyprRenderer->m_renderData.useNearestNeighbor = before;
+
+                if (clip)
+                    g_pHyprRenderer->m_renderData.clipBox = CBox();
+                set_rounding(0);
+
+                g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+                g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+            });
+            g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+        }
+    }
 };
 
 void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
