@@ -5205,8 +5205,8 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 data.a = alpha;
                 data.noAA = true;
                 data.roundingPower = roundingPower;
-                g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-                g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+                data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                data.primarySurfaceUVBottomRight = Vector2D(
                     std::min(1.0, 1.0),
                     std::min(1.0, 1.0)
                 );
@@ -5224,9 +5224,6 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 if (clip)
                     g_pHyprRenderer->m_renderData.clipBox = CBox();
                 set_rounding(0);
-
-                g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-                g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
             });
             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
         }
@@ -5409,32 +5406,29 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // return;
-    // for (auto hw : hyprwindows) {
-    //     if (hw->id == id) {
-    //         if (hw->deco_fb && hw->deco_fb->isAllocated()) {
-    //             AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
-    //                 auto tex = hw->deco_fb->getTexture();
-    //                 auto box = tocbox(b);
-    //                 CHyprOpenGLImpl::STextureRenderData data;
-    //                 data.allowCustomUV = true;
-    //                 data.round = rounding;
-    //                 data.roundingPower = roundingPower;
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-    //                     std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
-    //                     std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
-    //                 );
-    //                 set_rounding(cornermask);
-    //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //                 set_rounding(0);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-    //             });
-    //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    //         }
-    //     }
-    // }
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            if (hw->deco_fb && hw->deco_fb->isAllocated()) {
+                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
+                    auto tex = hw->deco_fb->getTexture();
+                    auto box = tocbox(b);
+                    Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+                    data.allowCustomUV = true;
+                    data.round = rounding;
+                    data.roundingPower = roundingPower;
+                    data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                    data.primarySurfaceUVBottomRight = Vector2D(
+                        std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
+                        std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
+                    );
+                    set_rounding(cornermask);
+                    Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+                    set_rounding(0);
+                });
+                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+            }
+        }
+    }
 }
 
 Bounds lerp(Bounds start, Bounds end, float scalar) {
@@ -5455,71 +5449,65 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // for (auto hw : hyprwindows) {
-    //     if (hw->id == id) {
-    //         if (hw->min_fb && hw->min_fb->isAllocated()) {
-    //             if (!hw->animate_to_dock)
-    //                 return;
-    //             AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
-    //                 auto tex = hw->min_fb->getTexture();
-    //                 auto sss = hw->w_min_mon;
-    //                 auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
-    //                 Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
-    //                 auto lerped = lerp(bounds, b, scalar);
-    //                 if (!hw->w->m_hidden)
-    //                     lerped = lerp(b, bounds, scalar);
-    //                 auto box = tocbox(lerped);
-    //                 CHyprOpenGLImpl::STextureRenderData data;
-    //                 data.allowCustomUV = false;
-    //                 data.round = 0.0;
-    //                 if (hw->w->m_hidden) {
-    //                     data.a = 1.0 - easeIn(scalar);
-    //                 } else {
-    //                     data.a = scalar;
-    //                 }
-    //                 data.roundingPower = 2.0;
-    //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-    //             });
-    //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    //
-    //             //border(hw->w_min_size, {1, 0, 0, 1}, 10);
-    //         }
-    //     }
-    // }
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            if (hw->min_fb && hw->min_fb->isAllocated()) {
+                if (!hw->animate_to_dock)
+                    return;
+                AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
+                    auto tex = hw->min_fb->getTexture();
+                    auto sss = hw->w_min_mon;
+                    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
+                    Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
+                    auto lerped = lerp(bounds, b, scalar);
+                    if (!hw->w->m_hidden)
+                        lerped = lerp(b, bounds, scalar);
+                    auto box = tocbox(lerped);
+                    Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+                    data.allowCustomUV = false;
+                    data.round = 0.0;
+                    if (hw->w->m_hidden) {
+                        data.a = 1.0 - easeIn(scalar);
+                    } else {
+                        data.a = scalar;
+                    }
+                    data.roundingPower = 2.0;
+                    Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+                });
+                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+                    //border(hw->w_min_size, {1, 0, 0, 1}, 10);
+            }
+        }
+    }
 }
 
 void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roundingPower, int cornermask) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // return;
-    // for (auto hw : hyprwindows) {
-    //     if (hw->id == id) {
-    //         if (hw->deco_fb && hw->deco_fb->isAllocated()) {
-    //             AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
-    //                 auto tex = hw->deco_fb->getTexture();
-    //                 auto box = tocbox(b);
-    //                 CHyprOpenGLImpl::STextureRenderData data;
-    //                 data.allowCustomUV = true;
-    //                 data.round = rounding;
-    //                 data.roundingPower = roundingPower;
-    //                 //g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //                 //g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
-    //                     //std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
-    //                     //std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
-    //                 //);
-    //                 set_rounding(cornermask);
-    //                 Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //                 set_rounding(0);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-    //             });
-    //             g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    //         }
-    //     }
-    // }
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            if (hw->deco_fb && hw->deco_fb->isAllocated()) {
+                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
+                    auto tex = hw->deco_fb->getTexture();
+                    auto box = tocbox(b);
+                    Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+                    data.allowCustomUV = true;
+                    data.round = rounding;
+                    data.roundingPower = roundingPower;
+                    //g_pHyprOpenGL->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                    //g_pHyprOpenGL->m_renderData.primarySurfaceUVBottomRight = Vector2D(
+                        //std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
+                        //std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
+                    //);
+                    set_rounding(cornermask);
+                    Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+                    set_rounding(0);
+                });
+                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+            }
+        }
+    }
 }
 
 
