@@ -5589,7 +5589,9 @@ void HyprIso::move_to_workspace(int workspace, bool follow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    // Desktop::focusState()->monitor()->changeWorkspace(std::to_string(workspace));
     // g_pKeybindManager->changeworkspace(std::to_string(workspace));
+    Config::Actions::changeWorkspace(std::to_string(workspace));
 }
 
 void HyprIso::move_to_workspace_id(int workspace) {
@@ -5598,6 +5600,7 @@ void HyprIso::move_to_workspace_id(int workspace) {
 #endif
     for (auto s : hyprspaces) {
         if (s->id == workspace) {
+            Config::Actions::changeWorkspace(std::to_string(s->w->m_id));
             // g_pKeybindManager->changeworkspace(std::to_string(s->w->m_id));
         }
     }
