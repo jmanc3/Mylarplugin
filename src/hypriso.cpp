@@ -327,6 +327,7 @@ struct HyprWindow {
     Bounds w_decos_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 
     // CFramebuffer *min_fb = nullptr;
+    SP<Render::IFramebuffer> min_fb = nullptr;
     Bounds w_min_mon;
     Bounds w_min_raw;
     Bounds w_min_size;
@@ -1684,7 +1685,7 @@ void HyprIso::create_callbacks() {
         auto hs = new HyprWorkspaces;
         hs->w = e;
         hs->id = unique_id++;
-        // hs->buffer = new CFramebuffer;
+        hs->buffer = g_pHyprRenderer->createFB();
         hyprspaces.push_back(hs);
     }
 
@@ -1693,7 +1694,7 @@ void HyprIso::create_callbacks() {
         auto hs = new HyprWorkspaces;
         hs->w = s;
         hs->id = unique_id++;
-        // hs->buffer = new CFramebuffer;
+        hs->buffer = g_pHyprRenderer->createFB();
         hyprspaces.push_back(hs);
     });
 
@@ -2154,41 +2155,41 @@ std::string get_previous_instance_signature() {
     return previous; 
 }
 
-// void screenshot_window_with_decos(CFramebuffer* buffer, PHLWINDOW w);
+void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w);
 
-// inline CFunctionHook* g_pOnSetHiddenHook = nullptr;
-// typedef void (*origSetHidden)(Desktop::View::CWindow *, bool);
-// void hook_onSetHidden(void* thisptr, bool state) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-// #ifdef FORK_WARN
-//     static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
-// #endif
-//     auto w = (Desktop::View::CWindow *) thisptr;
-//     for (auto hw : hyprwindows) {
-//         if  (hw->w.get() == w) {
-//             if (state) {
-//                 // set to hide
-//                 if (!hw->min_fb)
-//                     hw->min_fb = new CFramebuffer;
-//                 screenshot_window_with_decos(hw->min_fb, hw->w);
-//                 hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
-//                 hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
-//                 hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
-//                 hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
-//                 hw->w_min_size.scale(w->m_monitor->m_scale);
-//                 hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
-//                 hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
-//                 hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
-//             } else {
-//                 // set to show
-//                 hw->unminize_start = get_current_time_in_ms();
-//             }
-//         }
-//     }
-//     (*(origSetHidden)g_pOnSetHiddenHook->m_original)(w, state);
-// }
+inline CFunctionHook* g_pOnSetHiddenHook = nullptr;
+typedef void (*origSetHidden)(Desktop::View::CWindow *, bool);
+void hook_onSetHidden(void* thisptr, bool state) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+#ifdef FORK_WARN
+    static_assert(false, "[Function Body] Make sure our `CHyprOpenGLImpl::end` and Hyprland's are synced!");
+#endif
+    auto w = (Desktop::View::CWindow *) thisptr;
+    for (auto hw : hyprwindows) {
+        if  (hw->w.get() == w) {
+            if (state) {
+                // set to hide
+                if (!hw->min_fb)
+                    hw->min_fb = g_pHyprRenderer->createFB();
+                screenshot_window_with_decos(hw->min_fb, hw->w);
+                hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
+                hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
+                hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
+                hw->w_min_size.scale(w->m_monitor->m_scale);
+                hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
+                hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
+            } else {
+                // set to show
+                hw->unminize_start = get_current_time_in_ms();
+            }
+        }
+    }
+    (*(origSetHidden)g_pOnSetHiddenHook->m_original)(w, state);
+}
 
 void hook_hidden_state_change() {
 #ifdef FORK_WARN
@@ -2198,8 +2199,8 @@ void hook_hidden_state_change() {
     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "setHidden");
     for (auto m : METHODS) {
         if (m.demangled.find("CWindow::setHidden") != std::string::npos) {
-            // g_pOnSetHiddenHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSetHidden);
-            // g_pOnSetHiddenHook->hook();
+            g_pOnSetHiddenHook = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSetHidden);
+            g_pOnSetHiddenHook->hook();
             break;
         }
     }
@@ -5338,13 +5339,13 @@ void HyprIso::screenshot_deco(int id) {
     for (auto w : g_pCompositor->m_windows) {
         for (auto hw : hyprwindows) {
             if (hw->w == w && hw->id == id) {
-                // if (!hw->deco_fb)
-                //     hw->deco_fb = new CFramebuffer;
+                if (!hw->deco_fb)
+                    hw->deco_fb = g_pHyprRenderer->createFB();
                 screenshot_window(hw, w, true);
-                // auto tex = hw->deco_fb->getTexture();
-                // glActiveTexture(GL_TEXTURE0);
-                // tex->bind();
-                // glGenerateMipmap(tex->m_target);
+                auto tex = hw->deco_fb->getTexture();
+                glActiveTexture(GL_TEXTURE0);
+                tex->bind();
+                glGenerateMipmap(GL_TEXTURE_2D);
             }
         }
     }
@@ -8280,8 +8281,8 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
 void HyprIso::screenshot_monitor(int mon) {
     for (auto h : hyprmonitors) {
         if (h->id == mon) {
-            // if (!h->monfb)
-                // h->monfb = new CFramebuffer;
+            if (!h->monfb)
+                h->monfb = g_pHyprRenderer->createFB();
             PHLWORKSPACEREF startedOn = h->m->m_activeWorkspace;
             // screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
             h->mon_size.y = h->m->m_pixelSize.x;
