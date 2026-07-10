@@ -5576,19 +5576,18 @@ void HyprIso::set_zoom_factor(float amount, bool instant) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_factor");
-    // auto zoom_amount = (Hyprlang::FLOAT*)val->dataPtr();
-    // *zoom_amount = amount;
-    //
-    // for (auto const& m : g_pCompositor->m_monitors) {
-    //     if (m->m_cursorZoom) {
-    //         if (instant)
-    //             m->m_cursorZoom->setValueAndWarp(amount);
-    //         else
-    //             *(m->m_cursorZoom) = amount;
-    //         g_layoutManager->recalculateMonitor(m);
-    //     }
-    // }
+    static auto PZOOMFACTOR = CConfigValue<Config::FLOAT>("cursor:zoom_factor");
+    *(PZOOMFACTOR.ptr()) = amount;
+    for (auto const& m : g_pCompositor->m_monitors) {
+        if (instant)
+            m->m_cursorZoom->setValueAndWarp(amount);
+        else
+            *(m->m_cursorZoom) = amount;
+
+        g_pHyprRenderer->damageMonitor(m);
+        if (m->m_activeWorkspace)
+            m->m_activeWorkspace->m_space->recalculate();
+    }
 }
 
 int HyprIso::parent(int id) {
