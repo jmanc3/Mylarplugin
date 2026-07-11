@@ -19,6 +19,9 @@
 #include "tracy/Tracy.hpp"
 #endif
 
+struct lua_State;
+using PLUGIN_LUA_FN    = int (*)(lua_State* L);
+
 static int titlebar_h = 28;
 //static std::string mylar_font = "Noto Sans";
 //static std::string mylar_font = "SF Pro Rounded";
@@ -311,7 +314,7 @@ struct HyprIso {
 
     std::function<void(int cid, int want)> on_requests_max_or_min = nullptr;
 
-    void add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func);
+    void add_hyprctl_dispatcher(const std::string& command, PLUGIN_LUA_FN func);
 
     //std::vector<ThinClient *> windows;
     //std::vector<ThinMonitor *> monitors;

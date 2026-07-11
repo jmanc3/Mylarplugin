@@ -7304,25 +7304,16 @@ bool HyprIso::is_floating(int cid) {
     return false;
 }
 
-void HyprIso::add_hyprctl_dispatcher(std::string command, std::function<bool(std::string)> func) {
-	HyprlandAPI::registerHyprCtlCommand(
-        globals->api,
-        SHyprCtlCommand{
-            .name  = command,
-            .exact = false,
-            .fn    = [func](eHyprCtlOutputFormat format, std::string args) -> std::string {
-                func(args);
-                return "ok";
-            }
-        }
-    );
+void HyprIso::add_hyprctl_dispatcher(const std::string& command, PLUGIN_LUA_FN func) {
+    if (!HyprlandAPI::addLuaFunction(globals->api, "mylar", command, func))
+        Log::logger->log(Log::ERR, "hyprtester plugin: failed to register hl.plugin.test.{}", command);
+
     /*HyprlandAPI::addDispatcherV2(globals->api, command, [func](std::string in) {
         SDispatchResult result;
         result.success = func(in);
         return result;
     });*/
 }
-
 
 std::string HyprIso::monitor_name(int id) {
     for (auto hm : hyprmonitors) {
