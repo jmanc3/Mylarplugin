@@ -630,7 +630,7 @@ bool still_need_work(wl_context *ctx) {
 struct wl_window *wl_window_create(struct wl_context *ctx,
                                    int width, int height,
                                    int min_width, int min_height,
-                                   const char *title)
+                                   const char *title, RawWindow *rw)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -644,6 +644,7 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     win->min_width = min_width;
     win->min_height = min_height;
     win->pool = NULL;
+    win->rw = rw;
 
     // 1️⃣ Create surface
     win->surface = wl_compositor_create_surface(ctx->compositor);
@@ -652,8 +653,7 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
         delete win;
         return nullptr;
     }
-    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
-    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
+
     win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface); 
 
     // 2️⃣ Get xdg_surface
@@ -696,13 +696,16 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     log("surface commit");
     wl_surface_commit(win->surface);
 
+    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
+    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
+
     ctx->windows.push_back(win);
     return win;
 }
 
 struct wl_window *wl_popup_window_create(struct wl_context *ctx,
                                          int width, int height,
-                                         const char *title)
+                                         const char *title, RawWindow *rw)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -714,6 +717,7 @@ struct wl_window *wl_popup_window_create(struct wl_context *ctx,
     win->pending_width = width;
     win->pending_height = height;
     win->pool = NULL;
+    win->rw = rw;
 
     win->surface = wl_compositor_create_surface(ctx->compositor);
     if (!win->surface) {
@@ -722,8 +726,6 @@ struct wl_window *wl_popup_window_create(struct wl_context *ctx,
         return nullptr;
     }
 
-    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
-    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
     win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface);
 
     win->xdg_surface = xdg_wm_base_get_xdg_surface(ctx->wm_base, win->surface);
@@ -737,6 +739,9 @@ struct wl_window *wl_popup_window_create(struct wl_context *ctx,
     xdg_surface_add_listener(win->xdg_surface, &xdg_surface_listener, win);
 
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h);
+
+    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
+    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
 
     ctx->windows.push_back(win);
     return win;
@@ -774,7 +779,7 @@ static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
 struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int height,
                                          zwlr_layer_shell_v1_layer layer, const char *title,
                                          int alignment,
-                                         std::string monitor_name, bool exclusive_zone)
+                                         std::string monitor_name, bool exclusive_zone, RawWindow *rw)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -783,11 +788,10 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     win->scaled_w = win->logical_width * win->current_fractional_scale;
     win->scaled_h = win->logical_height * win->current_fractional_scale;
     win->title = title;
+    win->rw = rw;
 
     win->surface = wl_compositor_create_surface(ctx->compositor);
 
-    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
-    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
     win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface);
 
     bool found = false;
@@ -849,6 +853,9 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
+
+    win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
+    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
 
     ctx->windows.push_back(win);
     return win;
@@ -1935,8 +1942,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     rw->id = unique_id++;
 
     if (type == WindowType::NORMAL) {
-        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str());
-        window->rw = rw;
+        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str(), rw);
         rw->cr = window->cr;
         window->id = rw->id;
         window->on_render = on_window_render;  // set now that rw is set (resize_buffer skipped it)
@@ -1945,8 +1951,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         windows.push_back(window);
     }
     if (type == WindowType::DOCK) {
-        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.alignment, settings.monitor_name, true);
-        window->rw = rw;
+        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.alignment, settings.monitor_name, true, rw);
         rw->cr = window->cr;
         window->id = rw->id;
         window->on_render = on_window_render;
@@ -1971,13 +1976,12 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
     rw->creator = parent->creator;
     rw->id = unique_id++;
 
-    auto window = wl_popup_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str());
+    auto window = wl_popup_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str(), rw);
     if (!window) {
         delete rw;
         return nullptr;
     }
 
-    window->rw = rw;
     rw->cr = window->cr;
     window->id = rw->id;
     window->on_render = on_window_render;
