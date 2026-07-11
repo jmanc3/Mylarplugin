@@ -322,7 +322,7 @@ struct HyprWindow {
     SP<Render::IFramebuffer> fb = nullptr;
     Bounds w_bounds_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
-    
+
     SP<Render::IFramebuffer> deco_fb = nullptr;
     Bounds w_deco_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_decos_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
@@ -8215,7 +8215,7 @@ void HyprIso::screenshot_monitor(int mon) {
             if (!h->monfb)
                 h->monfb = g_pHyprRenderer->createFB();
             PHLWORKSPACEREF startedOn = h->m->m_activeWorkspace;
-            // screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
+            screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
             h->mon_size.y = h->m->m_pixelSize.x;
             h->mon_size.x = h->m->m_pixelSize.y;
         }
@@ -8223,388 +8223,388 @@ void HyprIso::screenshot_monitor(int mon) {
 }
 
 void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_path) {
-    // for (auto hm : hyprwindows) {
-    //     if (!hm || hm->id != cid)
-    //         continue;
-    //
-    //     if (!hm->deco_fb || !hm->deco_fb->isAllocated()) {
-    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", cid);
-    //         return;
-    //     }
-    //
-    //     const int w = static_cast<int>(hm->deco_fb->m_size.x);
-    //     const int h = static_cast<int>(hm->deco_fb->m_size.y);
-    //     if (w <= 0 || h <= 0) {
-    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", cid, w, h);
-    //         return;
-    //     }
-    //
-    //     g_pHyprRenderer->makeEGLCurrent();
-    //
-    //     GLint previousReadFB = 0;
-    //     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
-    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->deco_fb->getFBID());
-    //
-    //     const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
-    //     auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
-    //     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    //     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
-    //     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    //
-    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
-    //
-    //     const GLenum glErr = glGetError();
-    //     if (glErr != GL_NO_ERROR) {
-    //         Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", cid, static_cast<int>(glErr));
-    //         return;
-    //     }
-    //
-    //     std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, cid, outputPath = std::move(output_path)]() mutable {
-    //         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
-    //         const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
-    //         auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
-    //         std::memset(cairoPixels.get(), 0, cairoPixelsSize);
-    //
-    //         // Convert + flip vertically in ONE pass.
-    //         for (int y = 0; y < h; ++y) {
-    //             auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
-    //             const int srcY = y;
-    //
-    //             for (int x = 0; x < w; ++x) {
-    //                 const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
-    //
-    //                 const uint8_t r = rgbaPixels[src + 0];
-    //                 const uint8_t g = rgbaPixels[src + 1];
-    //                 const uint8_t b = rgbaPixels[src + 2];
-    //                 const uint8_t a = rgbaPixels[src + 3];
-    //
-    //                 // Premultiply alpha for Cairo ARGB32.
-    //                 const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
-    //                 const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
-    //                 const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
-    //
-    //                 dst[x] = (static_cast<uint32_t>(a) << 24) |
-    //                          (pr << 16) |
-    //                          (pg << 8)  |
-    //                          pb;
-    //             }
-    //         }
-    //
-    //         cairo_surface_t* surface = cairo_image_surface_create_for_data(
-    //             cairoPixels.get(),
-    //             CAIRO_FORMAT_ARGB32,
-    //             w,
-    //             h,
-    //             cairoStride
-    //         );
-    //
-    //         if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", cid);
-    //             cairo_surface_destroy(surface);
-    //             return;
-    //         }
-    //
-    //         std::filesystem::path outPath(outputPath);
-    //         std::error_code ec;
-    //
-    //         if (outPath.has_parent_path())
-    //             std::filesystem::create_directories(outPath.parent_path(), ec);
-    //
-    //         if (ec) {
-    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
-    //             cairo_surface_destroy(surface);
-    //             return;
-    //         }
-    //
-    //         const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
-    //         cairo_surface_destroy(surface);
-    //
-    //         if (writeStatus != CAIRO_STATUS_SUCCESS) {
-    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, cid);
-    //             return;
-    //         }
-    //     });
-    //
-    //     t.detach();
-    //
-    //     return;
-    // }
-    //
-    // Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
+    for (auto hm : hyprwindows) {
+        if (!hm || hm->id != cid)
+            continue;
+
+        if (!hm->deco_fb || !hm->deco_fb->isAllocated()) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", cid);
+            return;
+        }
+
+        const int w = static_cast<int>(hm->deco_fb->m_size.x);
+        const int h = static_cast<int>(hm->deco_fb->m_size.y);
+        if (w <= 0 || h <= 0) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", cid, w, h);
+            return;
+        }
+
+        Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+
+        GLint previousReadFB = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ((Render::GL::CGLFramebuffer *)hm->deco_fb.get())->getFBID());
+
+        const size_t rgbaPixelsSize = static_cast<size_t>(w) * h * 4;
+        auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+
+        const GLenum glErr = glGetError();
+        if (glErr != GL_NO_ERROR) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", cid, static_cast<int>(glErr));
+            return;
+        }
+
+        std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, cid, outputPath = std::move(output_path)]() mutable {
+            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
+            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
+            auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
+            std::memset(cairoPixels.get(), 0, cairoPixelsSize);
+
+            // Convert + flip vertically in ONE pass.
+            for (int y = 0; y < h; ++y) {
+                auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
+                const int srcY = y;
+
+                for (int x = 0; x < w; ++x) {
+                    const size_t src = (static_cast<size_t>(srcY) * w + x) * 4;
+
+                    const uint8_t r = rgbaPixels[src + 0];
+                    const uint8_t g = rgbaPixels[src + 1];
+                    const uint8_t b = rgbaPixels[src + 2];
+                    const uint8_t a = rgbaPixels[src + 3];
+
+                    // Premultiply alpha for Cairo ARGB32.
+                    const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
+                    const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
+                    const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
+
+                    dst[x] = (static_cast<uint32_t>(a) << 24) |
+                             (pr << 16) |
+                             (pg << 8)  |
+                             pb;
+                }
+            }
+
+            cairo_surface_t* surface = cairo_image_surface_create_for_data(
+                cairoPixels.get(),
+                CAIRO_FORMAT_ARGB32,
+                w,
+                h,
+                cairoStride
+            );
+
+            if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", cid);
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            std::filesystem::path outPath(outputPath);
+            std::error_code ec;
+
+            if (outPath.has_parent_path())
+                std::filesystem::create_directories(outPath.parent_path(), ec);
+
+            if (ec) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
+            cairo_surface_destroy(surface);
+
+            if (writeStatus != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, cid);
+                return;
+            }
+        });
+
+        t.detach();
+
+        return;
+    }
+
+    Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
 }
 
 void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds region) {
-    // for (auto hm : hyprmonitors) {
-    //     if (!hm || hm->id != mon)
-    //         continue;
-    //
-    //     if (!hm->monfb || !hm->monfb->isAllocated()) {
-    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", mon);
-    //         return;
-    //     }
-    //
-    //     const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
-    //     const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
-    //     if (framebufferW <= 0 || framebufferH <= 0) {
-    //         Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
-    //         return;
-    //     }
-    //
-    //     int readX = 0;
-    //     int readY = 0;
-    //     int readW = framebufferW;
-    //     int readH = framebufferH;
-    //
-    //     if (!(region.w == 0 && region.h == 0)) {
-    //         if (region.w <= 0 || region.h <= 0) {
-    //             Log::logger->log(
-    //                 Log::ERR,
-    //                 "save_monitor_to_png: monitor {} crop region has invalid size {}x{}",
-    //                 mon, region.w, region.h
-    //             );
-    //             return;
-    //         }
-    //
-    //         const int regionLeft   = static_cast<int>(std::floor(region.x));
-    //         const int regionTop    = static_cast<int>(std::floor(region.y));
-    //         const int regionRight  = static_cast<int>(std::ceil(region.x + region.w));
-    //         const int regionBottom = static_cast<int>(std::ceil(region.y + region.h));
-    //
-    //         readX = std::max(0, regionLeft);
-    //         readY = std::max(0, regionTop);
-    //         const int clampedRight  = std::min(framebufferW, regionRight);
-    //         const int clampedBottom = std::min(framebufferH, regionBottom);
-    //
-    //         readW = clampedRight - readX;
-    //         readH = clampedBottom - readY;
-    //
-    //         if (readW <= 0 || readH <= 0) {
-    //             Log::logger->log(
-    //                 Log::ERR,
-    //                 "save_monitor_to_png: monitor {} crop region ({}, {}, {}, {}) is outside framebuffer {}x{}",
-    //                 mon, region.x, region.y, region.w, region.h, framebufferW, framebufferH
-    //             );
-    //             return;
-    //         }
-    //     }
-    //
-    //     g_pHyprRenderer->makeEGLCurrent();
-    //
-    //     GLint previousReadFB = 0;
-    //     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
-    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
-    //
-    //     const size_t rgbaPixelsSize = static_cast<size_t>(readW) * readH * 4;
-    //     auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
-    //     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    //     glReadPixels(readX, readY, readW, readH, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
-    //     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    //
-    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
-    //
-    //     const GLenum glErr = glGetError();
-    //     if (glErr != GL_NO_ERROR) {
-    //         Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
-    //         return;
-    //     }
-    //
-    //     std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, outputPath = std::move(output_path)]() mutable {
-    //         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
-    //         const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
-    //         auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
-    //         std::memset(cairoPixels.get(), 0, cairoPixelsSize);
-    //
-    //         // Convert + flip vertically in ONE pass.
-    //         for (int y = 0; y < readH; ++y) {
-    //             auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
-    //             const int srcY = y;
-    //
-    //             for (int x = 0; x < readW; ++x) {
-    //                 const size_t src = (static_cast<size_t>(srcY) * readW + x) * 4;
-    //
-    //                 const uint8_t r = rgbaPixels[src + 0];
-    //                 const uint8_t g = rgbaPixels[src + 1];
-    //                 const uint8_t b = rgbaPixels[src + 2];
-    //                 const uint8_t a = rgbaPixels[src + 3];
-    //
-    //                 // Premultiply alpha for Cairo ARGB32.
-    //                 const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
-    //                 const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
-    //                 const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
-    //
-    //                 dst[x] = (static_cast<uint32_t>(a) << 24) |
-    //                          (pr << 16) |
-    //                          (pg << 8)  |
-    //                          pb;
-    //             }
-    //         }
-    //
-    //         cairo_surface_t* surface = cairo_image_surface_create_for_data(
-    //             cairoPixels.get(),
-    //             CAIRO_FORMAT_ARGB32,
-    //             readW,
-    //             readH,
-    //             cairoStride
-    //         );
-    //
-    //         if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
-    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", mon);
-    //             cairo_surface_destroy(surface);
-    //             return;
-    //         }
-    //
-    //         std::filesystem::path outPath(outputPath);
-    //         std::error_code ec;
-    //
-    //         if (outPath.has_parent_path())
-    //             std::filesystem::create_directories(outPath.parent_path(), ec);
-    //
-    //         if (ec) {
-    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
-    //             cairo_surface_destroy(surface);
-    //             return;
-    //         }
-    //
-    //         const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
-    //         cairo_surface_destroy(surface);
-    //
-    //         if (writeStatus != CAIRO_STATUS_SUCCESS) {
-    //             Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, mon);
-    //             return;
-    //         }
-    //     });
-    //
-    //     t.detach();
-    //
-    //     return;
-    // }
-    //
-    // Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", mon);
+    for (auto hm : hyprmonitors) {
+        if (!hm || hm->id != mon)
+            continue;
+
+        if (!hm->monfb || !hm->monfb->isAllocated()) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} has no framebuffer", mon);
+            return;
+        }
+
+        const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
+        const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
+        if (framebufferW <= 0 || framebufferH <= 0) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
+            return;
+        }
+
+        int readX = 0;
+        int readY = 0;
+        int readW = framebufferW;
+        int readH = framebufferH;
+
+        if (!(region.w == 0 && region.h == 0)) {
+            if (region.w <= 0 || region.h <= 0) {
+                Log::logger->log(
+                    Log::ERR,
+                    "save_monitor_to_png: monitor {} crop region has invalid size {}x{}",
+                    mon, region.w, region.h
+                );
+                return;
+            }
+
+            const int regionLeft   = static_cast<int>(std::floor(region.x));
+            const int regionTop    = static_cast<int>(std::floor(region.y));
+            const int regionRight  = static_cast<int>(std::ceil(region.x + region.w));
+            const int regionBottom = static_cast<int>(std::ceil(region.y + region.h));
+
+            readX = std::max(0, regionLeft);
+            readY = std::max(0, regionTop);
+            const int clampedRight  = std::min(framebufferW, regionRight);
+            const int clampedBottom = std::min(framebufferH, regionBottom);
+
+            readW = clampedRight - readX;
+            readH = clampedBottom - readY;
+
+            if (readW <= 0 || readH <= 0) {
+                Log::logger->log(
+                    Log::ERR,
+                    "save_monitor_to_png: monitor {} crop region ({}, {}, {}, {}) is outside framebuffer {}x{}",
+                    mon, region.x, region.y, region.w, region.h, framebufferW, framebufferH
+                );
+                return;
+            }
+        }
+
+        Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+
+        GLint previousReadFB = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ((Render::GL::CGLFramebuffer *)hm->monfb.get())->getFBID());
+
+        const size_t rgbaPixelsSize = static_cast<size_t>(readW) * readH * 4;
+        auto rgbaPixels = std::unique_ptr<uint8_t[]>(new uint8_t[rgbaPixelsSize]);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(readX, readY, readW, readH, GL_RGBA, GL_UNSIGNED_BYTE, rgbaPixels.get());
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+
+        const GLenum glErr = glGetError();
+        if (glErr != GL_NO_ERROR) {
+            Log::logger->log(Log::ERR, "save_monitor_to_png: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
+            return;
+        }
+
+        std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, outputPath = std::move(output_path)]() mutable {
+            const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
+            const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
+            auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
+            std::memset(cairoPixels.get(), 0, cairoPixelsSize);
+
+            // Convert + flip vertically in ONE pass.
+            for (int y = 0; y < readH; ++y) {
+                auto* dst = reinterpret_cast<uint32_t*>(cairoPixels.get() + static_cast<size_t>(y) * cairoStride);
+                const int srcY = y;
+
+                for (int x = 0; x < readW; ++x) {
+                    const size_t src = (static_cast<size_t>(srcY) * readW + x) * 4;
+
+                    const uint8_t r = rgbaPixels[src + 0];
+                    const uint8_t g = rgbaPixels[src + 1];
+                    const uint8_t b = rgbaPixels[src + 2];
+                    const uint8_t a = rgbaPixels[src + 3];
+
+                    // Premultiply alpha for Cairo ARGB32.
+                    const uint32_t pr = (static_cast<uint32_t>(r) * a + 127) / 255;
+                    const uint32_t pg = (static_cast<uint32_t>(g) * a + 127) / 255;
+                    const uint32_t pb = (static_cast<uint32_t>(b) * a + 127) / 255;
+
+                    dst[x] = (static_cast<uint32_t>(a) << 24) |
+                             (pr << 16) |
+                             (pg << 8)  |
+                             pb;
+                }
+            }
+
+            cairo_surface_t* surface = cairo_image_surface_create_for_data(
+                cairoPixels.get(),
+                CAIRO_FORMAT_ARGB32,
+                readW,
+                readH,
+                cairoStride
+            );
+
+            if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create cairo surface for monitor {}", mon);
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            std::filesystem::path outPath(outputPath);
+            std::error_code ec;
+
+            if (outPath.has_parent_path())
+                std::filesystem::create_directories(outPath.parent_path(), ec);
+
+            if (ec) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to create parent directories for {}: {}", outputPath, ec.message());
+                cairo_surface_destroy(surface);
+                return;
+            }
+
+            const auto writeStatus = cairo_surface_write_to_png(surface, outputPath.c_str());
+            cairo_surface_destroy(surface);
+
+            if (writeStatus != CAIRO_STATUS_SUCCESS) {
+                Log::logger->log(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, mon);
+                return;
+            }
+        });
+
+        t.detach();
+
+        return;
+    }
+
+    Log::logger->log(Log::ERR, "save_monitor_to_png: monitor {} not found", mon);
 }
 
 RGBA HyprIso::colorpick_monitor(int mon, Bounds mouse) {
     RGBA color = {0, 0, 0, 1};
-    //
-    // for (auto hm : hyprmonitors) {
-    //     if (!hm || hm->id != mon)
-    //         continue;
-    //
-    //     if (!hm->monfb || !hm->monfb->isAllocated()) {
-    //         Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} has no framebuffer", mon);
-    //         return color;
-    //     }
-    //
-    //     const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
-    //     const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
-    //     if (framebufferW <= 0 || framebufferH <= 0) {
-    //         Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
-    //         return color;
-    //     }
-    //
-    //     const Bounds monitorBounds = bounds_monitor(mon);
-    //     const float  sFactor       = scale(mon);
-    //     int          readX         = static_cast<int>(std::round((mouse.x - monitorBounds.x) * sFactor));
-    //     int          readY         = static_cast<int>(std::round((mouse.y - monitorBounds.y) * sFactor));
-    //
-    //     readX = std::clamp(readX, 0, framebufferW - 1);
-    //     readY = std::clamp(readY, 0, framebufferH - 1);
-    //
-    //     g_pHyprRenderer->makeEGLCurrent();
-    //
-    //     GLint previousReadFB = 0;
-    //     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
-    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, hm->monfb->getFBID());
-    //
-    //     uint8_t pixel[4] = {0, 0, 0, 255};
-    //     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    //     glReadPixels(readX, readY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-    //     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    //
-    //     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
-    //
-    //     const GLenum glErr = glGetError();
-    //     if (glErr != GL_NO_ERROR) {
-    //         Log::logger->log(Log::ERR, "colorpick_monitor: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
-    //         return color;
-    //     }
-    //
-    //     color.r = pixel[0] / 255.0;
-    //     color.g = pixel[1] / 255.0;
-    //     color.b = pixel[2] / 255.0;
-    //     color.a = pixel[3] / 255.0;
-    //     return color;
-    // }
-    //
-    // Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} not found", mon);
+
+    for (auto hm : hyprmonitors) {
+        if (!hm || hm->id != mon)
+            continue;
+
+        if (!hm->monfb || !hm->monfb->isAllocated()) {
+            Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} has no framebuffer", mon);
+            return color;
+        }
+
+        const int framebufferW = static_cast<int>(hm->monfb->m_size.x);
+        const int framebufferH = static_cast<int>(hm->monfb->m_size.y);
+        if (framebufferW <= 0 || framebufferH <= 0) {
+            Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} framebuffer has invalid size {}x{}", mon, framebufferW, framebufferH);
+            return color;
+        }
+
+        const Bounds monitorBounds = bounds_monitor(mon);
+        const float  sFactor       = scale(mon);
+        int          readX         = static_cast<int>(std::round((mouse.x - monitorBounds.x) * sFactor));
+        int          readY         = static_cast<int>(std::round((mouse.y - monitorBounds.y) * sFactor));
+
+        readX = std::clamp(readX, 0, framebufferW - 1);
+        readY = std::clamp(readY, 0, framebufferH - 1);
+
+        Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+
+        GLint previousReadFB = 0;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFB);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, ((Render::GL::CGLFramebuffer *)hm->monfb.get())->getFBID());
+
+        uint8_t pixel[4] = {0, 0, 0, 255};
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(readX, readY, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        glPixelStorei(GL_PACK_ALIGNMENT, 4);
+
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFB);
+
+        const GLenum glErr = glGetError();
+        if (glErr != GL_NO_ERROR) {
+            Log::logger->log(Log::ERR, "colorpick_monitor: glReadPixels failed for monitor {} with GL error 0x{:x}", mon, static_cast<int>(glErr));
+            return color;
+        }
+
+        color.r = pixel[0] / 255.0;
+        color.g = pixel[1] / 255.0;
+        color.b = pixel[2] / 255.0;
+        color.a = pixel[3] / 255.0;
+        return color;
+    }
+
+    Log::logger->log(Log::ERR, "colorpick_monitor: monitor {} not found", mon);
     return color;
 }
 
 void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
-    // for (auto hm : hyprmonitors) {
-    //     if (hm->id != mon)
-    //         continue;
-    //     if (!hm->monfb)
-    //         continue;
-    //     if (!hm->monfb->getTexture())
-    //         return;
-    //     bool clip = hypriso->clip;
-    //     Bounds clipbox = hypriso->clipbox;
-    //     if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
-    //         return;
-    //     }
-    //     AnyPass::AnyData anydata([hm, mon, b, clip, clipbox, uvBounds](AnyPass* pass) {
-    //         auto roundingPower = 2.0f;
-    //         auto cornermask = 0;
-    //         if (!hm->monfb)
-    //             return;
-    //         auto tex = hm->monfb->getTexture();
-    //         if (!tex)
-    //             return;
-    //         auto box = tocbox(b);
-    //
-    //         CHyprOpenGLImpl::STextureRenderData data;
-    //         data.allowCustomUV = true;
-    //
-    //         data.round = 0.0;
-    //         data.roundingPower = roundingPower;
-    //         data.a = 1.0;
-    //         data.noAA = true;
-    //
-    //         bool useCustomUV = uvBounds.x != 0 || uvBounds.y != 0 || uvBounds.w != 0 || uvBounds.h != 0;
-    //         if (useCustomUV) {
-    //             const double framebufferW = hm->monfb->m_size.x;
-    //             const double framebufferH = hm->monfb->m_size.y;
-    //             if (framebufferW > 0.0 && framebufferH > 0.0) {
-    //                 const double uvLeft   = std::clamp(uvBounds.x / framebufferW, 0.0, 1.0);
-    //                 const double uvTop    = std::clamp(uvBounds.y / framebufferH, 0.0, 1.0);
-    //                 const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
-    //                 const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
-    //
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
-    //             } else {
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //                 g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
-    //             }
-    //         } else {
-    //             g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
-    //             g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
-    //         }
-    //         set_rounding(cornermask);
-    //         if (clip)
-    //             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
-    //         tex->bind();
-    //         tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    //         tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    //         Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-    //         set_rounding(0);
-    //         g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
-    //         g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
-    //         if (clip)
-    //             g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
-    //     });
-    //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-    // }
+    for (auto hm : hyprmonitors) {
+        if (hm->id != mon)
+            continue;
+        if (!hm->monfb)
+            continue;
+        if (!hm->monfb->getTexture())
+            return;
+        bool clip = hypriso->clip;
+        Bounds clipbox = hypriso->clipbox;
+        if (clip && !tocbox(clipbox).overlaps(tocbox(b))) {
+            return;
+        }
+        AnyPass::AnyData anydata([hm, mon, b, clip, clipbox, uvBounds](AnyPass* pass) {
+            auto roundingPower = 2.0f;
+            auto cornermask = 0;
+            if (!hm->monfb)
+                return;
+            auto tex = hm->monfb->getTexture();
+            if (!tex)
+                return;
+            auto box = tocbox(b);
+
+            Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+            data.allowCustomUV = true;
+
+            data.round = 0.0;
+            data.roundingPower = roundingPower;
+            data.a = 1.0;
+            data.noAA = true;
+
+            bool useCustomUV = uvBounds.x != 0 || uvBounds.y != 0 || uvBounds.w != 0 || uvBounds.h != 0;
+            if (useCustomUV) {
+                const double framebufferW = hm->monfb->m_size.x;
+                const double framebufferH = hm->monfb->m_size.y;
+                if (framebufferW > 0.0 && framebufferH > 0.0) {
+                    const double uvLeft   = std::clamp(uvBounds.x / framebufferW, 0.0, 1.0);
+                    const double uvTop    = std::clamp(uvBounds.y / framebufferH, 0.0, 1.0);
+                    const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
+                    const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
+
+                    g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
+                    g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
+                } else {
+                    g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                    g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+                }
+            } else {
+                g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(0, 0);
+                g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(1, 1);
+            }
+            set_rounding(cornermask);
+            if (clip)
+                g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
+            tex->bind();
+            tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+            set_rounding(0);
+            g_pHyprRenderer->m_renderData.primarySurfaceUVTopLeft     = Vector2D(-1, -1);
+            g_pHyprRenderer->m_renderData.primarySurfaceUVBottomRight = Vector2D(-1, -1);
+            if (clip)
+                g_pHyprRenderer->m_renderData.clipBox = tocbox(Bounds());
+        });
+        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+    }
 }
 
 int HyprIso::window_from_mouse() {
