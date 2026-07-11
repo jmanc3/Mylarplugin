@@ -1618,7 +1618,7 @@ void add_hyprctl_dispatchers() {
 
 
 
-    hypriso->add_hyprctl_dispatcher("right_click_active", [](lua_State *) {
+    hypriso->add_hyprctl_dispatcher("right_click_activate", [](lua_State *) {
         for (auto m : actual_root->children) {
             if (m->custom_type == (int) TYPE::CLIENT) {
                 auto cid = *datum<int>(m, "cid");
