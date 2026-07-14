@@ -40,6 +40,7 @@
 #include <cstring>
 #include <functional>
 #include <climits>
+#include <atomic>
 
 extern "C" {
 #define namespace namespace_
@@ -144,8 +145,14 @@ struct wl_context {
     std::vector<std::function<void()>> functions_to_call;
     std::mutex functions_mut;
     bool have_functions_to_execute = false;
+
+    // A close request may come from a thread other than the Wayland loop.
+    // Keep it from returning while libwayland is invoking client callbacks.
+    std::recursive_mutex dispatch_mut;
   
-    bool running = true;
+    // close_app() may be called from a thread other than the Wayland event loop.
+    // Keep the stop request synchronized with the loop that owns `display`.
+    std::atomic_bool running { true };
     
     struct wl_display *display = nullptr;
     
@@ -1651,6 +1658,12 @@ void wl_context_destroy(struct wl_context *ctx) {
     wl_registry_destroy(ctx->registry);
     wl_display_disconnect(ctx->display);
 
+    for (const auto &pf : ctx->polled_fds)
+        if (pf.fd >= 0 && pf.fd != ctx->wake_pipe[0])
+            close(pf.fd);
+    close(ctx->wake_pipe[0]);
+    close(ctx->wake_pipe[1]);
+
     for (int i = apps.size() - 1; i >= 0; i--)
         if (apps[i] == ctx)
             apps.erase(apps.begin() + i);
@@ -1669,32 +1682,7 @@ void windowing::main_loop(RawApp *app) {
         return;
 
     bool need_flush = false;
-    int fd = wl_display_get_fd(ctx->display);
-
-    PolledFunction wayland_pf;
-    wayland_pf.fd = fd;
-    wayland_pf.func = [ctx, &need_flush](PolledFunction pf) {
-        short re = pf.revents;
-
-        if (re & POLLERR || re & POLLHUP) {
-            ctx->running = false;
-            return;
-        }
-
-        if (re & POLLIN) {
-            if (wl_display_prepare_read(ctx->display) == 0) {
-                wl_display_read_events(ctx->display);
-                wl_display_dispatch_pending(ctx->display);
-            } else {
-                wl_display_dispatch_pending(ctx->display);
-            }
-        }
-
-        if (re & POLLOUT) {
-            if (wl_display_flush(ctx->display) == 0)
-                need_flush = false;
-        }
-    };
+    const int wayland_fd = wl_display_get_fd(ctx->display);
 
     PolledFunction wake_pf;
     wake_pf.fd = ctx->wake_pipe[0];
@@ -1712,15 +1700,34 @@ void windowing::main_loop(RawApp *app) {
         }
     };
 
-    ctx->polled_fds.push_back(wayland_pf);
     ctx->polled_fds.push_back(wake_pf);
 
     while (ctx->running) {
-        // Handle pre-poll Wayland events
-        wl_display_dispatch_pending(ctx->display);
+        // A Wayland read must always be paired: prepare_read() before poll(),
+        // then read_events() when readable or cancel_read() otherwise.  In
+        // particular, never begin a read after the display has been woken for
+        // shutdown.
+        while (ctx->running && wl_display_prepare_read(ctx->display) != 0) {
+            std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
+            if (!ctx->running || wl_display_dispatch_pending(ctx->display) < 0) {
+                ctx->running = false;
+                break;
+            }
+        }
+        if (!ctx->running)
+            break;
 
-        if (wl_display_flush(ctx->display) < 0 && errno == EAGAIN)
-            need_flush = true;
+        if (wl_display_flush(ctx->display) < 0) {
+            if (errno == EAGAIN) {
+                need_flush = true;
+            } else {
+                wl_display_cancel_read(ctx->display);
+                ctx->running = false;
+                break;
+            }
+        } else {
+            need_flush = false;
+        }
 
         // Build pollfds based on ctx->polled_fds
         std::vector<struct pollfd> pfds;
@@ -1728,38 +1735,84 @@ void windowing::main_loop(RawApp *app) {
 
         for (auto &p : ctx->polled_fds) {
             short ev = POLLIN | POLLERR | POLLHUP | POLLNVAL;
-            if (p.fd == fd && need_flush)
+            if (p.fd == wayland_fd && need_flush)
                 ev |= POLLOUT;
             pfds.push_back({ p.fd, ev, 0 });
         }
+        pfds.insert(pfds.begin(), { wayland_fd,
+                                    static_cast<short>(POLLIN | POLLERR | POLLHUP | POLLNVAL |
+                                                       (need_flush ? POLLOUT : 0)),
+                                    0 });
 
-        // Block
-        if (poll(pfds.data(), pfds.size(), -1) < 0)
+        const int poll_result = poll(pfds.data(), pfds.size(), -1);
+        if (poll_result < 0) {
+            wl_display_cancel_read(ctx->display);
+            if (errno == EINTR)
+                continue;
+            ctx->running = false;
             break;
+        }
 
-        if (!ctx->running)
-            continue;
+        const short wayland_revents = pfds[0].revents;
+        if (wayland_revents & POLLIN) {
+            if (wl_display_read_events(ctx->display) < 0) {
+                ctx->running = false;
+                break;
+            }
+        } else {
+            wl_display_cancel_read(ctx->display);
+        }
 
-        // Dispatch
-        int end = ctx->polled_fds.size();
-        for (size_t i = 0; i < end; i++) {
-            auto &p = ctx->polled_fds[i];
-            if (p.fd == wayland_pf.fd) {
-                if (p.revents & POLLERR) {
-                    return;
-                }
+        // The wake pipe is the cross-thread stop notification.  Handle it
+        // before dispatching any newly received Wayland events: poll can
+        // report both descriptors in the same iteration.
+        for (size_t i = 0; i < ctx->polled_fds.size(); ++i) {
+            if (ctx->polled_fds[i].fd == ctx->wake_pipe[0] &&
+                (pfds[i + 1].revents & POLLIN)) {
+                char buf[64];
+                while (read(ctx->wake_pipe[0], buf, sizeof buf) > 0) {}
+                break;
             }
         }
 
-        // Dispatch
-        end = ctx->polled_fds.size();
+        // close_app() sets this flag and writes the wake pipe.  Once the
+        // outstanding read is cancelled, leave without dispatching callbacks
+        // against an application that is shutting down.
+        if (!ctx->running)
+            break;
+
+        if (wayland_revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            ctx->running = false;
+            break;
+        }
+        if ((wayland_revents & POLLOUT) && wl_display_flush(ctx->display) == 0)
+            need_flush = false;
+
+        {
+            // Do not allow close_app() to return while this call is executing:
+            // its caller is then free to release the objects referenced by
+            // Wayland listener callbacks.
+            std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
+            if (!ctx->running || wl_display_get_error(ctx->display) != 0 ||
+                wl_display_dispatch_pending(ctx->display) < 0) {
+                ctx->running = false;
+                break;
+            }
+        }
+
+        // The Wayland display is owned entirely by the code above.  Dispatch
+        // the auxiliary descriptors only after its read transaction is closed.
+        const size_t end = ctx->polled_fds.size();
         for (size_t i = 0; i < end; i++) {
             auto &p = ctx->polled_fds[i];
-            p.revents = pfds[i].revents;
+            p.revents = pfds[i + 1].revents;
 
             if (p.revents && p.func)
                 p.func(p);  // call the polled handler
         }
+
+        if (!ctx->running)
+            break;
 
         // should technically be atomic<bool> but should be fine?
         if (ctx->have_functions_to_execute) { 
@@ -2192,10 +2245,16 @@ void windowing::close_app(RawApp *app) {
             ctx = c;
     if (!ctx)
         return;
-    for (auto w : ctx->windows) {
-        windowing::close_window(w->rw); 
+
+    // This can be called from another thread.  Set the stop flag *before*
+    // touching any windows: otherwise the event thread can wake between
+    // close_window() calls and dispatch a queued Wayland callback for an
+    // object that is in the middle of being torn down.  main_loop() owns the
+    // actual Wayland destruction after it observes this flag.
+    {
+        std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
+        ctx->running = false;
     }
-    ctx->running = false;
     write(ctx->wake_pipe[1], "x", 1);
 }
 

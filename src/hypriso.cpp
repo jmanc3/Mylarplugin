@@ -10,6 +10,7 @@
 #include "heart.h"
 #include "dock.h"
 
+#include <config/shared/Types.hpp>
 #include <cstdint>
 //#include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
@@ -4742,45 +4743,6 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
     g_pDesktopAnimationManager->startAnimation(startedOn, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
 }
 
-// void makeSnapshot(PHLWINDOW pWindow, CFramebuffer *PFRAMEBUFFER) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//     // we trust the window is valid.
-//     const auto PMONITOR = pWindow->m_monitor.lock();
-//
-//     if (!PMONITOR || !PMONITOR->m_output || PMONITOR->m_pixelSize.x <= 0 || PMONITOR->m_pixelSize.y <= 0)
-//         return;
-//
-//     if (!g_pHyprRenderer->shouldRenderWindow(pWindow))
-//         return; // ignore, window is not being rendered
-//
-//     // we need to "damage" the entire monitor
-//     // so that we render the entire window
-//     // this is temporary, doesn't mess with the actual damage
-//     CRegion      fakeDamage{0, 0, PMONITOR->m_transformedSize.x, PMONITOR->m_transformedSize.y};
-//
-//     PHLWINDOWREF ref{pWindow};
-//
-//     g_pHyprRenderer->makeEGLCurrent();
-//
-//     //const auto PFRAMEBUFFER = &g_pHyprOpenGL->m_windowFramebuffers[ref];
-//
-//     PFRAMEBUFFER->alloc(PMONITOR->m_pixelSize.x, PMONITOR->m_pixelSize.y, DRM_FORMAT_ABGR8888);
-//
-//     g_pHyprRenderer->beginRender(PMONITOR, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, PFRAMEBUFFER);
-//
-//     g_pHyprRenderer->m_bRenderingSnapshot = true;
-//
-//     Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // JIC
-//
-//     g_pHyprRenderer->renderWindow(pWindow, PMONITOR, Time::steadyNow(), true, RENDER_PASS_ALL, true);
-//
-//     g_pHyprRenderer->endRender();
-//
-//     g_pHyprRenderer->m_bRenderingSnapshot = false;
-// }
-
 void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, Render::eRenderPassMode mode, bool ignorePosition, bool standalone) {
 #ifdef FORK_WARN
 //void CHyprRenderer::renderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, eRenderPassMode mode, bool ignorePosition, bool standalone) {
@@ -5740,45 +5702,8 @@ void HyprIso::overwrite_defaults() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    return;
-/*
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:blur:enabled");
-        auto target = (Hyprlang::INT*)val->dataPtr();
-        *target = 1;
-    }
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:blur:size");
-        auto target = (Hyprlang::INT*)val->dataPtr();
-        *target = 6;
-    }
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:blur:passes");
-        auto target = (Hyprlang::INT*)val->dataPtr();
-        *target = 3;
-    }
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:blur:noise");
-        auto target = (Hyprlang::FLOAT*)val->dataPtr();
-        *target = .04;
-    }
-    {
-        Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:blur:vibrancy");
-        auto target = (Hyprlang::FLOAT*)val->dataPtr();
-        *target = .4696;
-    }
-    */
-    // {
-    //     Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_rigid");
-    //     auto target = (Hyprlang::INT*)val->dataPtr();
-    //     *target = false;
-    // }
-    // {
-    //     Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("cursor:zoom_disable_aa");
-    //     auto target = (Hyprlang::INT*)val->dataPtr();
-    //     *target = true;
-    // }
-
+    *(CConfigValue<Config::FLOAT>("cursor:zoom_rigid").ptr()) = false;
+    *(CConfigValue<Config::INTEGER>("cursor:zoom_disable_aa").ptr()) = true;
     //g_pConfigManager->handleWindowRule("windowrulev2", "float, class:.*");
 }
 
