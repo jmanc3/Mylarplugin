@@ -11,6 +11,9 @@
 #include "dock.h"
 
 #include <config/shared/Types.hpp>
+#include <config/values/types/ColorValue.hpp>
+#include <config/values/types/FloatValue.hpp>
+#include <config/values/types/IntValue.hpp>
 #include <cstdint>
 //#include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
@@ -20,6 +23,8 @@
 // #include <hyprland/src/debug/HyprNotificationOverlay.hpp>
 // #include <hyprland/src/hyprerror/HyprError.hpp>
 // #include <hyprland/src/config/shared/actions/ConfigActions.cpp>
+#include <hyprland/src/config/shared/parserUtils/ParserUtils.hpp>
+#include <hyprutils/memory/SharedPtr.hpp>
 
 #define private public
 #include <hyprland/src/render/OpenGL.hpp>
@@ -96,6 +101,7 @@
 #include <hyprland/src/protocols/RelativePointer.hpp>
 #include <hyprland/src/protocols/SessionLock.hpp>
 #include <hyprland/src/protocols/LayerShell.hpp>
+#include <hyprland/src/config/values/ConfigValues.hpp>
 
 #define private public
 #include <hyprland/src/protocols/ColorManagement.hpp>
@@ -135,6 +141,7 @@
 
 #include <hyprland/src/xwayland/XWayland.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/plugins/PluginSystem.hpp>
 #include <hyprland/src/devices/IPointer.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
@@ -1416,39 +1423,68 @@ void HyprIso::set_float_state(int id, bool should_float) {
             change_float_state(hw->w, should_float);
 }
 
-int HyprIso::get_varint(std::string target, int default_float) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //return default_float;
+struct MylarHyprConfigValues {
+    SP<Config::Values::CColorValue> titlebar_button_bg_hovered_color;
+    SP<Config::Values::CColorValue> titlebar_button_bg_pressed_color;
+    SP<Config::Values::CColorValue> titlebar_closed_button_bg_hovered_color;
+    SP<Config::Values::CColorValue> titlebar_closed_button_bg_pressed_color;
+    SP<Config::Values::CColorValue> titlebar_closed_button_icon_color_hovered_pressed;
+    SP<Config::Values::CColorValue> titlebar_focused_color;
+    SP<Config::Values::CColorValue> titlebar_unfocused_color;
+    SP<Config::Values::CColorValue> titlebar_focused_text_color;
+    SP<Config::Values::CColorValue> titlebar_unfocused_text_color;
+    SP<Config::Values::CFloatValue> thumb_to_position_time;
+    SP<Config::Values::CFloatValue> snap_helper_fade_in;
+    SP<Config::Values::CFloatValue> titlebar_button_ratio;
+    SP<Config::Values::CFloatValue> titlebar_text_h;
+    SP<Config::Values::CFloatValue> titlebar_icon_h;
+    SP<Config::Values::CFloatValue> titlebar_button_icon_h;
+    SP<Config::Values::CFloatValue> resize_edge_size;
+    SP<Config::Values::CIntValue> dock;
+    SP<Config::Values::CColorValue> dock_color;
+    SP<Config::Values::CColorValue> dock_sel_active_color;
+    SP<Config::Values::CColorValue> dock_sel_press_color;
+    SP<Config::Values::CColorValue> dock_sel_hover_color;
+    SP<Config::Values::CColorValue> dock_sel_accent_color;
+    SP<Config::Values::CColorValue> sel_color;
+    SP<Config::Values::CColorValue> sel_border_color;
+};
 
-    auto confval = HyprlandAPI::getConfigValue(globals->api, target);
-    if (!confval) {
-        return default_float;
+MylarHyprConfigValues *values = new MylarHyprConfigValues;
+
+int HyprIso::get_varint(std::string target, int default_int) {
+    auto* const PLUGIN = g_pPluginSystem->getPluginByHandle(globals->api);
+    for (auto p : PLUGIN->m_registeredApiValues) {
+        if (p->name() == target) {
+            auto a = dynamic_cast<Config::Values::CIntValue *>(p.get());
+            return a->value();
+        }
     }
 
-    auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
-    return **VAR; 
+    return default_int;
 }
 
 float HyprIso::get_varfloat(std::string target, float default_float) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //return default_float;
-    
-    auto confval = HyprlandAPI::getConfigValue(globals->api, target);
-    if (!confval)
-        return default_float;
+    auto* const PLUGIN = g_pPluginSystem->getPluginByHandle(globals->api);
+    for (auto p : PLUGIN->m_registeredApiValues) {
+        if (p->name() == target) {
+            auto a = dynamic_cast<Config::Values::CFloatValue *>(p.get());
+            return a->value();
+        }
+    }
 
-    auto VAR = (Hyprlang::FLOAT* const*)confval->getDataStaticPtr();
-    return **VAR; 
+    return default_float;
 }
 
 RGBA HyprIso::get_varcolor(std::string target, RGBA default_color) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
+    auto* const PLUGIN = g_pPluginSystem->getPluginByHandle(globals->api);
+    for (auto p : PLUGIN->m_registeredApiValues) {
+        if (p->name() == target) {
+            auto a = dynamic_cast<Config::Values::CColorValue *>(p.get());
+            auto color = CHyprColor(a->value());
+            return RGBA(color.r, color.g, color.b, color.a);
+        }
+    }
     return default_color;
 //
 //     auto confval = HyprlandAPI::getConfigValue(globals->api, target);
@@ -1462,40 +1498,55 @@ RGBA HyprIso::get_varcolor(std::string target, RGBA default_color) {
 }
 
 void HyprIso::create_config_variables() {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_bg_hovered_color", Hyprlang::INT{*configStringToInt("rgba(202020ff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_bg_pressed_color", Hyprlang::INT{*configStringToInt("rgba(111111ff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", Hyprlang::INT{*configStringToInt("rgba(dd1111ff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", Hyprlang::INT{*configStringToInt("rgba(880000ff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", Hyprlang::INT{*configStringToInt("rgba(ffffffff)")});
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_focused_color", Hyprlang::INT{*configStringToInt("rgba(000000ff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_unfocused_color", Hyprlang::INT{*configStringToInt("rgba(222222ff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_focused_text_color", Hyprlang::INT{*configStringToInt("rgba(ffffffff)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_unfocused_text_color", Hyprlang::INT{*configStringToInt("rgba(999999ff)")});
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:thumb_to_position_time", Hyprlang::FLOAT{355});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:snap_helper_fade_in", Hyprlang::FLOAT{400});
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_ratio", Hyprlang::FLOAT{1.4375});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_text_h", Hyprlang::FLOAT{15});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_icon_h", Hyprlang::FLOAT{21});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:titlebar_button_icon_h", Hyprlang::FLOAT{13});
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:resize_edge_size", Hyprlang::FLOAT{10});
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock", Hyprlang::INT{3});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_color", Hyprlang::INT{*configStringToInt("rgba(00000088)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_active_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_press_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_hover_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:dock_sel_accent_color", Hyprlang::INT{*configStringToInt("rgba(ffffff88)")});
-//
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
-//     HyprlandAPI::addConfigValue(globals->api, "plugin:mylardesktop:sel_border_color", Hyprlang::INT{*configStringToInt("rgba(ffffff44)")});
+    values->titlebar_button_bg_hovered_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_button_bg_hovered_color", "", Config::ParserUtils::parseColor("rgba(202020ff)").value());
+    values->titlebar_button_bg_pressed_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_button_bg_pressed_color", "", Config::ParserUtils::parseColor("rgba(111111ff)").value());
+    values->titlebar_closed_button_bg_hovered_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_closed_button_bg_hovered_color", "", Config::ParserUtils::parseColor("rgba(dd1111ff)").value());
+    values->titlebar_closed_button_bg_pressed_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_closed_button_bg_pressed_color", "", Config::ParserUtils::parseColor("rgba(880000ff)").value());
+    values->titlebar_closed_button_icon_color_hovered_pressed = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", "", Config::ParserUtils::parseColor("rgba(ffffffff)").value());
+    values->titlebar_focused_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_focused_color", "", Config::ParserUtils::parseColor("rgba(000000ff)").value());
+    values->titlebar_unfocused_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_unfocused_color", "", Config::ParserUtils::parseColor("rgba(222222ff)").value());
+    values->titlebar_focused_text_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_focused_text_color", "", Config::ParserUtils::parseColor("rgba(ffffffff)").value());
+    values->titlebar_unfocused_text_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_unfocused_text_color", "", Config::ParserUtils::parseColor("rgba(999999ff)").value());
+    values->thumb_to_position_time = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:thumb_to_position_time", "", Hyprlang::FLOAT{355});
+    values->snap_helper_fade_in = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:snap_helper_fade_in", "", Hyprlang::FLOAT{400});
+    values->titlebar_button_ratio = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:titlebar_button_ratio", "", Hyprlang::FLOAT{1.4375});
+    values->titlebar_text_h = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:titlebar_text_h", "", Hyprlang::FLOAT{15});
+    values->titlebar_icon_h = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:titlebar_icon_h", "", Hyprlang::FLOAT{21});
+    values->titlebar_button_icon_h = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:titlebar_button_icon_h", "", Hyprlang::FLOAT{13});
+    values->resize_edge_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:resize_edge_size", "", Hyprlang::FLOAT{10});
+    values->dock = makeShared<Config::Values::CIntValue>("plugin:mylardesktop:dock", "", Hyprlang::INT{3});
+    values->dock_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_color", "", Config::ParserUtils::parseColor("rgba(00000088)").value());
+    values->dock_sel_active_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_active_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
+    values->dock_sel_press_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_press_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
+    values->dock_sel_hover_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_hover_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
+    values->dock_sel_accent_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_accent_color", "", Config::ParserUtils::parseColor("rgba(ffffff88)").value());
+    values->sel_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
+    values->sel_border_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_border_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
+
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_bg_hovered_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_bg_pressed_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_closed_button_bg_hovered_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_closed_button_bg_pressed_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_closed_button_icon_color_hovered_pressed);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_focused_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_unfocused_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_focused_text_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_unfocused_text_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->thumb_to_position_time);
+    HyprlandAPI::addConfigValueV2(globals->api, values->snap_helper_fade_in);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_ratio);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_text_h);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_icon_h);
+    HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_icon_h);
+    HyprlandAPI::addConfigValueV2(globals->api, values->resize_edge_size);
+    HyprlandAPI::addConfigValueV2(globals->api, values->dock);
+    HyprlandAPI::addConfigValueV2(globals->api, values->dock_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->dock_sel_active_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->dock_sel_press_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->dock_sel_hover_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->dock_sel_accent_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->sel_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->sel_border_color);
 }
 
 static void on_open_layer(PHLLS l) {
