@@ -42,6 +42,8 @@ void do_overview(int monitor_id) {
 }
 
 void do_spotify_toggle() {
+    if (!set->hotcorners)
+        return; 
     static long last_time = 0;
     auto current = get_current_time_in_ms();
     auto drag_end_time = *datum<long>(actual_root, "drag_end_time");

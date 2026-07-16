@@ -1107,6 +1107,15 @@ static void fill_mouse_settings(Container *root, Container *c) {
                 hypriso->generate_mylar_hyprland_config();
             });
         }, set->touchpad_acceleration_curve);
+
+    make_vert_space(padded_right, 4);
+
+    make_bool(padded_right, "Hotcorners", "", set->hotcorners, [](bool value) {
+        set->hotcorners = value;
+        main_thread([]() {
+            hypriso->generate_mylar_hyprland_config();
+        });
+    });
 }
 
 void create_tab_option(Container *parent, std::string label) {

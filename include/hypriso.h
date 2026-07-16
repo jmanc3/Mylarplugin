@@ -74,6 +74,7 @@ struct ConfigSettings {
     bool prefer_pipewire_audio_backend = false;
     bool show_docks = true;
     bool draw_wallpaper = true;
+    bool hotcorners = true;
 
     std::vector<MylarMonitorRule> monitor_rules;
 };

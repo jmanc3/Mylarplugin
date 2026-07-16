@@ -1486,15 +1486,6 @@ RGBA HyprIso::get_varcolor(std::string target, RGBA default_color) {
         }
     }
     return default_color;
-//
-//     auto confval = HyprlandAPI::getConfigValue(globals->api, target);
-//     if (!confval)
-//         return default_color;
-//
-//     auto VAR = (Hyprlang::INT* const*)confval->getDataStaticPtr();
-//     auto color = CHyprColor(**VAR);
-//     return RGBA(color.r, color.g, color.b, color.a);
-    //return RGBA(1, 0, 1, 1);
 }
 
 void HyprIso::create_config_variables() {
