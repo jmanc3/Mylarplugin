@@ -3624,13 +3624,62 @@ static void fill_projection_container(Dock *dock) {
             monitor_rule_disable_toggle(ours, option);
         });
     }, [](Container *c) { return ((Dock *) c->user_data)->projection; });
-
-    /*
-    windowing::timer(dock->app, 10, [](void *userdata) {
-        auto dock = (Dock *) userdata;
-        auto dpi = dock->projection->raw_window->dpi;
-        auto h = true_height(dock->projection->root);
-        //windowing::set_popup_size(dock->projection->raw_window, dock->projection->root->real_bounds.w, h);
-    }, dock);
-    */
 }
+
+void dock::create_slept_button() {
+    if (slept_windows.empty())
+        return;
+    // look for c 'icons' and insert after
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto root = d->window->root;
+        auto sleep_button = simple_dock_item(root, []() {
+            return "\uF738";
+        });
+        sleep_button->name = "sleep_button";
+        sleep_button->when_clicked = [d](Container *root, Container *c) {
+            std::thread t([]() {
+                dock::remove_slept_button();
+            });
+            t.detach();
+        };
+        for (int i = root->children.size() - 1; i >= 0; i--)
+            if (root->children[i]->name == "sleep_button") {
+                root->children.erase(root->children.begin() + i);
+                break;
+            }
+        for (int i = 0; i < root->children.size(); i++)
+            if (root->children[i]->name == "icons") {
+                root->children.insert(root->children.begin() + i + 1, sleep_button);
+                break;
+            }
+    }    
+}
+
+void actual_remove_slept_button(Dock *d) {
+   windowing::timer(d->app, 10, [](void *data) {
+        auto d = (Dock *) data;
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto root = d->window->root;
+        for (int i = root->children.size() - 1; i >= 0; i--) {
+            auto c = root->children[i];
+            if (c->name == "sleep_button") {
+                delete c;
+                root->children.erase(root->children.begin() + i);
+                break;
+            }
+        }
+    }, d);
+}
+
+void dock::remove_slept_button() {
+    for (auto zed : slept_windows)
+        dock::add_window(zed.cid);
+    slept_windows.clear();
+    
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        actual_remove_slept_button(d);
+    }
+}
+

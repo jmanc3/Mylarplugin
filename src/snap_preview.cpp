@@ -214,7 +214,7 @@ void snap_preview::on_drag(int cid, int x, int y) {
 
 void snap_preview::on_drag_end(int cid, int x, int y, int snap_type) {
     preview->show = false;
-    preview->keep_showing_until = get_current_time_in_ms() + 300;
+    preview->keep_showing_until = get_current_time_in_ms() + fade_time;
     preview->end_drag_time = get_current_time_in_ms();
     preview->end_snap_type = (SnapPosition) snap_type;
     if ((preview->scalar < .7 && preview->previous_snap_type == SnapPosition::MAX) || 

@@ -15,6 +15,9 @@ namespace dock {
     void title_change(int cid, std::string title);
     void on_activated(int cid);
 
+    void create_slept_button();
+    void remove_slept_button();
+
     void change_in_audio();
     void change_in_battery();
 

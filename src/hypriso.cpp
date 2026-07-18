@@ -169,6 +169,8 @@ static bool next_check = false;
 static std::string previously_seen_instance_signature = "";
 ConfigSettings *set = new ConfigSettings;
 
+std::vector<SleptWindow> slept_windows;
+
 PollingThread *polling_thread = nullptr;
 
 void* pRenderWindow = nullptr;
@@ -2712,6 +2714,7 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
 
 
 static void hook_vec_to_win() {
+    //return;
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "vectorToWindowUnified");
         for (auto m : METHODS) {

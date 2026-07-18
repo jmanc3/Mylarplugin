@@ -1809,6 +1809,7 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    later(2000, [](Timer *) {
     if (!polling_thread) {
         polling_thread = new PollingThread;
         polling_thread->start();
@@ -1893,6 +1894,7 @@ void heart::begin() {
         });
 
         watch_wallpaper_change();
+    });
     });
 }
 

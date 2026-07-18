@@ -1,5 +1,6 @@
 #include "titlebar.h"
 
+#include "dock.h"
 #include "heart.h"
 #include "hypriso.h"
 #include "events.h"
@@ -190,6 +191,25 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
     {
         PopOption pop;
         auto info = &restore_infos[hypriso->class_name(cid)];
+        pop.text = "Sleep...";
+        pop.on_clicked = [cid]() {
+            dock::remove_window(cid);
+            slept_windows.push_back({cid});
+
+            if (slept_windows.size() == 1) {
+                dock::create_slept_button();
+            }
+        };
+        root.push_back(pop);
+    }
+    {
+        PopOption pop;
+        pop.seperator = true;
+        root.push_back(pop);        
+    }
+    {
+        PopOption pop;
+        auto info = &restore_infos[hypriso->class_name(cid)];
         if (info->remember_size)
             pop.icon_left = ":Papirus:checkbox-checked-symbolic";
         pop.text = "Remember size";
@@ -310,7 +330,7 @@ void paint_button(Container *actual_root, Container *c, std::string name, std::s
     auto client = first_above_of(c, TYPE::CLIENT);
     auto cid = *datum<int>(client, "cid");
 
-    if (active_id == cid && stage == (int) STAGE::RENDER_PRE_WINDOW) {
+    if (active_id == cid && stage == (int) STAGE::RENDER_POST_WINDOW) {
         renderfix
 
         auto b = c->real_bounds;
@@ -369,7 +389,7 @@ void paint_titlebar(Container *actual_root, Container *c) {
     auto client = first_above_of(c, TYPE::CLIENT);
     auto cid = *datum<int>(client, "cid");
 
-    if (active_id == cid && stage == (int) STAGE::RENDER_PRE_WINDOW) {
+    if (active_id == cid && stage == (int) STAGE::RENDER_POST_WINDOW) {
         renderfix
         auto a = *datum<float>(client, "titlebar_alpha");
 
@@ -463,7 +483,7 @@ void create_titlebar(Container *root, Container *parent) {
             return;        
         auto cid = *datum<int>(client, "cid");
 
-        if (active_id == cid && stage == (int) STAGE::RENDER_PRE_WINDOW) {
+        if (active_id == cid && stage == (int) STAGE::RENDER_POST_WINDOW) {
             renderfix
 
             auto a = *datum<float>(client, "titlebar_alpha");
@@ -670,7 +690,7 @@ void titlebar::on_draw_decos(std::string name, int monitor, int id, float a) {
     int before_stage = *stage;
     int before_active_id = *active_id;
     
-    *stage = (int) STAGE::RENDER_PRE_WINDOW;
+    *stage = (int) STAGE::RENDER_POST_WINDOW;
     *active_id = id;
 
     c->children[0]->automatically_paint_children = true;
