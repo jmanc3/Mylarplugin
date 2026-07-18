@@ -3682,6 +3682,7 @@ void dock::remove_slept_button() {
     for (auto zed : slept_windows) {
         send_signal(zed.pid, SIGCONT);
         dock::add_window(zed.cid);
+        hypriso->set_hidden(zed.cid, false, false);
     }
     slept_windows.clear();
     

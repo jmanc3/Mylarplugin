@@ -1,5 +1,6 @@
 #include "titlebar.h"
 
+#include "alt_tab.h"
 #include "dock.h"
 #include "heart.h"
 #include "hypriso.h"
@@ -199,6 +200,7 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
         auto info = &restore_infos[hypriso->class_name(cid)];
         pop.text = "Sleep...";
         pop.on_clicked = [cid]() {
+            hypriso->set_hidden(cid, true, false);
             dock::remove_window(cid);
             auto pid = hypriso->get_pid(cid);
             slept_windows.push_back(SleptWindow(cid, pid));
@@ -207,6 +209,8 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
             if (slept_windows.size() == 1) {
                 dock::create_slept_button();
             }
+
+            heart::layout_containers();
         };
         root.push_back(pop);
     }
