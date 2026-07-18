@@ -92,6 +92,12 @@ void titlebar_pre_layout(Container* root, Container* self, const Bounds& bounds)
     self->children[3]->wanted_bounds.w = std::round(titlebar_h * titlebar_button_ratio());
 }
 
+static void send_signal(pid_t pid, int signal) {
+    if (kill(pid, signal) == 0) {
+        //std::cout << "Signal " << signal << " sent to process " << pid << std::endl;
+    }
+}
+
 void titlebar::titlebar_right_click(int cid, bool centered) {
     auto m = mouse();
     std::vector<PopOption> root;
@@ -194,8 +200,10 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
         pop.text = "Sleep...";
         pop.on_clicked = [cid]() {
             dock::remove_window(cid);
-            slept_windows.push_back({cid});
-
+            auto pid = hypriso->get_pid(cid);
+            slept_windows.push_back(SleptWindow(cid, pid));
+            send_signal(pid, SIGSTOP);
+            
             if (slept_windows.size() == 1) {
                 dock::create_slept_button();
             }

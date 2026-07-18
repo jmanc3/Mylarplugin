@@ -232,6 +232,12 @@ struct ThinMonitor {
 
 struct SleptWindow {
     int cid;
+    int pid;
+
+    SleptWindow(int cid, int pid) {
+        this->cid = cid;
+        this->pid = pid;
+    }
 };
 
 extern std::vector<SleptWindow> slept_windows;
@@ -608,5 +614,6 @@ void gestures_reset();
 void monitor_rule_mirror_from_to_toggle(std::string from, std::string to);
 void monitor_rule_disable_toggle(std::string from, std::string to);
 
+bool is_slept(int cid);
 
 #endif // hypriso_h_INCLUDED

@@ -84,7 +84,8 @@ static void any_container_closed(Container *c) {
 }
 
 static void set_exists(Container *c, bool state) {
-    c->exists = state; 
+    if (c->exists || state)
+        c->exists = state; 
 }
 
 static bool on_mouse_move(int id, float x, float y) {
@@ -1997,7 +1998,18 @@ void heart::layout_containers() {
 
     for (auto c : actual_root->children) {
         auto cid = *datum<int>(c, "cid");
-        set_exists(c, hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && !hypriso->whitelist_on && hypriso->render_whitelist.empty());
+        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->resizable(cid) && hypriso->get_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(cid);
+        if (hypriso->whitelist_on) {
+            bool found = false;
+            for (auto wid : hypriso->render_whitelist) {
+                if (wid == cid)
+                    found = true;
+            }
+            if (!found) {
+                exists = false;
+            }
+        }
+        set_exists(c, exists);
         
         if (c->exists) {
             auto b = bounds_client(cid);
@@ -2042,10 +2054,18 @@ void heart::layout_containers() {
         }
         if (c->custom_type == (int) TYPE::CLIENT_RESIZE) {
             auto id = *datum<int>(c, "cid");
-            set_exists(c, hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id));
-            set_exists(c, (c->exists && (hypriso->get_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor())))); 
-            set_exists(c, !hypriso->whitelist_on && hypriso->render_whitelist.empty());
-            //set_exists(c, (c->exists); 
+            bool exists = hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id) && hypriso->get_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(id);
+            if (hypriso->whitelist_on) {
+                bool found = false;
+                for (auto wid : hypriso->render_whitelist) {
+                    if (wid == id)
+                        found = true;
+                }
+                if (!found) {
+                    exists = false;
+                }
+            }
+            set_exists(c, exists);
             
             for (int i = actual_root->children.size() - 1; i >= 0; i--) {
                 auto child = actual_root->children[i];

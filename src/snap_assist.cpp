@@ -887,8 +887,8 @@ void actual_open(int monitor, int cid) {
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
 
-    // for (auto i : ids)
-        // hypriso->render_whitelist.push_back(i);
+    for (auto i : ids)
+        hypriso->render_whitelist.push_back(i);
 }
 
 void snap_assist::open(int monitor, int cid) {

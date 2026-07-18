@@ -3672,9 +3672,17 @@ void actual_remove_slept_button(Dock *d) {
     }, d);
 }
 
+static void send_signal(pid_t pid, int signal) {
+    if (kill(pid, signal) == 0) {
+        //std::cout << "Signal " << signal << " sent to process " << pid << std::endl;
+    }
+}
+
 void dock::remove_slept_button() {
-    for (auto zed : slept_windows)
+    for (auto zed : slept_windows) {
+        send_signal(zed.pid, SIGCONT);
         dock::add_window(zed.cid);
+    }
     slept_windows.clear();
     
     for (auto d : docks) {

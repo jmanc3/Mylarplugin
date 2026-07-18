@@ -1255,6 +1255,15 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
             }
         }
     }
+    for (auto hw : hyprwindows) {
+        if (hw->w == pWindow) {
+            for (auto sw : slept_windows) {
+                if (hw->id == sw.cid) {
+                    return;
+                }
+            }
+        }
+    }
 
     Hyprlang::INT* rounding_amount = nullptr;
     int initial_value = 0;
@@ -2686,6 +2695,24 @@ static void hook_use_shader() {
     }
 }
 
+bool win_disabled(PHLWINDOW w) {
+    for (auto hw : hyprwindows) {
+        if (hw->w == w) {
+            for (auto cid : hypriso->render_whitelist) {
+                if (hw->id == cid) {
+                    return true;
+                }
+            }
+            for (auto sw : slept_windows) {
+                if (hw->id == sw.cid) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 inline CFunctionHook* g_pOnVecToWin = nullptr;
 typedef PHLWINDOW (*origVecToWin)(CCompositor *, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow);
 PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow) {
@@ -2693,7 +2720,7 @@ PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint8_t properties
     ZoneScoped;
 #endif
     auto win = (*(origVecToWin)g_pOnVecToWin->m_original)((CCompositor *) thisptr, pos, properties, pIgnoreWindow);
-    if (hypriso->whitelist_on || !hypriso->render_whitelist.empty()) {
+    if (hypriso->whitelist_on || win_disabled(win)) {
         return nullptr;
     }
     return win;
@@ -2706,7 +2733,14 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
     ZoneScoped;
 #endif
     auto win = (*(origVecToWinSurf)g_pOnVecToWinSurf->m_original)((CCompositor *) thisptr, vc, m, sl);
-    if (hypriso->whitelist_on || !hypriso->render_whitelist.empty()) {
+    bool disabled = false;
+    for (auto hw : hyprwindows) {
+        if (hw->w->m_xdgSurface == win) {
+            disabled = win_disabled(hw->w);
+            break;
+        }
+    }
+    if (hypriso->whitelist_on || disabled) {
         return nullptr;
     }
     return win;
@@ -3633,7 +3667,14 @@ std::vector<int> get_window_stacking_order() {
     for (auto w : g_pCompositor->m_windows) {
         for (auto hyprwindow : hyprwindows) {
             if (hyprwindow->w == w) {
-                vec.push_back(hyprwindow->id);
+                bool skip = false;
+                for (auto sw : slept_windows) {
+                    if (sw.cid == hyprwindow->id) {
+                        skip = true;
+                    }
+                }
+                if (!skip)
+                    vec.push_back(hyprwindow->id);
             }
         }        
     }
@@ -8645,5 +8686,14 @@ std::vector<MylarMonitorRule> HyprIso::all_monitors() {
         monitors.push_back(rule);
     }
     return monitors;
+}
+
+bool is_slept(int cid) {
+    for (auto sw : slept_windows) {
+        if (sw.cid == cid) {
+            return true;
+        }
+    }
+    return false;
 }
 
