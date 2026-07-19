@@ -677,7 +677,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             };
             root.push_back(pop);
         }
-        {
+        if (pin->pinned) {
             PopOption pop;
             pop.text = "Edit pin";
             pop.icon_left = "\uE713";

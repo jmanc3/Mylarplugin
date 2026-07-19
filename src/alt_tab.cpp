@@ -14,7 +14,7 @@ Bounds max_thumb = { 510 * sd, 310 * sd, 510 * sd, 310 * sd };
 static int active_index = 0;
 static bool reticle = false;
 static long show_time = 0;
-static long show_delay = 40;
+static long show_delay = 100;
 static float visual_offset_amt = 0;
 
 static int wrap_index(int index, size_t size) {
@@ -506,7 +506,7 @@ void fill_root(Container *root, Container *alt_tab_parent) {
         }
         *shown_yet = true;
         auto b = c->real_bounds; 
-        b.grow(10 * s);
+        b.grow(23 * s);
         rect(b, {1, 1, 1, .4}, 0, 8 * s, 2.0, true);
     };
 
