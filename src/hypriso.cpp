@@ -443,6 +443,8 @@ public:
 static bool change_mask = true;
 static int surface_mask = 0;
 
+//static std::vector<WP<CShader>> seen_shaders;
+
 inline CFunctionHook* g_pOnUseShader = nullptr;
 typedef WP<CShader> (*origUseShader)(Render::GL::CHyprOpenGLImpl *, WP<CShader> prog);
 WP<CShader> hook_onUseShader(void* thisptr, WP<CShader> prog) {
@@ -453,6 +455,17 @@ WP<CShader> hook_onUseShader(void* thisptr, WP<CShader> prog) {
     if (change_mask) {
         GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
         glUniform1i(loc, surface_mask);
+//        bool seen = false;
+//        for (auto s : seen_shaders) {
+//            if (s.lock()) {
+//                if (s.get() == shader.get()) {
+//                    seen = true;
+//                }
+//            }
+//        }
+//        if (!seen) {
+//            seen_shaders.push_back(shader);
+//        }
     }
     return shader;
 }
@@ -2696,6 +2709,31 @@ static void hook_use_shader() {
     }
 }
 
+inline CFunctionHook* g_pLoadShader = nullptr;
+typedef std::string (*orLoadShader)(Render::CShaderLoader *, const std::string& filename);
+std::string hook_LoadShader(void *thisptr, const std::string& filename) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (filename == "rounding.glsl") {
+        return (*(orLoadShader)g_pLoadShader->m_original)((Render::CShaderLoader *) thisptr, "corner_rounding.glsl");
+    }
+    return (*(orLoadShader)g_pLoadShader->m_original)((Render::CShaderLoader *) thisptr, filename);
+}
+
+static void hook_load_shader() {
+    {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "loadShader");
+        for (auto m : METHODS) {
+            notify(m.demangled);
+            if (m.demangled.find("Render::CShaderLoader::loadShader") != std::string::npos) {
+                g_pLoadShader = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_LoadShader);
+                g_pLoadShader->hook();
+            }
+        }
+    }
+}
+
 bool win_disabled(PHLWINDOW w) {
     for (auto hw : hyprwindows) {
         if (hw->w == w) {
@@ -2791,6 +2829,7 @@ void HyprIso::create_hooks() {
     hook_monitor_arrange();
     hook_popup_creation_and_destruction();
     hook_use_shader();
+    hook_load_shader();
     // hook_monitor_render();
     hook_hidden_state_change();
     // hook_default_config();
