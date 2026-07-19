@@ -2412,6 +2412,12 @@ static void fill_root(Container *root) {
             windowing::redraw(dock->volume->raw_window);
         };
         volume->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
+            static long last_time_checked_ms = 0;
+            auto current = get_current_time_in_ms();
+            if (!audio_running && (current - last_time_checked_ms) > 300) {
+                audio_start();
+                last_time_checked_ms = current;
+            }
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             if (came_from_touchpad) {
