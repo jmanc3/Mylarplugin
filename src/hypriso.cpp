@@ -2725,7 +2725,6 @@ static void hook_load_shader() {
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "loadShader");
         for (auto m : METHODS) {
-            notify(m.demangled);
             if (m.demangled.find("Render::CShaderLoader::loadShader") != std::string::npos) {
                 g_pLoadShader = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_LoadShader);
                 g_pLoadShader->hook();
