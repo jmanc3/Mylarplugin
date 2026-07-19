@@ -777,15 +777,15 @@ SurfacePassInfo HyprIso::pass_info(int cid) {
 Bounds tobounds(CBox box);
 
 inline CFunctionHook* g_pOnSurfacePassDraw = nullptr;
-typedef void (*origSurfacePassDraw)(CSurfacePassElement *, const CRegion& damage);
-void hook_onSurfacePassDraw(void* thisptr, const CRegion& damage) {
+typedef void (*origSurfacePassDraw)(Render::IElementRenderer *, WP<CSurfacePassElement> element, const CRegion& damage);
+void hook_onSurfacePassDraw(void* thisptr, WP<CSurfacePassElement> element, const CRegion& damage) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
  
-    auto  spe = (CSurfacePassElement *) thisptr;
+    auto  spe = (Render::IElementRenderer *) thisptr;
 
-    auto window = spe->m_data.pWindow;
+    auto window = element.get()->m_data.pWindow;
     int cornermask = 0;
     for (auto hw: hyprwindows) {
         if (hw->w == window) {
@@ -793,7 +793,7 @@ void hook_onSurfacePassDraw(void* thisptr, const CRegion& damage) {
         }
     }
     set_rounding(cornermask); // only top rounding
-    (*(origSurfacePassDraw)g_pOnSurfacePassDraw->m_original)(spe, damage);
+    (*(origSurfacePassDraw)g_pOnSurfacePassDraw->m_original)(spe, element, damage);
     set_rounding(0);
 }
 
@@ -803,10 +803,10 @@ void fix_window_corner_rendering() {
 #endif
  
     //return;
-    static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "draw");
+    static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "drawSurface");
     // TODO: check if m.address is same as set_rounding even though signature is SurfacePassElement
     for (auto m : METHODS) {
-        if (m.signature.find("SurfacePassElement") != std::string::npos) {
+        if (m.signature.find("IElementRenderer::") != std::string::npos) {
             g_pOnSurfacePassDraw = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSurfacePassDraw);
             g_pOnSurfacePassDraw->hook();
             return;
@@ -5773,7 +5773,7 @@ void HyprIso::reload() {
     // g_pConfigManager->reload();
     // for (auto w : g_pCompositor->m_windows)
     //     w->updateDecorationValues();
-    //g_pHyprOpenGL->initShaders();
+    Render::GL::g_pHyprOpenGL->initShaders();
 }
 
 void HyprIso::add_float_rule() {
