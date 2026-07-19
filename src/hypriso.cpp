@@ -803,10 +803,11 @@ void fix_window_corner_rendering() {
 #endif
  
     //return;
+//void IElementRenderer::drawSurface(WP<CSurfacePassElement> element, const CRegion& damage) {
     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "drawSurface");
     // TODO: check if m.address is same as set_rounding even though signature is SurfacePassElement
     for (auto m : METHODS) {
-        if (m.signature.find("IElementRenderer::") != std::string::npos) {
+        if (m.signature.find("IElementRenderer") != std::string::npos) {
             g_pOnSurfacePassDraw = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onSurfacePassDraw);
             g_pOnSurfacePassDraw->hook();
             return;
