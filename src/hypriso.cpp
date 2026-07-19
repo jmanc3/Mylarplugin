@@ -1279,11 +1279,9 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
         }
     }
 
-    Hyprlang::INT* rounding_amount = nullptr;
     int initial_value = 0;
-
-    Hyprlang::INT* border_size = nullptr;
     int initial_border_size = 0;
+    bool set = false;
 
     Hyprlang::CConfigCustomValueType* active_border = nullptr;
     Hyprlang::CConfigCustomValueType* initial_active_border;
@@ -1295,23 +1293,23 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
                 return;
         }
         if (hw->w == pWindow && hw->no_rounding) {
-            {
-                // Hyprlang::CConfigValue* val = g_pConfigManager->getHyprlangConfigValuePtr("decoration:rounding");
-                // rounding_amount = (Hyprlang::INT*)val->dataPtr();
-                // initial_value = *rounding_amount;
-                // *rounding_amount = 0;
-            }
+            static auto PROUNDING = CConfigValue<Config::INTEGER>("decoration:rounding");
+            initial_value = *PROUNDING;
+            *PROUNDING.ptr() = 0;
+            
+            static auto PBORD = CConfigValue<Config::INTEGER>("general:border_size");
+            initial_border_size = *PBORD;
+            *PBORD.ptr() = 0;
 
-            // Hyprlang::CConfigValue* val2 = g_pConfigManager->getHyprlangConfigValuePtr("general:border_size");
-            // border_size = (Hyprlang::INT*)val2->dataPtr();
-            // initial_border_size = *border_size;
-            // *border_size = 0;
+            set = true;
         }
     }
     (*(origRenderWindowFunc)g_pRenderWindowHook->m_original)((Render::IHyprRenderer *) thisptr, pWindow, pMonitor, Time::steadyNow(), decorate, mode, ignorePosition, standalone);
-    if (rounding_amount) {
-        *rounding_amount = initial_value;
-        *border_size = initial_border_size;
+    if (set) {
+        static auto PBORD = CConfigValue<Config::INTEGER>("general:border_size");
+        *PBORD.ptr() = initial_border_size;
+        static auto PROUNDING = CConfigValue<Config::INTEGER>("decoration:rounding");
+        *PROUNDING.ptr() = initial_value;
         //if (active_border) {
             //active_border = initial_active_border;
         //}
