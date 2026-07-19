@@ -654,6 +654,26 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     return c;
 }
 
+static void icons_right_click(int startoff, int cw, std::string uuid, float dpi, float yoff) {
+    main_thread([startoff, cw, uuid, dpi, yoff] {
+        auto m = mouse();
+        std::vector<PopOption> root;
+        {
+            PopOption pop;
+            pop.text = "Add a pin";
+            pop.icon_left = "\ue70f";
+            pop.is_text_icon = true;
+            pop.on_clicked = []() {
+                edit_pin::open("", "", "");
+            };
+            root.push_back(pop);
+        }
+        popup::open(root, 
+            m.x - (277 * .5) + 1.4, 
+            m.y - (yoff / dpi) - 5 - (24 * root.size() * dpi));
+    });
+}
+
 static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff, std::string full_icon_path) {
     main_thread([cid, startoff, cw, uuid, pin, dpi, yoff, full_icon_path] {
         auto m = mouse();
@@ -2143,6 +2163,17 @@ static void fill_root(Container *root) {
             
             merge_list_into_icons(dock, c);
         };
+        icons->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
+                int cw = c->real_bounds.w / mylar->raw_window->dpi;
+                auto uuid = c->uuid;
+
+                icons_right_click(startoff, cw, uuid, dock->window->raw_window->dpi, dock->window->root->mouse_current_y);
+            }
+        };
 
         icons->when_paint = paint {
             auto dock = (Dock *) root->user_data;
@@ -2902,21 +2933,29 @@ void dock::toggle_dock_merge() {
 }
 
 void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {
-    for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->app->mutex);
-        if (auto icons = container_by_name("icons", d->window->root)) {
-            for (auto p : icons->children) {
-                auto pin = (Pin*)p->user_data;
-                if (pin->stacking_rule == original_stacking_rule) {
-                    pin->stacking_rule = new_stacking_rule;
-                    pin->command = new_command;
-                    pin->icon = new_icon;
-                    pin->scale_change = true;
+    if (!original_stacking_rule.empty()) {
+        for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+            if (auto icons = container_by_name("icons", d->window->root)) {
+                for (auto p : icons->children) {
+                    auto pin = (Pin*)p->user_data;
+                    if (pin->stacking_rule == original_stacking_rule) {
+                        pin->stacking_rule = new_stacking_rule;
+                        pin->command = new_command;
+                        pin->icon = new_icon;
+                        pin->scale_change = true;
+                    }
                 }
             }
         }
+    } else {
+        for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+            if (auto icons = container_by_name("icons", d->window->root)) {
+                create_pinned_icon(icons, new_stacking_rule, new_command, new_icon);
+            }
+        }
     }
-    //notify(fz("{} {} {} {}", original_stacking_rule, new_stacking_rule, new_command, new_icon));
 }
 
 Bounds dock::get_location(std::string name, int cid) {
