@@ -16,6 +16,7 @@ namespace dock {
     void on_activated(int cid);
 
     void create_slept_button();
+    void throb_slept_button();
     void remove_slept_button();
 
     void change_in_audio();

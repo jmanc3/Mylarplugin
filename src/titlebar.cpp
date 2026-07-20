@@ -209,6 +209,7 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
             if (slept_windows.size() == 1) {
                 dock::create_slept_button();
             }
+            dock::throb_slept_button();
 
             heart::layout_containers();
         };

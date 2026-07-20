@@ -159,21 +159,6 @@ static int line_end(const std::string &text, int pos) {
     return (nl == std::string::npos) ? text.size() : nl;
 }
 
-struct LabelData : UserData {
-    int cursor = 0;
-    
-    int selection = 0;
-    bool selecting = false;
-
-    std::string text;
-
-    long last_time = 0;
-    long last_activation = 0;
-
-    float scroll_x = 0;
-    float scroll_y = 0;
-};
-
 static bool did_double_click(long *last_time, long *last_activation, long timeout) {
     long current = get_current_time_in_ms();
     if (current - *last_time < timeout && current - *last_activation > timeout * 2) {
