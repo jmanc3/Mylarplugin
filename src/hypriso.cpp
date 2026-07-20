@@ -30,7 +30,7 @@
 #include <hyprland/src/render/OpenGL.hpp>
 #undef private
 
-#include "xdg-decoration-unstable-v1.hpp"
+//#include "xdg-decoration-unstable-v1.hpp"
 // extern "C" {
 // #include "client/xdg-shell-client-protocol.h"
 // }
