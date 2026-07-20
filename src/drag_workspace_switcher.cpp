@@ -88,7 +88,7 @@ void drag_switcher_actual_open() {
         auto s = scale(monitor);
 
         //b.y = (-b.h * (1.0 - openess)) + (new_h * peaking_amount) - (8 * openess);
-        b.y = (-b.h * (1.0 - openess)) + ((5 * s) * peaking_amount);
+        b.y = (-b.h * (1.0 - openess)) + ((7 * s) * peaking_amount);
         if (openess != 0.0) {
             b.grow(new_h);
         }
