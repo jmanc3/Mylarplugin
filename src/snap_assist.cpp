@@ -700,10 +700,10 @@ void paint_snap_helper_actual(Container *actual_root, Container *c) {
         //rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
     }
     auto b = c->real_bounds;
-    //b.shrink(1.0f);
+    b.shrink(1.0f);
     auto border_color = color_sel_border_color();
     border_color.a *= alpha;
-    border(b.round(), border_color, 1.0f, 0, 8 * s, std::round(2.0f * s), false, 1.0);
+    border(b.round(), border_color, std::round(1.0f * s), 0, 8 * s, 2.0f, false, 1.0);
 }
 
 

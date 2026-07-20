@@ -3709,7 +3709,7 @@ void dock::create_slept_button() {
 
             auto current = get_current_time_in_ms();
             float delta = ((float)(current - slept_creation_time));
-            static float throb_time = 700.0f;
+            static float throb_time = 2500.0f;
             if (delta < throb_time) {
                 windowing::redraw(mylar->raw_window);
                 
