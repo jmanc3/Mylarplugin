@@ -8734,3 +8734,9 @@ bool is_slept(int cid) {
     return false;
 }
 
+SleptWindow::SleptWindow(int cid, int pid) {
+    this->cid = cid;
+    this->pid = pid;
+    this->time_slept = get_current_time_in_ms();
+    this->monitor_id = get_monitor(cid);
+}

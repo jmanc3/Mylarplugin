@@ -198,9 +198,9 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
     {
         PopOption pop;
         auto info = &restore_infos[hypriso->class_name(cid)];
-        pop.text = "Sleep...";
-        pop.on_clicked = [cid]() {
-            hypriso->set_hidden(cid, true, false);
+        pop.text = "Sleep";
+        pop.on_clicked = [cid]() {            
+            hypriso->set_hidden(cid, true, true);
             dock::remove_window(cid);
             auto pid = hypriso->get_pid(cid);
             slept_windows.push_back(SleptWindow(cid, pid));

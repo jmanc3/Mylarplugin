@@ -233,11 +233,10 @@ struct ThinMonitor {
 struct SleptWindow {
     int cid;
     int pid;
+    long time_slept;
+    int monitor_id;
 
-    SleptWindow(int cid, int pid) {
-        this->cid = cid;
-        this->pid = pid;
-    }
+    SleptWindow(int cid, int pid);
 };
 
 extern std::vector<SleptWindow> slept_windows;

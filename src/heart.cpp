@@ -741,6 +741,8 @@ static void on_window_open(int id) {
         *datum<bool>(c, "snapped") = false; 
         *datum<bool>(c, "previous_hidden_state") = hypriso->is_hidden(id); 
         *datum<long>(c, "hidden_state_change_time") = 0; 
+        *datum<bool>(c, "previous_slept_state") = is_slept(id); 
+        *datum<long>(c, "slept_state_change_time") = 0; 
 
         auto client_info = new ClientInfo;
         c->user_data = client_info;
@@ -1049,11 +1051,35 @@ static void on_render(int id, int stage) {
            }
         }
 
+        if (!overview::is_showing()) {
+            for (auto zed : slept_windows) {
+                auto time = zed.time_slept;
+                auto current_time = get_current_time_in_ms();
+                // draw minimizing animation
+                long delta = current_time - time;
+
+                auto mon_id = zed.monitor_id;
+
+                if (((double) delta) < minimize_anim_time) { 
+                    float scalar = ((float) delta) / ((float) minimize_anim_time);
+
+                    auto bounds = dock::get_item_location(hypriso->monitor_name(mon_id), "sleep_button");
+                    auto monitor_b = bounds_monitor(mon_id);
+                    bounds.y = monitor_b.h;
+                    bounds.scale(scale(mon_id));
+
+                    hypriso->draw_raw_min_thumbnail(zed.cid, bounds, scalar);
+                    damage_all();
+                }
+            }
+        }
         
         for (auto c : actual_root->children) {
             if (c->custom_type == (int)TYPE::CLIENT && !overview::is_showing()) {
                 // TODO: should be interleaved where window WAS, not LAST_MOMENT
                 auto cid = *datum<int>(c, "cid");
+                if (is_slept(cid))
+                    continue;
                 auto mon_id = get_monitor(cid);
                 if (mon_id == current_monitor) {
                     auto time = datum<long>(c, "hidden_state_change_time");
@@ -1075,10 +1101,7 @@ static void on_render(int id, int stage) {
                         bounds.scale(scale(mon_id));
 
                         hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
-                        for (int i = actual_monitors.size() - 1; i >= 0; i--) {
-                            auto cid = *datum<int>(actual_monitors[i], "cid");
-                            hypriso->damage_entire(cid);
-                        }
+                        damage_all();
                     }
                 }
             }
@@ -1816,7 +1839,7 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    later(2000, [](Timer *) {
+    later(10, [](Timer *) {
     if (!polling_thread) {
         polling_thread = new PollingThread;
         polling_thread->start();

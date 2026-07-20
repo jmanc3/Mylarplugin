@@ -2971,6 +2971,23 @@ void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking
     }
 }
 
+Bounds dock::get_item_location(std::string monitor_name, std::string item_name) {
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (d->creation_settings.monitor_name == monitor_name) {
+            for (auto c : d->window->root->children) {
+                if (c->name == item_name) {
+                    Bounds b = c->real_bounds;
+                    b.scale(1.0f / d->window->raw_window->dpi);
+                    return b;
+                }
+            }
+        }
+    }
+
+    return {0, 0, 100, 100};
+}
+
 Bounds dock::get_location(std::string name, int cid) {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
@@ -3709,7 +3726,7 @@ void dock::create_slept_button() {
 
             auto current = get_current_time_in_ms();
             float delta = ((float)(current - slept_creation_time));
-            static float throb_time = 2500.0f;
+            static float throb_time = 700.0f;
             if (delta < throb_time) {
                 windowing::redraw(mylar->raw_window);
                 
