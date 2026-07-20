@@ -10,10 +10,10 @@
 #include "heart.h"
 #include "dock.h"
 
-#include <config/shared/Types.hpp>
-#include <config/values/types/ColorValue.hpp>
-#include <config/values/types/FloatValue.hpp>
-#include <config/values/types/IntValue.hpp>
+#include <hyprland/src/config/shared/Types.hpp>
+#include <hyprland/src/config/values/types/ColorValue.hpp>
+#include <hyprland/src/config/values/types/FloatValue.hpp>
+#include <hyprland/src/config/values/types/IntValue.hpp>
 #include <cstdint>
 //#include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
@@ -34,6 +34,11 @@
 // extern "C" {
 // #include "client/xdg-shell-client-protocol.h"
 // }
+#include <hyprland/src/state/MonitorQueryCore.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+
+#include <hyprland/src/desktop/state/GlobalWindowController.hpp>
+
 #include <hyprland/src/render/Shader.hpp>
 
 #include <GLES3/gl32.h>
@@ -53,8 +58,13 @@
 #include <glib-object.h>
 #include <hyprland/src/desktop/view/Popup.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
-#include <hyprland/src/managers/animation/AnimationManager.hpp>
-#include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
+#include <hyprland/src/animation/AnimationManager.hpp>
+// #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
+
+#include <hyprland/src/animation/WorkspaceAnimationController.hpp>
+
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/state/WorkspaceState.hpp>
 
 #include <unordered_map>
 #include <wlr-layer-shell-unstable-v1.hpp>
@@ -128,7 +138,7 @@
 #include <hyprland/src/notification/NotificationOverlay.hpp>
 #include <hyprland/src/debug/Overlay.hpp>
 #include <hyprland/src/config/shared/animation/AnimationTree.hpp>
-#include <hyprland/src/helpers/MonitorResources.hpp>
+#include <hyprland/src/output/MonitorResources.hpp>
 
 #undef private
 
@@ -147,13 +157,12 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 //#include <hyprland/src/managers/HookSystemManager.hpp>
-#include <hyprland/src/managers/PointerManager.hpp>
-#include <hyprland/src/managers/cursor/CursorShapeOverrideController.hpp>
+#include <hyprland/src/pointer/PointerManager.hpp>
+#include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
 #include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/render/decorations/DecorationPositioner.hpp>
 #include <hyprland/src/render/decorations/IHyprWindowDecoration.hpp>
-#include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/render/Framebuffer.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 
@@ -519,7 +528,7 @@ void set_rounding(int mask) {
 
 PHLWINDOW get_window_from_mouse() {
     const auto      MOUSECOORDS = g_pInputManager->getMouseCoordsInternal();
-    const PHLWINDOW PWINDOW     = g_pCompositor->vectorToWindowUnified(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+    const PHLWINDOW PWINDOW     = Desktop::viewState()->hitTest().windowAt(MOUSECOORDS, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
     return PWINDOW;
 }
 
@@ -555,7 +564,7 @@ static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
         PWINDOW->m_workspace->updateWindowData();
     }
 
-    g_pCompositor->updateAllWindowsAnimatedDecorationValues();
+    Desktop::globalWindowController()->updateAllWindowsDecorations();
 
     return;
 }
@@ -666,7 +675,7 @@ bool HyprIso::requested_client_side_decorations(int cid) {
 }
 
 void on_open_window(PHLWINDOW w) {
-    for (auto m : g_pCompositor->m_monitors) {
+    for (auto m : State::monitorState()->monitors()) {
         on_open_monitor(m);
     }
     if (auto surface = w->m_xdgSurface) {
@@ -685,7 +694,7 @@ void on_open_window(PHLWINDOW w) {
                     }
                 });
                 resource->setResize([](CXdgToplevel* t, wl_resource*, uint32_t, xdgToplevelResizeEdge e) {
-                    for (auto w : g_pCompositor->m_windows) {
+                    for (auto w : Desktop::windowState()->windows()) {
                         if (auto surf = w->m_xdgSurface.lock()) {
                             if (auto top = surf->m_toplevel.lock()) {
                                 auto resource = top->m_resource;
@@ -849,7 +858,7 @@ void hook_OnReadProp(void* thisptr, SP<CXWaylandSurface> XSURF, uint32_t atom, x
         std::vector<uint32_t> m_motifs;
         m_motifs.assign(hints, hints + std::min<size_t>(reply->value_len, 5));
 
-        for (const auto &w : g_pCompositor->m_windows) {
+        for (const auto &w : Desktop::windowState()->windows()) {
             if (w->m_xwaylandSurface == XSURF) {
                 w->m_X11DoesntWantBorders = false;
                 g_pXWaylandManager->checkBorders(w);
@@ -903,7 +912,7 @@ void remove_request_listeners() {
     ZoneScoped;
 #endif
     
-    for (auto& w : g_pCompositor->m_windows) {
+    for (auto& w : Desktop::windowState()->windows()) {
         if (auto surface = w->m_xdgSurface) {
             if (auto toplevel = surface->m_toplevel.lock()) {
                 auto resource = toplevel->m_resource;
@@ -945,13 +954,13 @@ void recheck_csd_for_all_wayland_windows() {
     ZoneScoped;
 #endif
     later(10, [](Timer *) {
-        for (auto w : g_pCompositor->m_windows) {
+        for (auto w : Desktop::windowState()->windows()) {
             if (w->m_isX11)
                 continue;
-            
+
             bool remove_csd = false;
             for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-                if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface) {
+                if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface->m_surface) {
                     if (s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT) {
                         remove_csd = true;
                     }
@@ -959,7 +968,8 @@ void recheck_csd_for_all_wayland_windows() {
             }
 
             for (const auto &[a, b] : NProtocols::xdgDecoration->m_decorations) {
-                if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource && b->m_resource == w->m_xdgSurface->m_toplevel->m_resource) {
+                if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource) {
+                // if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource && b->m_resource == w->m_xdgSurface->m_toplevel->m_resource) {
                     if (b->mostRecentlyRequested == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
                         remove_csd = true;
                     }
@@ -998,11 +1008,11 @@ uint32_t hook_OnKDECSD(void* thisptr) {
     auto ptr = (CServerDecorationKDE *) thisptr;
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (s->m_surf == hw->w->m_xdgSurface) {
+            if (s->m_surf == hw->w->m_xdgSurface->m_surface) {
                 break;
             }
         }
-    } 
+    }
     //ptr->m_resource
     //recheck_csd_for_all_wayland_windows();
     //
@@ -1018,11 +1028,11 @@ uint32_t hook_OnKDERequestCSD(void* thisptr, uint32_t mode) {
     //recheck_csd_for_all_wayland_windows();
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (s->m_surf == hw->w->m_xdgSurface) {
+            if (s->m_surf == hw->w->m_xdgSurface->m_surface) {
                 break;
             }
         }
-    } 
+    }
     
     return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
 }
@@ -1037,11 +1047,11 @@ uint32_t hook_OnKDEReleaseCSD(void* thisptr) {
     //recheck_csd_for_all_wayland_windows();
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (s->m_surf == hw->w->m_xdgSurface) {
+            if (s->m_surf == hw->w->m_xdgSurface->m_surface) {
                 break;
             }
         }
-    } 
+    }
     return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
 }
 
@@ -1122,7 +1132,7 @@ std::string get_atom_name(xcb_connection_t* conn, xcb_atom_t atom) {
 }
 
 PHLWINDOW winref_from_x11(xcb_window_t window) {
-    for (auto w : g_pCompositor->m_windows) {
+    for (auto w : Desktop::windowState()->windows()) {
         if (w->m_isX11 && w->m_xwaylandSurface->m_xID == window) {
             return w;
         }
@@ -1239,8 +1249,8 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit);
 inline CFunctionHook* g_pRenderMonitorHook = nullptr;
 typedef void (*origRenderMonitorFunc)(Render::IHyprRenderer *, PHLMONITOR pMonitor, bool commit);
 void hook_RenderMonitor(void* thisptr, PHLMONITOR pMonitor, bool commit) {
-    ourRenderMonitor(pMonitor, commit);
-    //(*(origRenderMonitorFunc)g_pRenderMonitorHook->m_original)((Render::IHyprRenderer *)thisptr, pMonitor, commit);
+    // ourRenderMonitor(pMonitor, commit);
+    (*(origRenderMonitorFunc)g_pRenderMonitorHook->m_original)((Render::IHyprRenderer *)thisptr, pMonitor, commit);
 }
 
 
@@ -1434,7 +1444,9 @@ RGBA HyprIso::get_shadow_color(int id) {
 #endif
     for (auto hw: hyprwindows)
         if (hw->id == id) {
-            auto c = hw->w->m_realShadowColor->value();
+            // auto c = hw->w->m_realShadowColor;
+
+            auto c = CHyprColor(0.0, 0.0, 0.0, .1);
             return RGBA(c.r, c.g, c.b, c.a);
         }
     return {0, 0, 0, 1};
@@ -1637,15 +1649,15 @@ void HyprIso::create_callbacks() {
 #endif    
     setup_wake_main_thread();
 
-    for (auto m : g_pCompositor->m_monitors) {
+    for (auto m : State::monitorState()->monitors()) {
         on_open_monitor(m);
     }
 
-    for (auto w : g_pCompositor->m_windows) {
+    for (auto w : Desktop::windowState()->windows()) {
         on_open_window(w);
     }
     
-    for (auto l : g_pCompositor->m_layers) {
+    for (auto l : Desktop::layerState()->layers()) {
         on_open_layer(l);
     }
 
@@ -1705,7 +1717,7 @@ void HyprIso::create_callbacks() {
         auto consume = false;
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
-            auto m     = g_pCompositor->getMonitorFromCursor();
+            auto m     = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run();
             consume    = hypriso->on_mouse_move(0, mouse.x * m->m_scale, mouse.y * m->m_scale);
         }
         info.cancelled = consume;
@@ -1715,7 +1727,7 @@ void HyprIso::create_callbacks() {
         auto consume = false;
         if (hypriso->on_mouse_press) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
-            auto s     = g_pCompositor->getMonitorFromCursor()->m_scale;
+            auto s     = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run()->m_scale;
             consume    = hypriso->on_mouse_press(e.mouse, e.button, e.state, mouse.x * s, mouse.y * s);
         }
         info.cancelled = consume;
@@ -1748,7 +1760,7 @@ void HyprIso::create_callbacks() {
         }
     });
 
-    for (auto e : g_pCompositor->m_workspaces) {
+    for (auto e : State::workspaceState()->workspaces()) {
         auto hs = new HyprWorkspaces;
         hs->w = e;
         hs->id = unique_id++;
@@ -1784,7 +1796,7 @@ void HyprIso::create_callbacks() {
     static auto workspaceChanged = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE w) {
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
-            auto m = g_pCompositor->getMonitorFromCursor();
+            auto m = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run();
             hypriso->on_mouse_move(0, mouse.x * m->m_scale, mouse.y * m->m_scale);
         }
         if (hypriso->on_workspace_change) {
@@ -1818,7 +1830,7 @@ void hook_onArrangeMonitors(void* thisptr) {
     // Go through all and check any that no longer exist or that need to exist
 
     //return;
-    for (const auto &m : g_pCompositor->m_monitors) {
+    for (const auto &m : State::monitorState()->monitors()) {
         bool already_in = false;
         for (auto hm : hyprmonitors) {
             if (hm->m == m) {
@@ -1833,7 +1845,7 @@ void hook_onArrangeMonitors(void* thisptr) {
     for (int i = hyprmonitors.size() - 1; i >= 0; i--) {
         auto hm = hyprmonitors[i];
         bool in = false;
-        for (const auto &m : g_pCompositor->m_monitors) {
+        for (const auto &m : State::monitorState()->monitors()) {
             if (hm->m == m) {
                 in = true;
             }
@@ -1945,8 +1957,8 @@ void onUpdateState(Desktop::View::CWindow *ptr) {
     if (requestsFS.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN)) {
         if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN_OUTPUT)) {
             if (ptr->m_isMapped) {
-                const auto monitor = g_pCompositor->getMonitorFromID(requestsID.value());
-                g_pCompositor->moveWindowToWorkspaceSafe(ptr->m_self.lock(), monitor->m_activeWorkspace);
+                const auto monitor = State::monitorState()->query().id(requestsID.value()).run();
+                Desktop::globalWindowController()->moveWindowToWorkspace(ptr->m_self.lock(), monitor->m_activeWorkspace);
                 Desktop::focusState()->rawMonitorFocus(monitor);
             }
 
@@ -1955,8 +1967,10 @@ void onUpdateState(Desktop::View::CWindow *ptr) {
         }
 
         bool fs = requestsFS.value();
-        if (ptr->m_isMapped)
-            g_pCompositor->changeWindowFullscreenModeClient(ptr->m_self.lock(), FSMODE_FULLSCREEN, requestsFS.value());
+        if (ptr->m_isMapped) {
+            Fullscreen::controller()->setFullscreenMode(ptr->m_self.lock(), std::nullopt, Fullscreen::FSMODE_FULLSCREEN);
+            // g_pCompositor->changeWindowFullscreenModeClient(ptr->m_self.lock(), Fullscreen::FSMODE_FULLSCREEN, requestsFS.value());
+        }
 
         if (!ptr->m_isMapped)
             ptr->m_wantsInitialFullscreen = fs;
@@ -2771,7 +2785,8 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
     auto win = (*(origVecToWinSurf)g_pOnVecToWinSurf->m_original)((CCompositor *) thisptr, vc, m, sl);
     bool disabled = false;
     for (auto hw : hyprwindows) {
-        if (hw->w->m_xdgSurface == win) {
+        if (hw->w->m_xdgSurface->m_surface == win) {
+        // if (hw->w->m_xdgSurface == win) {
             disabled = win_disabled(hw->w);
             break;
         }
@@ -3028,7 +3043,7 @@ bool HyprIso::alt_tabbable(int id) {
             } else {
                 canX11 = true;
             }
-            for (const auto &w : g_pCompositor->m_windows) {
+            for (const auto &w : Desktop::windowState()->windows()) {
                 if (w == h->w && w->m_isMapped && canX11) {
                     found = true;
                 }
@@ -3340,9 +3355,9 @@ void request_refresh() {
     ZoneScoped;
 #endif
     
-    for (auto m : g_pCompositor->m_monitors) {
+    for (auto m : State::monitorState()->monitors()) {
         g_pHyprRenderer->damageMonitor(m);
-        g_pCompositor->scheduleFrameForMonitor(m);
+        m->scheduleFrame();
     }
 }
 
@@ -3351,8 +3366,8 @@ void request_refresh_only() {
     ZoneScoped;
 #endif
     
-    for (auto m : g_pCompositor->m_monitors) {
-        g_pCompositor->scheduleFrameForMonitor(m);
+    for (auto m : State::monitorState()->monitors()) {
+        m->scheduleFrame();
     }
 }
 
@@ -3507,7 +3522,7 @@ std::vector<int> HyprIso::get_workspace_ids(int monitor) {
     std::vector<Pair> vec;
     for (auto hm : hyprmonitors) {
         if (hm->id == monitor) {
-            for (auto e : g_pCompositor->m_workspaces) {
+            for (auto e : State::workspaceState()->workspaces()) {
                 if (hm->m == e->m_monitor) {
                     for (auto hs : hyprspaces) {
                         if (hs->w == e) {
@@ -3540,7 +3555,7 @@ std::vector<int> HyprIso::get_workspaces(int monitor) {
     std::vector<Pair> vec;
     for (auto hm : hyprmonitors) {
         if (hm->id == monitor) {
-            for (auto e : g_pCompositor->m_workspaces) {
+            for (auto e : State::workspaceState()->workspaces()) {
                 if (hm->m == e->m_monitor) {
                     for (auto hs : hyprspaces) {
                         if (hs->w == e) {
@@ -3636,7 +3651,7 @@ bool HyprIso::is_fake_fullscreen(int id) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             auto w = hw->w;
-            if (w->m_fullscreenState.internal == 0 && w->m_fullscreenState.client == 2) {
+            if (Fullscreen::controller()->getFullscreenModes(w).internal == 0 && Fullscreen::controller()->getFullscreenModes(w).client == 2) {
                 return true;
             }
         }
@@ -3651,12 +3666,12 @@ void HyprIso::set_fullscreen(int id, bool state) {
             hw->w->m_ruleApplicator->syncFullscreenOverride(Desktop::Types::COverridableVar(false, Desktop::Types::PRIORITY_SET_PROP));
 
             if (state) {
-                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 2, .client = (eFullscreenMode) 2});
+                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_FULLSCREEN, Fullscreen::FSMODE_FULLSCREEN);
             } else {
-                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 0});
+                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
             }
             hw->w->m_ruleApplicator->syncFullscreenOverride(
-                Desktop::Types::COverridableVar(hw->w->m_fullscreenState.internal == hw->w->m_fullscreenState.client, Desktop::Types::PRIORITY_SET_PROP));
+                Desktop::Types::COverridableVar(Fullscreen::controller()->getFullscreenModes(hw->w).internal == Fullscreen::controller()->getFullscreenModes(hw->w).client, Desktop::Types::PRIORITY_SET_PROP));
         }
     }
 }
@@ -3668,14 +3683,14 @@ void HyprIso::fake_fullscreen(int id, bool state) {
 
             //hw->w->m_windowData.syncFullscreen = CWindowOverridableVar(false, PRIORITY_SET_PROP);
             
+
             if (state) {
-                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 2});
+                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_FULLSCREEN);
             } else {
-                g_pCompositor->setWindowFullscreenState(hw->w, Desktop::View::SFullscreenState{.internal = (eFullscreenMode) 0, .client = (eFullscreenMode) 0});
+                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
             }
             hw->w->m_ruleApplicator->syncFullscreenOverride(
-                Desktop::Types::COverridableVar(hw->w->m_fullscreenState.internal == hw->w->m_fullscreenState.client, Desktop::Types::PRIORITY_SET_PROP));
-            //hw->w->m_windowData.syncFullscreen = CWindowOverridableVar(hw->w->m_fullscreenState.internal == hw->w->m_fullscreenState.client, PRIORITY_SET_PROP);
+                Desktop::Types::COverridableVar(Fullscreen::controller()->getFullscreenModes(hw->w).internal == Fullscreen::controller()->getFullscreenModes(hw->w).client, Desktop::Types::PRIORITY_SET_PROP));
         }
     }
 }
@@ -3701,7 +3716,7 @@ std::vector<int> get_window_stacking_order() {
     ZoneScoped;
 #endif
     std::vector<int> vec;
-    for (auto w : g_pCompositor->m_windows) {
+    for (auto w : Desktop::windowState()->windows()) {
         for (auto hyprwindow : hyprwindows) {
             if (hyprwindow->w == w) {
                 bool skip = false;
@@ -3725,7 +3740,7 @@ void HyprIso::move(int id, int x, int y) {
 #endif
     for (auto c : hyprwindows) {
         if (c->id == id) {
-            c->w->m_realPosition->setValueAndWarp({x, y});
+            c->w->positionAnimation()->setValueAndWarp({x, y});
         }
     }
 }
@@ -3743,14 +3758,14 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                     #ifdef TRACY_ENABLE
                         ZoneScopedN("Move warp");
                     #endif
-                    c->w->m_realPosition->setValueAndWarp({x, y});
-                    c->w->m_realSize->setValueAndWarp({w, h});
+                    c->w->positionAnimation()->setValueAndWarp({x, y});
+                    c->w->sizeAnimation()->setValueAndWarp({w, h});
                 } else {
                     #ifdef TRACY_ENABLE
                         ZoneScopedN("Move regular");
                     #endif
-                    *c->w->m_realPosition = {x, y};
-                    *c->w->m_realSize = {w, h};
+                    *c->w->positionAnimation() = {x, y};
+                    *c->w->sizeAnimation() = {w, h};
                 }
             }
             
@@ -3772,7 +3787,7 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
             target->space()->setTargetGeom(CBox(x, y, w, h), target);
 
             Vector2D middle = target->position().middle();
-            const auto PMONITOR = g_pCompositor->getMonitorFromVector(middle);
+            const auto PMONITOR = State::monitorState()->query().vec(middle).run();
             if (PMONITOR && PMONITOR->m_activeWorkspace && target->floating() /* If we're resaizing a tiled target, don't do this */) {
                 const auto WS = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
                 target->assignToSpace(WS->m_space);
@@ -4324,7 +4339,7 @@ void setCursorImageUntilUnset(std::string cursor) {
     hypriso->last_cursor_set = cursor;
     // pre 52
     //g_pInputManager->setCursorImageUntilUnset(cursor);
-    Cursor::overrideController->setOverride(cursor, Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+    Pointer::Cursor::overrideController->setOverride(cursor, Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
 }
 
 void unsetCursorImage(bool force) {
@@ -4334,7 +4349,7 @@ void unsetCursorImage(bool force) {
     if (hypriso->last_cursor_set == "none" && !force)
         return;
     hypriso->last_cursor_set = "none";
-    Cursor::overrideController->unsetOverride(Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
+    Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_SPECIAL_ACTION);
     // pre 52
     //g_pInputManager->unsetCursorImage();
 }
@@ -4380,7 +4395,7 @@ int HyprIso::monitor_from_cursor() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto m = g_pCompositor->getMonitorFromCursor();
+    auto m = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run();
     for (auto hm : hyprmonitors) {
         if (hm->m == m) {
             return hm->id;   
@@ -4471,7 +4486,7 @@ static void updateRelativeCursorCoords() {
         return;
 
     if (Desktop::focusState()->window())
-        Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->m_position;
+        Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
 }
 
 
@@ -4486,7 +4501,7 @@ static void switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool forceFSCycle = fals
 
     g_pInputManager->unconstrainMouse();
 
-    if (PLASTWINDOW && PLASTWINDOW->m_workspace == PWINDOWTOCHANGETO->m_workspace && PLASTWINDOW->isFullscreen())
+    if (PLASTWINDOW && PLASTWINDOW->m_workspace == PWINDOWTOCHANGETO->m_workspace && Fullscreen::controller()->isFullscreen(PLASTWINDOW))
         Desktop::focusState()->fullWindowFocus(PWINDOWTOCHANGETO, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD, nullptr, forceFSCycle);
     else {
         updateRelativeCursorCoords();
@@ -4513,7 +4528,7 @@ void HyprIso::bring_to_front(int id, bool focus) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            g_pCompositor->changeWindowZOrder(hw->w, true);
+            Desktop::windowState()->raise(hw->w);
             if (focus)
                 switchToWindow(hw->w, true);
         }
@@ -4614,7 +4629,7 @@ bool HyprIso::is_fullscreen(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            return hw->w->isFullscreen();
+            return Fullscreen::controller()->isFullscreen(hw->w);
         }
     }
     return false;
@@ -4841,7 +4856,7 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 
     if (PWORKSPACE) {
         pMonitor->m_activeWorkspace = PWORKSPACE;
-        g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+        Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
         PWORKSPACE->m_visible = true;
 
         if (PWORKSPACE == startedOn)
@@ -4850,7 +4865,7 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
 
         PWORKSPACE->m_visible = false;
-        g_pDesktopAnimationManager->startAnimation(PWORKSPACE, CDesktopAnimationManager::ANIMATION_TYPE_OUT, false, true);
+        Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_OUT, false, true);
 
         if (PWORKSPACE == startedOn)
             pMonitor->m_activeSpecialWorkspace.reset();
@@ -4863,7 +4878,8 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
     pMonitor->m_activeSpecialWorkspace = openSpecial;
     pMonitor->m_activeWorkspace        = startedOn;
     startedOn->m_visible               = true;
-    g_pDesktopAnimationManager->startAnimation(startedOn, CDesktopAnimationManager::ANIMATION_TYPE_IN, true, true);
+
+    Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
 }
 
 void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, Render::eRenderPassMode mode, bool ignorePosition, bool standalone) {
@@ -4874,23 +4890,25 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    if (pWindow->m_fadingOut) {
-        if (pMonitor == pWindow->m_monitor) // TODO: fix this
-            g_pHyprRenderer->renderSnapshot(pWindow);
+    auto tis = g_pHyprRenderer.get();
+    if (pWindow->isHidden() && !standalone)
         return;
-    }
+
+    if (!standalone && pWindow->effectiveAlpha() == 0.F && !pWindow->alpha().isBeingAnimated())
+        return;
 
     if (!pWindow->m_isMapped)
         return;
 
     TRACY_GPU_ZONE("RenderWindow");
 
-    const auto                       PWORKSPACE = pWindow->m_workspace;
-    const auto                       REALPOS    = pWindow->m_realPosition->value() + (pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
-    static auto                      PDIMAROUND = CConfigValue<Hyprlang::FLOAT>("decoration:dim_around");
+    const auto  PWORKSPACE = pWindow->m_workspace;
+    const auto  REALPOS    = pWindow->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + (pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
+    static auto PDIMAROUND = CConfigValue<Config::FLOAT>("decoration:dim_around");
 
     CSurfacePassElement::SRenderData renderdata = {pMonitor, time};
-    CBox                             textureBox = {REALPOS.x, REALPOS.y, std::max(pWindow->m_realSize->value().x, 5.0), std::max(pWindow->m_realSize->value().y, 5.0)};
+    const auto                       REALSIZE   = pWindow->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    CBox                             textureBox = {REALPOS.x, REALPOS.y, std::max(REALSIZE.x, 5.0), std::max(REALSIZE.y, 5.0)};
 
     renderdata.pos.x = textureBox.x;
     renderdata.pos.y = textureBox.y;
@@ -4908,22 +4926,23 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             *pWindow->m_notRespondingTint = 0.F;
     }
 
-    //if (standalone)
-        //decorate = false;
+    // if (standalone)
+        // decorate = false;
 
     // whether to use m_fMovingToWorkspaceAlpha, only if fading out into an invisible ws
     const bool USE_WORKSPACE_FADE_ALPHA = pWindow->m_monitorMovedFrom != -1 && (!PWORKSPACE || !PWORKSPACE->isVisible());
 
     renderdata.surface   = pWindow->wlSurface()->resource();
-    renderdata.dontRound = pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
-    // renderdata.fadeAlpha = pWindow->m_alpha->value() * (pWindow->m_pinned || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
-        // (USE_WORKSPACE_FADE_ALPHA ? pWindow->m_movingToWorkspaceAlpha->value() : 1.F) * pWindow->m_movingFromWorkspaceAlpha->value();
-    // renderdata.alpha         = pWindow->m_activeInactiveAlpha->value();
-    renderdata.decorate      = decorate && !pWindow->m_X11DoesntWantBorders && !pWindow->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
+    renderdata.dontRound = Fullscreen::controller()->getFullscreenModes(pWindow).internal == Fullscreen::FSMODE_FULLSCREEN;
+    renderdata.fadeAlpha = pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) * pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_LAYOUT) *
+        (pWindow->m_pinned || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
+        (USE_WORKSPACE_FADE_ALPHA ? pWindow->alphaValue(
+                   Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE) : 1.F) * pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE);
+    renderdata.alpha         = pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE);
+    renderdata.decorate      = decorate && !pWindow->m_X11DoesntWantBorders && Fullscreen::controller()->getFullscreenModes(pWindow).internal != Fullscreen::FSMODE_FULLSCREEN;
     renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->rounding() * pMonitor->m_scale;
     renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->roundingPower();
-    //renderdata.blur          = !standalone && g_pHyprRenderer->shouldBlur(pWindow);
-    renderdata.blur          = false;
+    renderdata.blur          = !standalone && tis->shouldBlur(pWindow);
     renderdata.pWindow       = pWindow;
 
     if (standalone) {
@@ -4938,25 +4957,25 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     renderdata.pWindow = pWindow;
 
     // for plugins
-    g_pHyprRenderer->m_renderData.currentWindow = pWindow;
+    tis->m_renderData.currentWindow = pWindow;
 
     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOW);
 
     const auto fullAlpha = renderdata.alpha * renderdata.fadeAlpha;
 
-    if (*PDIMAROUND && pWindow->m_ruleApplicator->dimAround().valueOrDefault() && !g_pHyprRenderer->m_bRenderingSnapshot && mode != Render::RENDER_PASS_POPUP) {
-        CBox                        monbox = {0, 0, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.x, g_pHyprRenderer->m_renderData.pMonitor->m_transformedSize.y};
+    if (*PDIMAROUND && pWindow->m_ruleApplicator->dimAround().valueOrDefault() && !tis->m_bRenderingSnapshot && mode != Render::RENDER_PASS_POPUP) {
+        CBox                        monbox = {0, 0, tis->m_renderData.pMonitor->m_transformedSize.x, tis->m_renderData.pMonitor->m_transformedSize.y};
         CRectPassElement::SRectData data;
         data.color = CHyprColor(0, 0, 0, *PDIMAROUND * fullAlpha);
         data.box   = monbox;
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+        tis->addPassElement(makeUnique<CRectPassElement>(data));
     }
 
     renderdata.pos.x += pWindow->m_floatingOffset.x;
     renderdata.pos.y += pWindow->m_floatingOffset.y;
 
     // if window is floating and we have a slide animation, clip it to its full bb
-    if (!ignorePosition && pWindow->m_isFloating && !pWindow->isFullscreen() && PWORKSPACE->m_renderOffset->isBeingAnimated() && !pWindow->m_pinned) {
+    if (!ignorePosition && pWindow->m_isFloating && !Fullscreen::controller()->isFullscreen(pWindow) && PWORKSPACE->m_renderOffset->isBeingAnimated() && !pWindow->m_pinned) {
         CRegion rg =
             pWindow->getFullWindowBoundingBox().translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->m_floatingOffset).scale(pMonitor->m_scale);
         renderdata.clipBox = rg.getExtents();
@@ -4965,10 +4984,15 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     // render window decorations first, if not fullscreen full
     if (mode == Render::RENDER_PASS_ALL || mode == Render::RENDER_PASS_MAIN) {
 
-        const bool TRANSFORMERSPRESENT = !pWindow->m_transformers.empty();
+        const bool      TRANSFORMEDWINDOW = !pWindow->m_transformers.empty();
+        UP<Render::CRenderPass> transformedPass;
+        UP<Render::CScopeGuard> passRedirect;
+        const bool      windowBlur = renderdata.blur;
 
-        if (TRANSFORMERSPRESENT) {
-            // Render::GL::g_pHyprOpenGL->bindOffMain();
+        if (TRANSFORMEDWINDOW) {
+            transformedPass = makeUnique<Render::CRenderPass>();
+            passRedirect    = tis->redirectPass(transformedPass.get());
+            renderdata.blur = false;
 
             for (auto const& t : pWindow->m_transformers) {
                 t->preWindowRender(&renderdata);
@@ -4991,11 +5015,11 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             }
         }
 
-        static auto PXWLUSENN = CConfigValue<Hyprlang::INT>("xwayland:use_nearest_neighbor");
+        static auto PXWLUSENN = CConfigValue<Config::INTEGER>("xwayland:use_nearest_neighbor");
         if ((pWindow->m_isX11 && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
             renderdata.useNearestNeighbor = true;
 
-        if (pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
+        if (!TRANSFORMEDWINDOW && pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
             CBox wb = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
             wb.scale(pMonitor->m_scale).round();
             CRectPassElement::SRectData data;
@@ -5004,14 +5028,14 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             data.round = renderdata.dontRound ? 0 : renderdata.rounding - 1;
             data.blur  = true;
             data.blurA = renderdata.fadeAlpha;
-            // data.xray  = Render::GL::g_pHyprOpenGL->shouldUseNewBlurOptimizations(nullptr, pWindow);
-            g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+            data.xray  = tis->shouldUseNewBlurOptimizations(nullptr, pWindow);
+            tis->addPassElement(makeUnique<CRectPassElement>(data));
             renderdata.blur = false;
         }
 
         renderdata.surfaceCounter = 0;
         pWindow->wlSurface()->resource()->breadthfirst(
-            [&renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
+            [&tis, &renderdata, &pWindow](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
                 if (!s->m_current.texture)
                     return;
 
@@ -5022,7 +5046,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
                 renderdata.texture     = s->m_current.texture;
                 renderdata.surface     = s;
                 renderdata.mainSurface = s == pWindow->wlSurface()->resource();
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+                tis->addPassElement(makeUnique<CSurfacePassElement>(renderdata));
                 renderdata.surfaceCounter++;
             },
             nullptr);
@@ -5038,18 +5062,39 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             }
         }
 
-        if (TRANSFORMERSPRESENT) {
-            // CFramebuffer* last = g_pHyprRenderer->m_renderData.currentFB;
-            // for (auto const& t : pWindow->m_transformers) {
-                // last = t->transform(last);
-            // }
+        if (TRANSFORMEDWINDOW) {
+            passRedirect.reset();
 
-            // Render::GL::g_pHyprOpenGL->bindBackOnMain();
-            // Render::GL::g_pHyprOpenGL->renderOffToMain(last);
+            CBox currentBox = pWindow->getFullWindowBoundingBox();
+            currentBox.translate((pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value()) + pWindow->m_floatingOffset - pMonitor->m_position);
+
+            SMotionBlurData windowMotionBlur;
+            if (!standalone && !tis->m_bRenderingSnapshot) {
+                for (auto const& t : pWindow->m_transformers) {
+                    t->amendTransformedRenderData(currentBox, &windowMotionBlur);
+                }
+            }
+
+            CBox blurBox = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
+            blurBox.scale(pMonitor->m_scale).round();
+
+            tis->addPassElement(makeUnique<CTransformedWindowPassElement>(CTransformedWindowPassElement::SData{
+                .pass              = std::move(transformedPass),
+                .window            = pWindow,
+                .currentBox        = currentBox,
+                .blurBox           = blurBox,
+                .blur              = windowBlur,
+                .blurA             = renderdata.fadeAlpha,
+                .blurRound         = renderdata.dontRound ? 0 : std::max(renderdata.rounding - 1, 0),
+                .blurRoundingPower = renderdata.roundingPower,
+                .motionBlur        = windowMotionBlur,
+            }));
+
+            renderdata.blur = windowBlur;
         }
     }
 
-    g_pHyprRenderer->m_renderData.clipBox = CBox();
+    tis->m_renderData.clipBox = CBox();
 
     if (mode == Render::RENDER_PASS_ALL || mode == Render::RENDER_PASS_POPUP) {
         if (!pWindow->m_isX11) {
@@ -5061,9 +5106,9 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             renderdata.squishOversized = false; // don't squish popups
             renderdata.popup           = true;
 
-            static CConfigValue PBLURIGNOREA = CConfigValue<Hyprlang::FLOAT>("decoration:blur:popups_ignorealpha");
+            static CConfigValue PBLURIGNOREA = CConfigValue<Config::FLOAT>("decoration:blur:popups_ignorealpha");
 
-            renderdata.blur = g_pHyprRenderer->shouldBlur(pWindow->m_popupHead);
+            renderdata.blur = tis->shouldBlur(pWindow->m_popupHead);
 
             if (renderdata.blur) {
                 renderdata.discardMode |= DISCARD_ALPHA;
@@ -5076,22 +5121,17 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             renderdata.surfaceCounter = 0;
 
             pWindow->m_popupHead->breadthfirst(
-                [&renderdata](WP<Desktop::View::CPopup> popup, void* data) {
-                    if (popup->m_fadingOut) {
-                        g_pHyprRenderer->renderSnapshot(popup);
-                        return;
-                    }
-
+                [&tis, &renderdata](WP<Desktop::View::CPopup> popup, void* data) {
                     if (!popup->aliveAndVisible())
                         return;
 
                     const auto     pos    = popup->coordsRelativeToParent();
                     const Vector2D oldPos = renderdata.pos;
                     renderdata.pos += pos;
-                    renderdata.fadeAlpha = popup->m_alpha->value();
+                    renderdata.fadeAlpha = popup->alpha()[Desktop::View::POPUP_ALPHA_FADE]->value();
 
                     popup->wlSurface()->resource()->breadthfirst(
-                        [&renderdata](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
+                        [&tis, &renderdata](SP<CWLSurfaceResource> s, const Vector2D& offset, void* data) {
                             if (!s->m_current.texture)
                                 return;
 
@@ -5102,7 +5142,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
                             renderdata.texture     = s->m_current.texture;
                             renderdata.surface     = s;
                             renderdata.mainSurface = false;
-                            g_pHyprRenderer->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
+                            tis->m_renderPass.add(makeUnique<CSurfacePassElement>(renderdata));
                             renderdata.surfaceCounter++;
                         },
                         data);
@@ -5126,7 +5166,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 
     Event::bus()->m_events.render.stage.emit(RENDER_POST_WINDOW);
 
-    g_pHyprRenderer->m_renderData.currentWindow.reset();
+    tis->m_renderData.currentWindow.reset();
 }
 
 void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) {
@@ -5204,8 +5244,8 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
     //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
     g_pHyprRenderer->endRender();
     g_pHyprRenderer->m_bRenderingSnapshot = false;
-    hw->w_size = Bounds(0, 0, (w->m_realSize->value().x * m->m_scale), (w->m_realSize->value().y * m->m_scale));
-    hw->w_bounds_raw = Bounds(0, 0, (w->m_realSize->value().x), (w->m_realSize->value().y));
+    hw->w_size = Bounds(0, 0, (w->sizeAnimation()->value().x * m->m_scale), (w->sizeAnimation()->value().y * m->m_scale));
+    hw->w_bounds_raw = Bounds(0, 0, (w->sizeAnimation()->value().x), (w->sizeAnimation()->value().y));
     auto tex = hw->fb->getTexture();
     glActiveTexture(GL_TEXTURE0);
     tex->bind();
@@ -5217,7 +5257,7 @@ void HyprIso::screenshot_all() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto w : g_pCompositor->m_windows) {
+    for (auto w : Desktop::windowState()->windows()) {
         bool has_mylar_bar = false;
         for (const auto &decos : w->m_windowDecorations)
             if (decos->getDisplayName() == "MylarBar")
@@ -5239,7 +5279,7 @@ void HyprIso::screenshot(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto w : g_pCompositor->m_windows) {
+    for (auto w : Desktop::windowState()->windows()) {
         bool has_mylar_bar = false;
         for (const auto &decos : w->m_windowDecorations) 
             if (decos->getDisplayName() == "MylarBar")
@@ -5419,7 +5459,7 @@ void HyprIso::screenshot_deco(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto w : g_pCompositor->m_windows) {
+    for (auto w : Desktop::windowState()->windows()) {
         for (auto hw : hyprwindows) {
             if (hw->w == w && hw->id == id) {
                 if (!hw->deco_fb)
@@ -5603,7 +5643,7 @@ void HyprIso::set_zoom_factor(float amount, bool instant) {
 #endif
     static auto PZOOMFACTOR = CConfigValue<Config::FLOAT>("cursor:zoom_factor");
     *(PZOOMFACTOR.ptr()) = amount;
-    for (auto const& m : g_pCompositor->m_monitors) {
+    for (auto const& m : State::monitorState()->monitors()) {
         if (instant)
             m->m_cursorZoom->setValueAndWarp(amount);
         else
@@ -5729,24 +5769,25 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
             return;
         }
 
-        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+        auto       pWorkspace = State::workspaceState()->query().id(WORKSPACEID).run();
         PHLMONITOR pMonitor   = nullptr;
         const auto POLDWS     = PWINDOW->m_workspace;
 
         updateRelativeCursorCoords();
-
         g_pHyprRenderer->damageWindow(PWINDOW);
 
         if (pWorkspace) {
-            const auto FULLSCREENMODE = PWINDOW->m_fullscreenState.internal;
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+            const auto FULLSCREENMODE = Fullscreen::controller()->getFullscreenModes(PWINDOW).internal;
+            Desktop::globalWindowController()->moveWindowToWorkspace(PWINDOW, pWorkspace);
             pMonitor = pWorkspace->m_monitor.lock();
             Desktop::focusState()->rawMonitorFocus(pMonitor);
-            g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
+            Fullscreen::controller()->setFullscreenMode(PWINDOW, FULLSCREENMODE, std::nullopt);
+
+            // g_pCompositor->setWindowFullscreenInternal(PWINDOW, FULLSCREENMODE);
         } else {
-            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+            pWorkspace = State::workspaceState()->create(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
             pMonitor   = pWorkspace->m_monitor.lock();
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+            Desktop::globalWindowController()->moveWindowToWorkspace(PWINDOW, pWorkspace);
         }
 
         POLDWS->m_lastFocusedWindow = POLDWS->getFirstWindow();
@@ -5774,19 +5815,19 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
 
         g_pHyprRenderer->damageWindow(PWINDOW);
 
-        auto       pWorkspace = g_pCompositor->getWorkspaceByID(WORKSPACEID);
+        auto       pWorkspace = State::workspaceState()->query().id(WORKSPACEID).run();
         const auto OLDMIDDLE  = PWINDOW->middle();
 
         if (pWorkspace) {
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+            Desktop::globalWindowController()->moveWindowToWorkspace(PWINDOW, pWorkspace);
         } else {
-            pWorkspace = g_pCompositor->createNewWorkspace(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
-            g_pCompositor->moveWindowToWorkspaceSafe(PWINDOW, pWorkspace);
+            pWorkspace = State::workspaceState()->create(WORKSPACEID, PWINDOW->monitorID(), workspaceName, false);
+            Desktop::globalWindowController()->moveWindowToWorkspace(PWINDOW, pWorkspace);
         }
 
         if (PWINDOW == Desktop::focusState()->window()) {
             if (const auto PATCOORDS =
-                    g_pCompositor->vectorToWindowUnified(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
+                    Desktop::viewState()->hitTest().windowAt(OLDMIDDLE, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING, PWINDOW);
                 PATCOORDS)
                 Desktop::focusState()->fullWindowFocus(PATCOORDS, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
             else
@@ -5808,7 +5849,7 @@ void HyprIso::reload() {
     // }
     //
     // g_pConfigManager->reload();
-    // for (auto w : g_pCompositor->m_windows)
+    // for (auto w : Desktop::windowState()->windows())
     //     w->updateDecorationValues();
     Render::GL::g_pHyprOpenGL->initShaders();
 }
@@ -5897,7 +5938,7 @@ PHLWINDOW vectorToWindowUnified(const Vector2D& pos, uint8_t properties, PHLWIND
 
     // pinned windows on top of floating regardless
     if (properties & ALLOW_FLOATING) {
-        for (auto const& w : g_pCompositor->m_windows | std::views::reverse) {
+        for (auto const& w : Desktop::windowState()->windows() | std::views::reverse) {
             if (ONLY_PRIORITY && !w->priorityFocus())
                 continue;
 
@@ -5917,7 +5958,7 @@ PHLWINDOW vectorToWindowUnified(const Vector2D& pos, uint8_t properties, PHLWIND
 
     auto windowForWorkspace = [&](bool special) -> PHLWINDOW {
         auto floating = [&](bool aboveFullscreen) -> PHLWINDOW {
-            for (auto const& w : g_pCompositor->m_windows | std::views::reverse) {
+            for (auto const& w : Desktop::windowState()->windows() | std::views::reverse) {
 
                 if (special && !w->onSpecialWorkspace()) // because special floating may creep up into regular
                     continue;
@@ -5990,7 +6031,7 @@ PHLWINDOW vectorToWindowUnified(const Vector2D& pos, uint8_t properties, PHLWIND
             return found;
 
         // for windows, we need to check their extensions too, first.
-        for (auto const& w : g_pCompositor->m_windows) {
+        for (auto const& w : Desktop::windowState()->windows()) {
             if (ONLY_PRIORITY && !w->priorityFocus())
                 continue;
 
@@ -6007,7 +6048,7 @@ PHLWINDOW vectorToWindowUnified(const Vector2D& pos, uint8_t properties, PHLWIND
             }
         }
 
-        for (auto const& w : g_pCompositor->m_windows) {
+        for (auto const& w : Desktop::windowState()->windows()) {
             if (ONLY_PRIORITY && !w->priorityFocus())
                 continue;
 
@@ -6089,7 +6130,7 @@ void mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vec
 
     g_pInputManager->m_lastCursorPosFloored = MOUSECOORDSFLOORED;
 
-    const auto PMONITOR = g_pInputManager->isLocked() && g_pCompositor->m_lastMonitor ? g_pCompositor->m_lastMonitor.lock() : g_pCompositor->getMonitorFromCursor();
+    const auto PMONITOR = g_pInputManager->isLocked() && g_pCompositor->m_lastMonitor ? g_pCompositor->m_lastMonitor.lock() : State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run();
 
     // this can happen if there are no displays hooked up to Hyprland
     if (PMONITOR == nullptr)
@@ -6177,7 +6218,7 @@ void mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vec
 
     if (forcedFocus && !foundSurface) {
         pFoundWindow = forcedFocus;
-        surfacePos   = pFoundWindow->m_realPosition->value();
+        surfacePos   = pFoundWindow->positionAnimation()->value();
         foundSurface = pFoundWindow->m_wlSurface->resource();
     }
 
@@ -6268,7 +6309,7 @@ void mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vec
             surfacePos   = Vector2D(-1337, -1337);
         } else {
             foundSurface = pFoundWindow->m_wlSurface->resource();
-            surfacePos   = pFoundWindow->m_realPosition->value();
+            surfacePos   = pFoundWindow->positionAnimation()->value();
         }
     }
 
@@ -6310,11 +6351,11 @@ void mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vec
                 foundSurface = g_pCompositor->vectorWindowToSurface(mouseCoords, pFoundWindow, surfaceCoords);
                 if (!foundSurface) {
                     foundSurface = pFoundWindow->m_wlSurface->resource();
-                    surfacePos   = pFoundWindow->m_realPosition->value();
+                    surfacePos   = pFoundWindow->positionAnimation()->value();
                 }
             } else {
                 foundSurface = pFoundWindow->m_wlSurface->resource();
-                surfacePos   = pFoundWindow->m_realPosition->value();
+                surfacePos   = pFoundWindow->positionAnimation()->value();
             }
         }
     }
@@ -6516,10 +6557,10 @@ void renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const 
 //     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
 //
 //     std::vector<PHLWINDOWREF> windows, fadingOut, pinned;
-//     windows.reserve(g_pCompositor->m_windows.size());
+//     windows.reserve(Desktop::windowState()->windows().size());
 //
 //     // collect renderable windows
-//     for (auto const& w : g_pCompositor->m_windows) {
+//     for (auto const& w : Desktop::windowState()->windows()) {
 //         if (w->isHidden() || (!w->m_isMapped && !w->m_fadingOut))
 //             continue;
 //         if (!g_pHyprRenderer->shouldRenderWindow(w, pMonitor))
@@ -6737,7 +6778,7 @@ Bounds bounds_client_final(int wid) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == wid) {
             if (auto w = hyprwindow->w.get()) {
-                return {w->m_realPosition->goal().x, w->m_realPosition->goal().y, w->m_realSize->goal().x, w->m_realSize->goal().y};
+                return {w->positionAnimation()->goal().x, w->positionAnimation()->goal().y, w->sizeAnimation()->goal().x, w->sizeAnimation()->goal().y};
             }
         }
     }    
@@ -6751,7 +6792,7 @@ Bounds bounds_layer(int wid) {
     for (auto hl : hyprlayers) {
         if (hl->id == wid) {
             if (auto w = hl->l.get()) {
-                return tobounds(CBox(w->m_realPosition->goal().x, w->m_realPosition->goal().y, w->m_realSize->goal().x, w->m_realSize->goal().y));
+                return tobounds(CBox(w->positionAnimation()->goal().x, w->positionAnimation()->goal().y, w->sizeAnimation()->goal().x, w->sizeAnimation()->goal().y));
             }
         }
     }    
@@ -6767,8 +6808,8 @@ Bounds real_bounds_client(int wid) {
             if (auto w = hyprwindow->w.get()) {
                 //return w->getFullWindowBoundingBox();
                 return tobounds({
-                    w->m_realPosition->goal().x, w->m_realPosition->goal().y,
-                    w->m_realSize->goal().x, w->m_realSize->goal().y
+                    w->positionAnimation()->goal().x, w->positionAnimation()->goal().y,
+                    w->sizeAnimation()->goal().x, w->sizeAnimation()->goal().y
                 });
             }
         }
@@ -6839,7 +6880,7 @@ Bounds bounds_reserved_monitor(int id) {
 bool HyprIso::being_animated(int cid) {
     for (auto hw : hyprwindows) {
         if (hw->id == cid) {
-            return hw->w->m_realPosition->isBeingAnimated() || hw->w->m_realSize->isBeingAnimated() ;
+            return hw->w->positionAnimation()->isBeingAnimated() || hw->w->sizeAnimation()->isBeingAnimated() ;
         }
     }
     return false;
@@ -6857,8 +6898,8 @@ bool HyprIso::is_pinned(int id) {
 void updateWindow(CHyprDropShadowDecoration *ds, PHLWINDOW pWindow) {
     const auto PWINDOW = ds->m_window.lock();
 
-    ds->m_lastWindowPos  = PWINDOW->m_realPosition->value();
-    ds->m_lastWindowSize = PWINDOW->m_realSize->value();
+    ds->m_lastWindowPos  = PWINDOW->positionAnimation()->value();
+    ds->m_lastWindowSize = PWINDOW->sizeAnimation()->value();
 
     ds->m_lastWindowBox          = {ds->m_lastWindowPos.x, ds->m_lastWindowPos.y, ds->m_lastWindowSize.x, ds->m_lastWindowSize.y};
     ds->m_lastWindowBoxWithDecos = g_pDecorationPositioner->getBoxWithIncludedDecos(pWindow);
@@ -7032,9 +7073,9 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
     AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp, clip, clipbox](AnyPass* pass) {
         set_rounding(0);
         CHyprColor m_realShadowColor = CHyprColor(b.r, b.g, b.b, b.a);
-        if (g_pCompositor->m_windows.empty())
+        if (Desktop::windowState()->windows().empty())
             return;
-        PHLWINDOW fake_window = g_pCompositor->m_windows[0]; // there is a faulty assert that exists that would otherwise be hit without a fake window target
+        PHLWINDOW fake_window = Desktop::windowState()->windows()[0]; // there is a faulty assert that exists that would otherwise be hit without a fake window target
         static auto PSHADOWSIZE = range;
         const auto ROUNDING = ROUNDINGBASE;
         auto allBox = fullBox;
@@ -7854,7 +7895,7 @@ void HyprIso::save_position_info(int id) {
     for (auto c : hyprwindows) {
         if (c->id == id) {
             auto target = c->w->layoutTarget();
-            auto ccb = CBox(c->w->m_realPosition->goal(), c->w->m_realSize->goal());
+            auto ccb = CBox(c->w->positionAnimation()->goal(), c->w->sizeAnimation()->goal());
             //target->rememberFloatingSize({ccb.w, ccb.h});
             //target->setPositionGlobal(CBox(ccb.x, ccb.y, ccb.w, ccb.h));
             target->space()->setTargetGeom(ccb, target);
@@ -7993,268 +8034,268 @@ void add_mylar_gesture() {
     HyprlandAPI::addConfigKeyword(globals->api, "mylar-gesture", ::mylarGestureKeyword, {});
 }
 
-void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
-    if (!pMonitor)
-        return;
-    static std::chrono::high_resolution_clock::time_point renderStart        = std::chrono::high_resolution_clock::now();
-    static std::chrono::high_resolution_clock::time_point renderStartOverlay = std::chrono::high_resolution_clock::now();
-    static std::chrono::high_resolution_clock::time_point endRenderOverlay   = std::chrono::high_resolution_clock::now();
-
-    static auto                                           PDEBUGOVERLAY       = CConfigValue<Config::INTEGER>("debug:overlay");
-    static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Config::INTEGER>("debug:damage_tracking");
-    static auto                                           PDAMAGEBLINK        = CConfigValue<Config::INTEGER>("debug:damage_blink");
-    static auto                                           PSOLDAMAGE          = CConfigValue<Config::INTEGER>("debug:render_solitary_wo_damage");
-    static auto                                           PVFR                = CConfigValue<Config::INTEGER>("debug:vfr");
-
-    static int                                            damageBlinkCleanup = 0; // because double-buffered
-
-    const float                                           ZOOMFACTOR = pMonitor->m_cursorZoom->value();
-
-    if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
-        Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
-        return;
-    }
-
-    if (!*PDAMAGEBLINK)
-        damageBlinkCleanup = 0;
-
-    if (*PDEBUGOVERLAY == 1) {
-        renderStart = std::chrono::high_resolution_clock::now();
-        // Debug::overlay()->frameData(pMonitor);
-    }
-
-    if (!g_pCompositor->m_sessionActive)
-        return;
-
-    Event::bus()->m_events.render.preChecks.emit(pMonitor);
-
-    if (g_pAnimationManager)
-        g_pAnimationManager->frameTick();
-
-    {
-        static bool once = true;
-        if (once) {
-            Event::bus()->m_events.start.emit();
-            once = false;
-        }
-    }
-
-    if (pMonitor->m_scheduledRecalc) {
-        pMonitor->m_scheduledRecalc = false;
-        if (pMonitor->m_activeWorkspace) // might be missing (mirror)
-            pMonitor->m_activeWorkspace->m_space->recalculate(Layout::RECALCULATE_REASON_RENDER_MOINTOR);
-    }
-
-    if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
-        return;
-
-    // tearing and DS first
-    bool       shouldTear              = pMonitor->updateTearing();
-    const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast();
-
-    if (canAttemptDirectScanout) {
-        if (pMonitor->attemptDirectScanout()) {
-            if (!pMonitor->needsACopyFB())
-                pMonitor->resources()->markMirrorFBStale();
-
-            if (!pMonitor->m_directScanoutIsActive) {
-                pMonitor->m_previousFSWindow.reset(); // recalc fs settings
-                pMonitor->m_directScanoutIsActive = true;
-            }
-            g_pHyprRenderer->handleFullscreenSettings(pMonitor);
-            return;
-        } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive)
-            pMonitor->handleDSleave();
-    }
-
-    Event::bus()->m_events.render.pre.emit(pMonitor);
-
-    const auto NOW = Time::steadyNow();
-
-    if (!g_pHyprRenderer->shouldRenderMonitor(pMonitor) && damageBlinkCleanup == 0)
-        return;
-
-    if (*PDAMAGETRACKINGMODE == -1) {
-        Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
-        return;
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
-
-    pMonitor->m_renderingActive = true;
-
-    // Most frames have no fading-out windows or layers for this monitor.
-    if (!g_pCompositor->m_windowsFadingOut.empty() || !g_pCompositor->m_surfacesFadingOut.empty())
-        g_pCompositor->cleanupFadingOut(pMonitor->m_id);
-
-    // TODO: this is getting called with extents being 0,0,0,0 should it be?
-    // potentially can save on resources.
-
-    TRACY_GPU_ZONE("Render");
-
-    static bool zoomLock = false;
-    if (zoomLock && ZOOMFACTOR == 1.f) {
-        g_pPointerManager->unlockSoftwareAll();
-        zoomLock = false;
-    } else if (!zoomLock && ZOOMFACTOR != 1.f) {
-        g_pPointerManager->lockSoftwareAll();
-        zoomLock = true;
-    }
-
-    g_pHyprRenderer->m_renderData.mouseZoomFactor = 1.f;
-    if (ZOOMFACTOR != 1.f && pMonitor == g_pCompositor->getMonitorFromCursor())
-        g_pHyprRenderer->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
-
-    if (pMonitor->m_zoomAnimProgress->value() != 1) {
-        g_pHyprRenderer->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
-        g_pHyprRenderer->m_renderData.mouseZoomUseMouse  = false;
-        g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
-    }
-
-    CRegion damage, finalDamage;
-    if (!g_pHyprRenderer->beginRender(pMonitor, damage, Render::RENDER_MODE_NORMAL)) {
-        Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
-        return;
-    }
-
-    // if we have no tracking or full tracking, invalidate the entire monitor
-    if (*PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
-        damage = {0, 0, (double) sc<int>(pMonitor->m_transformedSize.x) * 10, (double) sc<int>(pMonitor->m_transformedSize.y) * 10};
-
-    finalDamage = damage;
-
-    // update damage in renderdata as we modified it
-    g_pHyprRenderer->setDamage(damage, finalDamage);
-
-    if (pMonitor->m_forceFullFrames > 0) {
-        pMonitor->m_forceFullFrames -= 1;
-        if (pMonitor->m_forceFullFrames > 10)
-            pMonitor->m_forceFullFrames = 0;
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_BEGIN);
-
-    bool renderCursor = true;
-
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
-        g_pHyprRenderer->renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, Render::RENDER_PASS_MAIN /* solitary = no popups */);
-    else if (!finalDamage.empty()) {
-        if (pMonitor->isMirror()) {
-            g_pHyprRenderer->blend(false);
-            g_pHyprRenderer->renderMirrored();
-            g_pHyprRenderer->blend(true);
-            Event::bus()->m_events.render.stage.emit(RENDER_POST_MIRROR);
-            renderCursor = false;
-        } else {
-            CBox renderBox = {0, 0, (double) sc<int>(pMonitor->m_pixelSize.x), (double) sc<int>(pMonitor->m_pixelSize.y)};
-            g_pHyprRenderer->renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
-
-            g_pHyprRenderer->renderLockscreen(pMonitor, NOW, renderBox);
-
-            if (pMonitor == Desktop::focusState()->monitor()) {
-                Notification::overlay()->draw(pMonitor);
-                ErrorOverlay::overlay()->draw();
-            }
-
-            // for drawing the debug overlay
-            if (pMonitor == g_pCompositor->m_monitors.front() && *PDEBUGOVERLAY == 1) {
-                renderStartOverlay = std::chrono::high_resolution_clock::now();
-                Debug::overlay()->draw();
-                endRenderOverlay = std::chrono::high_resolution_clock::now();
-            }
-
-            if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
-                CRectPassElement::SRectData data;
-                data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
-                data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
-                g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
-                damageBlinkCleanup = 1;
-            } else if (*PDAMAGEBLINK) {
-                damageBlinkCleanup++;
-                if (damageBlinkCleanup > 3)
-                    damageBlinkCleanup = 0;
-            }
-        }
-    } else if (!pMonitor->isMirror()) {
-        if (pMonitor->m_activeWorkspace)
-            g_pHyprRenderer->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
-        if (pMonitor->m_activeSpecialWorkspace)
-            g_pHyprRenderer->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
-    }
-
-    renderCursor = renderCursor && g_pHyprRenderer->shouldRenderCursor();
-
-    Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
-
-    if (renderCursor) {
-        TRACY_GPU_ZONE("RenderCursor");
-        g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, g_pHyprRenderer->m_renderData.damage);
-    }
-
-    Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
-
-    if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
-        // render the DPMS black if we are animating
-        CRectPassElement::SRectData data;
-        data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
-        data.color = Colors::BLACK.modifyA(pMonitor->m_dpmsBlackOpacity->value());
-        g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
-    }
-
-    Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
-
-    g_pHyprRenderer->endRender();
-
-    TRACY_GPU_COLLECT;
-
-    if (!pMonitor->needsACopyFB())
-        pMonitor->resources()->markMirrorFBStale(g_pHyprRenderer->m_renderData.damage);
-
-    CRegion    frameDamage{g_pHyprRenderer->m_renderData.damage};
-
-    const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
-    frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
-
-    if (*PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_MONITOR)
-        frameDamage.add(0, 0, sc<int>(pMonitor->m_transformedSize.x), sc<int>(pMonitor->m_transformedSize.y));
-
-    if (*PDAMAGEBLINK)
-        frameDamage.add(damage);
-
-    if (!pMonitor->m_mirrors.empty())
-        g_pHyprRenderer->damageMirrorsWith(pMonitor, frameDamage);
-
-    pMonitor->m_renderingActive = false;
-
-    Event::bus()->m_events.render.stage.emit(RENDER_POST);
-
-    pMonitor->m_output->state->addDamage(frameDamage);
-    auto presentationMode = shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE : Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC;
-    if (pMonitor->m_output->state->state().presentationMode != presentationMode)
-        pMonitor->m_output->state->setPresentationMode(presentationMode);
-
-    if (commit)
-        g_pHyprRenderer->commitPendingAndDoExplicitSync(pMonitor);
-
-    if (shouldTear)
-        pMonitor->m_tearingState.busy = true;
-
-    if (*PDAMAGEBLINK || *PVFR == 0 || pMonitor->m_pendingFrame)
-        g_pCompositor->scheduleFrameForMonitor(pMonitor, Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
-
-    pMonitor->m_pendingFrame = false;
-
-    if (*PDEBUGOVERLAY == 1) {
-        const float durationUs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - renderStart).count() / 1000.f;
-        Debug::overlay()->renderData(pMonitor, durationUs);
-
-        if (pMonitor == g_pCompositor->m_monitors.front()) {
-            const float noOverlayUs = durationUs - std::chrono::duration_cast<std::chrono::nanoseconds>(endRenderOverlay - renderStartOverlay).count() / 1000.f;
-            Debug::overlay()->renderDataNoOverlay(pMonitor, noOverlayUs);
-        } else
-            Debug::overlay()->renderDataNoOverlay(pMonitor, durationUs);
-    }
-}
+// void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
+//     if (!pMonitor)
+//         return;
+//     static std::chrono::high_resolution_clock::time_point renderStart        = std::chrono::high_resolution_clock::now();
+//     static std::chrono::high_resolution_clock::time_point renderStartOverlay = std::chrono::high_resolution_clock::now();
+//     static std::chrono::high_resolution_clock::time_point endRenderOverlay   = std::chrono::high_resolution_clock::now();
+//
+//     static auto                                           PDEBUGOVERLAY       = CConfigValue<Config::INTEGER>("debug:overlay");
+//     static auto                                           PDAMAGETRACKINGMODE = CConfigValue<Config::INTEGER>("debug:damage_tracking");
+//     static auto                                           PDAMAGEBLINK        = CConfigValue<Config::INTEGER>("debug:damage_blink");
+//     static auto                                           PSOLDAMAGE          = CConfigValue<Config::INTEGER>("debug:render_solitary_wo_damage");
+//     static auto                                           PVFR                = CConfigValue<Config::INTEGER>("debug:vfr");
+//
+//     static int                                            damageBlinkCleanup = 0; // because double-buffered
+//
+//     const float                                           ZOOMFACTOR = pMonitor->m_cursorZoom->value();
+//
+//     if (pMonitor->m_pixelSize.x < 1 || pMonitor->m_pixelSize.y < 1) {
+//         Log::logger->log(Log::ERR, "Refusing to render a monitor because of an invalid pixel size: {}", pMonitor->m_pixelSize);
+//         return;
+//     }
+//
+//     if (!*PDAMAGEBLINK)
+//         damageBlinkCleanup = 0;
+//
+//     if (*PDEBUGOVERLAY == 1) {
+//         renderStart = std::chrono::high_resolution_clock::now();
+//         // Debug::overlay()->frameData(pMonitor);
+//     }
+//
+//     if (!g_pCompositor->m_sessionActive)
+//         return;
+//
+//     Event::bus()->m_events.render.preChecks.emit(pMonitor);
+//
+//     if (g_pAnimationManager)
+//         g_pAnimationManager->frameTick();
+//
+//     {
+//         static bool once = true;
+//         if (once) {
+//             Event::bus()->m_events.start.emit();
+//             once = false;
+//         }
+//     }
+//
+//     if (pMonitor->m_scheduledRecalc) {
+//         pMonitor->m_scheduledRecalc = false;
+//         if (pMonitor->m_activeWorkspace) // might be missing (mirror)
+//             pMonitor->m_activeWorkspace->m_space->recalculate(Layout::RECALCULATE_REASON_RENDER_MOINTOR);
+//     }
+//
+//     if (!pMonitor->m_output->needsFrame && pMonitor->m_forceFullFrames == 0)
+//         return;
+//
+//     // tearing and DS first
+//     bool       shouldTear              = pMonitor->updateTearing();
+//     const bool canAttemptDirectScanout = pMonitor->canAttemptDirectScanoutFast();
+//
+//     if (canAttemptDirectScanout) {
+//         if (pMonitor->attemptDirectScanout()) {
+//             if (!pMonitor->needsACopyFB())
+//                 pMonitor->resources()->markMirrorFBStale();
+//
+//             if (!pMonitor->m_directScanoutIsActive) {
+//                 pMonitor->m_previousFSWindow.reset(); // recalc fs settings
+//                 pMonitor->m_directScanoutIsActive = true;
+//             }
+//             g_pHyprRenderer->handleFullscreenSettings(pMonitor);
+//             return;
+//         } else if (!pMonitor->m_lastScanout.expired() || pMonitor->m_directScanoutIsActive)
+//             pMonitor->handleDSleave();
+//     }
+//
+//     Event::bus()->m_events.render.pre.emit(pMonitor);
+//
+//     const auto NOW = Time::steadyNow();
+//
+//     if (!g_pHyprRenderer->shouldRenderMonitor(pMonitor) && damageBlinkCleanup == 0)
+//         return;
+//
+//     if (*PDAMAGETRACKINGMODE == -1) {
+//         Log::logger->log(Log::CRIT, "Damage tracking mode -1 ????");
+//         return;
+//     }
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_PRE);
+//
+//     pMonitor->m_renderingActive = true;
+//
+//     // Most frames have no fading-out windows or layers for this monitor.
+//     if (!Desktop::windowState()->windows()FadingOut.empty() || !g_pCompositor->m_surfacesFadingOut.empty())
+//         g_pCompositor->cleanupFadingOut(pMonitor->m_id);
+//
+//     // TODO: this is getting called with extents being 0,0,0,0 should it be?
+//     // potentially can save on resources.
+//
+//     TRACY_GPU_ZONE("Render");
+//
+//     static bool zoomLock = false;
+//     if (zoomLock && ZOOMFACTOR == 1.f) {
+//         g_pPointerManager->unlockSoftwareAll();
+//         zoomLock = false;
+//     } else if (!zoomLock && ZOOMFACTOR != 1.f) {
+//         g_pPointerManager->lockSoftwareAll();
+//         zoomLock = true;
+//     }
+//
+//     g_pHyprRenderer->m_renderData.mouseZoomFactor = 1.f;
+//     if (ZOOMFACTOR != 1.f && pMonitor == State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run())
+//         g_pHyprRenderer->m_renderData.mouseZoomFactor = std::clamp(ZOOMFACTOR, 1.f, INFINITY);
+//
+//     if (pMonitor->m_zoomAnimProgress->value() != 1) {
+//         g_pHyprRenderer->m_renderData.mouseZoomFactor    = 2.0 - pMonitor->m_zoomAnimProgress->value(); // 2x zoom -> 1x zoom
+//         g_pHyprRenderer->m_renderData.mouseZoomUseMouse  = false;
+//         g_pHyprRenderer->m_renderData.useNearestNeighbor = false;
+//     }
+//
+//     CRegion damage, finalDamage;
+//     if (!g_pHyprRenderer->beginRender(pMonitor, damage, Render::RENDER_MODE_NORMAL)) {
+//         Log::logger->log(Log::ERR, "renderer: couldn't beginRender()!");
+//         return;
+//     }
+//
+//     // if we have no tracking or full tracking, invalidate the entire monitor
+//     if (*PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
+//         damage = {0, 0, (double) sc<int>(pMonitor->m_transformedSize.x) * 10, (double) sc<int>(pMonitor->m_transformedSize.y) * 10};
+//
+//     finalDamage = damage;
+//
+//     // update damage in renderdata as we modified it
+//     g_pHyprRenderer->setDamage(damage, finalDamage);
+//
+//     if (pMonitor->m_forceFullFrames > 0) {
+//         pMonitor->m_forceFullFrames -= 1;
+//         if (pMonitor->m_forceFullFrames > 10)
+//             pMonitor->m_forceFullFrames = 0;
+//     }
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_BEGIN);
+//
+//     bool renderCursor = true;
+//
+//     if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+//         g_pHyprRenderer->renderWindow(pMonitor->m_solitaryClient.lock(), pMonitor, NOW, false, Render::RENDER_PASS_MAIN /* solitary = no popups */);
+//     else if (!finalDamage.empty()) {
+//         if (pMonitor->isMirror()) {
+//             g_pHyprRenderer->blend(false);
+//             g_pHyprRenderer->renderMirrored();
+//             g_pHyprRenderer->blend(true);
+//             Event::bus()->m_events.render.stage.emit(RENDER_POST_MIRROR);
+//             renderCursor = false;
+//         } else {
+//             CBox renderBox = {0, 0, (double) sc<int>(pMonitor->m_pixelSize.x), (double) sc<int>(pMonitor->m_pixelSize.y)};
+//             g_pHyprRenderer->renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
+//
+//             g_pHyprRenderer->renderLockscreen(pMonitor, NOW, renderBox);
+//
+//             if (pMonitor == Desktop::focusState()->monitor()) {
+//                 Notification::overlay()->draw(pMonitor);
+//                 ErrorOverlay::overlay()->draw();
+//             }
+//
+//             // for drawing the debug overlay
+//             if (pMonitor == State::monitorState()->monitors().front() && *PDEBUGOVERLAY == 1) {
+//                 renderStartOverlay = std::chrono::high_resolution_clock::now();
+//                 Debug::overlay()->draw();
+//                 endRenderOverlay = std::chrono::high_resolution_clock::now();
+//             }
+//
+//             if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
+//                 CRectPassElement::SRectData data;
+//                 data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+//                 data.color = CHyprColor(1.0, 0.0, 1.0, 100.0 / 255.0);
+//                 g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+//                 damageBlinkCleanup = 1;
+//             } else if (*PDAMAGEBLINK) {
+//                 damageBlinkCleanup++;
+//                 if (damageBlinkCleanup > 3)
+//                     damageBlinkCleanup = 0;
+//             }
+//         }
+//     } else if (!pMonitor->isMirror()) {
+//         if (pMonitor->m_activeWorkspace)
+//             g_pHyprRenderer->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW);
+//         if (pMonitor->m_activeSpecialWorkspace)
+//             g_pHyprRenderer->sendFrameEventsToWorkspace(pMonitor, pMonitor->m_activeSpecialWorkspace, NOW);
+//     }
+//
+//     renderCursor = renderCursor && g_pHyprRenderer->shouldRenderCursor();
+//
+//     Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
+//
+//     if (renderCursor) {
+//         TRACY_GPU_ZONE("RenderCursor");
+//         g_pPointerManager->renderSoftwareCursorsFor(pMonitor->m_self.lock(), NOW, g_pHyprRenderer->m_renderData.damage);
+//     }
+//
+//     Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
+//
+//     if (pMonitor->m_dpmsBlackOpacity->value() != 0.F) {
+//         // render the DPMS black if we are animating
+//         CRectPassElement::SRectData data;
+//         data.box   = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
+//         data.color = Colors::BLACK.modifyA(pMonitor->m_dpmsBlackOpacity->value());
+//         g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+//     }
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_LAST_MOMENT);
+//
+//     g_pHyprRenderer->endRender();
+//
+//     TRACY_GPU_COLLECT;
+//
+//     if (!pMonitor->needsACopyFB())
+//         pMonitor->resources()->markMirrorFBStale(g_pHyprRenderer->m_renderData.damage);
+//
+//     CRegion    frameDamage{g_pHyprRenderer->m_renderData.damage};
+//
+//     const auto TRANSFORM = Math::invertTransform(pMonitor->m_transform);
+//     frameDamage.transform(Math::wlTransformToHyprutils(TRANSFORM), pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y);
+//
+//     if (*PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_MONITOR)
+//         frameDamage.add(0, 0, sc<int>(pMonitor->m_transformedSize.x), sc<int>(pMonitor->m_transformedSize.y));
+//
+//     if (*PDAMAGEBLINK)
+//         frameDamage.add(damage);
+//
+//     if (!pMonitor->m_mirrors.empty())
+//         g_pHyprRenderer->damageMirrorsWith(pMonitor, frameDamage);
+//
+//     pMonitor->m_renderingActive = false;
+//
+//     Event::bus()->m_events.render.stage.emit(RENDER_POST);
+//
+//     pMonitor->m_output->state->addDamage(frameDamage);
+//     auto presentationMode = shouldTear ? Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_IMMEDIATE : Aquamarine::eOutputPresentationMode::AQ_OUTPUT_PRESENTATION_VSYNC;
+//     if (pMonitor->m_output->state->state().presentationMode != presentationMode)
+//         pMonitor->m_output->state->setPresentationMode(presentationMode);
+//
+//     if (commit)
+//         g_pHyprRenderer->commitPendingAndDoExplicitSync(pMonitor);
+//
+//     if (shouldTear)
+//         pMonitor->m_tearingState.busy = true;
+//
+//     if (*PDAMAGEBLINK || *PVFR == 0 || pMonitor->m_pendingFrame)
+//         g_pCompositor->scheduleFrameForMonitor(pMonitor, Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
+//
+//     pMonitor->m_pendingFrame = false;
+//
+//     if (*PDEBUGOVERLAY == 1) {
+//         const float durationUs = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::high_resolution_clock::now() - renderStart).count() / 1000.f;
+//         Debug::overlay()->renderData(pMonitor, durationUs);
+//
+//         if (pMonitor == State::monitorState()->monitors().front()) {
+//             const float noOverlayUs = durationUs - std::chrono::duration_cast<std::chrono::nanoseconds>(endRenderOverlay - renderStartOverlay).count() / 1000.f;
+//             Debug::overlay()->renderDataNoOverlay(pMonitor, noOverlayUs);
+//         } else
+//             Debug::overlay()->renderDataNoOverlay(pMonitor, durationUs);
+//     }
+// }
 
 
 void HyprIso::screenshot_monitor(int mon) {
@@ -8712,7 +8753,7 @@ void monitor_rule_disable_toggle(std::string from, std::string to) {
 
 std::vector<MylarMonitorRule> HyprIso::all_monitors() {
     std::vector<MylarMonitorRule> monitors;
-    for (auto m : g_pCompositor->m_realMonitors) {
+    for (auto m : State::monitorState()->allMonitors()) {
         if (m->m_name == "FALLBACK")
             continue;
         MylarMonitorRule rule;
