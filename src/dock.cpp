@@ -3707,11 +3707,12 @@ void dock::create_slept_button() {
 
             auto current = get_current_time_in_ms();
             float delta = ((float)(current - slept_creation_time));
-            if (delta < 1000) {
+            static float throb_time = 700.0f;
+            if (delta < throb_time) {
                 windowing::redraw(mylar->raw_window);
                 
                 set_rect(cr, c->real_bounds);
-                set_argb(cr, {.15, .52, .9, 0.7f * pull(throb, delta / 1000.0f)});
+                set_argb(cr, {.15, .52, .9, 0.7f * pull(throb, delta / throb_time)});
                 cairo_fill(cr); 
             }
 
