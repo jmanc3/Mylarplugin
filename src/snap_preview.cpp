@@ -14,6 +14,16 @@ static float fade_time = 300.0f;
 static float pad = 10.0f;
 static float circumvent_time = 220.0f;
 
+static RGBA color_sel_color() {
+    static RGBA default_color("99eeff25");
+    return hypriso->get_varcolor("plugin:mylardesktop:sel_color", default_color);
+}
+
+static RGBA color_sel_border_color() {
+    static RGBA default_color("99eeffff");
+    return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
+}
+
 struct Pos {
     int x;
     int y;
@@ -214,7 +224,7 @@ void snap_preview::on_drag(int cid, int x, int y) {
 
 void snap_preview::on_drag_end(int cid, int x, int y, int snap_type) {
     preview->show = false;
-    preview->keep_showing_until = get_current_time_in_ms() + 300;
+    preview->keep_showing_until = get_current_time_in_ms() + fade_time;
     preview->end_drag_time = get_current_time_in_ms();
     preview->end_snap_type = (SnapPosition) snap_type;
     if ((preview->scalar < .7 && preview->previous_snap_type == SnapPosition::MAX) || 
@@ -225,6 +235,10 @@ void snap_preview::on_drag_end(int cid, int x, int y, int snap_type) {
         preview->start = preview->current;
         preview->end = snap_position_to_bounds(hypriso->monitor_from_cursor(), preview->previous_snap_type);
     }
+    bool dont_expand_animate = true;
+	if (dont_expand_animate) {
+    	preview->end = preview->start;
+	}
     
     bool snapped = snap_type != (int)SnapPosition::NONE;
     if (preview->circumventing && snapped) {
@@ -324,11 +338,18 @@ void snap_preview::draw(Container* actual_root, Container* c) {
             b.scale(s);
             b.round();
             if (preview->previous_snap_type != SnapPosition::NONE || (preview->previous_snap_type == SnapPosition::NONE && preview->scalar < .8)) {
-                render_drop_shadow(rid, 1.0, {0, 0, 0, .05f * fade_amount}, preview->rounding * fade_amount, 2.0f, b);
+                render_drop_shadow(rid, 1.0, {0, 0, 0, .05f * fade_amount}, preview->rounding, 2.0f, b);
             }
-            rect(b, {.98, .98, .98, .30f}, 0, std::round(preview->rounding * s * fade_amount), 2.0f, true, 1.0);
+            
+            //rect(b, {.98, .98, .98, .30f}, 0, std::round(preview->rounding * s * fade_amount), 2.0f, true, 1.0);
+            auto inside_color = color_sel_color();
+            inside_color.a *= fade_amount;
+            rect(b, inside_color, 0, std::round(preview->rounding * s), 2.0f, false, 1.0);
             b.shrink(std::round(1.0f * s));
-            border(b, {1.0, 1.0, 1.0, 0.1f}, std::round(1.0f * s), 0, std::round(preview->rounding * s * fade_amount), 2.0f, false, 1.0);
+            //border(b, {1.0, 1.0, 1.0, 0.1f}, std::round(1.0f * s), 0, std::round(preview->rounding * s * fade_amount), 2.0f, false, 1.0);
+            auto border_color = color_sel_border_color();
+            border_color.a *= fade_amount;
+            border(b, border_color, std::round(1.0f * s), 0, std::round(preview->rounding * s), 2.0f, false, 1.0);
         }
     }
 }

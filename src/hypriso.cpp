@@ -1534,8 +1534,8 @@ void HyprIso::create_config_variables() {
     values->dock_sel_press_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_press_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
     values->dock_sel_hover_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_hover_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
     values->dock_sel_accent_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_accent_color", "", Config::ParserUtils::parseColor("rgba(ffffff88)").value());
-    values->sel_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
-    values->sel_border_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_border_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
+    values->sel_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_color", "", Config::ParserUtils::parseColor("rgba(5ce0ff25)").value());
+    values->sel_border_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_border_color", "", Config::ParserUtils::parseColor("rgba(5fe5fff1)").value());
 
     HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_bg_hovered_color);
     HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_bg_pressed_color);
@@ -3068,7 +3068,7 @@ void change_root_config_path(std::string path, bool force = true) {
 static std::vector<PF *> polled;
 static int inotify_fd = -1;
 static PF* inotify_poll_pf = nullptr;
-static std::unordered_map<int, std::function<void(FileWatchUpdate)>> inotify_watchers;
+static std::unordered_map<int, std::function<void(FileWatchUpdate, int)>> inotify_watchers;
 
 void HyprIso::end() {
 #ifdef TRACY_ENABLE
@@ -7532,7 +7532,7 @@ static FileWatchUpdate to_file_watch_update(uint32_t mask) {
     return FileWatchUpdate::OTHER;
 }
 
-int watch_file(const std::string& path, const std::function<void(FileWatchUpdate)>& on_update) {
+int watch_file(const std::string& path, const std::function<void(FileWatchUpdate, int)>& on_update) {
     if (path.empty() || !on_update)
         return -1;
 
@@ -7543,7 +7543,7 @@ int watch_file(const std::string& path, const std::function<void(FileWatchUpdate
     }
 
     if (!inotify_poll_pf) {
-        const bool ok = poll_descriptor(inotify_fd, [](PF *) {
+        const bool ok = poll_descriptor(inotify_fd, [](PF *f) {
             std::vector<char> buffer(4096);
             while (true) {
                 const ssize_t len = read(inotify_fd, buffer.data(), buffer.size());
@@ -7563,7 +7563,7 @@ int watch_file(const std::string& path, const std::function<void(FileWatchUpdate
                         const auto it = inotify_watchers.find(event->wd);
                         if (it != inotify_watchers.end()) {
                             const auto update = to_file_watch_update(event->mask);
-                            it->second(update);
+                            it->second(update, event->wd);
                             if (update == FileWatchUpdate::REMOVED)
                                 toRemove.push_back(event->wd);
                         }

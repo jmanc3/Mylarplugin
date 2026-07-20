@@ -70,12 +70,12 @@ void draw_text(std::string text, int x, int y);
 void apply_restore_info(int id);
 
 static RGBA color_sel_color() {
-    static RGBA default_color("0085e625");
+    static RGBA default_color("99eeff25");
     return hypriso->get_varcolor("plugin:mylardesktop:sel_color", default_color);
 }
 
 static RGBA color_sel_border_color() {
-    static RGBA default_color("0085e6ff");
+    static RGBA default_color("99eeffff");
     return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
 }
 
@@ -1359,10 +1359,10 @@ static void create_actual_root() {
             float rounding = 9.0f;
             auto shadow = b;
             shadow.grow(std::round(1.0f * s));
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .12f}, std::round(rounding * s), 2.0, shadow);
-            rect(b, RGBA(col.r, col.g, col.b, .50f), 0, std::round(rounding * s), 2.0f, true, 0.1);
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .04f}, std::round(rounding * s), 2.0, shadow);
+            rect(b, RGBA(col.r, col.g, col.b, col.a), 0, std::round(rounding * s), 2.0f, true, 0.1);
             col = color_sel_border_color();
-            border(b, RGBA(col.r, col.g, col.b, .8f), std::round(1.0f * s), 0, std::round(rounding * s), 2.0f, false, 1.0);
+            border(b, RGBA(col.r, col.g, col.b, col.a), std::round(1.0f * s), 0, std::round(rounding * s), 2.0f, false, 1.0);
         }
     };
 }
@@ -1787,7 +1787,13 @@ void watch_wallpaper_change() {
     std::filesystem::path filepath =
         std::filesystem::path(home) / ".config/mylar/wall.png";
     static Timer *t = nullptr;
-    watch_file(filepath.string(), [](FileWatchUpdate update) {
+    
+    watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
+        if (update == FileWatchUpdate::REMOVED) {
+            later(1500, [](Timer *) {
+                watch_wallpaper_change();
+            });
+        }
         if (!t) {
             t = later(1000, [](Timer *) {
                 for (auto c : actual_monitors) {

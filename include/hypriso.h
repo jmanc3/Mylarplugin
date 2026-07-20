@@ -598,7 +598,7 @@ enum class FileWatchUpdate {
     OTHER
 };
 
-int watch_file(const std::string& path, const std::function<void(FileWatchUpdate)>& on_update);
+int watch_file(const std::string& path, const std::function<void(FileWatchUpdate, int)>& on_update);
 void remove_watch(int watch_descriptor);
 
 // On it's own thread

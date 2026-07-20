@@ -11,8 +11,14 @@ void workspace_indicator::on_change(int cid) {
         
     };
     indicator->interactable = false;
+    static int index_id = 0;
+    index_id++;
+    auto copy_index = index_id;
 
-    indicator->when_paint = [](Container *actual_root, Container *c) {
+    indicator->when_paint = [copy_index](Container *actual_root, Container *c) {
+        // only paint top indicator
+        if (copy_index != index_id)
+            return;
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -67,9 +73,11 @@ void workspace_indicator::on_change(int cid) {
             larger.x -= 4 * s;
             larger.w += 8 * s;
             auto sm = larger;
+            sm.x -= sm.h * .5;
+            sm.w += sm.h;
             sm.shrink(1.0);
             larger.round();
-            //render_drop_shadow(rid, 1, {0, 0, 0, 0.5}, h * .5, 2.0, sm);
+            render_drop_shadow(rid, 1, {0, 0, 0, 0.4}, h * .5, 2.0, sm);
 
             rect(larger, {.14, .14, .14, 1}, 0, 0.0, 2.0, true);
             auto left = larger;

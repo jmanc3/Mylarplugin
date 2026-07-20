@@ -1668,6 +1668,14 @@ static void fill_applications_container(Dock *dock) {
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->applications->raw_window->dpi, 1.0);
         cairo_fill(cr);
     };
+    dock->applications->root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        /*
+        main_thread([is_text, text]() {
+            if (is_text)
+                notify(text);
+        });
+        */
+    };
 }
 
 static void fill_projection_container(Dock *dock);
@@ -2122,18 +2130,12 @@ static void fill_root(Container *root) {
                 auto dock = (Dock *) root->user_data;
                 dock->applications = nullptr;
             };
-            dock->applications->root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-                /*
-                main_thread([is_text, text]() {
-                    if (is_text)
-                        notify(text);
-                });
-                */
-            };
             dock->applications->root->user_data = dock;
             dock->applications->root->wanted_bounds.w = FILL_SPACE;
             dock->applications->root->wanted_bounds.h = FILL_SPACE;
+            
             fill_applications_container(dock);
+            
             windowing::redraw(dock->applications->raw_window);
         };
         super->after_paint = paint {

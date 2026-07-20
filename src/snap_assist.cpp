@@ -77,6 +77,16 @@ static RGBA titlebar_closed_button_icon_color_hovered_pressed() {
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_closed_button_icon_color_hovered_pressed", default_color);
 }
 
+static RGBA color_sel_color() {
+    static RGBA default_color("99eeff25");
+    return hypriso->get_varcolor("plugin:mylardesktop:sel_color", default_color);
+}
+
+static RGBA color_sel_border_color() {
+    static RGBA default_color("99eeffff");
+    return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
+}
+
 // {"anchors":[{"x":0,"y":1},{"x":0.47500000000000003,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.2911752162835537,"y":0.9622916751437718},{"x":0.6883506970527843,"y":0.08506946563720702}]}
 static std::vector<float> slidetopos = { 0, 0.0030000000000000027, 0.006000000000000005, 0.01100000000000001, 0.016000000000000014, 0.02200000000000002, 0.030000000000000027, 0.038000000000000034, 0.04800000000000004, 0.05900000000000005, 0.07099999999999995, 0.08399999999999996, 0.09899999999999998, 0.11499999999999999, 0.132, 0.15100000000000002, 0.17200000000000004, 0.19399999999999995, 0.21799999999999997, 0.243, 0.271, 0.30000000000000004, 0.33199999999999996, 0.366, 0.402, 0.44099999999999995, 0.483, 0.527, 0.575, 0.612, 0.636, 0.6579999999999999, 0.6799999999999999, 0.7, 0.72, 0.738, 0.756, 0.773, 0.789, 0.8049999999999999, 0.8200000000000001, 0.834, 0.847, 0.86, 0.873, 0.884, 0.895, 0.906, 0.916, 0.925, 0.9339999999999999, 0.943, 0.951, 0.959, 0.966, 0.972, 0.979, 0.985, 0.99, 0.995, 1 };
 
@@ -241,6 +251,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             thumb->when_clicked = paint {
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
+                hypriso->set_hidden(data->cid, false);
                 auto close_cid = data->cid;
                 auto b = c->real_bounds;
                 auto s = scale(parent_data->monitor);
@@ -327,7 +338,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 final_thumb_spot.y += std::round(titlebar_h * s);
                 final_thumb_spot.h -= std::round(titlebar_h * s);
                 auto l = lerp(size, final_thumb_spot, pull(slidetopos, alpha));
-                if (our_space != parent_space) {
+                if (our_space != parent_space || hypriso->is_hidden(cid)) {
                     l = final_thumb_spot;
                 }
                 if (parent_data->should_slide) {
@@ -542,7 +553,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto l2 = l;
                 if (parent_data->should_slide) {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, fadea);
-                } else if (our_space != parent_space) {
+                } else if (our_space != parent_space || hypriso->is_hidden(cid)) {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, pull(slidetopos, fadea));
                 } else {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3);
@@ -673,7 +684,10 @@ void paint_snap_helper_actual(Container *actual_root, Container *c) {
 
     auto sha = c->real_bounds;
     render_drop_shadow(rid, 1.0, {0, 0, 0, .14f * alpha}, std::round(8 * s), 2.0, sha);
-    rect(c->real_bounds, {1, 1, 1, .3f * alpha}, 0, std::round(8 * s), 2.0, true, 1.0 * alpha);
+    auto inside_color = color_sel_color();
+    inside_color.a *= alpha;
+    auto pos = c->real_bounds;
+    rect(pos.round(), inside_color, 0, std::round(8 * s), 2.0, false, 1.0 * alpha);
     if (c->state.mouse_hovering || c->state.mouse_pressing) {
         float alpha2 = ((float) (get_current_time_in_ms() - data->time_mouse_in)) / fade_in_time();
         if (alpha2 > 1.0)
@@ -686,8 +700,10 @@ void paint_snap_helper_actual(Container *actual_root, Container *c) {
         //rect(c->real_bounds, {1, 1, 1, .3f * (1.0f - alpha2)}, 0, std::round(8 * s), 2.0, false, 1.0); 
     }
     auto b = c->real_bounds;
-    b.shrink(1.0f);
-    border(b, {0.6, 0.6, 0.6, 0.5f * alpha}, 1.0f, 0, 8 * s, 2.0f, false, 1.0);
+    //b.shrink(1.0f);
+    auto border_color = color_sel_border_color();
+    border_color.a *= alpha;
+    border(b.round(), border_color, 1.0f, 0, 8 * s, std::round(2.0f * s), false, 1.0);
 }
 
 
