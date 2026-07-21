@@ -175,6 +175,10 @@ void drag::end(int cid) {
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
             auto mou = mouse();
+            auto openess = *datum<float>(c, "openess");
+            if (openess < .94)
+                continue;
+            
             for (auto ch : c->children) {
                 if (bounds_contains(ch->real_bounds, mou.x, mou.y)) {
                     auto space = *datum<int>(ch, "workspace");
