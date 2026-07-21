@@ -319,8 +319,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 //float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
                 float alpha = parent_data->visibility;
                 float fadea = alpha;
-                if (hypriso->has_decorations(cid))
+                bool start_at_final_position = our_space != parent_space || hypriso->is_hidden(cid);
+                if (hypriso->has_decorations(cid) && !start_at_final_position)
                     fadea = 1.0;
+                    
                 if (parent_data->should_slide) {
                     fadea = ((float) (get_current_time_in_ms() - parent_data->slide_start)) / (650.0f * ratioscalar);
                     if (fadea > 1.0)
@@ -328,8 +330,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     fadea = pull(slidetopos2fade, fadea);
                 }
                 if (parent_data->closing)
-                    fadea * alpha;
-                
+                    fadea *= alpha;
+               if (!start_at_final_position && parent_data->closing && hypriso->has_decorations(cid)) 
+                    fadea = 1.0; 
+               
                 auto size = hypriso->thumbnail_size(data->cid).scale(s);
                 auto pos = bounds_client(data->cid);
                 size.x = pos.x * s;
@@ -338,7 +342,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 final_thumb_spot.y += std::round(titlebar_h * s);
                 final_thumb_spot.h -= std::round(titlebar_h * s);
                 auto l = lerp(size, final_thumb_spot, pull(slidetopos, alpha));
-                if (our_space != parent_space || hypriso->is_hidden(cid)) {
+                if (start_at_final_position) {
                     l = final_thumb_spot;
                 }
                 if (parent_data->should_slide) {
@@ -553,7 +557,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto l2 = l;
                 if (parent_data->should_slide) {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, fadea);
-                } else if (our_space != parent_space || hypriso->is_hidden(cid)) {
+                } else if (start_at_final_position) {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, pull(slidetopos, fadea));
                 } else {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3);
@@ -657,9 +661,19 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     }
     
 
+    auto parent_data = (HelperData *) c->user_data;
+    auto parent_space = hypriso->get_workspace(parent_data->cid);
     for (int i = 0; i < c->children.size(); i++) {
         auto ch = c->children[i];
+        auto data = (SnapThumb *) ch->user_data;
+        auto our_space = hypriso->get_workspace(data->cid);
+ 
+        bool start_at_final_position = our_space != parent_space || hypriso->is_hidden(data->cid);
+        
         ch->z_index = c->children.size() + 10 - i;
+        if (start_at_final_position) {
+            ch->z_index -= 4000;
+        }
         ch->wanted_bounds = result.items[i];
         ch->wanted_bounds.x += bounds.x;
         ch->wanted_bounds.y += bounds.y + scroll_amount;
