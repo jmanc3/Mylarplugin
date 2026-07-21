@@ -2016,6 +2016,7 @@ void hook_onUpdateState(void* thisptr) {
 }
 
 void hook_maximize_minimize() {
+    return;
     {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "onUpdateState");
         for (auto m : METHODS) {
@@ -4491,39 +4492,6 @@ static void updateRelativeCursorCoords() {
         Desktop::focusState()->window()->m_relativeCursorCoordsOnLastWarp = g_pInputManager->getMouseCoordsInternal() - Desktop::focusState()->window()->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
 }
 
-
-static void switchToWindow(PHLWINDOW PWINDOWTOCHANGETO, bool forceFSCycle = false) {
-    static auto PFOLLOWMOUSE = CConfigValue<Config::INTEGER>("input:follow_mouse");
-    static auto PNOWARPS     = CConfigValue<Config::INTEGER>("cursor:no_warps");
-
-    const auto  PLASTWINDOW = Desktop::focusState()->window();
-
-    if (PWINDOWTOCHANGETO == PLASTWINDOW || !PWINDOWTOCHANGETO)
-        return;
-
-    g_pInputManager->unconstrainMouse();
-
-    if (PLASTWINDOW && PLASTWINDOW->m_workspace == PWINDOWTOCHANGETO->m_workspace && Fullscreen::controller()->isFullscreen(PLASTWINDOW))
-        Desktop::focusState()->fullWindowFocus(PWINDOWTOCHANGETO, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_HARD, nullptr, forceFSCycle);
-    else {
-        updateRelativeCursorCoords();
-        Desktop::focusState()->fullWindowFocus(PWINDOWTOCHANGETO, Desktop::FOCUS_REASON_SWITCH_TO_WINDOW_SOFT, nullptr, forceFSCycle);
-        PWINDOWTOCHANGETO->warpCursor();
-
-        if (*PNOWARPS == 0 || *PFOLLOWMOUSE < 2) {
-            g_pInputManager->m_forcedFocus = PWINDOWTOCHANGETO;
-            g_pInputManager->simulateMouseMovement();
-            g_pInputManager->m_forcedFocus.reset();
-        }
-
-        if (PLASTWINDOW && PLASTWINDOW->m_monitor != PWINDOWTOCHANGETO->m_monitor) {
-            const auto PNEWMON = PWINDOWTOCHANGETO->m_monitor.lock();
-            Desktop::focusState()->rawMonitorFocus(PNEWMON);
-        }
-    }
-}
-
-
 void HyprIso::bring_to_front(int id, bool focus) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -4531,8 +4499,7 @@ void HyprIso::bring_to_front(int id, bool focus) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             Desktop::windowState()->raise(hw->w);
-            if (focus)
-                switchToWindow(hw->w, true);
+            Desktop::focusState()->fullWindowFocus(hw->w, Desktop::eFocusReason::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
         }
     }
 }
@@ -5853,6 +5820,8 @@ void HyprIso::reload() {
     // g_pConfigManager->reload();
     // for (auto w : Desktop::windowState()->windows())
     //     w->updateDecorationValues();
+
+    
     Render::GL::g_pHyprOpenGL->initShaders();
 }
 

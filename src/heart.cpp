@@ -1805,13 +1805,15 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
     }
 }
 
+static int latest_file_watch = -1;
+
 void watch_wallpaper_change() {
     const char* home = std::getenv("HOME");
     std::filesystem::path filepath =
         std::filesystem::path(home) / ".config/mylar/wall.png";
     static Timer *t = nullptr;
     
-    watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
+    latest_file_watch = watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
         if (update == FileWatchUpdate::REMOVED) {
             later(1500, [](Timer *) {
                 watch_wallpaper_change();
@@ -1839,7 +1841,7 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    later(3000, [](Timer *) {
+    later(1000, [](Timer *) {
     if (!polling_thread) {
         polling_thread = new PollingThread;
         polling_thread->start();
@@ -1937,6 +1939,8 @@ void heart::end() {
     polling_thread = nullptr;
     audio_stop();
     audio_join();
+    if (latest_file_watch != -1)
+        remove_watch(latest_file_watch);
     dbus_end();
     dock::stop();
     for (auto c : actual_root->children) {
@@ -1952,6 +1956,7 @@ void heart::end() {
     save_restore_infos();
     hypriso->end();    
     settings::stop();
+
     //stop_dock();
 
 //#ifdef TRACY_ENABLE
