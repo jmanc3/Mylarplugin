@@ -87,8 +87,11 @@ void drag_switcher_actual_open() {
         }
         auto s = scale(monitor);
 
-        //b.y = (-b.h * (1.0 - openess)) + (new_h * peaking_amount) - (8 * openess);
-        b.y = (-b.h * (1.0 - openess)) + ((7 * s) * peaking_amount);
+        if (overview::is_showing()) {
+            b.y = (-b.h * (1.0 - openess)) + (new_h * peaking_amount) - (8 * openess);
+        } else {
+            b.y = (-b.h * (1.0 - openess)) + ((7 * s) * peaking_amount);
+        }
         if (openess != 0.0) {
             b.grow(new_h);
         }
@@ -274,14 +277,20 @@ void drag_switcher_actual_open() {
         b.shrink(1.0); 
         border(b, {.3, .3, .3, 1 * peaking_amount}, 1.0f, 3, 8 * s, 2.0, false); 
 
-        auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uf407", {.8, .8, .8, 1}, 13);
-        draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, peaking_amount * openess);
-        auto t = get_cached_texture(root, c, "drag_text", mylar_font, "Drag a window here to move it to another workspace.", 
-            {.8, .8, .8, 1}, 13);
-        draw_texture(*t, 
-            c->real_bounds.x + 14 * s + 10 * s + icon->w, 
-            c->real_bounds.y + c->real_bounds.h - t->h * 1.30, 
-            peaking_amount * openess);
+        {
+            float text_alpha = openess;
+            if (overview::is_showing()) {
+                text_alpha = 1.0;
+            }
+            auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uf407", {.8, .8, .8, 1}, 13);
+            draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, peaking_amount * text_alpha);
+            auto t = get_cached_texture(root, c, "drag_text", mylar_font, "Drag a window here to move it to another workspace.", 
+                {.8, .8, .8, 1}, 13);
+            draw_texture(*t, 
+                c->real_bounds.x + 14 * s + 10 * s + icon->w, 
+                c->real_bounds.y + c->real_bounds.h - t->h * 1.30, 
+                peaking_amount * text_alpha);
+        }
 
         if (c->state.mouse_hovering || hold_open) {
             auto openess = datum<float>(c, "openess");
