@@ -10,6 +10,8 @@
 #include "heart.h"
 #include "dock.h"
 
+#include <hyprland/src/helpers/math/Math.hpp>
+#include <hyprland/src/SharedDefs.hpp>
 #include <hyprland/src/config/shared/Types.hpp>
 #include <hyprland/src/config/values/types/ColorValue.hpp>
 #include <hyprland/src/config/values/types/FloatValue.hpp>
@@ -38,6 +40,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
+#include <hyprland/src/desktop/state/ViewHitTester.hpp>
 
 #include <hyprland/src/render/Shader.hpp>
 
@@ -63,6 +66,7 @@
 
 #include <hyprland/src/animation/WorkspaceAnimationController.hpp>
 
+#include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
 
@@ -160,8 +164,6 @@
 //#include <hyprland/src/managers/HookSystemManager.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
-#include <hyprland/src/SharedDefs.hpp>
-#include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/render/decorations/DecorationPositioner.hpp>
 #include <hyprland/src/render/decorations/IHyprWindowDecoration.hpp>
 #include <hyprland/src/render/Framebuffer.hpp>
@@ -1009,7 +1011,7 @@ uint32_t hook_OnKDECSD(void* thisptr) {
     auto ptr = (CServerDecorationKDE *) thisptr;
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (s->m_surf == hw->w->m_xdgSurface->m_surface) {
+            if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
                 break;
             }
         }
@@ -1029,7 +1031,7 @@ uint32_t hook_OnKDERequestCSD(void* thisptr, uint32_t mode) {
     //recheck_csd_for_all_wayland_windows();
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (s->m_surf == hw->w->m_xdgSurface->m_surface) {
+            if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
                 break;
             }
         }
@@ -1048,7 +1050,7 @@ uint32_t hook_OnKDEReleaseCSD(void* thisptr) {
     //recheck_csd_for_all_wayland_windows();
     for (auto hw : hyprwindows) {
         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (s->m_surf == hw->w->m_xdgSurface->m_surface) {
+            if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
                 break;
             }
         }
@@ -2767,12 +2769,12 @@ bool win_disabled(PHLWINDOW w) {
 }
 
 inline CFunctionHook* g_pOnVecToWin = nullptr;
-typedef PHLWINDOW (*origVecToWin)(CCompositor *, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow);
-PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow) {
+typedef PHLWINDOW (*origVecToWin)(Desktop::CViewHitTester *, const Vector2D& pos, uint16_t properties, PHLWINDOW pIgnoreWindow);
+PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint16_t properties, PHLWINDOW pIgnoreWindow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto win = (*(origVecToWin)g_pOnVecToWin->m_original)((CCompositor *) thisptr, pos, properties, pIgnoreWindow);
+    auto win = (*(origVecToWin)g_pOnVecToWin->m_original)((Desktop::CViewHitTester *) thisptr, pos, properties, pIgnoreWindow);
     if (hypriso->whitelist_on || win_disabled(win)) {
         return nullptr;
     }
@@ -2780,15 +2782,15 @@ PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint8_t properties
 }
 
 inline CFunctionHook* g_pOnVecToWinSurf = nullptr;
-typedef SP<CWLSurfaceResource> (*origVecToWinSurf)(CCompositor *, const Vector2D&, PHLWINDOW, Vector2D& sl);
+typedef SP<CWLSurfaceResource> (*origVecToWinSurf)(Desktop::CViewHitTester *, const Vector2D&, PHLWINDOW, Vector2D& sl);
 SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PHLWINDOW m, Vector2D& sl) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto win = (*(origVecToWinSurf)g_pOnVecToWinSurf->m_original)((CCompositor *) thisptr, vc, m, sl);
+    auto win = (*(origVecToWinSurf)g_pOnVecToWinSurf->m_original)((Desktop::CViewHitTester *) thisptr, vc, m, sl);
     bool disabled = false;
     for (auto hw : hyprwindows) {
-        if (hw->w->m_xdgSurface->m_surface == win) {
+        if (hw->w->m_xdgSurface && hw->w->m_xdgSurface->m_surface == win) {
         // if (hw->w->m_xdgSurface == win) {
             disabled = win_disabled(hw->w);
             break;
@@ -2804,9 +2806,9 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
 static void hook_vec_to_win() {
     //return;
     {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "vectorToWindowUnified");
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "windowAt");
         for (auto m : METHODS) {
-            if (m.demangled.find("CCompositor") != std::string::npos) {
+            if (m.demangled.find("CViewHitTester") != std::string::npos) {
                 g_pOnVecToWin = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onVecToWin);
                 g_pOnVecToWin->hook();
             }
@@ -2814,9 +2816,9 @@ static void hook_vec_to_win() {
     }
 
     {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "vectorWindowToSurface");
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "windowSurfaceAt");
         for (auto m : METHODS) {
-            if (m.demangled.find("CCompositor") != std::string::npos) {
+            if (m.demangled.find("CViewHitTester") != std::string::npos) {
                 g_pOnVecToWinSurf = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onVecToWinSurf);
                 g_pOnVecToWinSurf->hook();
             }
