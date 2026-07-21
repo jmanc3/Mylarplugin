@@ -1,5 +1,9 @@
 # Mylarplugin
 
+Mylarplugin implements Mylardesktop on Hyprland
+
+![Image of Mylardesktop in overview mode](screenshots/1.jpg)
+
 ## Features
 
 - Animated snap preview
