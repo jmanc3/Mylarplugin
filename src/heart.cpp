@@ -1839,7 +1839,7 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    later(10, [](Timer *) {
+    later(3000, [](Timer *) {
     if (!polling_thread) {
         polling_thread = new PollingThread;
         polling_thread->start();

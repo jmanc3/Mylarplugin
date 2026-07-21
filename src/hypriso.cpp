@@ -102,6 +102,7 @@
 //#include <hyprland/protocols/kde-server-decoration.hpp>
 //#include <hyprland/protocols/wlr-layer-shell-unstable-v1.hpp>
 
+#include <hyprland/src/render/pass/TransformedWindowPassElement.hpp>
 #include <hyprland/src/render/pass/ShadowPassElement.hpp>
 #include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
 //#include <hyprland/src/desktop/LayerSurface.hpp>
@@ -1068,6 +1069,7 @@ zxdgToplevelDecorationV1Mode hook_OnXDGCSD(void* thisptr) {
 }
 
 void detect_csd_request_change() {
+    return;
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
