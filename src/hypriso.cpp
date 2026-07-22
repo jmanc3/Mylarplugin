@@ -4892,14 +4892,19 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
             pMonitor->m_activeSpecialWorkspace = openSpecial;
 
         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+        Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
+        Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
 
         PWORKSPACE->m_visible = false;
         Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_OUT, false, true);
 
         if (PWORKSPACE == startedOn)
             pMonitor->m_activeSpecialWorkspace.reset();
-    } else
+    } else {
         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+        Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
+        Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
+    }
 
     g_pHyprRenderer->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();

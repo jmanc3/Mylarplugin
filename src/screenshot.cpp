@@ -560,7 +560,7 @@ void screenshot_tool::open() {
     
     screenshot_tool::close();
     heart::set_force_meta_open(true);
-    later_immediate([](Timer *) {
+    later(300, [](Timer *) {
         for (auto m : actual_monitors) {
             int monitor = *datum<int>(m, "cid");
             hypriso->screenshot_monitor(monitor);
