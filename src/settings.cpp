@@ -181,6 +181,8 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "natural_scrolling_touchpad", &settings->natural_scrolling_touchpad);
     bind(bool, "touchpad_disable_while_typing", &settings->touchpad_disable_while_typing);
     bind(bool, "show_docks", &settings->show_docks);
+    bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
+    bind(bool, "hotcorners", &settings->hotcorners);
     
     #undef bind
 }

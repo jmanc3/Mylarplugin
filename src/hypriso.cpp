@@ -2306,6 +2306,9 @@ prefix += "require(\"user\")\n\n";
 prefix += "require(\"debug_user\")\n\n";
 #endif
 
+    if (hypriso->on_config_generated)
+        hypriso->on_config_generated();
+    
     return prefix;
     
     /*
@@ -2683,29 +2686,11 @@ std::expected<Config::Supplementary::Jeremy::SConfigStateReply, std::string> hoo
     const char* home = std::getenv("HOME");
     if (!home || return_default_config)
         return (*(origGetMainConfigPath)g_pOnGetMainConfigPathHook->m_original)();
-    std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
-    std::filesystem::create_directories(filepath.parent_path());
-    {
-        std::ofstream out(filepath, std::ios::trunc);
-        out << default_conf() << std::endl;
-    }
-    {
-        std::filesystem::path f = std::filesystem::path(home) / ".config/mylar/user.lua";
-        std::filesystem::create_directories(f.parent_path());
-        if (!std::filesystem::exists(f)) {
-            std::ofstream out(f, std::ios::trunc);
-            out << std::endl << std::endl;
-        }
-    }
-    {
-        std::filesystem::path f = std::filesystem::path(home) / ".config/mylar/debug_user.lua";
-        std::filesystem::create_directories(f.parent_path());
-        if (!std::filesystem::exists(f)) {
-            std::ofstream out(f, std::ios::trunc);
-            out << std::endl << std::endl;
-        }
-    }
     
+    //hypriso->generate_mylar_hyprland_config();
+    
+    std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
+       
     return Config::Supplementary::Jeremy::SConfigStateReply{.path = filepath.string(), .type = Config::Supplementary::Jeremy::CONFIG_TYPE_EXPLICIT};
 }
 
@@ -5831,6 +5816,7 @@ void HyprIso::reload() {
     //     std::filesystem::path filepath = std::filesystem::path(home) / conf_path();
     //     change_root_config_path(filepath, false);
     // }
+    hypriso->generate_mylar_hyprland_config();
 
     Config::mgr()->reload();
     // for (auto w : Desktop::windowState()->windows())

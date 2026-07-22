@@ -1756,7 +1756,6 @@ void create_rounding_shader() {
         std::ofstream out(filepath, std::ios::trunc);
         out << rounding_shader << std::endl;
         later_immediate([](Timer *) {
-            hypriso->generate_mylar_hyprland_config();
             hypriso->reload();
         });
     }
@@ -1764,7 +1763,6 @@ void create_rounding_shader() {
 
 void create_default_config() {
     later_immediate([](Timer *) {
-        hypriso->generate_mylar_hyprland_config();
         hypriso->reload();
     });
 }
@@ -1934,6 +1932,7 @@ void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    settings::load_save_settings(true, set);
     polling_thread->stop_and_join();
     delete polling_thread;
     polling_thread = nullptr;
