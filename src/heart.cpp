@@ -28,6 +28,7 @@
 #include "audio.h"
 #include "coverflow.h"
 #include "screenshot.h"
+#include "desktop_icons.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -68,16 +69,6 @@ Container *actual_root = new Container;
 
 void draw_text(std::string text, int x, int y);
 void apply_restore_info(int id);
-
-static RGBA color_sel_color() {
-    static RGBA default_color("99eeff25");
-    return hypriso->get_varcolor("plugin:mylardesktop:sel_color", default_color);
-}
-
-static RGBA color_sel_border_color() {
-    static RGBA default_color("99eeffff");
-    return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
-}
 
 static void any_container_closed(Container *c) {
     remove_data(c->uuid); 
@@ -1336,56 +1327,10 @@ Bounds fixed_box(float startx, float starty, float endx, float endy) {
 }
 
 static void create_actual_root() {
-    *datum<long>(actual_root, "drag_end_time") = 0;
-    *datum<bool>(actual_root, "dragging") = false;
-
     actual_root->when_drag_end_is_click = false;
     actual_root->when_clicked = paint {
         if (c->state.mouse_button_pressed == BTN_RIGHT) {
             create_root_popup();
-        }
-    };
-    actual_root->when_drag_start = paint {
-        *datum<bool>(c, "dragging") = true;
-        for (auto m : actual_monitors)
-            hypriso->damage_entire(*datum<int>(m, "cid"));
-    };
-    actual_root->when_drag = [](Container *actual_root, Container *c) {
-        actual_root->consumed_event = true;
-        auto b = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
-        static Bounds previousB = b;
-        b.grow(20);
-        hypriso->damage_box(b);
-        hypriso->damage_box(previousB);
-        previousB = b;
-    };
-    actual_root->when_drag_end = paint {
-        *datum<bool>(c, "dragging") = false;
-        for (auto m : actual_monitors)
-            hypriso->damage_entire(*datum<int>(m, "cid"));
-    };
-    actual_root->when_paint = [](Container* actual_root, Container* c) {
-        auto root = get_rendering_root();
-        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        auto dragging = *datum<bool>(c, "dragging");
-        if (stage == (int)STAGE::RENDER_POST_WALLPAPER && dragging && c->state.mouse_button_pressed == BTN_LEFT) {
-            auto b = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
-
-            // renderfix euivalent
-            auto mb = bounds_monitor(rid);
-            b.x -= mb.x;
-            b.y -= mb.y;
-            b.scale(s);
-            b.round();
-            
-            auto col = color_sel_color();
-            float rounding = 9.0f;
-            auto shadow = b;
-            shadow.grow(std::round(1.0f * s));
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .04f}, std::round(rounding * s), 2.0, shadow);
-            rect(b, RGBA(col.r, col.g, col.b, col.a), 0, std::round(rounding * s), 2.0f, true, 0.1);
-            col = color_sel_border_color();
-            border(b, RGBA(col.r, col.g, col.b, col.a), std::round(1.0f * s), 0, std::round(rounding * s), 2.0f, false, 1.0);
         }
     };
 }
@@ -1899,6 +1844,8 @@ void heart::begin() {
     	
         hypriso->add_float_rule();
 
+        desktop_icons::start();
+
         if (icon_cache_needs_update()) {
             std::thread th([] {
                 icon_cache_generate();
@@ -2068,6 +2015,16 @@ void heart::layout_containers() {
 
     for (auto c : backup) {
         *datum<bool>(c, "touched") = false;
+    }
+
+    for (auto c : backup) {
+        if (c->custom_type == (int) TYPE::DESKTOP_ICONS) {
+            actual_root->children.push_back(c);
+            if (c->pre_layout) {
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+            }
+            *datum<bool>(c, "touched") = true;
+        }
     }
 
     for (auto c : backup) {
