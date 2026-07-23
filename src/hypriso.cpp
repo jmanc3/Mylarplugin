@@ -9,6 +9,7 @@
 #include "hypriso.h"
 #include "heart.h"
 #include "dock.h"
+#include "overview.h"
 
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/SharedDefs.hpp>
@@ -4892,6 +4893,7 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
             pMonitor->m_activeSpecialWorkspace = openSpecial;
 
         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+        
         Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
         Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
 
@@ -4902,6 +4904,7 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
             pMonitor->m_activeSpecialWorkspace.reset();
     } else {
         g_pHyprRenderer->renderWorkspace(pMonitor, PWORKSPACE, Time::steadyNow(), monbox);
+        
         Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_PRE_CURSOR);
         Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
     }

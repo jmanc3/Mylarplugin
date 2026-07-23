@@ -15,6 +15,7 @@ namespace overview {
     void fake_paint(int id);
     
     void should_draw(bool state);
+    void should_force_paint(bool state);
 
     bool is_showing();
 };
