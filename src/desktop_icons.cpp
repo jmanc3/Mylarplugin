@@ -3,6 +3,7 @@
 #include "heart.h"
 
 #include <linux/input-event-codes.h>
+#include <filesystem>
 
 static RGBA color_sel_color() {
     static RGBA default_color("99eeff25");
@@ -19,7 +20,40 @@ struct IconButton {
     bool togged = false;
 };
 
+
+static int latest_desktop_watch = -1;
+
+void watch_desktop_folder() {
+    const char* home = std::getenv("HOME");
+    std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
+    if (!std::filesystem::exists(filepath))
+        return;
+    static Timer *t = nullptr;
+    static long time_made = 0;
+    
+    latest_desktop_watch = watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
+        if (t) {
+            auto current = get_current_time_in_ms();
+            if ((current - time_made) > 1200) { // allow a reset if timer still exists after a second
+                t = nullptr;
+            } else {
+                return;
+            }
+        }
+            
+        t = later(1000, [](Timer *) {
+            notify("change in desktop foldler");
+            
+            damage_all();
+            t = nullptr;
+        });
+        time_made = get_current_time_in_ms();
+    });
+}
+
 void desktop_icons::start() {
+    watch_desktop_folder();
+    
     // each monitor needs its own desktop pane possibly every workspace
     // assign each desktop pane a monitor id
     auto c = actual_root->child(FILL_SPACE, FILL_SPACE);
@@ -112,5 +146,6 @@ void desktop_icons::stop() {
         }
     }
     damage_all();
-
+    if (latest_desktop_watch != -1)
+        remove_watch(latest_desktop_watch);
 }

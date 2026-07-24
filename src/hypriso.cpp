@@ -7684,7 +7684,8 @@ int watch_file(const std::string& path, const std::function<void(FileWatchUpdate
 
         inotify_poll_pf = polled.empty() ? nullptr : polled.back();
     }
-    const int wd = inotify_add_watch(inotify_fd, path.c_str(), IN_MODIFY | IN_CLOSE_WRITE | IN_DELETE_SELF | IN_MOVE_SELF);
+    uint32_t mask = IN_CREATE | IN_DELETE | IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO;
+    const int wd = inotify_add_watch(inotify_fd, path.c_str(), mask);
     if (wd < 0)
         return -1;
 

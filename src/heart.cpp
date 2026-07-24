@@ -1889,6 +1889,7 @@ void heart::end() {
     audio_join();
     if (latest_file_watch != -1)
         remove_watch(latest_file_watch);
+    desktop_icons::stop();
     dbus_end();
     dock::stop();
     for (auto c : actual_root->children) {
