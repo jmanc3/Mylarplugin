@@ -1,4 +1,5 @@
 #include "desktop_icons.h"
+#include "container.h"
 #include "heart.h"
 
 #include <linux/input-event-codes.h>
@@ -13,18 +14,52 @@ static RGBA color_sel_border_color() {
     return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
 }
 
+struct IconButton {
+    Bounds b;
+    bool togged = false;
+};
+
 void desktop_icons::start() {
     // each monitor needs its own desktop pane possibly every workspace
     // assign each desktop pane a monitor id
     auto c = actual_root->child(FILL_SPACE, FILL_SPACE);
     c->custom_type = (int) TYPE::DESKTOP_ICONS;
-    *datum<int>(c, "monitor") = hypriso->monitor_from_cursor();
+    int monitor = hypriso->monitor_from_cursor();
+    auto monitor_scale = scale(monitor);
+    *datum<int>(c, "monitor") = monitor;
+
+    static std::vector<Bounds> icons;
+    icons.clear();
+    int pad = 20 * monitor_scale;
+    int start_x = pad;
+    int start_y = pad;
+    for (int i = 0; i < 3; i++) {
+        icons.push_back(Bounds(start_x, start_y, 100, 100));
+        start_x += 100 + pad; 
+    }
+
+    for (auto b : icons) {
+        auto child = c->child(FILL_SPACE, FILL_SPACE);
+        child->when_paint = [](Container* actual_root, Container* c) {
+            return;
+            auto root = get_rendering_root();
+            auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+            if (stage == (int)STAGE::RENDER_POST_WALLPAPER) {
+                renderfix
+                rect(c->real_bounds, RGBA(1, 0, 0, 1));
+            }
+        };
+    }
 
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto monitor = *datum<int>(c, "monitor");
-        c->wanted_bounds = bounds_monitor(monitor);
+        c->wanted_bounds = bounds_reserved_monitor(monitor);
         c->real_bounds = c->wanted_bounds;
         auto s = scale(monitor);
+        for (int i = 0; i < c->children.size(); i++) {
+            auto child = c->children[i];
+            child->real_bounds = icons[i];
+        }
     };
     static bool dragging = false;
     dragging = false;
@@ -61,6 +96,9 @@ void desktop_icons::start() {
             rect(b, RGBA(col.r, col.g, col.b, col.a), 0, std::round(rounding * s), 2.0f, true, 0.1);
             col = color_sel_border_color();
             border(b, RGBA(col.r, col.g, col.b, col.a), std::round(1.0f * s), 0, std::round(rounding * s), 2.0f, false, 1.0);
+
+
+            // TEXT is center aligned label with trailing ... and max height of 2 ilnes
         }
     };
 }

@@ -2715,6 +2715,23 @@ hl.layer_rule({
     hl.layer_rule({ match = { namespace = "Dock" }, blur = true })
 })
 
+hl.gesture({
+    fingers = 3,
+    direction = "down",
+    action = function()
+        hl.plugin.mylar.overview_close_or_hide_desktop()
+    end
+})
+
+hl.gesture({
+    fingers = 3,
+    direction = "up",
+    action = function()
+        hl.plugin.mylar.overview_open_or_show_desktop()
+    end
+})
+
+
    
 )END";
 
@@ -3815,6 +3832,8 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
 #endif
     for (auto c : hyprwindows) {
         if (c->id == id) {
+            if (!c->w->m_monitor)
+                continue;
             auto scaling_factor = c->w->m_monitor->m_scale;
 
             {
