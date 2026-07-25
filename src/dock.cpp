@@ -5,6 +5,7 @@
 
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
+#include "overview.h"
 #include "process.hpp"
 #include "hypriso.h"
 #include "icons.h"
@@ -1042,6 +1043,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         
         if (c->state.mouse_button_pressed == BTN_LEFT) {
             main_thread([cid] {
+                if (overview::is_showing())
+                    return;
+                if (hypriso->whitelist_on) {
+                    hypriso->whitelist_on = false;
+                    return;
+                }
+                
                 // todo we need to focus next (already wrote this combine code)
                 bool is_hidden = hypriso->is_hidden(cid);
                 if (is_hidden) {

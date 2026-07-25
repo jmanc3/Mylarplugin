@@ -1477,8 +1477,12 @@ void do_snap(SnapPosition pos) {
                 auto pre_snap_bounds = *datum<Bounds>(c, "pre_snap_bounds");
                 
                 if (pos == SnapPosition::NONE) {
-                    drag::snap_window(get_monitor(cid), cid, (int) pos);                    
-                } if (snapped) {
+                    if (!snapped)
+                        return;
+                    pos = SnapPosition::MAX;
+                } 
+                
+                if (snapped) {
                     if (snap_type == (int) SnapPosition::MAX && pos == SnapPosition::MAX) {
                         drag::snap_window(get_monitor(cid), cid, (int) SnapPosition::NONE);
                         *datum<Bounds>(c, "pre_snap_bounds") = pre_snap_bounds;
