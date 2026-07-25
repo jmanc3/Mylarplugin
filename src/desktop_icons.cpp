@@ -234,7 +234,8 @@ struct IcoContainerData : UserData {
     std::string name;
     Container *c;
     bool was_active_last_frame = false;
-
+    long last_time_pressed = 0;
+    
     ~IcoContainerData() {
         //notify(fz("{} was deleted", name));
         auto text_img = *datum<TextureInfo>(c, "label");
@@ -274,6 +275,16 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     };
     c->when_mouse_leaves_container = c->when_mouse_motion;
     c->when_drag_end = c->when_mouse_motion;
+    c->when_clicked = [](Container* actual_root, Container* c) {
+        auto ico = (IcoContainerData *) c->user_data;
+        auto current = get_current_time_in_ms();
+        if ((current - ico->last_time_pressed) < 700) {
+            DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
+            auto ran = fz("xdg-open \"{}\"", item->full_filepath);
+            launch_command(ran);
+        }
+        ico->last_time_pressed = current;
+    };
    
     c->when_paint = [](Container* actual_root, Container* c) {
         auto root = get_rendering_root();
