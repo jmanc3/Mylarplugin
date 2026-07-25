@@ -24,7 +24,8 @@ static RGBA color_sel_border_color() {
 }
 
 float conf_font_size = 11;
-float conf_icon_size = 52;
+float conf_icon_size = 64;
+float conf_pad = 10;
 
 enum class DesktopItemType {
     DIRECTORY,
@@ -115,7 +116,8 @@ void on_change_in_desktop_folder() {
         return;
     }
 
-    const std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
+    //const std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
+    const std::filesystem::path filepath = std::filesystem::path(home);
     std::error_code ec;
     if (!std::filesystem::is_directory(filepath, ec)) {
         clear_desktop_items();
@@ -200,7 +202,8 @@ void on_change_in_desktop_folder() {
 
 void watch_desktop_folder() {
     const char* home = std::getenv("HOME");
-    std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
+    //std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
+    std::filesystem::path filepath = std::filesystem::path(home);
     if (!std::filesystem::exists(filepath))
         return;
     static Timer *t = nullptr;
@@ -291,7 +294,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                     info = *datum<TextureInfo>(c, "text-plain");
                 }
                 if (info.id != -1) {
-                    draw_texture(info, c->real_bounds);
+                    draw_texture(info, c->real_bounds.x, c->real_bounds.y);
                 }
             }
             
@@ -311,7 +314,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             }
             draw_texture(text_img, 
                 c->real_bounds.x,
-                c->real_bounds.y + c->real_bounds.h);
+                c->real_bounds.y + c->real_bounds.h + 4 * s);
         }
     };
 
@@ -338,12 +341,12 @@ void desktop_icons::start() {
             create_desktop_icon(parent, data);
         });
 
-        int pad = 8 * s;
+        int pad = conf_pad * s;
         int start_x = c->real_bounds.x + pad;
         int start_y = c->real_bounds.y + pad;
         for (int i = 0; i < c->children.size(); i++) {
             auto child = c->children[i];
-            child->real_bounds = Bounds(start_x, start_y, conf_icon_size * s, conf_icon_size * s);
+            child->real_bounds = Bounds(start_x, start_y, conf_icon_size, conf_icon_size);
             start_x += child->real_bounds.w + pad;
             if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
                 start_y +=  child->real_bounds.h + pad;
