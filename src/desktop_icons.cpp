@@ -26,7 +26,8 @@ static RGBA color_sel_border_color() {
 float conf_font_size = 11;
 float conf_icon_size = 64;
 float conf_pad = 10;
-
+int two_line_height = conf_font_size * 2;
+ 
 enum class DesktopItemType {
     DIRECTORY,
     IMAGE,
@@ -273,12 +274,8 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     };
     c->when_mouse_leaves_container = c->when_mouse_motion;
     c->when_drag_end = c->when_mouse_motion;
-
-    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size * scale(hypriso->monitor_from_cursor()), RGBA(1, 1, 1, 1));
-    float two_line_height = in.h;
-    free_text_texture(in.id);
-    
-    c->when_paint = [two_line_height](Container* actual_root, Container* c) {
+   
+    c->when_paint = [](Container* actual_root, Container* c) {
         auto root = get_rendering_root();
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (stage == (int)STAGE::RENDER_POST_WALLPAPER) {
@@ -321,6 +318,9 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
 }
 
 void desktop_icons::start() {
+    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size * scale(hypriso->monitor_from_cursor()), RGBA(1, 1, 1, 1));
+    two_line_height = in.h;
+    free_text_texture(in.id);
     // each monitor needs its own desktop pane possibly every workspace
     // assign each desktop pane a monitor id
     auto c = actual_root->child(FILL_SPACE, FILL_SPACE);
@@ -349,7 +349,7 @@ void desktop_icons::start() {
             child->real_bounds = Bounds(start_x, start_y, conf_icon_size, conf_icon_size);
             start_x += child->real_bounds.w + pad;
             if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
-                start_y +=  child->real_bounds.h + pad;
+                start_y +=  child->real_bounds.h + pad + two_line_height * .5;
                 start_x = c->real_bounds.x + pad;
             }
         }
