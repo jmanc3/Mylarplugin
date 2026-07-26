@@ -194,6 +194,12 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
            }
        }
     }
+    bool any_desktop_icons_pierced = false;
+    if (!pierced.empty())
+        any_desktop_icons_pierced = pierced[0]->custom_type == (int) TYPE::DESKTOP_ICON;
+    if (!any_desktop_icons_pierced && state)
+    	desktop_icons::deselect();
+    
     if (any_closed)
         damage_all();
 

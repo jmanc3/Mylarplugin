@@ -272,6 +272,7 @@ static void update_desktop_selection(Container* desktop, const Bounds& selection
 
 void create_desktop_icon(Container *parent, DesktopItem *item) {
     auto c = parent->child(FILL_SPACE, FILL_SPACE);
+    c->custom_type = (int) TYPE::DESKTOP_ICON;
     auto ico = new IcoContainerData;
     ico->name = item->name;
     ico->c = c;
@@ -493,4 +494,13 @@ void desktop_icons::stop() {
     damage_all();
     if (latest_desktop_watch != -1)
         remove_watch(latest_desktop_watch);
+}
+
+void desktop_icons::deselect() {
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto child = actual_root->children[i];
+        if (child->custom_type == (int) TYPE::DESKTOP_ICONS) {
+            clear_desktop_selection(child);
+        }
+    }
 }

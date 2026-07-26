@@ -3,5 +3,6 @@
 namespace desktop_icons {
     void start();
     void stop();
+    void deselect();
 }
 
