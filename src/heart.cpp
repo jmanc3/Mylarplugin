@@ -1013,9 +1013,7 @@ static void on_render(int id, int stage) {
            }
         }
 
-        if (show_desktop::is_opened()) {
-            show_desktop::render();
-        }
+        show_desktop::render();
 
         if (!overview::is_showing()) {
             auto current_time = get_current_time_in_ms();
@@ -1482,9 +1480,6 @@ void add_hyprctl_dispatchers() {
         if (!overview::is_showing())
             if (show_desktop::is_opened()) {
                 show_desktop::stop();
-                //hypriso->whitelist_on = false;
-                damage_all();
-                hypriso->simulateMouseMovement();
                 return 0;
             }
             
@@ -1509,8 +1504,6 @@ void add_hyprctl_dispatchers() {
         
         if (!show_desktop::is_opened()) {
             show_desktop::start();
-            damage_all();
-            hypriso->simulateMouseMovement();
             return 0;
         }
 

@@ -3,6 +3,7 @@
 #include "heart.h"
 #include "hypriso.h"
 #include "icons.h"
+#include "show_desktop.h"
 #include "titlebar.h"
 #include "layout_thumbnails.h"
 #include "drag_workspace_switcher.h"
@@ -951,6 +952,8 @@ void overview::open(int monitor) {
     drag_workspace_switcher::open();
     
     later_immediate([monitor](Timer *) {
+        show_desktop::stop(false);
+        
         screenshotting_wallpaper = true;
         hypriso->screenshot_wallpaper(monitor);
         screenshotting_wallpaper = false;
