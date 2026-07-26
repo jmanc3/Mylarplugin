@@ -134,42 +134,6 @@ static bool on_mouse_move(int id, float x, float y) {
     return consumed;
 }
 
-static void create_root_popup() {
-    auto m = mouse();
-    std::vector<PopOption> root;
-    {
-        PopOption pop;
-        pop.text = "Configure Display Settings...";   
-        pop.on_clicked = []() {
-            settings::start();
-        };
-        root.push_back(pop);
-    }
-    {
-        PopOption pop;
-        pop.text = "Refresh Compositor...";   
-        pop.on_clicked = []() {
-            hypriso->dispatch("forcerendererreload", "");
-        };
-        root.push_back(pop);
-    }
-  
-    PopOption pop;
-    pop.seperator = true;
-    root.push_back(pop);        
-
-    {
-        PopOption pop;
-        pop.text = "Log out";   
-        pop.on_clicked = []() {
-            hypriso->logout();
-        };
-        root.push_back(pop);
-    }
-
-    popup::open(root, m.x - 1, m.y + 1);
-}
-
 static bool on_mouse_press(int id, int button, int state, float x, float y) {
     mouse_down = state;
     heart::layout_containers();
@@ -1336,11 +1300,6 @@ Bounds fixed_box(float startx, float starty, float endx, float endy) {
 
 static void create_actual_root() {
     actual_root->when_drag_end_is_click = false;
-    actual_root->when_clicked = paint {
-        if (c->state.mouse_button_pressed == BTN_RIGHT) {
-            create_root_popup();
-        }
-    };
 }
 
 void load_restore_infos() {

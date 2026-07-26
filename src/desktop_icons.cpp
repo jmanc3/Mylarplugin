@@ -3,6 +3,8 @@
 #include "heart.h"
 #include "hypriso.h"
 #include "icons.h"
+#include "popup.h"
+#include "settings.h"
 
 #include <gio/gio.h>
 #include <algorithm>
@@ -378,6 +380,42 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
 
 }
 
+static void create_root_popup() {
+    auto m = mouse();
+    std::vector<PopOption> root;
+    {
+        PopOption pop;
+        pop.text = "Configure Display Settings...";   
+        pop.on_clicked = []() {
+            settings::start();
+        };
+        root.push_back(pop);
+    }
+    {
+        PopOption pop;
+        pop.text = "Refresh Compositor...";   
+        pop.on_clicked = []() {
+            hypriso->dispatch("forcerendererreload", "");
+        };
+        root.push_back(pop);
+    }
+  
+    PopOption pop;
+    pop.seperator = true;
+    root.push_back(pop);        
+
+    {
+        PopOption pop;
+        pop.text = "Log out";   
+        pop.on_clicked = []() {
+            hypriso->logout();
+        };
+        root.push_back(pop);
+    }
+
+    popup::open(root, m.x - 1, m.y + 1);
+}
+
 void desktop_icons::start() {
     auto in = gen_text_texture(mylar_font, "W\n", conf_font_size() * scale(hypriso->monitor_from_cursor()), RGBA(1, 1, 1, 1));
     two_line_height = in.h;
@@ -427,7 +465,11 @@ void desktop_icons::start() {
     dragging = false;
     c->when_drag_end_is_click = false;
     c->when_clicked = [](Container* actual_root, Container* c) {
-        clear_desktop_selection(c);
+        if (c->state.mouse_button_pressed == BTN_RIGHT) {
+           create_root_popup();
+        } else {
+            clear_desktop_selection(c);
+        }
     };
     c->when_drag_start = [](Container* actual_root, Container* c) {
         dragging = true;
