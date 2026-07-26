@@ -33,7 +33,7 @@ static float conf_font_size() {
 }
 
 static float conf_icon_size() {
-    return hypriso->get_varfloat("plugin:mylardesktop:desktop_icon_size", 68);
+    return hypriso->get_varfloat("plugin:mylardesktop:desktop_icon_size", 48);
 }
 
 static float conf_pad() {
@@ -46,6 +46,22 @@ static bool conf_vertical() {
 
 static std::string conf_desktop_folder() {
     return hypriso->get_varstring("plugin:mylardesktop:desktop_folder", "~/Desktop");
+}
+
+static float conf_total_w() {
+    return 74;
+}
+
+static float conf_total_h() {
+    return 84;
+}
+
+static float horiz_pad() {
+    return 3;
+}
+
+static float vert_pad() {
+    return 16;
 }
 
 int two_line_height = 24;
@@ -350,20 +366,25 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                 }
 
                 if (info.id != -1) {
-                    draw_texture(info, c->real_bounds.x, c->real_bounds.y);
+                    draw_texture(info, 
+                        c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5, 
+                        c->real_bounds.y + 2 * s);
                 }
             }
             
             auto* ico = (IcoContainerData*)(c->user_data);
+            auto border_bounds = c->real_bounds;
+            auto border_thickness = std::round(1 * s);
+            border_bounds.shrink(border_thickness);
             if (c->state.mouse_pressing) {
                 //rect(c->real_bounds, color_sel_color());
-                border(c->real_bounds, color_sel_border_color(), std::round(1 * s));
+                border(border_bounds, color_sel_border_color(), border_thickness);
             } else if (c->state.mouse_hovering) {
                 rect(c->real_bounds, color_sel_color());
-                border(c->real_bounds, color_sel_border_color(), std::round(1 * s));
+                border(border_bounds, color_sel_border_color(), border_thickness);
             } else if (ico->is_selected) {
                 rect(c->real_bounds, color_sel_color());
-                border(c->real_bounds, color_sel_border_color(), std::round(1 * s));
+                border(border_bounds, color_sel_border_color(), border_thickness);
             }
             
             
@@ -374,7 +395,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             }
             draw_texture(text_img, 
                 c->real_bounds.x,
-                c->real_bounds.y + c->real_bounds.h + 4 * s);
+                c->real_bounds.y + conf_icon_size() * s + 2 * s + 6 * s);
         }
     };
 
@@ -440,23 +461,26 @@ void desktop_icons::start() {
             create_desktop_icon(parent, data);
         });
 
-        int pad = conf_pad() * s;
-        int start_x = c->real_bounds.x + pad;
-        int start_y = c->real_bounds.y + pad;
+        int hpad = horiz_pad() * s;
+        int vpad = vert_pad() * s;
+        int totalh = conf_total_h() * s;
+        int totalw = conf_total_w() * s;
+        int start_x = c->real_bounds.x + hpad;
+        int start_y = c->real_bounds.y + vpad * .3;
         for (int i = 0; i < c->children.size(); i++) {
             auto child = c->children[i];
-            child->real_bounds = Bounds(start_x, start_y, conf_icon_size(), conf_icon_size());
+            child->real_bounds = Bounds(start_x, start_y, totalw, totalh);
             if (conf_vertical()) {
-                start_y += child->real_bounds.h + pad + two_line_height * .5;
+                start_y += totalh + vpad;
                 if (start_y + child->real_bounds.h > (c->real_bounds.y + c->real_bounds.h)) {
-                    start_x += child->real_bounds.w + pad;
-                    start_y = c->real_bounds.y + pad;
+                    start_x += totalw + hpad;
+                    start_y = c->real_bounds.y + vpad * .3;
                 }
             } else {
-                start_x += child->real_bounds.w + pad;
+                start_x += totalw + hpad;
                 if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
-                    start_y += child->real_bounds.h + pad + two_line_height * .5;
-                    start_x = c->real_bounds.x + pad;
+                    start_y += totalh + vpad;
+                    start_x = c->real_bounds.x + hpad;
                 }
             }
         }
