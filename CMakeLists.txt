@@ -42,6 +42,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     libudev
     wayland-server
     wayland-client 
+    gio-2.0
     wayland-cursor
     xkbcommon
     cairo

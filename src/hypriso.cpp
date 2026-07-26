@@ -1493,6 +1493,11 @@ struct MylarHyprConfigValues {
     SP<Config::Values::CColorValue> dock_sel_accent_color;
     SP<Config::Values::CColorValue> sel_color;
     SP<Config::Values::CColorValue> sel_border_color;
+    SP<Config::Values::CFloatValue> desktop_font_size;
+    SP<Config::Values::CFloatValue> desktop_icon_size;
+    SP<Config::Values::CFloatValue> desktop_pad;
+    SP<Config::Values::CIntValue> desktop_vertical;
+    SP<Config::Values::CStringValue> desktop_folder;
 };
 
 MylarHyprConfigValues *values = new MylarHyprConfigValues;
@@ -1507,6 +1512,18 @@ int HyprIso::get_varint(std::string target, int default_int) {
     }
 
     return default_int;
+}
+
+std::string HyprIso::get_varstring(std::string target, std::string default_string) {
+    auto* const PLUGIN = g_pPluginSystem->getPluginByHandle(globals->api);
+    for (auto p : PLUGIN->m_registeredApiValues) {
+        if (p->name() == target) {
+            auto a = dynamic_cast<Config::Values::CStringValue *>(p.get());
+            return a->value();
+        }
+    }
+
+    return default_string;
 }
 
 float HyprIso::get_varfloat(std::string target, float default_float) {
@@ -1558,6 +1575,11 @@ void HyprIso::create_config_variables() {
     values->dock_sel_accent_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_accent_color", "", Config::ParserUtils::parseColor("rgba(ffffff88)").value());
     values->sel_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_color", "", Config::ParserUtils::parseColor("rgba(5ce0ff25)").value());
     values->sel_border_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_border_color", "", Config::ParserUtils::parseColor("rgba(5fe5fff1)").value());
+    values->desktop_font_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_font_size", "", Hyprlang::FLOAT{12});
+    values->desktop_icon_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_icon_size", "", Hyprlang::FLOAT{68});
+    values->desktop_pad = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_pad", "", Hyprlang::FLOAT{12});
+    values->desktop_vertical = makeShared<Config::Values::CIntValue>("plugin:mylardesktop:desktop_vertical", "", Hyprlang::INT{1});
+    values->desktop_folder = makeShared<Config::Values::CStringValue>("plugin:mylardesktop:desktop_folder", "", "~/Desktop");
 
     HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_bg_hovered_color);
     HyprlandAPI::addConfigValueV2(globals->api, values->titlebar_button_bg_pressed_color);
@@ -1583,6 +1605,11 @@ void HyprIso::create_config_variables() {
     HyprlandAPI::addConfigValueV2(globals->api, values->dock_sel_accent_color);
     HyprlandAPI::addConfigValueV2(globals->api, values->sel_color);
     HyprlandAPI::addConfigValueV2(globals->api, values->sel_border_color);
+    HyprlandAPI::addConfigValueV2(globals->api, values->desktop_font_size);
+    HyprlandAPI::addConfigValueV2(globals->api, values->desktop_icon_size);
+    HyprlandAPI::addConfigValueV2(globals->api, values->desktop_pad);
+    HyprlandAPI::addConfigValueV2(globals->api, values->desktop_vertical);
+    HyprlandAPI::addConfigValueV2(globals->api, values->desktop_folder);
 }
 
 static void on_open_layer(PHLLS l) {

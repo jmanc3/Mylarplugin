@@ -4,10 +4,13 @@
 #include "hypriso.h"
 #include "icons.h"
 
-#include <linux/input-event-codes.h>
+#include <gio/gio.h>
 #include <algorithm>
+#include <iostream>
 #include <cctype>
 #include <filesystem>
+#include <hyprutils/path/Path.hpp>
+#include <linux/input-event-codes.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -23,30 +26,34 @@ static RGBA color_sel_border_color() {
     return hypriso->get_varcolor("plugin:mylardesktop:sel_border_color", default_color);
 }
 
-float conf_font_size = 11;
-float conf_icon_size = 64;
-float conf_pad = 10;
-int two_line_height = conf_font_size * 2;
- 
-enum class DesktopItemType {
-    DIRECTORY,
-    IMAGE,
-    VIDEO,
-    AUDIO,
-    DOCUMENT,
-    TEXT,
-    ARCHIVE,
-    EXECUTABLE,
-    DESKTOP_ENTRY,
-    OTHER,
-};
+static float conf_font_size() {
+    return hypriso->get_varfloat("plugin:mylardesktop:desktop_font_size", 12);
+}
 
+static float conf_icon_size() {
+    return hypriso->get_varfloat("plugin:mylardesktop:desktop_icon_size", 68);
+}
+
+static float conf_pad() {
+    return hypriso->get_varfloat("plugin:mylardesktop:desktop_pad", 12);
+}
+
+static bool conf_vertical() {
+    return hypriso->get_varint("plugin:mylardesktop:desktop_vertical", 1) != 0;
+}
+
+static std::string conf_desktop_folder() {
+    return hypriso->get_varstring("plugin:mylardesktop:desktop_folder", "~/Desktop");
+}
+
+int two_line_height = 24;
+ 
 struct DesktopItem {
     std::string full_filepath;
     std::string name;
     std::string extension;
     bool is_folder = false;
-    DesktopItemType type = DesktopItemType::OTHER;
+    std::vector<std::string> icons_for_mime;
 };
 
 static std::vector<DesktopItem*> desktop_items;
@@ -64,70 +71,25 @@ static std::string lowercase(std::string value) {
     return value;
 }
 
-static DesktopItemType desktop_item_type(const std::string& extension, const bool isFolder, const bool isExecutable) {
-    static const std::unordered_set<std::string_view> imageExtensions = {
-        ".avif", ".bmp", ".gif", ".heic", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".tif", ".tiff", ".webp",
-    };
-    static const std::unordered_set<std::string_view> videoExtensions = {
-        ".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm",
-    };
-    static const std::unordered_set<std::string_view> audioExtensions = {
-        ".aac", ".flac", ".m4a", ".mp3", ".ogg", ".opus", ".wav", ".wma",
-    };
-    static const std::unordered_set<std::string_view> documentExtensions = {
-        ".doc", ".docx", ".epub", ".odf", ".odp", ".ods", ".odt", ".pdf", ".ppt", ".pptx", ".xls", ".xlsx",
-    };
-    static const std::unordered_set<std::string_view> textExtensions = {
-        ".cfg", ".conf", ".csv", ".ini", ".json", ".log", ".md", ".rst", ".toml", ".txt", ".xml", ".yaml", ".yml",
-    };
-    static const std::unordered_set<std::string_view> archiveExtensions = {
-        ".7z", ".bz2", ".gz", ".rar", ".tar", ".tgz", ".xz", ".zip", ".zst",
-    };
-
-    if (isFolder)
-        return DesktopItemType::DIRECTORY;
-    if (extension == ".desktop")
-        return DesktopItemType::DESKTOP_ENTRY;
-    if (imageExtensions.contains(extension))
-        return DesktopItemType::IMAGE;
-    if (videoExtensions.contains(extension))
-        return DesktopItemType::VIDEO;
-    if (audioExtensions.contains(extension))
-        return DesktopItemType::AUDIO;
-    if (documentExtensions.contains(extension))
-        return DesktopItemType::DOCUMENT;
-    if (textExtensions.contains(extension))
-        return DesktopItemType::TEXT;
-    if (archiveExtensions.contains(extension))
-        return DesktopItemType::ARCHIVE;
-    if (isExecutable)
-        return DesktopItemType::EXECUTABLE;
-    return DesktopItemType::OTHER;
-}
-
-
 static int latest_desktop_watch = -1;
 
 void on_change_in_desktop_folder() {
     //notify("change in desktop foldler");
-
-    const char* home = std::getenv("HOME");
-    if (!home) {
+    auto folder = Hyprutils::Path::resolvePath(conf_desktop_folder());
+    if (!folder.has_value()) {
         clear_desktop_items();
         return;
     }
 
-    //const std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
-    const std::filesystem::path filepath = std::filesystem::path(home);
     std::error_code ec;
-    if (!std::filesystem::is_directory(filepath, ec)) {
+    if (!std::filesystem::is_directory(folder.value(), ec)) {
         clear_desktop_items();
         return;
     }
 
     std::vector<DesktopItem> scanned;
     std::unordered_set<std::string> seenPaths;
-    std::filesystem::directory_iterator iterator(filepath, std::filesystem::directory_options::skip_permission_denied, ec);
+    std::filesystem::directory_iterator iterator(folder.value(), std::filesystem::directory_options::skip_permission_denied, ec);
     const std::filesystem::directory_iterator end;
 
     while (!ec && iterator != end) {
@@ -154,7 +116,6 @@ void on_change_in_desktop_folder() {
             .name          = isFolder ? path.filename().string() : path.stem().string(),
             .extension     = extension,
             .is_folder     = isFolder,
-            .type          = desktop_item_type(extension, isFolder, isExecutable),
         });
 
         iterator.increment(ec);
@@ -181,17 +142,53 @@ void on_change_in_desktop_folder() {
             item->name = scannedItem.name;
             item->extension = scannedItem.extension;
             item->is_folder = scannedItem.is_folder;
-            item->type = scannedItem.type;
             continue;
         }
 
-        desktop_items.push_back(new DesktopItem{
+        auto item = new DesktopItem{
             .full_filepath = scannedItem.full_filepath,
             .name          = scannedItem.name,
             .extension     = scannedItem.extension,
             .is_folder     = scannedItem.is_folder,
-            .type          = scannedItem.type,
-        });
+        };
+        desktop_items.push_back(item);
+
+        {
+            auto file = g_file_new_for_path(item->full_filepath.c_str());
+            GFileInfo *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_ICON, G_FILE_QUERY_INFO_NONE, NULL, nullptr);
+
+            if (!info) {
+                g_object_unref(file);
+                continue;
+            }
+
+            gchar **attrs = g_file_info_list_attributes(info, nullptr);
+
+            for (int i = 0; attrs[i] != nullptr; ++i) {
+                const char *name = attrs[i];
+                GFileAttributeType type = g_file_info_get_attribute_type(info, name);
+
+                switch (type) {
+                    case G_FILE_ATTRIBUTE_TYPE_OBJECT: {
+                        GObject *obj = g_file_info_get_attribute_object(info, name);
+
+                        if (G_IS_THEMED_ICON(obj)) {
+                            const gchar * const *names =
+                                g_themed_icon_get_names(G_THEMED_ICON(obj));
+
+                            for (int j = 0; names[j] != nullptr; ++j) {
+                                item->icons_for_mime.push_back(names[j]);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+
+            g_strfreev(attrs);
+            g_object_unref(info);
+            g_object_unref(file);
+        }
     }
 
     std::ranges::sort(desktop_items, [](const DesktopItem* lhs, const DesktopItem* rhs) {
@@ -202,15 +199,17 @@ void on_change_in_desktop_folder() {
 }
 
 void watch_desktop_folder() {
-    const char* home = std::getenv("HOME");
-    //std::filesystem::path filepath = std::filesystem::path(home) / "Desktop";
-    std::filesystem::path filepath = std::filesystem::path(home);
-    if (!std::filesystem::exists(filepath))
+    auto folder = Hyprutils::Path::resolvePath(conf_desktop_folder());
+    if (!folder.has_value()) {
+        clear_desktop_items();
+        return;
+    }
+    if (!std::filesystem::exists(folder.value()))
         return;
     static Timer *t = nullptr;
     static long time_made = 0;
     
-    latest_desktop_watch = watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
+    latest_desktop_watch = watch_file(folder.value(), [](FileWatchUpdate update, int fd) {
         if (t) {
             auto current = get_current_time_in_ms();
             if ((current - time_made) > 1200) { // allow a reset if timer still exists after a second
@@ -253,12 +252,16 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     *datum<DesktopItem *>(c, "DesktopItem") = item;
     *datum<TextureInfo>(c, "label") = TextureInfo();
     {
-        auto path = one_shot_icon(conf_icon_size * s, {"folder"});
-        *datum<TextureInfo>(c, "folder") = gen_texture(path, conf_icon_size * s);
+        auto path = one_shot_icon(conf_icon_size() * s, {"folder"});
+        *datum<TextureInfo>(c, "folder") = gen_texture(path, conf_icon_size() * s);
     }
     {
-        auto path = one_shot_icon(conf_icon_size * s, {"text-plain"});
-        *datum<TextureInfo>(c, "text-plain") = gen_texture(path, conf_icon_size * s);
+        auto path = one_shot_icon(conf_icon_size() * s, {"text-plain"});
+        *datum<TextureInfo>(c, "text-plain") = gen_texture(path, conf_icon_size() * s);
+    }
+    {
+        *datum<TextureInfo>(c, "icon") = TextureInfo();
+        *datum<bool>(c, "icon_attempted") = false;
     }
      
     c->when_mouse_motion = [](Container* actual_root, Container* c) {
@@ -296,11 +299,24 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
 
             {
                 TextureInfo info;
-                if (item->is_folder) {
-                    info = *datum<TextureInfo>(c, "folder");
-                } else {
-                    info = *datum<TextureInfo>(c, "text-plain");
+
+                if (!*datum<bool>(c, "icon_attempted")) {
+                    *datum<bool>(c, "icon_attempted") = true;
+                    auto path = one_shot_icon(conf_icon_size() * s, item->icons_for_mime);
+                    auto generated = gen_texture(path, conf_icon_size() * s);
+                    *datum<TextureInfo>(c, "icon") = generated;
                 }
+
+                info = *datum<TextureInfo>(c, "icon");
+
+                if (info.id == -1) {
+                    if (item->is_folder) {
+                        info = *datum<TextureInfo>(c, "folder");
+                    } else {
+                        info = *datum<TextureInfo>(c, "text-plain");
+                    }
+                }
+
                 if (info.id != -1) {
                     draw_texture(info, c->real_bounds.x, c->real_bounds.y);
                 }
@@ -317,7 +333,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             
             TextureInfo text_img = *datum<TextureInfo>(c, "label");
             if (text_img.id == -1) {
-                text_img = gen_text_texture(mylar_font, item->name, conf_font_size * s, RGBA(1, 1, 1, 1), c->real_bounds.w, two_line_height, 1);
+                text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, two_line_height, 1);
                 *datum<TextureInfo>(c, "label") = text_img;
             }
             draw_texture(text_img, 
@@ -329,7 +345,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
 }
 
 void desktop_icons::start() {
-    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size * scale(hypriso->monitor_from_cursor()), RGBA(1, 1, 1, 1));
+    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size() * scale(hypriso->monitor_from_cursor()), RGBA(1, 1, 1, 1));
     two_line_height = in.h;
     free_text_texture(in.id);
     // each monitor needs its own desktop pane possibly every workspace
@@ -352,16 +368,24 @@ void desktop_icons::start() {
             create_desktop_icon(parent, data);
         });
 
-        int pad = conf_pad * s;
+        int pad = conf_pad() * s;
         int start_x = c->real_bounds.x + pad;
         int start_y = c->real_bounds.y + pad;
         for (int i = 0; i < c->children.size(); i++) {
             auto child = c->children[i];
-            child->real_bounds = Bounds(start_x, start_y, conf_icon_size, conf_icon_size);
-            start_x += child->real_bounds.w + pad;
-            if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
-                start_y +=  child->real_bounds.h + pad + two_line_height * .5;
-                start_x = c->real_bounds.x + pad;
+            child->real_bounds = Bounds(start_x, start_y, conf_icon_size(), conf_icon_size());
+            if (conf_vertical()) {
+                start_y += child->real_bounds.h + pad + two_line_height * .5;
+                if (start_y + child->real_bounds.h > (c->real_bounds.y + c->real_bounds.h)) {
+                    start_x += child->real_bounds.w + pad;
+                    start_y = c->real_bounds.y + pad;
+                }
+            } else {
+                start_x += child->real_bounds.w + pad;
+                if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
+                    start_y += child->real_bounds.h + pad + two_line_height * .5;
+                    start_x = c->real_bounds.x + pad;
+                }
             }
         }
     };

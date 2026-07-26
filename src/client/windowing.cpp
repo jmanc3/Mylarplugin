@@ -97,6 +97,8 @@ bool on_keyboard_focus(RawWindow *rw, bool gained) {
 void on_render(RawWindow *rw, int w, int h) {
     std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_render");
+    if (!rw->cr)
+        return;
     auto m = mylar(rw);
     if (!m) return;
     m->root->real_bounds = Bounds(0, 0, w, h);

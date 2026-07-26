@@ -260,8 +260,8 @@ struct HyprIso {
 
     float get_varfloat(std::string target, float default_float = 1.0);    
     RGBA get_varcolor(std::string target, RGBA default_color = {1.0, 0.0, 1.0, 1.0});
-
     int get_varint(std::string target, int default_int = 0);
+    std::string get_varstring(std::string target, std::string default_string);
 
     Bounds getTexBox(int id);
 

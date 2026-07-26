@@ -1521,6 +1521,14 @@ void add_hyprctl_dispatchers() {
             overview::open(hypriso->monitor_from_cursor()); 
         return 0;
     });
+    hypriso->add_hyprctl_dispatcher("desktop_icons_start", [](lua_State *) {
+        desktop_icons::start();
+        return 0; 
+    }); 
+    hypriso->add_hyprctl_dispatcher("desktop_icons_stop", [](lua_State *) {
+        desktop_icons::stop();
+        return 0; 
+    }); 
     hypriso->add_hyprctl_dispatcher("overview_close_or_hide_desktop", [](lua_State *) {
         if (overview::is_showing()) {
             overview::close(); 
@@ -1850,7 +1858,10 @@ void heart::begin() {
     	
         hypriso->add_float_rule();
 
-        desktop_icons::start();
+        later(100, [](Timer *t) {
+            t->keep_running = !icons_loaded;
+            desktop_icons::start();
+        });
 
         if (icon_cache_needs_update()) {
             std::thread th([] {
