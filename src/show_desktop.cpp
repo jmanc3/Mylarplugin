@@ -4,6 +4,7 @@
 #include "hypriso.h"
 #include "dock.h"
 #include "heart.h"
+#include "overview.h"
 
 static bool is_open = false;
 static float conf_anim_time = 100.0;
@@ -17,6 +18,21 @@ bool show_desktop::is_opened() {
 void show_desktop::start() {
     if (is_open)
         return;
+    if (overview::is_showing())
+        return;
+    bool any_client_visible = false;
+    for (auto c : actual_root->children) {
+        if (c->custom_type != (int) TYPE::CLIENT) {
+            auto cid = *datum<int>(c, "cid");
+            if (!hypriso->is_hidden(cid) && !is_slept(cid) ) {
+                any_client_visible = true;
+            }
+        }
+    }
+
+    if (!any_client_visible)
+        return;
+ 
     
     later_immediate([](Timer *) {
         for (auto c : actual_root->children) {
