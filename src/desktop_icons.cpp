@@ -395,7 +395,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             }
             draw_texture(text_img, 
                 c->real_bounds.x,
-                c->real_bounds.y + conf_icon_size() * s + 2 * s + 6 * s);
+                c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s);
         }
     };
 
@@ -461,25 +461,28 @@ void desktop_icons::start() {
             create_desktop_icon(parent, data);
         });
 
-        int hpad = horiz_pad() * s;
-        int vpad = vert_pad() * s;
-        int totalh = conf_total_h() * s;
-        int totalw = conf_total_w() * s;
+        int hpad = horiz_pad();
+        int vpad = vert_pad();
+        auto ico_width = conf_icon_size();
+        float width = ico_width + (13 * 2); // left, right
+        float shrink = 1 / s;
+        float height = ico_width + two_line_height * shrink + 13; // top, bottom-top, bottom-bottom
         int start_x = c->real_bounds.x + hpad;
         int start_y = c->real_bounds.y + vpad * .3;
+
         for (int i = 0; i < c->children.size(); i++) {
             auto child = c->children[i];
-            child->real_bounds = Bounds(start_x, start_y, totalw, totalh);
+            child->real_bounds = Bounds(start_x, start_y, width, height);
             if (conf_vertical()) {
-                start_y += totalh + vpad;
+                start_y += height + vpad;
                 if (start_y + child->real_bounds.h > (c->real_bounds.y + c->real_bounds.h)) {
-                    start_x += totalw + hpad;
+                    start_x += width + hpad;
                     start_y = c->real_bounds.y + vpad * .3;
                 }
             } else {
-                start_x += totalw + hpad;
+                start_x += width + hpad;
                 if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
-                    start_y += totalh + vpad;
+                    start_y += height + vpad;
                     start_x = c->real_bounds.x + hpad;
                 }
             }
