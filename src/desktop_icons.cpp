@@ -234,6 +234,7 @@ struct IcoContainerData : UserData {
     Container *c;
     bool was_active_last_frame = false;
     long last_time_pressed = 0;
+    bool is_selected = false;
     
     ~IcoContainerData() {
         //notify(fz("{} was deleted", name));
@@ -241,6 +242,33 @@ struct IcoContainerData : UserData {
         free_text_texture(text_img.id);
     }
 };
+
+static void clear_desktop_selection(Container* desktop) {
+    for (auto* child : desktop->children) {
+        auto* ico = (IcoContainerData*)(child->user_data);
+        if (!ico->is_selected)
+            continue;
+
+        ico->is_selected = false;
+        auto damage = child->real_bounds;
+        damage.grow(2);
+        hypriso->damage_box(damage);
+    }
+}
+
+static void update_desktop_selection(Container* desktop, const Bounds& selection) {
+    for (auto* child : desktop->children) {
+        auto* ico          = (IcoContainerData*)(child->user_data);
+        const bool selected = overlaps(child->real_bounds, selection);
+        if (ico->is_selected == selected)
+            continue;
+
+        ico->is_selected = selected;
+        auto damage      = child->real_bounds;
+        damage.grow(2);
+        hypriso->damage_box(damage);
+    }
+}
 
 void create_desktop_icon(Container *parent, DesktopItem *item) {
     auto c = parent->child(FILL_SPACE, FILL_SPACE);
@@ -280,6 +308,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     c->when_drag_end = c->when_mouse_motion;
     c->when_clicked = [](Container* actual_root, Container* c) {
         auto ico = (IcoContainerData *) c->user_data;
+        clear_desktop_selection(c->parent);
         auto current = get_current_time_in_ms();
         if ((current - ico->last_time_pressed) < 700) {
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
@@ -322,10 +351,14 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                 }
             }
             
+            auto* ico = (IcoContainerData*)(c->user_data);
             if (c->state.mouse_pressing) {
                 //rect(c->real_bounds, color_sel_color());
                 border(c->real_bounds, color_sel_border_color(), std::round(1 * s));
             } else if (c->state.mouse_hovering) {
+                rect(c->real_bounds, color_sel_color());
+                border(c->real_bounds, color_sel_border_color(), std::round(1 * s));
+            } else if (ico->is_selected) {
                 rect(c->real_bounds, color_sel_color());
                 border(c->real_bounds, color_sel_border_color(), std::round(1 * s));
             }
@@ -391,17 +424,30 @@ void desktop_icons::start() {
     };
     static bool dragging = false;
     dragging = false;
+    c->when_drag_end_is_click = false;
+    c->when_clicked = [](Container* actual_root, Container* c) {
+        clear_desktop_selection(c);
+    };
     c->when_drag_start = [](Container* actual_root, Container* c) {
         dragging = true;
+        const auto selection = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
+        update_desktop_selection(c, selection);
     };
     c->when_drag = [](Container *actual_root, Container *c) {
         actual_root->consumed_event = true;
         auto b = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
+        update_desktop_selection(c, b);
         static Bounds previousB = b;
         b.grow(20);
         hypriso->damage_box(b);
         hypriso->damage_box(previousB);
         previousB = b;
+    };
+    c->when_drag_end = [](Container* actual_root, Container* c) {
+        dragging = false;
+        auto damage = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
+        damage.grow(20);
+        hypriso->damage_box(damage);
     };
     c->when_paint = [](Container* actual_root, Container* c) {
         auto root = get_rendering_root();
