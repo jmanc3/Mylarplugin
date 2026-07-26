@@ -587,6 +587,22 @@ void alt_tab::show() {
     damage_all();
 }
 
+void close_overview_with_selection(int cid) {
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto c = actual_root->children[i];
+        if (c->custom_type == (int) TYPE::OVERVIEW) {
+            for (auto child : c->children) {
+                auto child_cid = *datum<int>(child, "cid");
+                if (child_cid == cid) {
+                    child->when_clicked(actual_root, child);
+                    return;
+                }
+            }
+        }
+    }
+ 
+}
+
 void alt_tab::close(bool focus) {
     if (!is_showing)
         return;
@@ -616,10 +632,15 @@ void alt_tab::close(bool focus) {
                         }
                         int real_active_index = wrap_index(ai, c->children.size());
                         auto cid = *datum<int>(c->children[real_active_index], "cid");
-                        later_immediate([cid](Timer *) {
-                            hypriso->set_hidden(cid, false);
-                            hypriso->bring_to_front(cid);
-                        });
+                        if (overview::is_showing()) {
+                            close_overview_with_selection(cid);
+                        } else {
+                            later_immediate([cid](Timer *) {
+                                hypriso->set_hidden(cid, false);
+                                hypriso->bring_to_front(cid);
+                            });
+                        }
+                        
                     }
                 }
                 request_damage(actual_root, c);
