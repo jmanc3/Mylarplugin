@@ -7,6 +7,7 @@
 #include "heart.h"
 
 #include "container.h"
+#include "show_desktop.h"
 #include "simple_dbus.h"
 #include "hypriso.h"
 #include "titlebar.h"
@@ -1012,10 +1013,14 @@ static void on_render(int id, int stage) {
            }
         }
 
+        if (show_desktop::is_opened()) {
+            show_desktop::render();
+        }
+
         if (!overview::is_showing()) {
+            auto current_time = get_current_time_in_ms();
             for (auto zed : slept_windows) {
                 auto time = zed.time_slept;
-                auto current_time = get_current_time_in_ms();
                 // draw minimizing animation
                 long delta = current_time - time;
 
@@ -1475,8 +1480,9 @@ void do_snap(SnapPosition pos) {
 void add_hyprctl_dispatchers() {
     hypriso->add_hyprctl_dispatcher("overview_open_or_show_desktop", [](lua_State *) {
         if (!overview::is_showing())
-            if (hypriso->whitelist_on) {
-                hypriso->whitelist_on = false;
+            if (show_desktop::is_opened()) {
+                show_desktop::stop();
+                //hypriso->whitelist_on = false;
                 damage_all();
                 hypriso->simulateMouseMovement();
                 return 0;
@@ -1488,6 +1494,7 @@ void add_hyprctl_dispatchers() {
     });
     hypriso->add_hyprctl_dispatcher("desktop_icons_start", [](lua_State *) {
         desktop_icons::start();
+        damage_all();
         return 0; 
     }); 
     hypriso->add_hyprctl_dispatcher("desktop_icons_stop", [](lua_State *) {
@@ -1500,8 +1507,8 @@ void add_hyprctl_dispatchers() {
             return 0;
         }
         
-        if (!hypriso->whitelist_on) {
-            hypriso->whitelist_on = true;
+        if (!show_desktop::is_opened()) {
+            show_desktop::start();
             damage_all();
             hypriso->simulateMouseMovement();
             return 0;
@@ -1554,12 +1561,12 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("desktop_hide", [](lua_State *) {
-        hypriso->whitelist_on = true;
+        show_desktop::stop();
         damage_all();
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("desktop_show", [](lua_State *) {
-        hypriso->whitelist_on = false;
+        show_desktop::start();
         damage_all();
         return 0;
     });
@@ -1826,6 +1833,7 @@ void heart::begin() {
         later(100, [](Timer *t) {
             t->keep_running = !icons_loaded;
             desktop_icons::start();
+            damage_all();
         });
 
         if (icon_cache_needs_update()) {

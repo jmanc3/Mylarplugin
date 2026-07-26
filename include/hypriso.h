@@ -398,6 +398,8 @@ struct HyprIso {
     void screenshot_all();
     void screenshot(int id);
     void screenshot_deco(int id);
+    void set_animate_to_dock(int id, bool state);
+    void screenshot_min(int id);
     void screenshot_space(int mon, int id);
     void screenshot_wallpaper(int mon);
     

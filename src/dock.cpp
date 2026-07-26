@@ -15,26 +15,28 @@
 #include "components.h"
 #include "settings.h"
 
+#include "process.hpp"
+#include "show_desktop.h"
 #include <algorithm>
 #include <cairo.h>
-#include "process.hpp"
+
 #include <chrono>
-#include <mutex>
 #include <cmath>
+#include <condition_variable>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
+#include <pango/pangocairo.h>
 #include <random>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
-#include <memory>
-#include <fstream>
-#include <pango/pangocairo.h>
-#include <sys/stat.h>
-#include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
-#include <condition_variable>
 
 #define BTN_LEFT		0x110
 #define BTN_RIGHT		0x111
@@ -1045,10 +1047,8 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             main_thread([cid] {
                 if (overview::is_showing())
                     return;
-                if (hypriso->whitelist_on) {
-                    hypriso->whitelist_on = false;
-                    return;
-                }
+                if (show_desktop::is_opened())
+                    show_desktop::stop();
                 
                 // todo we need to focus next (already wrote this combine code)
                 bool is_hidden = hypriso->is_hidden(cid);
@@ -2586,7 +2586,11 @@ static void fill_root(Container *root) {
         };
         show_desktop->when_clicked = [](Container *root, Container *c) {
             main_thread([]() {
-                hypriso->whitelist_on = !hypriso->whitelist_on;
+                if (show_desktop::is_opened()) {
+                    show_desktop::stop();
+                } else {
+                    show_desktop::start();
+                }
                 damage_all();
             });
         };

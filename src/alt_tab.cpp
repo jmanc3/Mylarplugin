@@ -5,6 +5,7 @@
 #include "drag.h"
 #include "icons.h"
 #include "overview.h"
+#include "show_desktop.h"
 #include "titlebar.h"
 #include "layout_thumbnails.h"
 
@@ -589,8 +590,13 @@ void alt_tab::show() {
 void alt_tab::close(bool focus) {
     if (!is_showing)
         return;
-    if (!overview::is_showing())
-        hypriso->whitelist_on = false;
+    if (!overview::is_showing()) {
+        if (show_desktop::is_opened()) {
+            show_desktop::stop();
+        } else {
+            hypriso->whitelist_on = false;
+        }
+    }
     is_showing = false;
     {
         for (int i = actual_root->children.size() - 1; i >= 0; i--) {

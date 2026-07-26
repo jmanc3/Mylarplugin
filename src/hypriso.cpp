@@ -2276,6 +2276,38 @@ std::string get_previous_instance_signature() {
 
 void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w);
 
+void HyprIso::set_animate_to_dock(int id, bool state) {
+    for (auto w : Desktop::windowState()->windows()) {
+        for (auto hw : hyprwindows) {
+            if (hw->id == id) {
+                hw->animate_to_dock = true;
+            }
+        }
+    }
+}
+
+void HyprIso::screenshot_min(int id) {
+    for (auto w : Desktop::windowState()->windows()) {
+        for (auto hw : hyprwindows) {
+            if (hw->id == id) {
+                if (hw->w == w && hw->w->m_monitor) {
+                    if (!hw->min_fb)
+                        hw->min_fb = g_pHyprRenderer->createFB();
+                    screenshot_window_with_decos(hw->min_fb, hw->w);
+                    hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
+                    hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+                    hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
+                    hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
+                    hw->w_min_size.scale(w->m_monitor->m_scale);
+                    hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+                    hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
+                    hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
+                }
+            }
+        }
+    }
+}
+
 inline CFunctionHook* g_pOnSetHiddenHook = nullptr;
 typedef void (*origSetHidden)(Desktop::View::CWindow *, bool);
 void hook_onSetHidden(void* thisptr, bool state) {
