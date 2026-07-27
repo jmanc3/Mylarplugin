@@ -20,6 +20,8 @@ void show_desktop::start() {
         return;
     if (overview::is_showing())
         return;
+    if (snap_assist::is_showing())
+        return;
     bool any_client_visible = false;
     for (auto c : actual_root->children) {
         if (c->custom_type != (int) TYPE::CLIENT) {
@@ -111,11 +113,21 @@ void show_desktop::render() {
             continue;
 
         auto mon_id = get_monitor(cid);
-        auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+        //auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+        auto bounds = bounds_monitor(mon_id);
 
-        auto monitor_b = bounds_monitor(mon_id);
-        bounds.y = monitor_b.h;
-        bounds.scale(scale(mon_id));
+        //auto monitor_b = bounds_monitor(mon_id);
+        auto s = scale(mon_id);
+        bounds = bounds.scale(s);
+        
+        bounds.y += bounds.h * .5;
+        bounds.h = 100 * s;
+        bounds.y -= 100 * s;
+        
+        bounds.x += bounds.w * .5;
+        bounds.w = 100 * s;
+        bounds.x -= bounds.w * .5;
+        //bounds.scale(scale(mon_id));
         if (end_time != 0) {
             hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
         } else {

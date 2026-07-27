@@ -1036,3 +1036,13 @@ void snap_assist::fix_order() {
     }
 }
 
+bool snap_assist::is_showing() {
+    for (int i = 0; i < (int)actual_root->children.size(); i++) {
+        Container* child = actual_root->children[i];
+        if (child->custom_type == (int)TYPE::SNAP_HELPER) {
+            return true;
+        }
+    }
+    
+    return false;
+}
