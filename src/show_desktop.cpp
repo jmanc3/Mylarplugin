@@ -121,7 +121,7 @@ void show_desktop::render() {
         auto s = scale(mon_id);
         bounds = bounds.scale(s);
         
-        bounds.y += bounds.h * .5;
+        bounds.y += bounds.h;
         bounds.h = 100 * s;
         bounds.y -= 100 * s;
         
