@@ -5,6 +5,7 @@
 #include "dock.h"
 #include "heart.h"
 #include "overview.h"
+#include "snap_assist.h"
 
 static bool is_open = false;
 static float conf_anim_time = 100.0;

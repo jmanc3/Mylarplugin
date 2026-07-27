@@ -4,6 +4,7 @@
 #include "hypriso.h"
 #include "icons.h"
 #include "show_desktop.h"
+#include "snap_assist.h"
 #include "titlebar.h"
 #include "layout_thumbnails.h"
 #include "drag_workspace_switcher.h"
@@ -933,6 +934,8 @@ void actual_open(int monitor) {
 }
 
 void overview::open(int monitor) {
+    if (snap_assist::is_showing())
+        return;
     if (running) {
         for (auto c: actual_root->children) {
             if (c->custom_type == (int) TYPE::OVERVIEW) {
