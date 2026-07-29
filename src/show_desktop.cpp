@@ -114,21 +114,11 @@ void show_desktop::render() {
             continue;
 
         auto mon_id = get_monitor(cid);
-        //auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
-        auto bounds = bounds_monitor(mon_id);
-
-        //auto monitor_b = bounds_monitor(mon_id);
-        auto s = scale(mon_id);
-        bounds = bounds.scale(s);
+        auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+        auto monitor_b = bounds_monitor(mon_id);
+        bounds.y = monitor_b.h;
+        bounds.scale(scale(mon_id));
         
-        bounds.y += bounds.h;
-        bounds.h = 100 * s;
-        bounds.y -= 100 * s;
-        
-        bounds.x += bounds.w * .5;
-        bounds.w = 100 * s;
-        bounds.x -= bounds.w * .5;
-        //bounds.scale(scale(mon_id));
         if (end_time != 0) {
             hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
         } else {
