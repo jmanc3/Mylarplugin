@@ -8,6 +8,7 @@
 
 #include <gio/gio.h>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <cctype>
 #include <filesystem>
@@ -253,6 +254,16 @@ struct IcoContainerData : UserData {
     bool was_active_last_frame = false;
     long last_time_pressed = 0;
     bool is_selected = false;
+    // Grid slot; (0,0) is top-left, (0,1) is the slot below. (-1,-1) = unset.
+    int x_pos = -1;
+    int y_pos = -1;
+    float drag_offset_x = 0;
+    float drag_offset_y = 0;
+    bool is_dragging = false;
+    bool is_settling = false;
+    float settle_from_x = 0;
+    float settle_from_y = 0;
+    long settle_start_ms = 0;
     
     ~IcoContainerData() {
         //notify(fz("{} was deleted", name));
@@ -260,6 +271,192 @@ struct IcoContainerData : UserData {
         free_text_texture(text_img.id);
     }
 };
+
+static constexpr float ICON_SETTLE_MS = 90.f;
+
+static void damage_icon(Container *icon) {
+    auto b = icon->real_bounds;
+    b.grow(20);
+    hypriso->damage_box(b);
+}
+
+static void begin_icon_settle(Container *icon) {
+    auto *ico = (IcoContainerData *)icon->user_data;
+    ico->is_settling = true;
+    ico->settle_from_x = icon->real_bounds.x;
+    ico->settle_from_y = icon->real_bounds.y;
+    ico->settle_start_ms = get_current_time_in_ms();
+    damage_icon(icon);
+    request_refresh();
+}
+
+// Loads persisted grid positions into icons (keyed by filepath). Stub for now.
+static void load_icon_positions_from_save(Container *desktop) {
+    (void)desktop;
+}
+
+static long long grid_key(int x, int y) {
+    return (static_cast<long long>(x) << 32) ^ static_cast<unsigned int>(y);
+}
+
+static std::pair<int, int> next_available_slot(const std::unordered_set<long long> &occupied, int cols, int rows, bool vertical) {
+    cols = std::max(1, cols);
+    rows = std::max(1, rows);
+    if (vertical) {
+        for (int x = 0;; ++x) {
+            for (int y = 0; y < rows; ++y) {
+                if (!occupied.contains(grid_key(x, y)))
+                    return {x, y};
+            }
+        }
+    }
+    for (int y = 0;; ++y) {
+        for (int x = 0; x < cols; ++x) {
+            if (!occupied.contains(grid_key(x, y)))
+                return {x, y};
+        }
+    }
+}
+
+struct IconGridMetrics {
+    float width = 0;
+    float height = 0;
+    float hpad = 0;
+    float vpad = 0;
+    float start_x = 0;
+    float start_y = 0;
+    int cols = 1;
+    int rows = 1;
+};
+
+static IconGridMetrics icon_grid_metrics(Container *desktop, float s) {
+    IconGridMetrics m;
+    m.hpad = horiz_pad();
+    m.vpad = vert_pad();
+    auto ico_width = conf_icon_size();
+    m.width = ico_width + (13 * 2);
+    float shrink = 1 / s;
+    m.height = ico_width + two_line_height * shrink + 13;
+    m.start_x = desktop->real_bounds.x + m.hpad;
+    m.start_y = desktop->real_bounds.y + m.vpad * .3f;
+    const float cell_w = m.width + m.hpad;
+    const float cell_h = m.height + m.vpad;
+    m.cols = std::max(1, static_cast<int>((desktop->real_bounds.w - m.hpad) / cell_w));
+    m.rows = std::max(1, static_cast<int>((desktop->real_bounds.h - m.vpad * .3f) / cell_h));
+    return m;
+}
+
+static Bounds bounds_for_grid_slot(const IconGridMetrics &m, int x_pos, int y_pos) {
+    return Bounds(m.start_x + x_pos * (m.width + m.hpad),
+                  m.start_y + y_pos * (m.height + m.vpad),
+                  m.width,
+                  m.height);
+}
+
+static void clear_desktop_selection(Container *desktop);
+
+static std::pair<int, int> nearest_free_slot(const std::unordered_set<long long> &occupied, int prefer_x, int prefer_y) {
+    prefer_x = std::max(0, prefer_x);
+    prefer_y = std::max(0, prefer_y);
+    if (!occupied.contains(grid_key(prefer_x, prefer_y)))
+        return {prefer_x, prefer_y};
+
+    for (int radius = 1; radius < 256; ++radius) {
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dx = -radius; dx <= radius; ++dx) {
+                if (std::max(std::abs(dx), std::abs(dy)) != radius)
+                    continue;
+                const int x = prefer_x + dx;
+                const int y = prefer_y + dy;
+                if (x < 0 || y < 0)
+                    continue;
+                if (!occupied.contains(grid_key(x, y)))
+                    return {x, y};
+            }
+        }
+    }
+    return {prefer_x, prefer_y};
+}
+
+// Updates grid slots only; visual position is animated via begin_icon_settle.
+static void snap_icons_to_grid(Container *desktop, const std::vector<Container *> &icons) {
+    if (icons.empty())
+        return;
+
+    auto monitor = *datum<int>(desktop, "monitor");
+    auto m = icon_grid_metrics(desktop, scale(monitor));
+    std::unordered_set<Container *> dragged(icons.begin(), icons.end());
+
+    std::unordered_set<long long> occupied;
+    occupied.reserve(desktop->children.size());
+    for (auto *child : desktop->children) {
+        if (dragged.contains(child))
+            continue;
+        auto *oico = (IcoContainerData *)child->user_data;
+        if (oico->x_pos < 0 || oico->y_pos < 0)
+            continue;
+        occupied.insert(grid_key(oico->x_pos, oico->y_pos));
+    }
+
+    if (icons.size() == 1) {
+        auto *icon = icons[0];
+        auto *ico = (IcoContainerData *)icon->user_data;
+        int gx = static_cast<int>(std::lround((icon->real_bounds.x - m.start_x) / (m.width + m.hpad)));
+        int gy = static_cast<int>(std::lround((icon->real_bounds.y - m.start_y) / (m.height + m.vpad)));
+        gx = std::max(0, gx);
+        gy = std::max(0, gy);
+
+        const int old_x = ico->x_pos;
+        const int old_y = ico->y_pos;
+
+        for (auto *other : desktop->children) {
+            if (other == icon)
+                continue;
+            auto *oico = (IcoContainerData *)other->user_data;
+            if (oico->x_pos == gx && oico->y_pos == gy) {
+                damage_icon(other);
+                oico->x_pos = old_x;
+                oico->y_pos = old_y;
+                begin_icon_settle(other);
+                break;
+            }
+        }
+
+        ico->x_pos = gx;
+        ico->y_pos = gy;
+        return;
+    }
+
+    for (auto *icon : icons) {
+        auto *ico = (IcoContainerData *)icon->user_data;
+        int gx = static_cast<int>(std::lround((icon->real_bounds.x - m.start_x) / (m.width + m.hpad)));
+        int gy = static_cast<int>(std::lround((icon->real_bounds.y - m.start_y) / (m.height + m.vpad)));
+        auto [nx, ny] = nearest_free_slot(occupied, gx, gy);
+        ico->x_pos = nx;
+        ico->y_pos = ny;
+        occupied.insert(grid_key(nx, ny));
+    }
+}
+
+static std::vector<Container *> icons_for_drag(Container *desktop, Container *primary) {
+    auto *pico = (IcoContainerData *)primary->user_data;
+    std::vector<Container *> result;
+    if (!pico->is_selected) {
+        clear_desktop_selection(desktop);
+        pico->is_selected = true;
+        damage_icon(primary);
+        result.push_back(primary);
+        return result;
+    }
+    for (auto *child : desktop->children) {
+        auto *ico = (IcoContainerData *)child->user_data;
+        if (ico->is_selected)
+            result.push_back(child);
+    }
+    if (result.empty())
+        result.push_back(primary);
+    return result;
+}
 
 static void clear_desktop_selection(Container* desktop) {
     for (auto* child : desktop->children) {
@@ -324,7 +521,56 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         ico->was_active_last_frame = is_active;
     };
     c->when_mouse_leaves_container = c->when_mouse_motion;
-    c->when_drag_end = c->when_mouse_motion;
+    c->when_drag_end_is_click = false;
+    c->when_drag_start = [](Container* actual_root, Container* c) {
+        auto icons = icons_for_drag(c->parent, c);
+        for (auto *icon : icons) {
+            auto *ico = (IcoContainerData *)icon->user_data;
+            ico->is_settling = false;
+            ico->is_dragging = true;
+            ico->drag_offset_x = icon->real_bounds.x - actual_root->mouse_initial_x;
+            ico->drag_offset_y = icon->real_bounds.y - actual_root->mouse_initial_y;
+            icon->z_index = 1;
+            damage_icon(icon);
+        }
+    };
+    c->when_drag = [](Container* actual_root, Container* c) {
+        actual_root->consumed_event = true;
+        for (auto *icon : c->parent->children) {
+            auto *ico = (IcoContainerData *)icon->user_data;
+            if (!ico->is_dragging)
+                continue;
+            damage_icon(icon);
+            Bounds next(actual_root->mouse_current_x + ico->drag_offset_x,
+                        actual_root->mouse_current_y + ico->drag_offset_y,
+                        icon->real_bounds.w,
+                        icon->real_bounds.h);
+            next.grow(20);
+            hypriso->damage_box(next);
+        }
+    };
+    c->when_drag_end = [](Container* actual_root, Container* c) {
+        std::vector<Container *> dragged;
+        for (auto *icon : c->parent->children) {
+            auto *ico = (IcoContainerData *)icon->user_data;
+            if (!ico->is_dragging)
+                continue;
+            damage_icon(icon);
+            ico->is_dragging = false;
+            icon->z_index = 0;
+            icon->real_bounds = Bounds(actual_root->mouse_current_x + ico->drag_offset_x,
+                                       actual_root->mouse_current_y + ico->drag_offset_y,
+                                       icon->real_bounds.w,
+                                       icon->real_bounds.h);
+            dragged.push_back(icon);
+        }
+        snap_icons_to_grid(c->parent, dragged);
+        for (auto *icon : dragged) {
+            begin_icon_settle(icon);
+            auto *ico = (IcoContainerData *)icon->user_data;
+            ico->was_active_last_frame = icon->state.mouse_hovering || icon->state.mouse_pressing;
+        }
+    };
     c->when_clicked = [](Container* actual_root, Container* c) {
         auto ico = (IcoContainerData *) c->user_data;
         clear_desktop_selection(c->parent);
@@ -461,31 +707,64 @@ void desktop_icons::start() {
             create_desktop_icon(parent, data);
         });
 
-        int hpad = horiz_pad();
-        int vpad = vert_pad();
-        auto ico_width = conf_icon_size();
-        float width = ico_width + (13 * 2); // left, right
-        float shrink = 1 / s;
-        float height = ico_width + two_line_height * shrink + 13; // top, bottom-top, bottom-bottom
-        int start_x = c->real_bounds.x + hpad;
-        int start_y = c->real_bounds.y + vpad * .3;
-
-        for (int i = 0; i < c->children.size(); i++) {
-            auto child = c->children[i];
-            child->real_bounds = Bounds(start_x, start_y, width, height);
-            if (conf_vertical()) {
-                start_y += height + vpad;
-                if (start_y + child->real_bounds.h > (c->real_bounds.y + c->real_bounds.h)) {
-                    start_x += width + hpad;
-                    start_y = c->real_bounds.y + vpad * .3;
-                }
-            } else {
-                start_x += width + hpad;
-                if (start_x + child->real_bounds.w > (c->real_bounds.x + c->real_bounds.w)) {
-                    start_y += height + vpad;
-                    start_x = c->real_bounds.x + hpad;
-                }
+        for (auto *child : c->children) {
+            auto *ico = (IcoContainerData *)child->user_data;
+            if (ico->x_pos < 0 || ico->y_pos < 0) {
+                load_icon_positions_from_save(c);
+                break;
             }
+        }
+
+        auto m = icon_grid_metrics(c, s);
+        std::unordered_set<long long> occupied;
+        occupied.reserve(c->children.size());
+
+        for (auto *child : c->children) {
+            auto *ico = (IcoContainerData *)child->user_data;
+            if (ico->x_pos < 0 || ico->y_pos < 0)
+                continue;
+            occupied.insert(grid_key(ico->x_pos, ico->y_pos));
+        }
+
+        const bool vertical = conf_vertical();
+        for (auto *child : c->children) {
+            auto *ico = (IcoContainerData *)child->user_data;
+            if (ico->x_pos >= 0 && ico->y_pos >= 0)
+                continue;
+            auto [sx, sy] = next_available_slot(occupied, m.cols, m.rows, vertical);
+            ico->x_pos = sx;
+            ico->y_pos = sy;
+            occupied.insert(grid_key(sx, sy));
+        }
+
+        for (auto *child : c->children) {
+            auto *ico = (IcoContainerData *)child->user_data;
+            if (ico->is_dragging) {
+                child->real_bounds = Bounds(root->mouse_current_x + ico->drag_offset_x,
+                                            root->mouse_current_y + ico->drag_offset_y,
+                                            m.width,
+                                            m.height);
+                continue;
+            }
+
+            const auto target = bounds_for_grid_slot(m, ico->x_pos, ico->y_pos);
+            if (ico->is_settling) {
+                const float t = (get_current_time_in_ms() - ico->settle_start_ms) / ICON_SETTLE_MS;
+                if (t >= 1.f) {
+                    ico->is_settling = false;
+                    child->real_bounds = target;
+                    damage_icon(child);
+                } else {
+                    damage_icon(child);
+                    Bounds from(ico->settle_from_x, ico->settle_from_y, m.width, m.height);
+                    child->real_bounds = lerp(from, target, t);
+                    damage_icon(child);
+                    request_refresh();
+                }
+                continue;
+            }
+
+            child->real_bounds = target;
         }
     };
     static bool dragging = false;
