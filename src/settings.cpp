@@ -1,6 +1,7 @@
 
 #include "settings.h"
 
+#include "desktop_icons.h"
 #include "heart.h"
 #include "hypriso.h"
 #include "client/raw_windowing.h"
@@ -183,6 +184,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "show_docks", &settings->show_docks);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "hotcorners", &settings->hotcorners);
+    bind(bool, "desktop_icons", &settings->desktop_icons);
     
     #undef bind
 }
@@ -853,6 +855,84 @@ static void make_button(Container *parent, std::string text, std::function<void(
    };
 }
 
+static void fill_display_settings(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Display Settings");
+    
+    make_vert_space(padded_right, 10);
+
+/*
+    make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
+        set->draw_wallpaper = c;
+        damage_all();
+    });
+    */
+}
+
+static void fill_desktop_settings(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Desktop Settings");
+    
+    make_vert_space(padded_right, 10);
+
+    make_bool(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
+        set->desktop_icons = c;
+        main_thread([]() {
+            desktop_icons::stop();
+            desktop_icons::start();
+            damage_all();
+        });
+    });
+}
+
 static void fill_wallpaper_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -1155,6 +1235,10 @@ void create_tab_option(Container *parent, std::string label) {
             fill_dock_settings(root, c);
         } else if (label == "Wallpaper") {
             fill_wallpaper_settings(root, c);
+        } else if (label == "Desktop") {
+            fill_desktop_settings(root, c);
+        } else if (label == "Display") {
+            fill_display_settings(root, c);
         }
     };
 }
@@ -1162,6 +1246,7 @@ void create_tab_option(Container *parent, std::string label) {
 void fill_left(Container *left) {
     create_tab_option(left, "Search");
     create_tab_option(left, "Display");
+    create_tab_option(left, "Desktop");
     create_tab_option(left, "Mouse & Touchpad");
     create_tab_option(left, "Keyboard");
     create_tab_option(left, "Shortcuts");

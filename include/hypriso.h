@@ -75,6 +75,7 @@ struct ConfigSettings {
     bool show_docks = true;
     bool draw_wallpaper = true;
     bool hotcorners = true;
+    bool desktop_icons = true;
 
     std::vector<MylarMonitorRule> monitor_rules;
 };

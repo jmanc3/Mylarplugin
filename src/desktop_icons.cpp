@@ -9,11 +9,14 @@
 #include <gio/gio.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <hyprutils/path/Path.hpp>
 #include <linux/input-event-codes.h>
+#include <map>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -274,6 +277,10 @@ struct IcoContainerData : UserData {
 
 static constexpr float ICON_SETTLE_MS = 90.f;
 
+static long long grid_key(int x, int y) {
+    return (static_cast<long long>(x) << 32) ^ static_cast<unsigned int>(y);
+}
+
 static void damage_icon(Container *icon) {
     auto b = icon->real_bounds;
     b.grow(20);
@@ -290,13 +297,177 @@ static void begin_icon_settle(Container *icon) {
     request_refresh();
 }
 
-// Loads persisted grid positions into icons (keyed by filepath). Stub for now.
-static void load_icon_positions_from_save(Container *desktop) {
-    (void)desktop;
+static std::string trim_copy(std::string value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+        value.pop_back();
+    return value;
 }
 
-static long long grid_key(int x, int y) {
-    return (static_cast<long long>(x) << 32) ^ static_cast<unsigned int>(y);
+static std::filesystem::path icon_positions_conf_path() {
+    const char *home = std::getenv("HOME");
+    if (!home)
+        return {};
+    return std::filesystem::path(home) / ".config/mylar/desktop_icons.conf";
+}
+
+static std::string current_desktop_section_key() {
+    auto folder = Hyprutils::Path::resolvePath(conf_desktop_folder());
+    if (folder.has_value())
+        return folder.value();
+    return conf_desktop_folder();
+}
+
+static std::string icon_entry_name(DesktopItem *item) {
+    return std::filesystem::path(item->full_filepath).filename().string();
+}
+
+// section path -> entry name -> (x, y)
+using IconPosMap = std::unordered_map<std::string, std::pair<int, int>>;
+using IconPosSections = std::map<std::string, IconPosMap>;
+
+static IconPosSections read_icon_position_sections() {
+    IconPosSections sections;
+    const auto path = icon_positions_conf_path();
+    if (path.empty() || !std::filesystem::exists(path))
+        return sections;
+
+    std::ifstream in(path);
+    if (!in)
+        return sections;
+
+    std::string line;
+    std::string current;
+    while (std::getline(in, line)) {
+        line = trim_copy(std::move(line));
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        if (line.front() == '[' && line.back() == ']') {
+            current = line.substr(1, line.size() - 2);
+            sections.try_emplace(current);
+            continue;
+        }
+
+        if (current.empty())
+            continue;
+
+        const auto eq = line.find('=');
+        if (eq == std::string::npos)
+            continue;
+
+        const std::string name = trim_copy(line.substr(0, eq));
+        const std::string rest = trim_copy(line.substr(eq + 1));
+        if (name.empty())
+            continue;
+
+        const auto comma = rest.find(',');
+        if (comma == std::string::npos)
+            continue;
+
+        try {
+            const int x = std::stoi(trim_copy(rest.substr(0, comma)));
+            const int y = std::stoi(trim_copy(rest.substr(comma + 1)));
+            sections[current][name] = {x, y};
+        } catch (...) {
+            continue;
+        }
+    }
+
+    return sections;
+}
+
+static void write_icon_position_sections(const IconPosSections &sections) {
+    const auto path = icon_positions_conf_path();
+    if (path.empty())
+        return;
+
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    if (!out)
+        return;
+
+    out << "# mylar desktop icon positions (x,y grid slots per desktop folder)\n";
+    for (const auto &[section, entries] : sections) {
+        out << '\n' << '[' << section << "]\n";
+        for (const auto &[name, pos] : entries)
+            out << name << '=' << pos.first << ',' << pos.second << '\n';
+    }
+}
+
+static void save_icon_positions(Container *desktop) {
+    if (!desktop)
+        return;
+
+    const auto section = current_desktop_section_key();
+    if (section.empty())
+        return;
+
+    auto sections = read_icon_position_sections();
+    IconPosMap current;
+    current.reserve(desktop->children.size());
+    for (auto *child : desktop->children) {
+        auto *ico = (IcoContainerData *)child->user_data;
+        if (ico->x_pos < 0 || ico->y_pos < 0)
+            continue;
+        DesktopItem *item = *datum<DesktopItem *>(child, "DesktopItem");
+        if (!item)
+            continue;
+        current[icon_entry_name(item)] = {ico->x_pos, ico->y_pos};
+    }
+    sections[section] = std::move(current);
+    write_icon_position_sections(sections);
+}
+
+// Loads persisted grid positions into icons (keyed by entry name within the desktop folder section).
+static void load_icon_positions_from_save(Container *desktop) {
+    if (!desktop)
+        return;
+
+    const auto section = current_desktop_section_key();
+    if (section.empty())
+        return;
+
+    const auto sections = read_icon_position_sections();
+    const auto it = sections.find(section);
+    if (it == sections.end())
+        return;
+
+    std::unordered_set<long long> occupied;
+    occupied.reserve(desktop->children.size());
+    for (auto *child : desktop->children) {
+        auto *ico = (IcoContainerData *)child->user_data;
+        if (ico->x_pos < 0 || ico->y_pos < 0)
+            continue;
+        occupied.insert(grid_key(ico->x_pos, ico->y_pos));
+    }
+
+    for (auto *child : desktop->children) {
+        auto *ico = (IcoContainerData *)child->user_data;
+        if (ico->x_pos >= 0 && ico->y_pos >= 0)
+            continue;
+
+        DesktopItem *item = *datum<DesktopItem *>(child, "DesktopItem");
+        if (!item)
+            continue;
+
+        const auto pit = it->second.find(icon_entry_name(item));
+        if (pit == it->second.end())
+            continue;
+
+        const int x = pit->second.first;
+        const int y = pit->second.second;
+        if (x < 0 || y < 0)
+            continue;
+        if (occupied.contains(grid_key(x, y)))
+            continue;
+
+        ico->x_pos = x;
+        ico->y_pos = y;
+        occupied.insert(grid_key(x, y));
+    }
 }
 
 static std::pair<int, int> next_available_slot(const std::unordered_set<long long> &occupied, int cols, int rows, bool vertical) {
@@ -471,6 +642,50 @@ static void clear_desktop_selection(Container* desktop) {
     }
 }
 
+static void delete_selected_desktop_icons(Container *desktop) {
+    std::thread t([desktop]() {
+    std::vector<Container *> selected;
+    selected.reserve(desktop->children.size());
+    for (auto *child : desktop->children) {
+        auto *ico = (IcoContainerData *)child->user_data;
+        if (ico->is_selected)
+            selected.push_back(child);
+    }
+    if (selected.empty())
+        return;
+
+    const int count = static_cast<int>(selected.size());
+    const int result = system(fz(
+        "zenity --question --no-markup --title='Delete' --text='Delete {} selected item(s)?' --ok-label=OK --cancel-label=Cancel",
+        count).c_str());
+    if (result != 0)
+        return;
+    later_immediate([desktop, selected](Timer *) {
+        for (auto *icon : selected) {
+            DesktopItem *item = *datum<DesktopItem *>(icon, "DesktopItem");
+            if (!item)
+                continue;
+            std::error_code ec;
+            std::filesystem::remove_all(item->full_filepath, ec);
+        }
+
+        for (auto *icon : selected) {
+            auto it = std::ranges::find(desktop->children, icon);
+            if (it == desktop->children.end())
+                continue;
+            desktop->children.erase(it);
+            delete icon;
+        }
+
+        on_change_in_desktop_folder();
+        save_icon_positions(desktop);
+        damage_all();
+    });
+
+    });
+    t.detach();
+}
+
 static void update_desktop_selection(Container* desktop, const Bounds& selection) {
     for (auto* child : desktop->children) {
         auto* ico          = (IcoContainerData*)(child->user_data);
@@ -570,15 +785,20 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             auto *ico = (IcoContainerData *)icon->user_data;
             ico->was_active_last_frame = icon->state.mouse_hovering || icon->state.mouse_pressing;
         }
+        save_icon_positions(c->parent);
     };
     c->when_clicked = [](Container* actual_root, Container* c) {
         auto ico = (IcoContainerData *) c->user_data;
-        clear_desktop_selection(c->parent);
+        bool shift_down = *datum<bool>(c->parent, "shift_held");
+        if (!shift_down)
+            clear_desktop_selection(c->parent);
         auto current = get_current_time_in_ms();
         if ((current - ico->last_time_pressed) < 700) {
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
             auto ran = fz("xdg-open \"{}\"", item->full_filepath);
             launch_command(ran);
+        } else {
+            ico->is_selected = true;
         }
         ico->last_time_pressed = current;
     };
@@ -701,11 +921,13 @@ void desktop_icons::start() {
         c->real_bounds = c->wanted_bounds;
         auto s = scale(monitor);
 
-        merge_create<DesktopItem *>(c, desktop_items, [](Container *c) {
-            return *datum<DesktopItem *>(c, "DesktopItem");
-        }, [](Container *parent, DesktopItem *data) {
-            create_desktop_icon(parent, data);
-        });
+        if (set->desktop_icons) {
+            merge_create<DesktopItem *>(c, desktop_items, [](Container *c) {
+                return *datum<DesktopItem *>(c, "DesktopItem");
+            }, [](Container *parent, DesktopItem *data) {
+                create_desktop_icon(parent, data);
+            });
+        }
 
         for (auto *child : c->children) {
             auto *ico = (IcoContainerData *)child->user_data;
@@ -727,6 +949,7 @@ void desktop_icons::start() {
         }
 
         const bool vertical = conf_vertical();
+        bool assigned_new = false;
         for (auto *child : c->children) {
             auto *ico = (IcoContainerData *)child->user_data;
             if (ico->x_pos >= 0 && ico->y_pos >= 0)
@@ -735,7 +958,10 @@ void desktop_icons::start() {
             ico->x_pos = sx;
             ico->y_pos = sy;
             occupied.insert(grid_key(sx, sy));
+            assigned_new = true;
         }
+        if (assigned_new)
+            save_icon_positions(c);
 
         for (auto *child : c->children) {
             auto *ico = (IcoContainerData *)child->user_data;
@@ -797,6 +1023,18 @@ void desktop_icons::start() {
         auto damage = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
         damage.grow(20);
         hypriso->damage_box(damage);
+    };
+    c->when_key_event = [](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        (void)root;
+        (void)sym;
+        (void)mods;
+        (void)is_text;
+        (void)text;
+        if (key == KEY_LEFTSHIFT)
+            *datum<bool>(c, "shift_held") = pressed;
+
+        if (key == KEY_DELETE && pressed)
+            delete_selected_desktop_icons(c);
     };
     c->when_paint = [](Container* actual_root, Container* c) {
         auto root = get_rendering_root();
