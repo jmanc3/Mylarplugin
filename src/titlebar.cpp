@@ -99,6 +99,21 @@ static void send_signal(pid_t pid, int signal) {
     }
 }
 
+static void sleep_cid(int cid) {
+    hypriso->set_hidden(cid, true, true);
+    dock::remove_window(cid);
+    auto pid = hypriso->get_pid(cid);
+    slept_windows.push_back(SleptWindow(cid, pid));
+    send_signal(pid, SIGSTOP);
+
+    if (slept_windows.size() == 1) {
+        dock::create_slept_button();
+    }
+    dock::throb_slept_button();
+
+    heart::layout_containers();
+}
+
 void titlebar::titlebar_right_click(int cid, bool centered) {
     auto m = mouse();
     std::vector<PopOption> root;
@@ -200,18 +215,7 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
         auto info = &restore_infos[hypriso->class_name(cid)];
         pop.text = "Sleep";
         pop.on_clicked = [cid]() {            
-            hypriso->set_hidden(cid, true, true);
-            dock::remove_window(cid);
-            auto pid = hypriso->get_pid(cid);
-            slept_windows.push_back(SleptWindow(cid, pid));
-            send_signal(pid, SIGSTOP);
-            
-            if (slept_windows.size() == 1) {
-                dock::create_slept_button();
-            }
-            dock::throb_slept_button();
-
-            heart::layout_containers();
+            sleep_cid(cid);
         };
         root.push_back(pop);
     }
@@ -554,14 +558,20 @@ void create_titlebar(Container *root, Container *parent) {
         }
 
         c->when_mouse_down(root, c);
-        if (double_clicked(c, "max")) {
+        if (double_clicked(c, "max") && c->state.mouse_button_pressed == BTN_LEFT) {
             // todo should actually transition from non max snap, to max and then unsnap?
             if (*datum<bool>(client, "snapped")) {
                 drag::snap_window(hypriso->monitor_from_cursor(), cid, (int)SnapPosition::NONE);
             } else {
                 drag::snap_window(hypriso->monitor_from_cursor(), cid, (int)SnapPosition::MAX);
             }
-       }
+        }
+
+        if (double_clicked(c, "sleep") && c->state.mouse_button_pressed == BTN_MIDDLE) {
+            later_immediate([cid](Timer *) {
+                sleep_cid(cid);
+            });
+        }
     };
     titlebar->when_drag_end_is_click = false;
     titlebar->when_drag_start = paint {
