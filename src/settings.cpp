@@ -7,7 +7,7 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock.h"
-#include "portable-file-dialogs.h"
+#include <hyprland/src/helpers/MiscFunctions.hpp>
 
 #include <gtk/gtk.h>
 #include <thread>
@@ -59,6 +59,14 @@ static std::string trim(std::string s) {
         [](unsigned char c){ return !std::isspace(c); }));
     s.erase(std::find_if(s.rbegin(), s.rend(),
         [](unsigned char c){ return !std::isspace(c); }).base(), s.end());
+    return s;
+}
+
+static std::string trim_newline(std::string s) {
+    s.erase(s.begin(), std::find_if(s.begin(), s.end(),
+        [](unsigned char c){ return !std::iscntrl(c); }));
+    s.erase(std::find_if(s.rbegin(), s.rend(),
+        [](unsigned char c){ return !std::iscntrl(c); }).base(), s.end());
     return s;
 }
 
@@ -834,11 +842,11 @@ static void make_button(Container *parent, std::string text, std::function<void(
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         if (c->state.mouse_pressing) {
-            set_argb(cr, {.4, .4, .4, 1});
+            set_argb(cr, {.5, .5, .5, 1});
         } else if (c->state.mouse_hovering) {
-            set_argb(cr, {.55, .55, .55, 1});
+            set_argb(cr, {.65, .65, .65, 1});
         } else {
-            set_argb(cr, {.7, .7, .7, 1});
+            set_argb(cr, {.8, .8, .8, 1});
         }
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
@@ -971,26 +979,39 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
     make_vert_space(padded_right, 4); 
 
     make_button(padded_right, "Choose file", []() {
-        /*
-        static bool finding = false;
-        if (finding)
+        static bool chooser_open = false;
+        if (chooser_open)
             return;
-        finding = true;
-        std::thread t([]() {
-            */
-            // File open
-            auto f = pfd::open_file("Choose wallpaper", pfd::path::home(),
-                                    { "All Files", "*" },
-                                    pfd::opt::multiselect);
-            for (auto const &name : f.result())
-                notify(name);
 
-/*
-            finding = false;
+        chooser_open = true;
+
+        std::thread t([]() {
+            auto file = trim_newline(execAndGet("zenity --file-selection"));
+
+            if (!file.empty() && std::filesystem::exists(file)) {
+                auto mime = trim_newline(execAndGet(std::string("file --mime-type -b \"" + file + "\"").c_str()));
+
+                if (mime.starts_with("image/")) {
+                    const char* home = std::getenv("HOME");
+                    std::filesystem::path filepath =
+                        std::filesystem::path(home) / ".config/mylar/wall.png";
+ 
+                    std::string cmd =
+                        "ffmpeg -y -i \"" + file +
+                        "\" \"" + filepath.string() + "\"";
+
+                    if (std::system(cmd.c_str()) == 0) {
+                        // Successfully converted.
+                        // Use output here.
+                    }
+                }
+            }
+
+            chooser_open = false;
         });
+
         t.detach();
-        */
-    });
+    }); 
 }
 
 
