@@ -866,7 +866,11 @@ static void on_monitor_open(int id) {
     heart::layout_containers();
     if (set->show_docks)
         dock::start(hypriso->monitor_name(id));
-    auto t = datum<TextureInfo>(c, "bg_wall");
+    auto t = datum<TextureInfo>(c, "bg_wall1");
+    auto t2 = datum<TextureInfo>(c, "bg_wall2");
+    auto wall1_active = datum<bool>(c, "bg_wall1_active");
+    *datum<long>(c, "bg_wall_change_time_ms") = 0;
+    *wall1_active = true;
     const char* home = std::getenv("HOME");
     std::filesystem::path filepath =
         std::filesystem::path(home) / ".config/mylar/wall.png";
@@ -881,8 +885,10 @@ static void on_monitor_closed(int id) {
     for (int i = actual_monitors.size() - 1; i >= 0; i--) {
         auto cid = *datum<int>(actual_monitors[i], "cid");
         if (cid == id) {
-            auto t = datum<TextureInfo>(actual_monitors[i], "bg_wall");
+            auto t = datum<TextureInfo>(actual_monitors[i], "bg_wall1");
             free_text_texture(t->id);
+            auto t2 = datum<TextureInfo>(actual_monitors[i], "bg_wall2");
+            free_text_texture(t2->id);
             
             actual_monitors.erase(actual_monitors.begin() + i);
         }
@@ -969,12 +975,35 @@ static void on_render(int id, int stage) {
         for (auto m : actual_monitors) {
             if (*datum<int>(m, "cid") == current_monitor) {
                 if (set->draw_wallpaper) {
-                    TextureInfo info = *datum<TextureInfo>(m, "bg_wall");
+                    auto first = *datum<TextureInfo>(m, "bg_wall1");
+                    auto second = *datum<TextureInfo>(m, "bg_wall2");
+                    auto wall1_active = *datum<bool>(m, "bg_wall1_active");
+                    auto start = *datum<long>(m, "bg_wall_change_time_ms");
+                    auto current = get_current_time_in_ms();
+                    auto delta = (float) (current - start);
+                    
                     auto b = bounds_monitor(current_monitor);
                     b.x = 0;
                     b.y = 0;
                     b.scale(scale(current_monitor));
-                    draw_texture(info, b);
+                    float trans = 700.0f;
+                    
+                    if (delta < trans) {
+                        if (wall1_active) {
+                            draw_texture(second, b);              // old base
+                            draw_texture(first, b, delta / trans); // new fades in
+                        } else {
+                            draw_texture(first, b);
+                            draw_texture(second, b, delta / trans);
+                        }
+                        request_refresh();
+                    } else {
+                        if (wall1_active) {
+                            draw_texture(first, b);
+                        } else {
+                            draw_texture(second, b);
+                        }
+                    }
                 }
             }
         }
@@ -1737,19 +1766,25 @@ void watch_wallpaper_change() {
     
     latest_file_watch = watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
         if (update == FileWatchUpdate::REMOVED) {
-            later(1500, [](Timer *) {
+            later(500, [](Timer *) {
                 watch_wallpaper_change();
             });
         }
         if (!t) {
-            t = later(1000, [](Timer *) {
+            t = later(200, [](Timer *) {
                 for (auto c : actual_monitors) {
-                    auto t = datum<TextureInfo>(c, "bg_wall");
+                    auto t = datum<TextureInfo>(c, "bg_wall1");
+                    auto wall1_active = datum<bool>(c, "bg_wall1_active");
+                    if (*wall1_active) {
+                        t = datum<TextureInfo>(c, "bg_wall2");
+                    }
                     const char* home = std::getenv("HOME");
                     std::filesystem::path filepath =
                         std::filesystem::path(home) / ".config/mylar/wall.png";
                     free_text_texture(t->id);
                     *t = gen_texture_png(filepath);
+                    *wall1_active = !*wall1_active;
+                    *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
                 }
                 
                 damage_all();
