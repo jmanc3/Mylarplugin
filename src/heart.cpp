@@ -954,6 +954,22 @@ static bool is_snapped(int id) {
     return false;
 }
 
+static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor_bounds) {
+    if (texture.w <= 0 || texture.h <= 0)
+        return monitor_bounds;
+
+    const double texture_scale = std::max(monitor_bounds.w / texture.w, monitor_bounds.h / texture.h);
+    const double width         = texture.w * texture_scale;
+    const double height        = texture.h * texture_scale;
+
+    return {
+        monitor_bounds.x + (monitor_bounds.w - width) * 0.5,
+        monitor_bounds.y + (monitor_bounds.h - height) * 0.5,
+        width,
+        height,
+    };
+}
+
 static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_BEGIN) {
         heart::layout_containers();
@@ -986,22 +1002,24 @@ static void on_render(int id, int stage) {
                     b.x = 0;
                     b.y = 0;
                     b.scale(scale(current_monitor));
+                    auto first_bounds = wallpaper_bounds(first, b);
+                    auto second_bounds = wallpaper_bounds(second, b);
                     float trans = 700.0f;
                     
                     if (delta < trans) {
                         if (wall1_active) {
-                            draw_texture(second, b);              // old base
-                            draw_texture(first, b, delta / trans); // new fades in
+                            draw_texture(second, second_bounds);              // old base
+                            draw_texture(first, first_bounds, delta / trans); // new fades in
                         } else {
-                            draw_texture(first, b);
-                            draw_texture(second, b, delta / trans);
+                            draw_texture(first, first_bounds);
+                            draw_texture(second, second_bounds, delta / trans);
                         }
                         request_refresh();
                     } else {
                         if (wall1_active) {
-                            draw_texture(first, b);
+                            draw_texture(first, first_bounds);
                         } else {
-                            draw_texture(second, b);
+                            draw_texture(second, second_bounds);
                         }
                     }
                 }
@@ -2431,4 +2449,3 @@ void heart::set_zoom(float zoom) {
     zoom_factor = zoom;
     hypriso->set_zoom_factor(zoom);
 }
-
