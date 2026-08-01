@@ -49,7 +49,7 @@ static bool conf_vertical() {
 }
 
 static std::string conf_desktop_folder() {
-    return hypriso->get_varstring("plugin:mylardesktop:desktop_folder", "~/Desktop");
+    return set->desktop_folder;
 }
 
 static float conf_total_w() {
@@ -643,7 +643,6 @@ static void clear_desktop_selection(Container* desktop) {
 }
 
 static void delete_selected_desktop_icons(Container *desktop) {
-    std::thread t([desktop]() {
     std::vector<Container *> selected;
     selected.reserve(desktop->children.size());
     for (auto *child : desktop->children) {
@@ -654,36 +653,33 @@ static void delete_selected_desktop_icons(Container *desktop) {
     if (selected.empty())
         return;
 
-    const int count = static_cast<int>(selected.size());
-    const int result = system(fz(
-        "zenity --question --no-markup --title='Delete' --text='Delete {} selected item(s)?' --ok-label=OK --cancel-label=Cancel",
-        count).c_str());
-    if (result != 0)
-        return;
-    later_immediate([desktop, selected](Timer *) {
-        for (auto *icon : selected) {
-            DesktopItem *item = *datum<DesktopItem *>(icon, "DesktopItem");
-            if (!item)
-                continue;
-            std::error_code ec;
-            std::filesystem::remove_all(item->full_filepath, ec);
-        }
+    for (auto *icon : selected) {
+        DesktopItem *item = *datum<DesktopItem *>(icon, "DesktopItem");
+        if (!item)
+            continue;
 
-        for (auto *icon : selected) {
-            auto it = std::ranges::find(desktop->children, icon);
-            if (it == desktop->children.end())
-                continue;
-            desktop->children.erase(it);
-            delete icon;
-        }
+        GFile *file = g_file_new_for_path(item->full_filepath.c_str());
+        gboolean trashed = g_file_trash(file, nullptr, nullptr);
+        g_object_unref(file);
 
-        on_change_in_desktop_folder();
-        save_icon_positions(desktop);
-        damage_all();
-    });
+        if (trashed)
+            continue;
 
-    });
-    t.detach();
+        std::error_code ec;
+        std::filesystem::remove_all(item->full_filepath, ec);
+    }
+
+    for (auto *icon : selected) {
+        auto it = std::ranges::find(desktop->children, icon);
+        if (it == desktop->children.end())
+            continue;
+        desktop->children.erase(it);
+        delete icon;
+    }
+
+    on_change_in_desktop_folder();
+    save_icon_positions(desktop);
+    damage_all();
 }
 
 static void update_desktop_selection(Container* desktop, const Bounds& selection) {

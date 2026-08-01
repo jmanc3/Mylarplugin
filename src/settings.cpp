@@ -70,19 +70,24 @@ static std::string trim_newline(std::string s) {
     return s;
 }
 
-
-std::string choose_file(GtkWindow* parent = nullptr) {
+std::string choose_file(bool folder = false, GtkWindow* parent = nullptr) {
     std::string filename;
 
     if (!gtk_init_check(nullptr, nullptr))
         return filename;
 
+    GtkFileChooserAction action = folder
+        ? GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER
+        : GTK_FILE_CHOOSER_ACTION_OPEN;
+
+    const char* accept_label = folder ? "_Select" : "_Open";
+
     GtkWidget* dialog = gtk_file_chooser_dialog_new(
-        "Select File",
+        folder ? "Select Folder" : "Select File",
         parent,
-        GTK_FILE_CHOOSER_ACTION_OPEN,
+        action,
         "_Cancel", GTK_RESPONSE_CANCEL,
-        "_Open", GTK_RESPONSE_ACCEPT,
+        accept_label, GTK_RESPONSE_ACCEPT,
         nullptr);
 
     if (!dialog)
@@ -228,6 +233,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "desktop_icons", &settings->desktop_icons);
+    bind(std::string, "desktop_folder", &settings->desktop_folder);
     
     #undef bind
 }
@@ -974,6 +980,36 @@ static void fill_desktop_settings(Container *root, Container *c) {
             damage_all();
         });
     });
+    
+    make_vert_space(padded_right, 4);
+    
+    make_button(padded_right, "Change folder", []() {
+        static bool chooser_open = false;
+        if (chooser_open)
+            return;
+
+        chooser_open = true;
+
+        std::thread t([]() {
+            const auto file = trim_newline(choose_file(true));
+            main_thread([file]() {
+                    notify(file);
+            });
+            
+            if (!file.empty() && std::filesystem::exists(file) && std::filesystem::is_directory(file)) {
+                main_thread([file]() {
+                    set->desktop_folder = file;
+                    desktop_icons::stop();
+                    desktop_icons::start();
+                    settings::load_save_settings(true, set); // save
+                });
+            }
+
+            chooser_open = false;
+        });
+
+        t.detach();
+    }); 
 }
 
 static void fill_wallpaper_settings(Container *root, Container *c) {

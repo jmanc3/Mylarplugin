@@ -76,6 +76,7 @@ struct ConfigSettings {
     bool draw_wallpaper = true;
     bool hotcorners = true;
     bool desktop_icons = true;
+    std::string desktop_folder = "~/Desktop";
 
     std::vector<MylarMonitorRule> monitor_rules;
 };
