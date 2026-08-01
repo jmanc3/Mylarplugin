@@ -1030,14 +1030,10 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
                     std::filesystem::path filepath =
                         std::filesystem::path(home) / ".config/mylar/wall.png";
  
-                    std::string cmd =
-                        "ffmpeg -y -i \"" + file +
-                        "\" \"" + filepath.string() + "\"";
-
-                    if (std::system(cmd.c_str()) == 0) {
-                        // Successfully converted.
-                        // Use output here.
-                    }
+                    std::error_code ec;
+                    std::filesystem::create_directories(filepath.parent_path(), ec);
+                    std::filesystem::copy_file(file, filepath,
+                                               std::filesystem::copy_options::overwrite_existing, ec);
                 }
             }
 

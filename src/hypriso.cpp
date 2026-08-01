@@ -6,6 +6,9 @@
  *  The purpose is to minimize our interaction surface so that our program stays as functional as possible on new updates, and we only need to fix up this file for new versions. 
  */
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 #include "hypriso.h"
 #include "heart.h"
 #include "dock.h"
@@ -4188,7 +4191,45 @@ void load_icon_full_path(cairo_surface_t** surface, std::string path) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    *surface = cairo_image_surface_create_from_png(path.c_str());
+    int w = 0, h = 0, channels = 0;
+    unsigned char* pixels = stbi_load(path.c_str(), &w, &h, &channels, STBI_rgb_alpha);
+    if (!pixels) {
+        *surface = nullptr;
+        return;
+    }
+
+    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    if (cairo_surface_status(s) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(s);
+        stbi_image_free(pixels);
+        *surface = nullptr;
+        return;
+    }
+
+    unsigned char* data   = cairo_image_surface_get_data(s);
+    const int      stride = cairo_image_surface_get_stride(s);
+
+    // stb returns RGBA; cairo ARGB32 is BGRA (little-endian) with premultiplied alpha
+    for (int y = 0; y < h; ++y) {
+        unsigned char* src = pixels + y * w * 4;
+        unsigned char* dst = data + y * stride;
+        for (int x = 0; x < w; ++x) {
+            const unsigned char r = src[0];
+            const unsigned char g = src[1];
+            const unsigned char b = src[2];
+            const unsigned char a = src[3];
+            dst[0] = (unsigned char)((b * a + 127) / 255);
+            dst[1] = (unsigned char)((g * a + 127) / 255);
+            dst[2] = (unsigned char)((r * a + 127) / 255);
+            dst[3] = a;
+            src += 4;
+            dst += 4;
+        }
+    }
+
+    cairo_surface_mark_dirty(s);
+    stbi_image_free(pixels);
+    *surface = s;
 }
 
 // SP<CTexture> missingTexure(int size) {
