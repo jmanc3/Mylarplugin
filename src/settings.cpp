@@ -70,6 +70,41 @@ static std::string trim_newline(std::string s) {
     return s;
 }
 
+
+std::string choose_file(GtkWindow* parent = nullptr) {
+    std::string filename;
+
+    if (!gtk_init_check(nullptr, nullptr))
+        return filename;
+
+    GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        "Select File",
+        parent,
+        GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Open", GTK_RESPONSE_ACCEPT,
+        nullptr);
+
+    if (!dialog)
+        return filename;
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        if (path) {
+            filename = path;
+            g_free(path);
+        }
+    }
+
+    gtk_widget_destroy(dialog);
+
+    // Needed if you're not already running gtk_main()
+    while (gtk_events_pending())
+        gtk_main_iteration();
+
+    return filename;
+}
+
 // TODO: bad memory churn
 template<typename T>
 void parse(const std::vector<std::string>& lines,
@@ -986,8 +1021,7 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
         chooser_open = true;
 
         std::thread t([]() {
-            auto file = trim_newline(execAndGet("zenity --file-selection"));
-
+            const auto file = trim_newline(choose_file());
             if (!file.empty() && std::filesystem::exists(file)) {
                 auto mime = trim_newline(execAndGet(std::string("file --mime-type -b \"" + file + "\"").c_str()));
 
