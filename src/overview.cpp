@@ -46,7 +46,7 @@ struct ThumbData : UserData {
 
 
 static bool running = false;
-static float overview_anim_time = 300.0f;
+static float overview_anim_time = 180.0f;
 static long creation_time_global = 0;
 
 static RGBA color_titlebar_focused() {

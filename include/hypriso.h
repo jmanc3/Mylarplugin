@@ -639,4 +639,6 @@ void monitor_rule_disable_toggle(std::string from, std::string to);
 
 bool is_slept(int cid);
 
+void set_api(void *api);
+
 #endif // hypriso_h_INCLUDED

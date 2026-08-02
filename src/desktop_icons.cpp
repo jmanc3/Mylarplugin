@@ -74,6 +74,8 @@ struct DesktopItem {
     std::string full_filepath;
     std::string name;
     std::string extension;
+    std::string icon;
+    std::string exec;
     bool is_folder = false;
     std::vector<std::string> icons_for_mime;
 };
@@ -91,6 +93,120 @@ static std::string lowercase(std::string value) {
         return std::tolower(character);
     });
     return value;
+}
+
+static std::string trim_copy(std::string value);
+
+static std::string remove_desktop_exec_field_codes(const std::string& exec) {
+    std::string result;
+    result.reserve(exec.size());
+
+    for (size_t i = 0; i < exec.size(); ++i) {
+        if (exec[i] != '%') {
+            result += exec[i];
+            continue;
+        }
+
+        if (i + 1 < exec.size())
+            ++i;
+    }
+
+    return trim_copy(std::move(result));
+}
+
+static void read_desktop_file(DesktopItem& item, const std::filesystem::path& path) {
+    std::ifstream file(path);
+    if (!file)
+        return;
+
+    std::string line;
+    bool inDesktopEntry = false;
+    while (std::getline(file, line)) {
+        if (line.starts_with('[') && line.ends_with(']')) {
+            inDesktopEntry = line == "[Desktop Entry]";
+            continue;
+        }
+        if (!inDesktopEntry)
+            continue;
+
+        const auto separator = line.find('=');
+        if (separator == std::string::npos)
+            continue;
+
+        const std::string_view key(line.data(), separator);
+        const std::string value = line.substr(separator + 1);
+        if (key == "Name")
+            item.name = value;
+        else if (key == "Icon")
+            item.icon = value;
+        else if (key == "Exec")
+            item.exec = remove_desktop_exec_field_codes(value);
+    }
+}
+
+static void refresh_desktop_item(DesktopItem& item, const std::filesystem::path& path, bool isFolder) {
+    item.full_filepath = path.string();
+    item.name = isFolder ? path.filename().string() : path.stem().string();
+    item.extension = isFolder ? std::string{} : lowercase(path.extension().string());
+    item.icon.clear();
+    item.exec.clear();
+    item.is_folder = isFolder;
+
+    if (item.extension == ".desktop")
+        read_desktop_file(item, path);
+}
+
+static void add_icon_candidate(std::vector<std::string>& candidates, const std::string& candidate) {
+    if (!candidate.empty())
+        candidates.push_back(candidate);
+}
+
+static void add_desktop_file_icon_candidates(DesktopItem& item) {
+    if (item.extension != ".desktop")
+        return;
+
+    const std::filesystem::path path(item.full_filepath);
+    std::vector<std::string> candidates;
+    add_icon_candidate(candidates, item.icon);
+    add_icon_candidate(candidates, lowercase(item.icon));
+    add_icon_candidate(candidates, item.name);
+    add_icon_candidate(candidates, lowercase(item.name));
+    add_icon_candidate(candidates, item.exec);
+    add_icon_candidate(candidates, path.stem().string());
+    add_icon_candidate(candidates, lowercase(path.stem().string()));
+    item.icons_for_mime.insert(item.icons_for_mime.begin(), candidates.begin(), candidates.end());
+}
+
+static void add_mime_icon_candidates(DesktopItem& item) {
+    auto file = g_file_new_for_path(item.full_filepath.c_str());
+    GFileInfo *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_ICON, G_FILE_QUERY_INFO_NONE, NULL, nullptr);
+
+    if (!info) {
+        g_object_unref(file);
+        return;
+    }
+
+    gchar **attrs = g_file_info_list_attributes(info, nullptr);
+
+    for (int i = 0; attrs[i] != nullptr; ++i) {
+        const char *name = attrs[i];
+        GFileAttributeType type = g_file_info_get_attribute_type(info, name);
+
+        if (type != G_FILE_ATTRIBUTE_TYPE_OBJECT)
+            continue;
+
+        GObject *obj = g_file_info_get_attribute_object(info, name);
+        if (!G_IS_THEMED_ICON(obj))
+            continue;
+
+        const gchar * const *names = g_themed_icon_get_names(G_THEMED_ICON(obj));
+        for (int j = 0; names[j] != nullptr; ++j)
+            item.icons_for_mime.push_back(names[j]);
+    }
+
+    g_strfreev(attrs);
+    g_object_unref(info);
+    g_object_unref(file);
 }
 
 static int latest_desktop_watch = -1;
@@ -117,6 +233,11 @@ void on_change_in_desktop_folder() {
     while (!ec && iterator != end) {
         const auto& entry = *iterator;
         const auto path = entry.path();
+        if (path.filename().string().starts_with('.')) {
+            iterator.increment(ec);
+            continue;
+        }
+
         const bool isFolder = entry.is_directory(ec);
         if (ec) {
             ec.clear();
@@ -130,15 +251,12 @@ void on_change_in_desktop_folder() {
                 std::filesystem::perms::none;
         ec.clear();
 
-        const auto extension = isFolder ? std::string{} : lowercase(path.extension().string());
         const auto fullPath = path.string();
         seenPaths.insert(fullPath);
-        scanned.push_back(DesktopItem{
-            .full_filepath = fullPath,
-            .name          = isFolder ? path.filename().string() : path.stem().string(),
-            .extension     = extension,
-            .is_folder     = isFolder,
-        });
+        scanned.emplace_back();
+        refresh_desktop_item(scanned.back(), path, isFolder);
+        add_mime_icon_candidates(scanned.back());
+        add_desktop_file_icon_candidates(scanned.back());
 
         iterator.increment(ec);
     }
@@ -163,54 +281,15 @@ void on_change_in_desktop_folder() {
             auto* item = it->second;
             item->name = scannedItem.name;
             item->extension = scannedItem.extension;
+            item->icon = scannedItem.icon;
+            item->exec = scannedItem.exec;
             item->is_folder = scannedItem.is_folder;
+            item->icons_for_mime = scannedItem.icons_for_mime;
             continue;
         }
 
-        auto item = new DesktopItem{
-            .full_filepath = scannedItem.full_filepath,
-            .name          = scannedItem.name,
-            .extension     = scannedItem.extension,
-            .is_folder     = scannedItem.is_folder,
-        };
+        auto item = new DesktopItem(scannedItem);
         desktop_items.push_back(item);
-
-        {
-            auto file = g_file_new_for_path(item->full_filepath.c_str());
-            GFileInfo *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_ICON, G_FILE_QUERY_INFO_NONE, NULL, nullptr);
-
-            if (!info) {
-                g_object_unref(file);
-                continue;
-            }
-
-            gchar **attrs = g_file_info_list_attributes(info, nullptr);
-
-            for (int i = 0; attrs[i] != nullptr; ++i) {
-                const char *name = attrs[i];
-                GFileAttributeType type = g_file_info_get_attribute_type(info, name);
-
-                switch (type) {
-                    case G_FILE_ATTRIBUTE_TYPE_OBJECT: {
-                        GObject *obj = g_file_info_get_attribute_object(info, name);
-
-                        if (G_IS_THEMED_ICON(obj)) {
-                            const gchar * const *names =
-                                g_themed_icon_get_names(G_THEMED_ICON(obj));
-
-                            for (int j = 0; names[j] != nullptr; ++j) {
-                                item->icons_for_mime.push_back(names[j]);
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-
-            g_strfreev(attrs);
-            g_object_unref(info);
-            g_object_unref(file);
-        }
     }
 
     std::ranges::sort(desktop_items, [](const DesktopItem* lhs, const DesktopItem* rhs) {
@@ -791,8 +870,10 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         auto current = get_current_time_in_ms();
         if ((current - ico->last_time_pressed) < 700) {
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
-            auto ran = fz("xdg-open \"{}\"", item->full_filepath);
-            launch_command(ran);
+            if (item->extension == ".desktop")
+                launch_command(item->exec);
+            else
+                launch_command(fz("xdg-open \"{}\"", item->full_filepath));
         } else {
             ico->is_selected = true;
         }

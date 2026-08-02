@@ -2432,7 +2432,7 @@ hl.monitor({
     output   = "",
     mode     = "highrr",
     position = "auto",
-    scale    = "1.0",
+    scale    = "auto",
 })
 
 
@@ -9050,3 +9050,8 @@ SleptWindow::SleptWindow(int cid, int pid) {
     this->time_slept = get_current_time_in_ms();
     this->monitor_id = get_monitor(cid);
 }
+
+void set_api(void *api) {
+    globals->api = api;
+}
+
