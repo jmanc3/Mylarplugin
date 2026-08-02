@@ -181,12 +181,15 @@
 
 #include <hyprlang.hpp>
 
+#ifdef AS_SHARED_OBJECT
 struct Globals {
     void *api = nullptr;
 };
 
 static Globals *globals = new Globals;
-
+#else
+#include "first.h"
+#endif
 
 template<typename F>
 struct privDefer {
