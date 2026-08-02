@@ -1,7 +1,26 @@
 #ifndef hypriso_h_INCLUDED
 #define hypriso_h_INCLUDED
 
+#ifdef AS_SHARED_OBJECT
+struct Bounds {
+    double x = 0;
+    double y = 0;
+    double w = 0;
+    double h = 0;
+    
+    Bounds scale(double amount) {
+        this->x *= amount;
+        this->y *= amount;
+        this->w *= amount;
+        this->h *= amount;
+        return *this;
+    }
+};
+#else
 #include "container.h"
+#endif
+
+
 #include <ranges>
 #include <string>
 #include <vector>

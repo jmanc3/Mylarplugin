@@ -9,11 +9,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include <cstring>
 #include "hypriso.h"
-#include "heart.h"
-#include "dock.h"
-#include "overview.h"
-#include <pango/pango-font.h>
+//#include "heart.h"
+//#include "dock.h"
+//#include "container.h"
+//#include "first.h"
 #include <pango/pangocairo.h>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
@@ -95,8 +96,6 @@
 #include "tracy/Tracy.hpp"
 #endif
 
-#include "container.h"
-#include "first.h"
 #include <cassert>
 #include <hyprland/src/helpers/time/Time.hpp>
 
@@ -181,6 +180,33 @@
 #include <hyprutils/utils/ScopeGuard.hpp>
 
 #include <hyprlang.hpp>
+
+struct Globals {
+    void *api = nullptr;
+};
+
+static Globals *globals = new Globals;
+
+
+template<typename F>
+struct privDefer {
+    F f;
+    
+    privDefer(F f) : f(f) {}
+    
+    ~privDefer() { f(); }
+};
+
+template<typename F>
+privDefer<F> defer_func(F f) {
+    return privDefer<F>(f);
+}
+
+#define DEFER_1(x, y) x##y
+#define DEFER_2(x, y) DEFER_1(x, y)
+#define DEFER_3(x)    DEFER_2(x, __COUNTER__)
+#define defer(code)   auto DEFER_3(_defer_) = defer_func([&](){code;})
+
 
 HyprIso *hypriso = new HyprIso;
 
@@ -2403,7 +2429,7 @@ hl.monitor({
     output   = "",
     mode     = "highrr",
     position = "auto",
-    scale    = "auto",
+    scale    = "1.0",
 })
 
 
@@ -7409,7 +7435,7 @@ void HyprIso::dispatch(std::string command, std::string args) {
     if (g_pKeybindManager->m_dispatchers.contains(command)) {
        g_pKeybindManager->m_dispatchers[command](args);
     } else {
-        notify(fz("dispatch {} no longer exists, report this issue if encountered", command));
+        //notify(fz("dispatch {} no longer exists, report this issue if encountered", command));
     }
 }
 
@@ -8186,7 +8212,7 @@ void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaS
     gestures_created.push_back(GestureHolding(fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit));
     
     if (!resultFromGesture) {
-        notify(fz("{}", resultFromGesture.error().c_str()));
+        //notify(fz("{}", resultFromGesture.error().c_str()));
     }
 }
 
@@ -8988,7 +9014,7 @@ void monitor_rule_disable_toggle(std::string from, std::string to) {
                 return;
 
     set->monitor_rules.push_back({from, to, true, false});
-    dock::stop(to);
+    //dock::stop(to);
 }
 
 std::vector<MylarMonitorRule> HyprIso::all_monitors() {
