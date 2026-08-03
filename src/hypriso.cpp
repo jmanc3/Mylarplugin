@@ -7414,15 +7414,18 @@ void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, flo
     }
     if (!pMonitor)
         return;
-    CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
-    static auto PSHADOWSIZE = CConfigValue<Hyprlang::INT>("decoration:shadow:range");
-    static auto PSHADOWSCALE = CConfigValue<Hyprlang::FLOAT>("decoration:shadow:scale");
+    //CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
+    CHyprColor colorb = CHyprColor(0.0, 0.0, 0.0, 0.1);
+    static auto PSHADOWSIZE = 3 * scale(current_rendering_monitor());
 
+    drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), PSHADOWSIZE, false);
+    /*
     if (size != 0) {
         drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), size, false);
     } else {
-        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), *PSHADOWSIZE, false);
+        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), PSHADOWSIZE, false);
     }
+    */
 }
 
 
