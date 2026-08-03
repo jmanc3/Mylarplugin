@@ -50,6 +50,9 @@ void show_desktop::start() {
         hypriso->whitelist_on = true;
         start_time = get_current_time_in_ms();
         damage_all();
+        later(20, [](Timer *) {
+            hypriso->simulateMouseMovement();
+        });
     });
 }
 
@@ -80,6 +83,9 @@ void show_desktop::stop(bool animate) {
     if (animate) {
         later(conf_anim_time, [](Timer *) {
             actual_stop();
+            later(20, [](Timer *) {
+                hypriso->simulateMouseMovement();
+            });
         });
     } else {
         actual_stop();
