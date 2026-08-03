@@ -925,15 +925,20 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             auto border_bounds = c->real_bounds;
             auto border_thickness = std::round(1 * s);
             border_bounds.shrink(border_thickness);
+            auto sel_color = color_sel_color();
+            auto sel_border_color = color_sel_border_color();
+            sel_color.a *= overview_alpha;
+            sel_border_color.a *= overview_alpha;
+            
             if (c->state.mouse_pressing) {
-                rect(c->real_bounds, color_sel_color());
-                border(border_bounds, color_sel_border_color(), border_thickness);
+                rect(c->real_bounds, sel_color);
+                border(border_bounds, sel_border_color, border_thickness);
             } else if (c->state.mouse_hovering) {
-                rect(c->real_bounds, color_sel_color());
-                border(border_bounds, color_sel_border_color(), border_thickness);
+                rect(c->real_bounds, sel_color);
+                border(border_bounds, sel_border_color, border_thickness);
             } else if (ico->is_selected) {
-                rect(c->real_bounds, color_sel_color());
-                border(border_bounds, color_sel_border_color(), border_thickness);
+                rect(c->real_bounds, sel_color);
+                border(border_bounds, sel_border_color, border_thickness);
             }
             
             
