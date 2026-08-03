@@ -104,6 +104,9 @@ void show_desktop::render() {
         }
     }
 
+    auto current_monitor = current_rendering_monitor();
+    auto current_workspace_id = hypriso->get_active_workspace_id(current_monitor);
+
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type != (int) TYPE::CLIENT)
@@ -114,6 +117,13 @@ void show_desktop::render() {
             continue;
 
         auto mon_id = get_monitor(cid);
+        if (mon_id != current_monitor)
+            continue;
+        
+        auto cl_id = hypriso->get_active_workspace_id_client(cid);
+        if (cl_id != current_workspace_id)
+            continue;
+ 
         auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
         auto monitor_b = bounds_monitor(mon_id);
         bounds.y = monitor_b.h;
