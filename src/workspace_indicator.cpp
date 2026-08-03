@@ -77,7 +77,7 @@ void workspace_indicator::on_change(int cid) {
             sm.w += sm.h;
             sm.shrink(1.0);
             larger.round();
-            render_drop_shadow(rid, 1, {0, 0, 0, 0.4}, h * .5, 2.0, sm);
+            render_drop_shadow(rid, 1, {0, 0, 0, 1.0}, h * .5, 2.0, sm);
 
             rect(larger, {.14, .14, .14, 1}, 0, 0.0, 2.0, true);
             auto left = larger;

@@ -1137,7 +1137,7 @@ void desktop_icons::start() {
             float rounding = 9.0f;
             auto shadow = b;
             shadow.grow(std::round(1.0f * s));
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .04f}, std::round(rounding * s), 2.0, shadow);
+            render_drop_shadow(rid, 1.0, {0, 0, 0, 1.0f}, std::round(rounding * s), 2.0, shadow);
             rect(b, RGBA(col.r, col.g, col.b, col.a), 0, std::round(rounding * s), 2.0f, true, 0.1);
             col = color_sel_border_color();
             border(b, RGBA(col.r, col.g, col.b, col.a), std::round(1.0f * s), 0, std::round(rounding * s), 2.0f, false, 1.0);

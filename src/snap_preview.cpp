@@ -338,7 +338,7 @@ void snap_preview::draw(Container* actual_root, Container* c) {
             b.scale(s);
             b.round();
             if (preview->previous_snap_type != SnapPosition::NONE || (preview->previous_snap_type == SnapPosition::NONE && preview->scalar < .8)) {
-                render_drop_shadow(rid, 1.0, {0, 0, 0, .05f * fade_amount}, preview->rounding, 2.0f, b);
+                render_drop_shadow(rid, 1.0, {0, 0, 0, fade_amount}, preview->rounding, 2.0f, b);
             }
             
             //rect(b, {.98, .98, .98, .30f}, 0, std::round(preview->rounding * s * fade_amount), 2.0f, true, 1.0);

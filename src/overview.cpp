@@ -186,7 +186,7 @@ void paint_over_wallpaper_actual(Container *actual_root, Container *c, int monit
     m = lerp(rawmon, m, scalar);
     hypriso->draw_wallpaper(monitor, m, 14 * s * scalar);
     auto b = m;
-    render_drop_shadow(rid, 1, {.1, .1, .1, .33f * scalar}, 14 * s * scalar, 2.0, b, 50 * s);
+    render_drop_shadow(rid, 1, {.1, .1, .1, scalar}, 14 * s * scalar, 2.0, b, 50 * s);
     b.shrink(2);
     border(b, {1, 1, 1, .05}, 1, 0, 14 * s); 
 }
@@ -261,7 +261,7 @@ static void paint_option(Container *actual_root, Container *c, int monitor, long
     if (!*datum<bool>(c, "opaque")) {
         rect(c->real_bounds, {0, 0, 0, 0}, 0, roundingAmt * s, 2.0, true);
     }
-    render_drop_shadow(monitor, 1.0, {0, 0, 0, .3f * scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 7 * s);
+    render_drop_shadow(monitor, 1.0, {0, 0, 0, scalar * fade_in_a}, roundingAmt * s, 2.0, c->real_bounds, 7 * s);
     auto th = titlebar_h;
     titlebar_h = std::round(titlebar_h * shrink_factor);
     defer(titlebar_h = th);
