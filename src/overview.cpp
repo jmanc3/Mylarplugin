@@ -775,6 +775,9 @@ void actual_open(int monitor) {
     animate(&overview_data->scalar, 1.0, overview_anim_time(), over->lifetime, nullptr, [](float a) {
         return pull(bounce_end, a);
     }); 
+    later(20, [](Timer *) {
+        hypriso->simulateMouseMovement();
+    });
     auto order = get_window_stacking_order();
     for (auto o : order) {
         if (hypriso->alt_tabbable(o) && get_monitor(o) == monitor && hypriso->get_active_workspace_id_client(o) == hypriso->get_active_workspace_id(monitor)) {
@@ -992,6 +995,9 @@ static void actual_overview_stop(bool focus) {
     drag_workspace_switcher::set_overwrite_monitor(-1);
     running = false;
     hypriso->whitelist_on = false;
+    later(20, [](Timer *) {
+        hypriso->simulateMouseMovement();
+    });
     auto m = actual_root;
     bool removed = false;
     //auto info = *datum<TextureInfo>(actual_root, "overview_gradient");
