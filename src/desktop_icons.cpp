@@ -1124,7 +1124,7 @@ void desktop_icons::start() {
         if (key == KEY_DELETE && pressed)
             delete_selected_desktop_icons(c);
     };
-    c->when_paint = [](Container* actual_root, Container* c) {
+    c->after_paint = [](Container* actual_root, Container* c) {
         if (!screenshotting_wallpaper && overview::is_showing())
             return;
         
