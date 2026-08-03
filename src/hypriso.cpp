@@ -7415,7 +7415,7 @@ void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, flo
     if (!pMonitor)
         return;
     //CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
-    CHyprColor colorb = CHyprColor(0.0, 0.0, 0.0, 0.1);
+    CHyprColor colorb = CHyprColor(0.0, 0.0, 0.0, 0.1 * b.a);
     static auto PSHADOWSIZE = 3 * scale(current_rendering_monitor());
 
     drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), PSHADOWSIZE, false);
