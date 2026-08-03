@@ -3,6 +3,7 @@
 #include "heart.h"
 #include "hypriso.h"
 #include "icons.h"
+#include "overview.h"
 #include "popup.h"
 #include "settings.h"
 
@@ -881,6 +882,9 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     };
    
     c->when_paint = [](Container* actual_root, Container* c) {
+        if (screenshotting_wallpaper || overview::is_showing())
+            return;
+        
         auto root = get_rendering_root();
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (stage == (int)STAGE::RENDER_POST_WALLPAPER) {
@@ -1114,6 +1118,9 @@ void desktop_icons::start() {
             delete_selected_desktop_icons(c);
     };
     c->when_paint = [](Container* actual_root, Container* c) {
+        if (screenshotting_wallpaper || overview::is_showing())
+            return;
+        
         auto root = get_rendering_root();
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (stage == (int)STAGE::RENDER_POST_WALLPAPER && dragging && c->state.mouse_button_pressed == BTN_LEFT) {

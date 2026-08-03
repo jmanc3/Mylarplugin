@@ -133,7 +133,7 @@ void screenshot_loop() {
     });
 }
 
-static bool screenshotting_wallpaper = false;
+bool screenshotting_wallpaper = false;
 
 void fadeout_docks(Container *actual_root, Container *c, int monitor, long creation_time) {
     auto root = get_rendering_root();

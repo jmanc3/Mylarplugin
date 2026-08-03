@@ -916,6 +916,10 @@ static void on_activated(int id) {
         });
     }
 
+    if (show_desktop::is_opened()) {
+        hypriso->render_whitelist.push_back(*datum<int>(c, "cid"));
+        show_desktop::stop(true);
+    }
     titlebar::on_activated(id);
     alt_tab::on_activated(id);
     dock::on_activated(id);

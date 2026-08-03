@@ -1,6 +1,8 @@
 #ifndef overview_h_INCLUDED
 #define overview_h_INCLUDED
 
+extern bool screenshotting_wallpaper;
+
 namespace overview {
     void open(int monitor);
     void close(bool focus = true);
