@@ -157,9 +157,9 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     m.scale(s);
     auto rawmon = m;
     //rect(rawmon, {.14, .14, .14, 1 * scalar}, 0, 0, 2.0, false);
-    hypriso->draw_wallpaper(monitor, m);
-    rect(m, {.2f, .2f, .2f, 1.0f}, 0, 0, 2.0, false);
-    //rect(m, {0, 0, 0, .4f}, 0, 0, 2.0, true);
+    //hypriso->draw_wallpaper(monitor, m);
+    //rect(m, {.2f, .2f, .2f, 1.0f}, 0, 0, 2.0, false);
+    rect(m, {0, 0, 0, .7f}, 0, 0, 2.0, true);
     //rect(m, {0, 0, 0, .5}, 0, 0, 2.0, true);
 }
 
