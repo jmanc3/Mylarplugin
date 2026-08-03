@@ -32,7 +32,7 @@ struct HelperData : UserData {
 };
 
 static float fade_in_time() {
-    static float amount = 400;
+    static float amount = 250;
     return hypriso->get_varfloat("plugin:mylardesktop:snap_helper_fade_in", amount);
 }
 
