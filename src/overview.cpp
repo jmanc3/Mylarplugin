@@ -46,7 +46,10 @@ struct ThumbData : UserData {
 
 
 static bool running = false;
-static float overview_anim_time = 180.0f;
+static float overview_anim_time() {
+    static float default_value = 180;
+    return hypriso->get_varfloat("plugin:mylardesktop:overview_anim_time", default_value);
+}
 static long creation_time_global = 0;
 
 static RGBA color_titlebar_focused() {
@@ -101,8 +104,8 @@ static RGBA titlebar_button_bg_pressed_color() {
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
 
-// {"anchors":[{"x":0,"y":1},{"x":0.6000000000000001,"y":0.225},{"x":1,"y":-0.07500000000000001},{"x":1.5,"y":0}],"controls":[{"x":0.37776596796519674,"y":0.7659070117526584},{"x":0.7475504251532529,"y":-0.10770409935845272},{"x":1.3208964677674515,"y":-0.0022794811672635974}]}
-std::vector<float> bounce_end = { 0.000, 0.011, 0.021, 0.033, 0.045, 0.057, 0.069, 0.083, 0.096, 0.110, 0.125, 0.140, 0.156, 0.172, 0.189, 0.206, 0.224, 0.243, 0.263, 0.283, 0.304, 0.325, 0.348, 0.371, 0.395, 0.420, 0.447, 0.474, 0.502, 0.531, 0.562, 0.594, 0.627, 0.661, 0.698, 0.735, 0.775, 0.811, 0.843, 0.872, 0.899, 0.923, 0.944, 0.964, 0.981, 0.997, 1.011, 1.023, 1.034, 1.044, 1.052, 1.059, 1.065, 1.069, 1.073, 1.075, 1.077, 1.078, 1.078, 1.077, 1.075, 1.071, 1.068, 1.064, 1.060, 1.057, 1.053, 1.050, 1.047, 1.043, 1.040, 1.037, 1.034, 1.031, 1.028, 1.025, 1.023, 1.020, 1.018, 1.015, 1.013, 1.011, 1.009, 1.007, 1.006, 1.004, 1.003, 1.002, 1.001, 1.000, 1.000 };
+// {"anchors":[{"x":0,"y":1},{"x":0.1,"y":0.675},{"x":0.5,"y":0}],"controls":[{"x":0.05,"y":0.8375},{"x":0.21385668715227257,"y":0.1685185326470269}]}
+std::vector<float> bounce_end = { 0.000, 0.054, 0.108, 0.163, 0.217, 0.271, 0.325, 0.394, 0.454, 0.507, 0.554, 0.597, 0.636, 0.672, 0.705, 0.735, 0.763, 0.789, 0.813, 0.835, 0.856, 0.875, 0.894, 0.910, 0.926, 0.941, 0.954, 0.967, 0.979, 0.990, 1.000 };
 
 void screenshot_loop() {
     running = true;
@@ -493,7 +496,7 @@ static void create_option(int cid, Container *parent, int monitor, long creation
         scalar = overopen;
     if (scalar == 1.0) {
         *datum<float>(c, "alpha_fade_in") = 0.0;
-        animate(datum<float>(c, "alpha_fade_in"), 1.0, overview_anim_time, c->lifetime);
+        animate(datum<float>(c, "alpha_fade_in"), 1.0, overview_anim_time(), c->lifetime);
     } else {
         *datum<float>(c, "alpha_fade_in") = 1.0;
     }
@@ -768,7 +771,7 @@ void actual_open(int monitor) {
     *hotconer_tl = 0.0;
     animate(hotconer_tl, 1.0, 530, over->lifetime); 
     auto overview_data = new OverviewData;
-    animate(&overview_data->scalar, 1.0, overview_anim_time + 100, over->lifetime, nullptr, [](float a) {
+    animate(&overview_data->scalar, 1.0, overview_anim_time(), over->lifetime, nullptr, [](float a) {
         return pull(bounce_end, a);
     }); 
     auto order = get_window_stacking_order();
@@ -944,7 +947,7 @@ void overview::open(int monitor) {
                 if (overopen != -1)
                     scalar = overopen;
                 if (scalar != 1.0 && overopen != -1) {
-                    animate(&overview_data->scalar, 1.0, overview_anim_time, c->lifetime, nullptr, [](float scalar) {
+                    animate(&overview_data->scalar, 1.0, overview_anim_time(), c->lifetime, nullptr, [](float scalar) {
                         return pull(slidetopos2, scalar);
                     }); 
                 }
@@ -1053,7 +1056,7 @@ void overview::close(bool focus) {
                             ch->z_index = 1001;
                     }
                 }
-                animate(&overview_data->scalar, 0.0, overview_anim_time * 0.9, c->lifetime, [focus](bool normal_end) {
+                animate(&overview_data->scalar, 0.0, overview_anim_time() * 0.95, c->lifetime, [focus](bool normal_end) {
                     if (normal_end) {
                         actual_overview_stop(focus);
                     }
