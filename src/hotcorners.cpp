@@ -4,9 +4,11 @@
 #include "heart.h"
 #include "alt_tab.h"
 #include "drag.h"
+#include "hypriso.h"
 #include "resizing.h"
 #include "overview.h"
 #include "drag_workspace_switcher.h"
+#include "show_desktop.h"
 
 #include <linux/input-event-codes.h>
 
@@ -36,7 +38,14 @@ void do_overview(int monitor_id) {
     static long last_time = 0;
     auto current = get_current_time_in_ms();
     if (current - last_time > 300) {
-        overview::open(monitor_id);
+        if (show_desktop::is_opened()) {
+            show_desktop::stop(true);
+            later(100, [monitor_id](Timer *) {
+                overview::open(monitor_id);
+            });
+        } else {
+            overview::open(monitor_id);
+        }
         last_time = current;
     }
 }
