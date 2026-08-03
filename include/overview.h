@@ -20,6 +20,8 @@ namespace overview {
     void should_force_paint(bool state);
 
     bool is_showing();
+
+    float get_openess();
 };
 
 #endif // overview_h_INCLUDED

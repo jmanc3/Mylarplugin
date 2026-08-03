@@ -158,7 +158,8 @@ void fadeout_docks(Container *actual_root, Container *c, int monitor, long creat
     auto rawmon = m;
     //rect(rawmon, {.14, .14, .14, 1 * scalar}, 0, 0, 2.0, false);
     hypriso->draw_wallpaper(monitor, m);
-    rect(m, {0, 0, 0, .4f}, 0, 0, 2.0, true);
+    rect(m, {.2f, .2f, .2f, 1.0f}, 0, 0, 2.0, false);
+    //rect(m, {0, 0, 0, .4f}, 0, 0, 2.0, true);
     //rect(m, {0, 0, 0, .5}, 0, 0, 2.0, true);
 }
 
@@ -971,6 +972,12 @@ void overview::open(int monitor) {
 
         actual_open(monitor);
     });
+    later(1000.0f / hypriso->fps(monitor), [monitor](Timer *t) {
+        t->keep_running = overview::is_showing();
+        screenshotting_wallpaper = true;
+        hypriso->screenshot_wallpaper(monitor);
+        screenshotting_wallpaper = false;
+    });
 }
 
 void fade_in_min_max(int cid) {
@@ -1103,5 +1110,15 @@ void overview::overwrite_openess(float a) {
         overopen = 1;
     if (overopen < 0)
         overopen = -1;
+}
+
+float overview::get_openess() {
+    Container *over = nullptr;
+    for (auto c : actual_root->children)
+        if (c->custom_type == (int) TYPE::OVERVIEW)
+            over = c;
+    if (!over)
+        return 0.0;    
+    return ((OverviewData *) over->user_data)->scalar;
 }
 

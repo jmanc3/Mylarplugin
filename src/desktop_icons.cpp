@@ -882,7 +882,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     };
    
     c->when_paint = [](Container* actual_root, Container* c) {
-        if (screenshotting_wallpaper || overview::is_showing())
+        if (!screenshotting_wallpaper && overview::is_showing())
             return;
         
         auto root = get_rendering_root();
@@ -891,6 +891,8 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             renderfix
             
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
+
+            float overview_alpha = 1.0 - overview::get_openess();
 
             {
                 TextureInfo info;
@@ -915,7 +917,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                 if (info.id != -1) {
                     draw_texture(info, 
                         c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5, 
-                        c->real_bounds.y + 2 * s);
+                        c->real_bounds.y + 2 * s, overview_alpha);
                 }
             }
             
@@ -924,7 +926,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             auto border_thickness = std::round(1 * s);
             border_bounds.shrink(border_thickness);
             if (c->state.mouse_pressing) {
-                //rect(c->real_bounds, color_sel_color());
+                rect(c->real_bounds, color_sel_color());
                 border(border_bounds, color_sel_border_color(), border_thickness);
             } else if (c->state.mouse_hovering) {
                 rect(c->real_bounds, color_sel_color());
@@ -942,7 +944,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             }
             draw_texture(text_img, 
                 c->real_bounds.x,
-                c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s);
+                c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s, overview_alpha);
         }
     };
 
@@ -1118,7 +1120,7 @@ void desktop_icons::start() {
             delete_selected_desktop_icons(c);
     };
     c->when_paint = [](Container* actual_root, Container* c) {
-        if (screenshotting_wallpaper || overview::is_showing())
+        if (!screenshotting_wallpaper && overview::is_showing())
             return;
         
         auto root = get_rendering_root();
