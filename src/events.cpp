@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <format>
 
-#include "json.hpp"
+//#include "json.hpp"
 
 #ifdef TRACY_ENABLE
 #include "tracy/Tracy.hpp"
@@ -471,6 +471,7 @@ void log_json(const std::string& msg) {
     ofs.flush(); // force write so GUI viewer always shows latest content
 }
 
+#ifdef DEBUGCONTAINERS
 nlohmann::ordered_json output_container(Container *c) {
     nlohmann::ordered_json data = nlohmann::ordered_json::object();
 
@@ -500,6 +501,7 @@ nlohmann::ordered_json output_container(Container *c) {
 
     return data;
 }
+#endif 
 
 void log_layout(Container *root) {
 #ifdef DEBUGCONTAINERS
