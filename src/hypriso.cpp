@@ -1594,7 +1594,7 @@ void HyprIso::create_config_variables() {
     values->titlebar_unfocused_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_unfocused_color", "", Config::ParserUtils::parseColor("rgba(222222ff)").value());
     values->titlebar_focused_text_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_focused_text_color", "", Config::ParserUtils::parseColor("rgba(ffffffff)").value());
     values->titlebar_unfocused_text_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:titlebar_unfocused_text_color", "", Config::ParserUtils::parseColor("rgba(999999ff)").value());
-    values->overview_anim_time = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:overview_anim_time", "", Hyprlang::FLOAT{180});
+    values->overview_anim_time = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:overview_anim_time", "", Hyprlang::FLOAT{280});
     values->thumb_to_position_time = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:thumb_to_position_time", "", Hyprlang::FLOAT{355});
     values->snap_helper_fade_in = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:snap_helper_fade_in", "", Hyprlang::FLOAT{400});
     values->titlebar_button_ratio = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:titlebar_button_ratio", "", Hyprlang::FLOAT{1.4375});

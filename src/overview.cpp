@@ -47,7 +47,7 @@ struct ThumbData : UserData {
 
 static bool running = false;
 static float overview_anim_time() {
-    static float default_value = 180;
+    static float default_value = 280;
     return hypriso->get_varfloat("plugin:mylardesktop:overview_anim_time", default_value);
 }
 static long creation_time_global = 0;
