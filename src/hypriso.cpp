@@ -11,6 +11,7 @@
 
 #include <cstring>
 #include "hypriso.h"
+#include "overview.h"
 //#include "heart.h"
 //#include "dock.h"
 //#include "container.h"
@@ -4674,6 +4675,8 @@ void close_window(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
+            if (overview::is_showing())
+                hypriso->set_hidden(id, true);
             hw->w->sendClose();
             //closeWindow(hw->w);
             // g_pCompositor->closeWindow(hw->w);
