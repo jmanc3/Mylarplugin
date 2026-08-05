@@ -1231,12 +1231,14 @@ static void on_drag_or_resize_cancel_requested() {
     }
 }
 
+static int minimize_gesture_count = 0;
+
 static void minimize_animate_out(long start, long end, float y_offset, float scalar_at_start) {
     constexpr static float slow = .42;
     
     const auto gestureDuration = std::max(end - start, 1L) / 1000.0;
     const auto gestureVelocity = std::abs(y_offset) / 150.0 / gestureDuration;
-    constexpr auto flickVelocity = 0.1 * slow;
+    constexpr auto flickVelocity = 0.6 * slow;
     const bool isFlick = gestureVelocity >= flickVelocity;
 
     // Flicks can complete with less travel: 0.15 to open, 0.85 to close.
@@ -1251,9 +1253,15 @@ static void minimize_animate_out(long start, long end, float y_offset, float sca
 
     auto initialVelocity = target < scalar_at_start ? -gestureVelocity : gestureVelocity;
     initialVelocity *= .8;
+    float start_count = minimize_gesture_count;
 
-    later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target](Timer *t) {
+    later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target, start_count](Timer *t) {
         t->keep_running = true;
+        if (minimize_gesture_count != start_count) {
+            t->keep_running = false;
+            return;
+        }
+            
 
         const auto elapsed = (get_current_time_in_ms() - end) / 1000.0;
         const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.2, 1.0});
@@ -1291,6 +1299,7 @@ static void minimize_overview_combined_gesture() {
 
     // down stroke results in higher y, vice versa
     make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
+        minimize_gesture_count++;
         // start
         y_offset += s.y * slow;
         started_minimize = show_desktop::get_scalar() > .5;
