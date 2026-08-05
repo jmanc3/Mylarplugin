@@ -30,6 +30,7 @@
 #include "coverflow.h"
 #include "screenshot.h"
 #include "desktop_icons.h"
+#include "spring.h"
 
 #include "process.hpp"
 #include <cstdio>
@@ -918,7 +919,7 @@ static void on_activated(int id) {
 
     if (show_desktop::is_opened()) {
         hypriso->render_whitelist.push_back(*datum<int>(c, "cid"));
-        show_desktop::stop(true);
+        show_desktop::stop();
     }
     titlebar::on_activated(id);
     alt_tab::on_activated(id);
@@ -1230,6 +1231,118 @@ static void on_drag_or_resize_cancel_requested() {
     }
 }
 
+static void minimize_animate_out(long start, long end, float y_offset, float scalar_at_start) {
+    const auto gestureDuration = std::max(end - start, 1L) / 1000.0;
+    const auto gestureVelocity = std::abs(y_offset) / 150.0 / gestureDuration;
+    constexpr auto flickVelocity = 1.0;
+    const bool isFlick = gestureVelocity >= flickVelocity;
+
+    // Flicks can complete with less travel: 0.15 to open, 0.85 to close.
+    // Slow releases still require crossing the midpoint.
+    double target;
+    if (isFlick && y_offset > 0)
+        target = scalar_at_start >= 0.15f ? 1.0 : 0.0;
+    else if (isFlick && y_offset < 0)
+        target = scalar_at_start <= 0.85f ? 0.0 : 1.0;
+    else
+        target = scalar_at_start < 0.5f ? 0.0 : 1.0;
+
+    auto initialVelocity = target < scalar_at_start ? -gestureVelocity : gestureVelocity;
+    initialVelocity *= .8;
+
+    later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target](Timer *t) {
+        t->keep_running = true;
+
+        const auto elapsed = (get_current_time_in_ms() - end) / 1000.0;
+        const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.2, 1.0});
+        const auto scalar = static_cast<float>(state.value);
+
+        if (target == 0.0 && scalar <= 0.001f) {
+            show_desktop::set_scalar(0.0);
+            show_desktop::stop();
+            t->keep_running = false;
+            return;
+        }
+
+        if (target == 1.0 && scalar >= 0.999f) {
+            show_desktop::set_scalar(1.0);
+            t->keep_running = false;
+            return;
+        }
+
+        show_desktop::set_scalar(scalar);
+        request_refresh();
+    });
+}
+
+static void minimize_overview_combined_gesture() {
+    static float y_offset = 0.0;
+    
+    static const float minimum_before_activation = 10.0;
+    static const float maximum_offset = 150.0f;
+    static bool started_minimize = false;
+
+    static long start = 0;
+    static long end = 0;
+
+    // down stroke results in higher y, vice versa
+    make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
+        // start
+        y_offset += s.y;
+        started_minimize = show_desktop::get_scalar() > .5;
+        start = get_current_time_in_ms();
+    }, [](Bounds s) {
+        // update
+        y_offset += s.y;
+        if (y_offset > maximum_offset)
+            y_offset = maximum_offset;
+        if (y_offset < -maximum_offset)
+            y_offset = -maximum_offset;
+ 
+        if (y_offset > minimum_before_activation) {
+            if (!show_desktop::is_opened())
+                show_desktop::start();
+            if (!started_minimize) {
+                float scalar = (y_offset - minimum_before_activation) / (maximum_offset - minimum_before_activation);
+                if (scalar <= 0.0)
+                    scalar = 0.0;
+                if (scalar > 1.0)
+                    scalar = 1.0;
+                show_desktop::set_scalar(scalar);
+            }
+        } else if (y_offset < -minimum_before_activation) {
+            if (started_minimize) {
+                float scalar = (std::abs(y_offset) - minimum_before_activation) / (maximum_offset - minimum_before_activation);
+                if (scalar <= 0.0)
+                    scalar = 0.0;
+                if (scalar > 1.0)
+                    scalar = 1.0;
+                show_desktop::set_scalar(1.0 - scalar);
+            }
+        } else {
+            if (started_minimize) {
+                show_desktop::set_scalar(1.0);
+            } else {
+                show_desktop::set_scalar(0.0);
+            }
+        }
+    }, []() {
+        end = get_current_time_in_ms();
+        
+        if (show_desktop::is_opened()) {
+            auto scalar = show_desktop::get_scalar();
+            if (scalar < .01) {
+                show_desktop::stop();
+            } else if (scalar > .99) {
+                show_desktop::set_scalar(1.0);
+            } else {
+                minimize_animate_out(start, end, y_offset, scalar);
+            }
+            request_refresh();
+        }
+        y_offset = 0.0;
+    });
+}
 
 static void on_config_reload() {
     hypriso->set_zoom_factor(zoom_factor);
@@ -1246,35 +1359,8 @@ static void on_config_reload() {
     // alt tab gesture
     gestures_reset();
 
-    static float over_y = 0;
-    static float total_over = 170.0f;
-    static bool opened = false;
-    /*
-    make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
-        over_y = 0;
-        over_y += s.y;
-        if (over_y < 0 && !overview::is_showing() && !opened) {
-            //overview::overwrite_openess((-over_y) / total_over);
-            overview::open(hypriso->monitor_from_cursor());
-            opened = true;
-        }
-    }, [](Bounds s) {
-        over_y += s.y;
-        if (over_y < 0) {
-            //overview::overwrite_openess((-over_y) / total_over);
-            if (!overview::is_showing() && !opened) {
-                overview::open(hypriso->monitor_from_cursor());
-                opened = true;
-            }
-        }
-    }, []() {
-        opened = false;
-        //overview::overwrite_openess(-1.0);
-        if (over_y > 0)
-            overview::close();
-    });
-    */
-    
+    minimize_overview_combined_gesture();
+
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset_x = 0;
         offset_y = 0;

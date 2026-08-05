@@ -8,34 +8,24 @@
 #include "snap_assist.h"
 
 static bool is_open = false;
-static float conf_anim_time = 100.0;
-static long start_time = 0;
-static long end_time = 0;
 
 bool show_desktop::is_opened() {
     return is_open;
 }
 
 void show_desktop::start() {
-    if (is_open)
-        return;
-    if (overview::is_showing())
-        return;
-    if (snap_assist::is_showing())
+    if (is_open || overview::is_showing() || snap_assist::is_showing())
         return;
     bool any_client_visible = false;
     for (auto c : actual_root->children) {
         if (c->custom_type != (int) TYPE::CLIENT) {
             auto cid = *datum<int>(c, "cid");
-            if (!hypriso->is_hidden(cid) && !is_slept(cid) ) {
+            if (!hypriso->is_hidden(cid) && !is_slept(cid))
                 any_client_visible = true;
-            }
         }
     }
-
     if (!any_client_visible)
         return;
- 
     
     later_immediate([](Timer *) {
         for (auto c : actual_root->children) {
@@ -48,11 +38,8 @@ void show_desktop::start() {
  
         is_open = true;
         hypriso->whitelist_on = true;
-        start_time = get_current_time_in_ms();
         damage_all();
-        later(20, [](Timer *) {
-            hypriso->simulateMouseMovement();
-        });
+        later(20, [](Timer *) { hypriso->simulateMouseMovement(); });
     });
 }
 
@@ -65,51 +52,32 @@ void actual_stop() {
         auto cid = *datum<int>(c, "cid");
         hypriso->set_animate_to_dock(cid, false);
     }
-    start_time = 0;
-    end_time = 0;
     damage_all();
 }
 
-void show_desktop::stop(bool animate) {
+void show_desktop::stop() {
     if (!is_open)
         return;
+    show_desktop::set_scalar(0);
 
-    if (animate) {
-        end_time = get_current_time_in_ms();
-    } else {
-        end_time = get_current_time_in_ms() - conf_anim_time * 2;
-    }
     damage_all();
-    if (animate) {
-        later(conf_anim_time, [](Timer *) {
-            actual_stop();
-            later(20, [](Timer *) {
-                hypriso->simulateMouseMovement();
-            });
-        });
-    } else {
-        actual_stop();
-    }
+    actual_stop();
+}
 
+static float conf_scalar = 0.0;
+
+void show_desktop::set_scalar(float scalar) {
+    conf_scalar = scalar;
+}
+
+float show_desktop::get_scalar() {
+    return conf_scalar;
 }
 
 void show_desktop::render() {
-    auto current_time = get_current_time_in_ms();
-    long delta = current_time - start_time;
-    if (end_time != 0) {
-        delta = current_time - end_time;
-    }
-    auto scalar = ((float) delta) / conf_anim_time;
-    if (scalar > 1.0) {
-        if (scalar < 1.5) {
-            damage_all();
-            request_refresh();
-            return;
-        } else {
-            return;
-        }
-    }
-
+    if (!show_desktop::is_opened())
+        return;
+    
     auto current_monitor = current_rendering_monitor();
     auto current_workspace_id = hypriso->get_active_workspace_id(current_monitor);
 
@@ -135,11 +103,7 @@ void show_desktop::render() {
         bounds.y = monitor_b.h;
         bounds.scale(scale(mon_id));
         
-        if (end_time != 0) {
-            hypriso->draw_raw_min_thumbnail(cid, bounds, scalar);
-        } else {
-            hypriso->draw_raw_min_thumbnail(cid, bounds, 1.0 - scalar);
-        }
+        hypriso->draw_raw_min_thumbnail(cid, bounds, 1.0 - conf_scalar);
     }
 
     damage_all();

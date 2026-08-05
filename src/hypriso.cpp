@@ -2814,23 +2814,6 @@ hl.layer_rule({
     hl.layer_rule({ match = { namespace = "Dock" }, blur = true })
 })
 
-hl.gesture({
-    fingers = 3,
-    direction = "down",
-    action = function()
-        hl.plugin.mylar.overview_close_or_hide_desktop()
-    end
-})
-
-hl.gesture({
-    fingers = 3,
-    direction = "up",
-    action = function()
-        hl.plugin.mylar.overview_open_or_show_desktop()
-    end
-})
-
-
    
 )END";
 
@@ -5082,6 +5065,8 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    overview::should_force_paint(true);
+    
     auto pMonitor = m;
     if (!pMonitor)
         return;
@@ -5146,6 +5131,8 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
     startedOn->m_visible               = true;
 
     Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
+    
+    overview::should_force_paint(false);
 }
 
 void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, Render::eRenderPassMode mode, bool ignorePosition, bool standalone) {
@@ -8217,6 +8204,21 @@ void gestures_reset() {
     gestures_created.clear();
 }
 
+/*
+enum eTrackpadGestureDirection : uint8_t {
+    TRACKPAD_GESTURE_DIR_NONE = 0,
+    TRACKPAD_GESTURE_DIR_SWIPE,
+    TRACKPAD_GESTURE_DIR_LEFT,
+    TRACKPAD_GESTURE_DIR_RIGHT,
+    TRACKPAD_GESTURE_DIR_UP,
+    TRACKPAD_GESTURE_DIR_DOWN,
+    TRACKPAD_GESTURE_DIR_VERTICAL,
+    TRACKPAD_GESTURE_DIR_HORIZONTAL,
+    TRACKPAD_GESTURE_DIR_PINCH,
+    TRACKPAD_GESTURE_DIR_PINCH_OUT,
+    TRACKPAD_GESTURE_DIR_PINCH_IN,
+};
+*/
 void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit, std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end) {
     std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(std::move(start), std::move(update), std::move(end)), fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit);
 

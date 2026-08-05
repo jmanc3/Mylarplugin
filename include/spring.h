@@ -13,7 +13,7 @@ struct SpringState {
     double velocity;  // velocity at time t
 };
 
-SpringState springEvaluate(
+static SpringState springEvaluate(
     double time,        // elapsed time (seconds)
     double x0,          // initial value
     double xTarget,     // final value
