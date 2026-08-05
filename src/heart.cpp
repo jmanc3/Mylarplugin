@@ -1232,18 +1232,20 @@ static void on_drag_or_resize_cancel_requested() {
 }
 
 static void minimize_animate_out(long start, long end, float y_offset, float scalar_at_start) {
+    constexpr static float slow = .42;
+    
     const auto gestureDuration = std::max(end - start, 1L) / 1000.0;
     const auto gestureVelocity = std::abs(y_offset) / 150.0 / gestureDuration;
-    constexpr auto flickVelocity = 1.0;
+    constexpr auto flickVelocity = 0.1 * slow;
     const bool isFlick = gestureVelocity >= flickVelocity;
 
     // Flicks can complete with less travel: 0.15 to open, 0.85 to close.
     // Slow releases still require crossing the midpoint.
     double target;
     if (isFlick && y_offset > 0)
-        target = scalar_at_start >= 0.15f ? 1.0 : 0.0;
+        target = scalar_at_start >= 0.01f ? 1.0 : 0.0;
     else if (isFlick && y_offset < 0)
-        target = scalar_at_start <= 0.85f ? 0.0 : 1.0;
+        target = scalar_at_start <= 0.99f ? 0.0 : 1.0;
     else
         target = scalar_at_start < 0.5f ? 0.0 : 1.0;
 
@@ -1277,9 +1279,11 @@ static void minimize_animate_out(long start, long end, float y_offset, float sca
 
 static void minimize_overview_combined_gesture() {
     static float y_offset = 0.0;
+
+    static float slow = .42;
     
-    static const float minimum_before_activation = 10.0;
-    static const float maximum_offset = 150.0f;
+    static const float minimum_before_activation = 2.0 * slow;
+    static const float maximum_offset = 150.0f * slow;
     static bool started_minimize = false;
 
     static long start = 0;
@@ -1288,12 +1292,12 @@ static void minimize_overview_combined_gesture() {
     // down stroke results in higher y, vice versa
     make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
         // start
-        y_offset += s.y;
+        y_offset += s.y * slow;
         started_minimize = show_desktop::get_scalar() > .5;
         start = get_current_time_in_ms();
     }, [](Bounds s) {
         // update
-        y_offset += s.y;
+        y_offset += s.y * slow;
         if (y_offset > maximum_offset)
             y_offset = maximum_offset;
         if (y_offset < -maximum_offset)
