@@ -924,8 +924,8 @@ static void on_activated(int id) {
     //overview::close(false);
 }
 
-static void on_draw_decos(std::string name, int monitor, int id, float a) {
-    titlebar::on_draw_decos(name, monitor, id, a);
+static void on_draw_decos(std::string name, int monitor, int id, float a, int deco_offset_x, int deco_offset_y) {
+    titlebar::on_draw_decos(name, monitor, id, a, deco_offset_x, deco_offset_y);
 }
 
 void draw_text(std::string text, int x, int y) {

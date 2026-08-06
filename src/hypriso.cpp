@@ -9,6 +9,13 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include <any>
+#include <sstream>
+#define private public
+#include <hyprutils/animation/AnimatedVariable.hpp>
+#undef private
+
+
 #include <cstring>
 #include "hypriso.h"
 #include "overview.h"
@@ -39,6 +46,7 @@
 #include <hyprutils/memory/SharedPtr.hpp>
 
 #define private public
+#include <hyprutils/animation/AnimatedVariable.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #undef private
 
@@ -106,7 +114,6 @@
 #include <memory>
 #include <hyprutils/math/Vector2D.hpp>
 #include <librsvg/rsvg.h>
-#include <any>
 
 
 #include <hyprland/src/helpers/Color.hpp>
@@ -223,6 +230,9 @@ ConfigSettings *set = new ConfigSettings;
 std::vector<SleptWindow> slept_windows;
 
 PollingThread *polling_thread = nullptr;
+
+static int deco_offset_x = 0;
+static int deco_offset_y = 0;
 
 void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
@@ -3397,7 +3407,6 @@ void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float s
 //     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
 
-
 struct MylarBar : public IHyprWindowDecoration {
     PHLWINDOW m_window;
     int m_size;
@@ -3439,7 +3448,7 @@ struct MylarBar : public IHyprWindowDecoration {
             if (m->m == monitor) {
                 for (auto w : hyprwindows) {
                    if (w->w == m_window)  {
-                       hypriso->on_draw_decos(getDisplayName(), m->id, w->id, a);
+                       hypriso->on_draw_decos(getDisplayName(), m->id, w->id, a, deco_offset_x, deco_offset_y);
                        return;
                    }
                 }
@@ -5446,7 +5455,31 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     auto before = w->m_hidden;
     w->m_hidden = false;
 
+    auto r = w->m_workspace->m_renderOffset->value();
+
+    const auto REALPOS = w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    auto mbox = w->m_monitor->logicalBox();
+
+    auto off = Vector2D(-(REALPOS.x - mbox.x), -(REALPOS.y - mbox.y));
+    off.y += w->m_monitor->scale() * titlebar_h;
+    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
+    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
+    
+    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
+    float border_size = *PBORDERSIZE;
+    off.x += border_size + shadow_range;
+    off.y += border_size + shadow_range;
+    w->m_workspace->m_renderOffset->m_Value = off; 
+    deco_offset_x = off.x;
+    deco_offset_y = off.y;
+    
     ourRenderWindow(w, m, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
+
+    w->m_workspace->m_renderOffset->m_Value = r;
+    deco_offset_x = 0;
+    deco_offset_y = 0;
+
     w->m_hidden = before;
 
     w->m_floatingOffset = fo;

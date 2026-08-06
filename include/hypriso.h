@@ -332,7 +332,7 @@ struct HyprIso {
 
     std::function<void()> on_config_generated = nullptr;
 
-    std::function<void(std::string name, int monitor, int w, float a)> on_draw_decos = nullptr;
+    std::function<void(std::string name, int monitor, int w, float a, int deco_offset_x, int deco_offset_y)> on_draw_decos = nullptr;
     
     std::function<void(int id, int stage)> on_render = nullptr;
 

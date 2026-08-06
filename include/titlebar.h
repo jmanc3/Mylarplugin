@@ -6,7 +6,7 @@
 namespace titlebar {
     void on_window_open(int id);
     void on_window_closed(int id);
-    void on_draw_decos(std::string name, int monitor, int id, float a);
+    void on_draw_decos(std::string name, int monitor, int id, float a, int deco_offset_x, int deco_offset_y);
     void on_activated(int id);
 
     void titlebar_right_click(int cid, bool centered = false);

@@ -43,7 +43,6 @@ void show_desktop::start() {
         later(20, [](Timer *) { hypriso->simulateMouseMovement(); });
     });
 
-    /*
     later((1000.0f / hypriso->fps(current_rendering_monitor())) * .5, [](Timer *t) {
         t->keep_running = is_open;
         for (auto c : actual_root->children) {
@@ -53,7 +52,6 @@ void show_desktop::start() {
             hypriso->screenshot_min(cid);
         }
     });
-    */
 }
 
 void actual_stop() {
@@ -135,7 +133,7 @@ static void actual_spring_anim(long end, float initialVelocity, float scalar_at_
         }
 
         const auto elapsed = (get_current_time_in_ms() - end) / 1000.0;
-        const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.2, 1.0});
+        const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.3, 1.0});
         const auto scalar = static_cast<float>(state.value);
 
         if (target == 0.0 && scalar <= 0.001f) {
@@ -157,10 +155,11 @@ static void actual_spring_anim(long end, float initialVelocity, float scalar_at_
 }
 
 void show_desktop::minimize_animate_out(long start, long end, float y_offset, float scalar_at_start) {
-    constexpr static float slow = .42;
+    //constexpr static float slow = .42;
+    constexpr static float slow = 1.0;
     
     const auto gestureDuration = std::max(end - start, 1L) / 1000.0;
-    const auto gestureVelocity = std::abs(y_offset) / 150.0 / gestureDuration;
+    const auto gestureVelocity = std::abs(y_offset) / (250.0 * .42) / gestureDuration;
     constexpr auto flickVelocity = 0.6 * slow;
     const bool isFlick = gestureVelocity >= flickVelocity;
 
@@ -184,14 +183,12 @@ void show_desktop::minimize_animate_out(long start, long end, float y_offset, fl
 void show_desktop::start_animation() {
     show_desktop::start();
     later(10, [](Timer *) {
+        minimize_gesture_count++;
         actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 1.0, minimize_gesture_count);
     });
 }
 
 void show_desktop::stop_animation() {
+    minimize_gesture_count++;
     actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 0.0, minimize_gesture_count);
-    
-    later(300, [](Timer *t) {
-        show_desktop::stop();
-    });
 }

@@ -12,6 +12,7 @@
 #include "resizing.h"
 
 #include "process.hpp"
+#include "show_desktop.h"
 
 #include <assert.h>
 #include <chrono>
@@ -694,7 +695,7 @@ static void draw_text(std::string text, int x, int y) {
     return;
 }
 
-void titlebar::on_draw_decos(std::string name, int monitor, int id, float a) {
+void titlebar::on_draw_decos(std::string name, int monitor, int id, float a, int deco_offset_x, int deco_offset_y) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -716,8 +717,14 @@ void titlebar::on_draw_decos(std::string name, int monitor, int id, float a) {
     *stage = (int) STAGE::RENDER_POST_WINDOW;
     *active_id = id;
 
+    auto before = c->exists;
+    defer(c->exists = before);
+    c->exists = true;
+
     c->children[0]->automatically_paint_children = true;
+    modify_all(c, deco_offset_x, deco_offset_y);
     paint_outline(actual_root, c);
+    modify_all(c, -deco_offset_x, -deco_offset_y);
     c->children[0]->automatically_paint_children = false;
     
     *datum<bool>(c, "already_painted") = true;
