@@ -5445,7 +5445,13 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(w, false);
-    buffer->alloc(m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x, m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y, DRM_FORMAT_ABGR8888);
+    const auto REALSIZE = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+    buffer->alloc(
+        //m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x + REALSIZE.x, 
+        (ex.topLeft.x + ex.bottomRight.x + REALSIZE.x + 20) * w->m_monitor->m_scale, 
+        //m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y + REALSIZE.y, 
+        (ex.topLeft.y + ex.bottomRight.y + REALSIZE.y + 20) * w->m_monitor->m_scale, 
+        DRM_FORMAT_ABGR8888);
     g_pHyprRenderer->beginRender(m, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, buffer);
 
     g_pHyprRenderer->m_bRenderingSnapshot = true;
@@ -5461,7 +5467,7 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     auto mbox = w->m_monitor->logicalBox();
 
     auto off = Vector2D(-(REALPOS.x - mbox.x), -(REALPOS.y - mbox.y));
-    off.y += w->m_monitor->scale() * titlebar_h;
+    off.y += titlebar_h;
     static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
     static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
     static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
@@ -5870,7 +5876,24 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     auto tex = hw->min_fb->getTexture();
                     auto sss = hw->w_min_mon;
                     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
-                    Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
+                    const auto REALPOS = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + (hw->w->m_pinned ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
+                    const auto REALSIZE = hw->w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
+                    auto s = hw->w->m_monitor->m_scale;
+
+                    auto off = Vector2D(0, 0);
+                    off.y += titlebar_h;
+                    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
+                    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+                    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
+                    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
+                    float border_size = *PBORDERSIZE;
+                    off.x += border_size + shadow_range;
+                    off.y += border_size + shadow_range;
+                  
+ 
+                    //Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
+                    Bounds bounds = {REALPOS.x - off.x, REALPOS.y - off.y, tex->m_size.x * (1.0 / s), tex->m_size.y * (1.0 / s)};
+                    bounds.scale(s);
                     auto lerped = lerp(bounds, b, scalar);
                     if (!hw->w->m_hidden)
                         lerped = lerp(b, bounds, scalar);
