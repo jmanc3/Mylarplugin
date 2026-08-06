@@ -27,12 +27,8 @@
 #include "workspace_indicator.h"
 #include "drag_workspace_switcher.h"
 #include "audio.h"
-#include "coverflow.h"
 #include "screenshot.h"
 #include "desktop_icons.h"
-#include "spring.h"
-
-#include "process.hpp"
 #include <cstdio>
 #include <dbus/dbus-shared.h>
 #include <iterator>
@@ -919,7 +915,7 @@ static void on_activated(int id) {
 
     if (show_desktop::is_opened()) {
         hypriso->render_whitelist.push_back(*datum<int>(c, "cid"));
-        show_desktop::stop();
+        show_desktop::stop_animation();
     }
     titlebar::on_activated(id);
     alt_tab::on_activated(id);
@@ -1231,67 +1227,13 @@ static void on_drag_or_resize_cancel_requested() {
     }
 }
 
-static int minimize_gesture_count = 0;
-
-static void minimize_animate_out(long start, long end, float y_offset, float scalar_at_start) {
-    constexpr static float slow = .42;
-    
-    const auto gestureDuration = std::max(end - start, 1L) / 1000.0;
-    const auto gestureVelocity = std::abs(y_offset) / 150.0 / gestureDuration;
-    constexpr auto flickVelocity = 0.6 * slow;
-    const bool isFlick = gestureVelocity >= flickVelocity;
-
-    // Flicks can complete with less travel: 0.15 to open, 0.85 to close.
-    // Slow releases still require crossing the midpoint.
-    double target;
-    if (isFlick && y_offset > 0)
-        target = scalar_at_start >= 0.01f ? 1.0 : 0.0;
-    else if (isFlick && y_offset < 0)
-        target = scalar_at_start <= 0.99f ? 0.0 : 1.0;
-    else
-        target = scalar_at_start < 0.5f ? 0.0 : 1.0;
-
-    auto initialVelocity = target < scalar_at_start ? -gestureVelocity : gestureVelocity;
-    initialVelocity *= .8;
-    float start_count = minimize_gesture_count;
-
-    later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target, start_count](Timer *t) {
-        t->keep_running = true;
-        if (minimize_gesture_count != start_count) {
-            t->keep_running = false;
-            return;
-        }
-            
-
-        const auto elapsed = (get_current_time_in_ms() - end) / 1000.0;
-        const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.2, 1.0});
-        const auto scalar = static_cast<float>(state.value);
-
-        if (target == 0.0 && scalar <= 0.001f) {
-            show_desktop::set_scalar(0.0);
-            show_desktop::stop();
-            t->keep_running = false;
-            return;
-        }
-
-        if (target == 1.0 && scalar >= 0.999f) {
-            show_desktop::set_scalar(1.0);
-            t->keep_running = false;
-            return;
-        }
-
-        show_desktop::set_scalar(scalar);
-        request_refresh();
-    });
-}
-
 static void minimize_overview_combined_gesture() {
     static float y_offset = 0.0;
 
     static float slow = .42;
     
     static const float minimum_before_activation = 2.0 * slow;
-    static const float maximum_offset = 150.0f * slow;
+    static const float maximum_offset = 250.0f * slow;
     static bool started_minimize = false;
 
     static long start = 0;
@@ -1349,7 +1291,7 @@ static void minimize_overview_combined_gesture() {
             } else if (scalar > .99) {
                 show_desktop::set_scalar(1.0);
             } else {
-                minimize_animate_out(start, end, y_offset, scalar);
+                show_desktop::minimize_animate_out(start, end, y_offset, scalar);
             }
             request_refresh();
         }
@@ -1630,7 +1572,7 @@ void add_hyprctl_dispatchers() {
     hypriso->add_hyprctl_dispatcher("overview_open_or_show_desktop", [](lua_State *) {
         if (!overview::is_showing())
             if (show_desktop::is_opened()) {
-                show_desktop::stop();
+                show_desktop::stop_animation();
                 return 0;
             }
             
@@ -1654,7 +1596,7 @@ void add_hyprctl_dispatchers() {
         }
         
         if (!show_desktop::is_opened()) {
-            show_desktop::start();
+            show_desktop::start_animation();
             return 0;
         }
 
@@ -1705,12 +1647,12 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("desktop_hide", [](lua_State *) {
-        show_desktop::stop();
+        show_desktop::stop_animation();
         damage_all();
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("desktop_show", [](lua_State *) {
-        show_desktop::start();
+        show_desktop::start_animation();
         damage_all();
         return 0;
     });

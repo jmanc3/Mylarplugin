@@ -608,7 +608,7 @@ void alt_tab::close(bool focus) {
         return;
     if (!overview::is_showing()) {
         if (show_desktop::is_opened()) {
-            show_desktop::stop();
+            show_desktop::stop_animation();
         } else {
             hypriso->whitelist_on = false;
         }

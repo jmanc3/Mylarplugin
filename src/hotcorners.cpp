@@ -39,7 +39,7 @@ void do_overview(int monitor_id) {
     auto current = get_current_time_in_ms();
     if (current - last_time > 300) {
         if (show_desktop::is_opened()) {
-            show_desktop::stop();
+            show_desktop::stop_animation();
             later(100, [monitor_id](Timer *) {
                 overview::open(monitor_id);
             });

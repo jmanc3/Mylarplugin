@@ -1048,7 +1048,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 if (overview::is_showing())
                     return;
                 if (show_desktop::is_opened())
-                    show_desktop::stop();
+                    show_desktop::stop_animation();
                 
                 // todo we need to focus next (already wrote this combine code)
                 bool is_hidden = hypriso->is_hidden(cid);
@@ -2587,9 +2587,9 @@ static void fill_root(Container *root) {
         show_desktop->when_clicked = [](Container *root, Container *c) {
             main_thread([]() {
                 if (show_desktop::is_opened()) {
-                    show_desktop::stop();
+                    show_desktop::stop_animation();
                 } else {
-                    show_desktop::start();
+                    show_desktop::start_animation();
                 }
                 damage_all();
             });
