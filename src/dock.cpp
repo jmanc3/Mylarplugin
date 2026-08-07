@@ -1047,8 +1047,12 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             main_thread([cid] {
                 if (overview::is_showing())
                     return;
-                if (show_desktop::is_opened())
+                if (show_desktop::is_opened()) {
                     show_desktop::stop_animation();
+                    hypriso->set_hidden(cid, false, false);
+                    hypriso->bring_to_front(cid);
+                    return;
+                }
                 
                 // todo we need to focus next (already wrote this combine code)
                 bool is_hidden = hypriso->is_hidden(cid);

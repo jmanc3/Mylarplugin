@@ -131,6 +131,7 @@
 #include <hyprland/src/protocols/RelativePointer.hpp>
 #include <hyprland/src/protocols/SessionLock.hpp>
 #include <hyprland/src/protocols/LayerShell.hpp>
+#include <hyprland/src/protocols/OutputManagement.hpp>
 #include <hyprland/src/config/values/ConfigValues.hpp>
 #include <hyprland/src/config/supplementary/jeremy/Jeremy.hpp>
 
@@ -2652,7 +2653,7 @@ hl.config({
         sensitivity = 0, -- -1.0 - 1.0, 0 means no modification.
 
         touchpad = {
-            natural_scroll = false,
+            --natural_scroll = false,
         },
     },
 })
@@ -2826,6 +2827,50 @@ hl.layer_rule({
 
    
 )END";
+
+    if (set->touchpad_acceleration_curve == "Custom") {
+        base += "hl.config({ input = { accel_profile = \"custom 0.5351446139 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 13.786 18.360 27.935 33.123\" }})\n\n";
+    } else if (set->touchpad_acceleration_curve == "Adaptive") {
+        base += "hl.config({ input = { accel_profile = \"adaptive\" }})\n\n";
+    } else if (set->touchpad_acceleration_curve == "Flat") {
+        base += "hl.config({ input = { accel_profile = \"flat\" }})\n\n";
+    }
+
+    base += "hl.config({ input = { sensitivity = "
+         + std::to_string(std::max((set->cursor_speed * 2.0f) - 1.0f, -0.7f))
+         + " }})\n\n";
+
+    if (set->primary_mouse_button == "Left") {
+        base += "hl.config({ input = { left_handed = false }})\n\n";
+    } else {
+        base += "hl.config({ input = { left_handed = true }})\n\n";
+    }
+
+    if (set->natural_scrolling_mouse) {
+        base += "hl.config({ input = { natural_scroll = true }})\n\n";
+    } else {
+        base += "hl.config({ input = { natural_scroll = false }})\n\n";
+    }
+    
+    if (set->natural_scrolling_touchpad) {
+        base += "hl.config({ input = { touchpad = { natural_scroll = true }}})\n\n";
+    } else {
+        base += "hl.config({ input = { touchpad = { natural_scroll = false }}})\n\n";
+    }
+
+    base += "hl.config({ input = { repeat_rate = "
+         + std::to_string(set->repeat_rate)
+         + " }})\n\n";
+
+    base += "hl.config({ input = { repeat_delay = "
+         + std::to_string(set->repeat_delay)
+         + " }})\n\n";
+
+    if (set->touchpad_disable_while_typing) {
+        base += "hl.config({ input = { touchpad = { disable_while_typing = true }}})\n\n";
+    } else {
+        base += "hl.config({ input = { touchpad = { disable_while_typing = true }}})\n\n";
+    }
 
 
     if (hypriso->on_config_generated)
