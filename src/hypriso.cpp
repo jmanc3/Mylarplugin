@@ -5902,11 +5902,7 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.allowCustomUV = false;
                     data.round = 0.0;
-                    if (hw->w->m_hidden) {
-                        data.a = 1.0 - easeIn(scalar);
-                    } else {
-                        data.a = scalar;
-                    }
+                    data.a = scalar;
                     data.roundingPower = 2.0;
                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
                 });

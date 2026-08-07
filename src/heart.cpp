@@ -896,6 +896,8 @@ static void on_monitor_closed(int id) {
 }
 
 static void on_activated(int id) {
+    heart::layout_containers();
+    
     Container *c = get_cid_container(id);
     if (!c) return;
     static bool leave = false;
@@ -1038,7 +1040,8 @@ static void on_render(int id, int stage) {
             paint_outline(actual_root, actual_root);
         }
     }
-    if (stage == (int) STAGE::RENDER_POST_CURSOR) {
+    if (stage == (int) STAGE::RENDER_PRE_WINDOWS) {
+        show_desktop::render();
     }
     if (stage == (int) STAGE::RENDER_PRE_CURSOR) {
     }
@@ -1061,8 +1064,6 @@ static void on_render(int id, int stage) {
                draw_colored_circ(seax * s, seay * s, 70 * s  * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
            }
         }
-
-        show_desktop::render();
 
         if (!overview::is_showing()) {
             auto current_time = get_current_time_in_ms();

@@ -45,11 +45,14 @@ void show_desktop::start() {
 
     later((1000.0f / hypriso->fps(current_rendering_monitor())) * .5, [](Timer *t) {
         t->keep_running = is_open;
+        if (!is_open)
+            return;
         if (show_desktop::get_scalar() != 1.0) {
             for (auto c : actual_root->children) {
                 if (c->custom_type != (int) TYPE::CLIENT)
                     continue;
                 auto cid = *datum<int>(c, "cid");
+                hypriso->set_animate_to_dock(cid, true);
                 hypriso->screenshot_min(cid);
             }
         }
@@ -186,11 +189,16 @@ void show_desktop::minimize_animate_out(long start, long end, float y_offset, fl
 }
 
 void show_desktop::start_animation() {
-    show_desktop::start();
-    later(10, [](Timer *) {
+    if (show_desktop::is_opened()) {
         minimize_gesture_count++;
         actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 1.0, minimize_gesture_count);
-    });
+    } else {
+        show_desktop::start();
+        later(10, [](Timer *) {
+            minimize_gesture_count++;
+            actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 1.0, minimize_gesture_count);
+        });
+    }
 }
 
 void show_desktop::stop_animation() {
