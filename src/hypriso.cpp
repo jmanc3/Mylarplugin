@@ -5448,9 +5448,9 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     const auto REALSIZE = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     buffer->alloc(
         //m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x + REALSIZE.x, 
-        (ex.topLeft.x + ex.bottomRight.x + REALSIZE.x + 20) * w->m_monitor->m_scale, 
+        (ex.topLeft.x + ex.bottomRight.x + REALSIZE.x) * w->m_monitor->m_scale, 
         //m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y + REALSIZE.y, 
-        (ex.topLeft.y + ex.bottomRight.y + REALSIZE.y + 20) * w->m_monitor->m_scale, 
+        (ex.topLeft.y + ex.bottomRight.y + REALSIZE.y) * w->m_monitor->m_scale, 
         DRM_FORMAT_ABGR8888);
     g_pHyprRenderer->beginRender(m, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, buffer);
 
@@ -5898,6 +5898,7 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     if (!hw->w->m_hidden)
                         lerped = lerp(b, bounds, scalar);
                     auto box = tocbox(lerped);
+                    box.round();
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.allowCustomUV = false;
                     data.round = 0.0;

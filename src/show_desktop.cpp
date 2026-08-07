@@ -45,11 +45,13 @@ void show_desktop::start() {
 
     later((1000.0f / hypriso->fps(current_rendering_monitor())) * .5, [](Timer *t) {
         t->keep_running = is_open;
-        for (auto c : actual_root->children) {
-            if (c->custom_type != (int) TYPE::CLIENT)
-                continue;
-            auto cid = *datum<int>(c, "cid");
-            hypriso->screenshot_min(cid);
+        if (show_desktop::get_scalar() != 1.0) {
+            for (auto c : actual_root->children) {
+                if (c->custom_type != (int) TYPE::CLIENT)
+                    continue;
+                auto cid = *datum<int>(c, "cid");
+                hypriso->screenshot_min(cid);
+            }
         }
     });
 }
@@ -86,7 +88,7 @@ float show_desktop::get_scalar() {
 }
 
 void show_desktop::render() {
-    if (!show_desktop::is_opened())
+    if (!show_desktop::is_opened() || show_desktop::get_scalar() == 1.0)
         return;
     
     auto current_monitor = current_rendering_monitor();
@@ -128,6 +130,7 @@ static void actual_spring_anim(long end, float initialVelocity, float scalar_at_
     later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target, start_count](Timer *t) {
         t->keep_running = true;
         if (minimize_gesture_count != start_count) {
+            request_refresh();
             t->keep_running = false;
             return;
         }
@@ -140,12 +143,14 @@ static void actual_spring_anim(long end, float initialVelocity, float scalar_at_
             show_desktop::set_scalar(0.0);
             show_desktop::stop();
             t->keep_running = false;
+            request_refresh();
             return;
         }
 
         if (target == 1.0 && scalar >= 0.999f) {
             show_desktop::set_scalar(1.0);
             t->keep_running = false;
+            request_refresh();
             return;
         }
 
