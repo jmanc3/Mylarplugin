@@ -916,7 +916,7 @@ static void on_activated(int id) {
     }
 
     if (show_desktop::is_opened()) {
-        hypriso->render_whitelist.push_back(*datum<int>(c, "cid"));
+        hypriso->render_whitelist.emplace_back(*datum<int>(c, "cid"));
         show_desktop::stop_animation();
     }
     titlebar::on_activated(id);

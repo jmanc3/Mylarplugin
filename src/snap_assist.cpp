@@ -942,7 +942,7 @@ void snap_assist::open(int monitor, int cid) {
     });
 }
 
-void actual_close() {
+static void actual_close() {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
@@ -960,6 +960,8 @@ void actual_close() {
 }
 
 void snap_assist::close() {
+    if (!snap_assist::is_showing())
+        return;
     if (skip_close)
         return;
     bool first = true;

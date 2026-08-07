@@ -52,16 +52,17 @@ void show_desktop::start() {
                 if (c->custom_type != (int) TYPE::CLIENT)
                     continue;
                 auto cid = *datum<int>(c, "cid");
-                hypriso->set_animate_to_dock(cid, true);
+                // hypriso->set_animate_to_dock(cid, true);
                 hypriso->screenshot_min(cid);
             }
         }
     });
 }
 
-void actual_stop() {
+static void actual_stop() {
     is_open = false;
     hypriso->whitelist_on = false;
+    hypriso->render_whitelist.clear();
     for (auto c : actual_root->children) {
         if (c->custom_type != (int) TYPE::CLIENT)
             continue;
