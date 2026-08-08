@@ -127,7 +127,7 @@ enum struct STAGE : uint8_t {
     RENDER_PRE_WINDOW,     /* Before rendering a window (any pass) Note some windows (e.g. tiled) may have 2 passes (main & popup) */
     RENDER_POST_WINDOW,    /* After rendering a window (any pass) */
     RENDER_PRE_CURSOR,
-    RENDER_POST_CURSOR
+    RENDER_POST_CURSOR,
 };
 
 enum class SnapPosition {
@@ -431,6 +431,7 @@ struct HyprIso {
     void save_window_to_png(int cid, bool decorations, std::string output_path);
 
     Bounds thumbnail_size(int id);
+    Bounds thumbnail_size_deco(int id);
 
     void draw_thumbnail(int id, Bounds b, int rounding = 0, float roundingPower = 2.0f, int cornermask = 0, float alpha = 1.0);
     void draw_deco_thumbnail(int id, Bounds b, int rounding = 0, float roundingPower = 2.0f, int cornermask = 0);

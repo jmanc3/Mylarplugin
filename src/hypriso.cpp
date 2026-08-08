@@ -598,6 +598,15 @@ void HyprIso::overwrite_animation_speed(float speed) {
     Config::animationTree()->setConfigForNode("zoomFactor", true, speed, "quick", "");
 }
 
+int get_wid(PHLWINDOW w) {
+    for (auto hw : hyprwindows) {
+        if (hw->w == w) {
+            return hw->id;
+        }
+    }
+    return -1;
+}
+
 static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
     if (!PWINDOW)
         return;
@@ -5512,7 +5521,9 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     auto mbox = w->m_monitor->logicalBox();
 
     auto off = Vector2D(-(REALPOS.x - mbox.x), -(REALPOS.y - mbox.y));
-    off.y += titlebar_h;
+    if (hypriso->has_decorations(get_wid(w))) {
+        off.y += titlebar_h;
+    }
     static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
     static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
     static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
@@ -5803,12 +5814,37 @@ void HyprIso::screenshot_deco(int id) {
                     hw->deco_fb = g_pHyprRenderer->createFB();
                 screenshot_window(hw, w, true);
                 auto tex = hw->deco_fb->getTexture();
-                glActiveTexture(GL_TEXTURE0);
-                tex->bind();
-                glGenerateMipmap(GL_TEXTURE_2D);
+                if (tex) {
+                    glActiveTexture(GL_TEXTURE0);
+                    tex->bind();
+                    glGenerateMipmap(GL_TEXTURE_2D);
+                }
             }
         }
     }
+}
+
+Bounds HyprIso::thumbnail_size_deco(int id) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id && hw->deco_fb) {
+            auto off = Vector2D(0, 0);
+            if (hypriso->has_decorations(hw->id)) {
+                off.y += titlebar_h;
+            }
+            static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
+            static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+            static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
+            float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
+            float border_size = *PBORDERSIZE;
+            if (hw->no_rounding)
+                border_size = 0;
+            off.x += border_size + shadow_range;
+            off.y += border_size + shadow_range;
+            
+            return Bounds(off.x, off.y, hw->deco_fb->m_size.x, hw->deco_fb->m_size.y);
+        }
+    }
+    return {800, 600, 800, 600};
 }
 
 Bounds HyprIso::thumbnail_size(int id) {
@@ -5876,14 +5912,16 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     auto tex = hw->deco_fb->getTexture();
                     auto box = tocbox(b);
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = true;
                     data.round = rounding;
                     data.roundingPower = roundingPower;
+                    /*
+                    data.allowCustomUV = true;
                     data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
                     data.primarySurfaceUVBottomRight = Vector2D(
                         std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
                         std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
                     );
+                    */
                     set_rounding(cornermask);
                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
                     set_rounding(0);
@@ -5926,7 +5964,9 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     auto s = hw->w->m_monitor->m_scale;
 
                     auto off = Vector2D(0, 0);
-                    off.y += titlebar_h;
+                    if (hypriso->has_decorations(hw->id)) {
+                        off.y += titlebar_h;
+                    }
                     static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
                     static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
                     static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
@@ -5967,7 +6007,26 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
             if (hw->deco_fb && hw->deco_fb->isAllocated()) {
                 AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
                     auto tex = hw->deco_fb->getTexture();
-                    auto box = tocbox(b);
+
+                    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
+                    auto s = hw->w->m_monitor->m_scale;
+
+                    auto off = Vector2D(0, 0);
+                    if (hypriso->has_decorations(hw->id)) {
+                        off.y += titlebar_h;
+                    }
+                    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
+                    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+                    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
+                    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
+                    float border_size = *PBORDERSIZE;
+                    off.x += border_size + shadow_range;
+                    off.y += border_size + shadow_range;
+ 
+                    //Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
+                    Bounds bounds = {b.x - off.x, b.y - off.y, tex->m_size.x * (1.0 / s), tex->m_size.y * (1.0 / s)};
+                    bounds.scale(s);
+                   
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.allowCustomUV = true;
                     data.round = rounding;
@@ -5978,7 +6037,7 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
                         //std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
                     //);
                     set_rounding(cornermask);
-                    Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+                    Render::GL::g_pHyprOpenGL->renderTexture(tex, tocbox(bounds), data);
                     set_rounding(0);
                 });
                 g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));

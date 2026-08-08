@@ -122,4 +122,3 @@ void workspace_indicator::on_change(int cid) {
         damage_all();
     });
 }
-
