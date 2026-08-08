@@ -10,11 +10,23 @@ bool screenshotting_wallpaper = false;
 bool running = false;
 float openess = 0.0f;
 
+struct WindowOption {
+    int cid;
+    Bounds b;
+};
+std::vector<WindowOption> window_options;
+
 static void paint_workspace(int monitor_id, int rendering_workspace_id, float openess) {
+    window_options.clear();
     auto mb = bounds_monitor(monitor_id);
     auto s = scale(monitor_id);
     
     mb.scale(s);
+
+    rect(mb, RGBA(.16, .16, .16, 1.0));
+    auto wallpaper_bounds = mb;
+    wallpaper_bounds.scale_from_center(1.0 - (.2 * openess));
+    hypriso->draw_wallpaper(monitor_id, wallpaper_bounds, 20 * s * openess);
 
     rect(mb, RGBA(0, 0, 0, .2));
 
@@ -83,6 +95,7 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
         auto r = democell->result();
         auto final_b = lerp(b, Bounds(r.x + overx * (1 / s), r.y + overy * (1 / s), r.w, r.h).scale(s), openess);
         hypriso->draw_deco_thumbnail(cid, final_b);
+        window_options.push_back({cid, final_b.scale(1/s)});
     }
 }
 
@@ -104,6 +117,11 @@ void create_overview_for_monitor(int monitor) {
         paint_workspace(rid, hypriso->get_active_workspace_id(rid), openess);
     };
     over->when_clicked = [](Container *root, Container *c) {
+        for (auto o : window_options) {
+            if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
+                hypriso->bring_to_front(o.cid, true);
+            }
+        }
         later_immediate([](Timer *) {
             overview::close();
         });
@@ -117,7 +135,7 @@ void overview::open(int monitor) {
         auto mid = *datum<int>(m, "cid");
         create_overview_for_monitor(mid);
     }
-    later(1000.0f / hypriso->fps(monitor), [](Timer *t) {
+    later(1000.0f / hypriso->fps(monitor), [monitor](Timer *t) {
         t->keep_running = false;
         for (int i = actual_root->children.size() - 1; i >= 0; i--) {
             auto c = actual_root->children[i];
@@ -126,6 +144,9 @@ void overview::open(int monitor) {
                 hypriso->screenshot_deco(cid);
             }
         }
+
+        // TODO: every monitor needs it's own screenshot
+        hypriso->screenshot_wallpaper(monitor);
  
         for (auto c : actual_root->children) 
             if (c->custom_type == (int) TYPE::OVERVIEW)
