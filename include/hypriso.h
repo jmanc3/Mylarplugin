@@ -20,6 +20,7 @@ struct Bounds {
 #include "container.h"
 #endif
 
+#include "spring.h"
 
 #include <ranges>
 #include <string>
@@ -585,6 +586,10 @@ Bounds lerp(Bounds start, Bounds end, float scalar);
 float pull(std::vector<float>& fls, float scalar);
 
 void animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr, std::function<float(float)> lerp_func = nullptr, float delay = 0.0);
+void spring_animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr,
+                    std::function<float(float)> on_update_lerp = nullptr);
+void spring_animate(float *value, float target, SpringParams params, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion = nullptr,
+                    std::function<float(float)> on_update_lerp = nullptr);
 bool is_being_animating(float *value);
 bool is_being_animating_to(float *value, float target);
 

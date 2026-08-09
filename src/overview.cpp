@@ -9,6 +9,7 @@
 bool screenshotting_wallpaper = false;
 bool running = false;
 float openess = 0.0f;
+float overview_open_time_ms = 600;
 
 struct WindowOption {
     int cid;
@@ -22,13 +23,19 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     auto s = scale(monitor_id);
     
     mb.scale(s);
-
-    rect(mb, RGBA(.16, .16, .16, 1.0));
+    
     auto wallpaper_bounds = mb;
-    wallpaper_bounds.scale_from_center(1.0 - (.2 * openess));
-    hypriso->draw_wallpaper(monitor_id, wallpaper_bounds, 20 * s * openess);
+    hypriso->draw_wallpaper(monitor_id, wallpaper_bounds);
+    rect(wallpaper_bounds, {0, 0, 0, .7f}, 0, 0, 2.0, true);
 
-    rect(mb, RGBA(0, 0, 0, .2));
+    //rect(mb, RGBA(.16, .16, .16, 1.0));
+    wallpaper_bounds.scale_from_center(1.0 - (.2 * openess));
+    hypriso->draw_wallpaper(monitor_id, wallpaper_bounds, 14 * s * openess);
+    auto b = wallpaper_bounds;
+    render_drop_shadow(monitor_id, 1, {.1, .1, .1, openess}, 14 * s * openess, 2.0, b, 50 * s);
+    b.shrink(2);
+    border(b, {1, 1, 1, .05}, 1, 0, 14 * s); 
+
 
     std::vector<int> clients_on_workspace;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
@@ -102,7 +109,7 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
 void create_overview_for_monitor(int monitor) {
     auto over = actual_root->child(FILL_SPACE, FILL_SPACE);
     //openess = 1.0;
-    animate(&openess, 1.0, 200, over->lifetime);
+    spring_animate(&openess, 1.0, overview_open_time_ms, over->lifetime);
     over->custom_type = (int) TYPE::OVERVIEW;
     over->pre_layout = [monitor](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds = bounds_reserved_monitor(monitor);
@@ -128,33 +135,42 @@ void create_overview_for_monitor(int monitor) {
     };
 }
 
-void overview::open(int monitor) {
-    hypriso->whitelist_on = true;
-    running = true;
-    for (auto m : actual_monitors) {
-        auto mid = *datum<int>(m, "cid");
-        create_overview_for_monitor(mid);
-    }
-    later(1000.0f / hypriso->fps(monitor), [monitor](Timer *t) {
-        t->keep_running = false;
-        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-            auto c = actual_root->children[i];
-            if (c->custom_type == (int) TYPE::CLIENT) {
-                auto cid = *datum<int>(c, "cid");
-                hypriso->screenshot_deco(cid);
-            }
+bool screenshots(int monitor) {
+    bool ret = false;
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto c = actual_root->children[i];
+        if (c->custom_type == (int) TYPE::CLIENT) {
+            auto cid = *datum<int>(c, "cid");
+            hypriso->screenshot_deco(cid);
         }
+    }
 
-        // TODO: every monitor needs it's own screenshot
-        hypriso->screenshot_wallpaper(monitor);
- 
-        for (auto c : actual_root->children) 
-            if (c->custom_type == (int) TYPE::OVERVIEW)
-                t->keep_running = true;
-        damage_all();
+    // TODO: every monitor needs it's own screenshot
+    hypriso->screenshot_wallpaper(monitor);
+
+    for (auto c : actual_root->children) 
+        if (c->custom_type == (int) TYPE::OVERVIEW)
+            ret = true;
+    damage_all();
+    return ret;
+}
+
+void overview::open(int monitor) {
+    later_immediate([monitor](Timer *) {
+        screenshots(monitor);
+        hypriso->whitelist_on = true;
+        running = true;
+        for (auto m : actual_monitors) {
+            auto mid = *datum<int>(m, "cid");
+            create_overview_for_monitor(mid);
+        }
+        drag_workspace_switcher::open();
+        drag_workspace_switcher::force_hold_open(true);
     });
-    drag_workspace_switcher::open();
-    drag_workspace_switcher::force_hold_open(true);
+
+    later(1000.0f / hypriso->fps(monitor), [monitor](Timer *t) {
+        t->keep_running = screenshots(monitor);
+    });
 }
 
 void overview_actual_close() {
@@ -180,7 +196,7 @@ void overview::close(bool focus) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             if (!is_being_animating(&openess) || !is_being_animating_to(&openess, 0.0))
-                animate(&openess, 0.0, 200, c->lifetime, [](bool) {
+                spring_animate(&openess, 0.0, overview_open_time_ms, c->lifetime, [](bool) {
                     overview_actual_close();
                 });
         }

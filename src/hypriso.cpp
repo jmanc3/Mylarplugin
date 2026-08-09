@@ -363,18 +363,84 @@ static std::vector<GestureHolding> gestures_created;
 
 struct Anim {
     float *value = nullptr;
-    float start_value;
-    float target;
-    float delay;
-    long start_time;
-    float time_ms;
+    float start_value = 0.0f;
+    float target = 0.0f;
+    float delay = 0.0f;
+    long start_time = 0;
+    float time_ms = 0.0f;
     std::weak_ptr<bool> lifetime;
     std::function<void(bool)> on_completion = nullptr;
     std::function<float(float)> lerp_func = nullptr;
+    bool spring = false;
+    bool spring_finishes_on_time = false;
+    SpringParams spring_params = {0.3, 0.8};
 };
 
 static std::vector<Anim *> anims;
 
+static void remove_anim(Anim *anim) {
+    for (int i = anims.size() - 1; i >= 0; i--) {
+        if (anims[i] != anim)
+            continue;
+
+        anims.erase(anims.begin() + i);
+        break;
+    }
+}
+
+static void start_anim_timer(Anim *anim) {
+    // TODO: this creates a later per animation which is dumb, they should all be combined into one that calls over a vec of anims
+    later(1000.0f / 165.0f, [anim](Timer *t) {
+        t->keep_running = true;
+
+        if (!anim->lifetime.lock()) {
+            remove_anim(anim);
+            t->keep_running = false;
+            const auto on_completion = anim->on_completion;
+            delete anim;
+            if (on_completion)
+                on_completion(false);
+            return;
+        }
+
+        const long  delta    = get_current_time_in_ms() - anim->start_time;
+        const float delta_ms = sc<float>(delta);
+        float       scalar   = 0.0f;
+
+        if (anim->spring) {
+            const auto state = springEvaluate(delta_ms / 1000.0, 0.0, 1.0, 0.0, anim->spring_params);
+            scalar           = sc<float>(state.value);
+
+            if (anim->spring_finishes_on_time)
+                t->keep_running = delta_ms < anim->time_ms;
+            else
+                t->keep_running = std::abs(1.0 - state.value) > 0.001 || std::abs(state.velocity) > 0.001;
+
+            if (anim->start_value == anim->target)
+                t->keep_running = false;
+        } else {
+            scalar = delta_ms / anim->time_ms;
+            if (scalar > 1.0f) {
+                t->keep_running = false;
+                scalar         = 1.0f;
+            }
+        }
+
+        if (anim->lerp_func)
+            scalar = anim->lerp_func(scalar);
+
+        *anim->value = anim->start_value + (anim->target - anim->start_value) * scalar;
+        if (t->keep_running)
+            return;
+
+        *anim->value = anim->target;
+        remove_anim(anim);
+        const auto on_completion = anim->on_completion;
+        delete anim;
+        if (on_completion)
+            on_completion(true);
+    });
+}
 
 struct HyprWindow {
     int id;  
@@ -7907,6 +7973,7 @@ void animate(float *value, float target, float time_ms, std::shared_ptr<bool> li
             anim->on_completion = on_completion;
             anim->lerp_func = lerp_func;
             anim->delay = delay;
+            anim->spring = false;
             return;
         }
     }
@@ -7921,50 +7988,61 @@ void animate(float *value, float target, float time_ms, std::shared_ptr<bool> li
     anim->on_completion = on_completion;
     anim->lerp_func = lerp_func;
     anim->delay = delay;
+    anim->spring = false;
     
     anims.push_back(anim);
-    
-    // TODO: this creates a later per animation which is dumb, they should all be combined into one that calls over a vec of anims
-    later(1000.0f / 165.0f, [anim](Timer *t) {
-        t->keep_running = true;
-        
-        if (anim->lifetime.lock()) {
-            long delta = get_current_time_in_ms() - anim->start_time;
-            float delta_ms = (float) delta;
-            float scalar = delta_ms / anim->time_ms;
-            if (scalar > 1.0) {
-                t->keep_running = false;
-                scalar = 1.0;
-            }
-            if (anim->lerp_func)
-                scalar = anim->lerp_func(scalar);
-            
-            auto diff = (anim->target - anim->start_value) * scalar;
-            *anim->value = anim->start_value + diff;
-            if (!t->keep_running ) {
-                *anim->value = anim->target;
-                if (anim->on_completion) {
-                    anim->on_completion(true);
-                }
-                for (int i = anims.size() - 1; i >= 0; i--) {
-                    if (anims[i] == anim) {
-                        anims.erase(anims.begin() + i);
-                    }
-                }
-                delete anim;
-            }
-        } else {
-            for (int i = anims.size() - 1; i >= 0; i--) {
-                if (anims[i] == anim) {
-                    anims.erase(anims.begin() + i);
-                }
-            }
-            t->keep_running = false;
-            if (anim->on_completion)
-                anim->on_completion(false);
-            delete anim;
-        }
-    });
+
+    start_anim_timer(anim);
+}
+
+static void start_spring_animation(float *value, float target, SpringParams params, float time_ms, bool finishes_on_time, std::shared_ptr<bool> lifetime,
+                                   std::function<void(bool)> on_completion, std::function<float(float)> on_update_lerp) {
+    params.response        = std::max(params.response, 0.001);
+    params.dampingFraction = std::max(params.dampingFraction, 0.0);
+
+    for (auto anim : anims) {
+        if (anim->value != value)
+            continue;
+
+        anim->start_value             = *value;
+        anim->target                  = target;
+        anim->start_time              = get_current_time_in_ms();
+        anim->time_ms                 = time_ms;
+        anim->lifetime                = lifetime;
+        anim->on_completion           = on_completion;
+        anim->lerp_func               = on_update_lerp;
+        anim->spring                  = true;
+        anim->spring_finishes_on_time = finishes_on_time;
+        anim->spring_params           = params;
+        return;
+    }
+
+    auto anim                     = new Anim;
+    anim->value                   = value;
+    anim->start_value             = *value;
+    anim->target                  = target;
+    anim->start_time              = get_current_time_in_ms();
+    anim->time_ms                 = time_ms;
+    anim->lifetime                = lifetime;
+    anim->on_completion           = on_completion;
+    anim->lerp_func               = on_update_lerp;
+    anim->spring                  = true;
+    anim->spring_finishes_on_time = finishes_on_time;
+    anim->spring_params           = params;
+
+    anims.push_back(anim);
+    start_anim_timer(anim);
+}
+
+void spring_animate(float *value, float target, float time_ms, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion,
+                    std::function<float(float)> on_update_lerp) {
+    const float duration_ms = std::max(time_ms, 1.0f);
+    start_spring_animation(value, target, {duration_ms / 2000.0, 0.8}, duration_ms, true, lifetime, on_completion, on_update_lerp);
+}
+
+void spring_animate(float *value, float target, SpringParams params, std::shared_ptr<bool> lifetime, std::function<void(bool)> on_completion,
+                    std::function<float(float)> on_update_lerp) {
+    start_spring_animation(value, target, params, 0.0f, false, lifetime, on_completion, on_update_lerp);
 }
 
 bool is_being_animating(float *value) {
