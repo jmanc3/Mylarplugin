@@ -196,7 +196,7 @@ void overview::close(bool focus) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             if (!is_being_animating(&openess) || !is_being_animating_to(&openess, 0.0))
-                spring_animate(&openess, 0.0, overview_open_time_ms, c->lifetime, [](bool) {
+                spring_animate(&openess, 0.0, {.3, 1}, c->lifetime, [](bool) {
                     overview_actual_close();
                 });
         }
