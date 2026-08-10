@@ -55,8 +55,8 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     std::vector<ExpoCell *> cells;
     for (auto o : clients_on_workspace) {
         auto size = hypriso->thumbnail_size_deco(o);
-        auto height = size.h * (1/s) + titlebar_h;
-        auto width = size.w * (1/s);
+        auto height = size.h;
+        auto width = size.w;
         auto x = bounds_client(o).x - reserved.x;
         auto y = bounds_client(o).y - reserved.y;
         auto cell = new DemoCell(o, x, y, width, height);
@@ -100,7 +100,10 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
         b.w = size.w;
         b.h = size.h;
         auto r = democell->result();
-        auto final_b = lerp(b, Bounds(r.x + overx * (1 / s), r.y + overy * (1 / s), r.w, r.h).scale(s), openess);
+        auto small_bounds = Bounds(r.x, r.y, r.w, r.h).scale(s);
+        small_bounds.x += overx;
+        small_bounds.y += overy;
+        auto final_b = lerp(b, small_bounds, openess);
         hypriso->draw_deco_thumbnail(cid, final_b);
         window_options.push_back({cid, final_b.scale(1/s)});
     }
@@ -186,17 +189,17 @@ void overview_actual_close() {
             m->children.erase(m->children.begin() + i);
         }
     }
-    drag_workspace_switcher::close();
     request_refresh();
 }
 
 void overview::close(bool focus) {
+    drag_workspace_switcher::close();
     auto m = actual_root;
     for (int i = m->children.size() - 1; i >= 0; i--) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             if (!is_being_animating(&openess) || !is_being_animating_to(&openess, 0.0))
-                spring_animate(&openess, 0.0, {.3, 1}, c->lifetime, [](bool) {
+                animate(&openess, 0.0, 200, c->lifetime, [](bool) {
                     overview_actual_close();
                 });
         }
