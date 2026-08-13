@@ -1296,9 +1296,9 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
         if (!ctx->key_repeat_going_to_happen) {
             ctx->key_repeat_going_to_happen = true;
             PolledFunction pf;
-            auto time_ms = ctx->key_repeat_delay;
+            int time_ms = ctx->key_repeat_delay;
             if (ctx->key_repeat_type == 1)
-                time_ms = ctx->key_repeat_rate;
+                time_ms = (int) std::round(1000.0f / ((float ) ctx->key_repeat_rate));
             ctx->key_repeat_type = 1;
             pf.fd = create_timerfd_ms(time_ms);
             pf.name = "Popping func";
