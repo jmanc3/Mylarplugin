@@ -1,6 +1,7 @@
 
 #include "settings.h"
 
+#include "container.h"
 #include "desktop_icons.h"
 #include "heart.h"
 #include "hypriso.h"
@@ -904,6 +905,89 @@ static void make_button(Container *parent, std::string text, std::function<void(
    };
 }
 
+struct Field : UserData {
+    std::string text;
+};
+
+bool is_digits(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); });
+}
+
+static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (std::string)> on_change) {
+    static float pad_amount = 11;
+    static float text_height = 11;
+    auto pad = parent->child(FILL_SPACE, FILL_SPACE);
+    auto field = new Field;
+    field->text = initial_value;
+    pad->user_data = field;
+    pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        text_height = 11 * dpi;
+        pad_amount = 11 * dpi;
+        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        c->wanted_bounds.w = FILL_SPACE;
+        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+    };
+    pad->when_key_event = [only_numbers, on_change](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (!c->active && !c->parent->active)
+            return;
+        if (!pressed)
+            return;
+        auto field = (Field *) c->user_data;
+        auto start = field->text;
+        defer(if (start != field->text) { on_change(field->text); });
+        
+        if (sym == XKB_KEY_BackSpace && !field->text.empty()) {
+            field->text.pop_back();
+        }
+        
+        if (is_text) {
+            if (only_numbers && !is_digits(text))
+                return;
+            field->text += text;
+        }
+    };
+  
+    pad->when_paint = [](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto field = (Field *) c->user_data;
+
+        set_argb(cr, c->active ? accent : RGBA(.8, .8, .8, 1));
+        set_rect(cr, c->real_bounds);
+        cairo_fill(cr);
+
+        set_argb(cr, {1, 1, 1, 1});
+        auto minus_border = c->real_bounds;
+        minus_border.shrink(std::round(1 * dpi));
+        set_rect(cr, minus_border);
+        cairo_fill(cr);
+        
+        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+
+        float over = ((c->real_bounds.h - bounds.h) * .5);
+        
+        if (c->active) {
+            set_argb(cr, {0, 0, 0, 1});
+            auto cursor_width = std::round(1.0 * dpi);
+            auto cursor_bounds = Bounds(c->real_bounds.x + c->real_bounds.w - cursor_width - over, 
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
+                cursor_width, bounds.h);
+            set_rect(cr, cursor_bounds);
+            cairo_fill(cr);
+        }
+        
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w - bounds.w - over, 
+            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
+            field->text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+    };
+    return pad;
+}
+
 static void fill_display_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -1081,6 +1165,109 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
 }
 
 
+/*
+        {
+            auto b = c->real_bounds;
+            float h = 8.5 * dpi;
+            b.y += b.h * .5 - h * .5;
+            b.h = h;
+
+            drawRoundedRect(cr, b.x - std::round(5 * dpi), b.y, b.w + std::round(10 * dpi), b.h, h * .5, 1.0);
+            set_argb(cr, slider_bg);
+            cairo_fill(cr); 
+
+            if (notches != 0) {
+                float snap_percentage = 1.0f / ((float) notches);
+                int count = std::round(1.0f / snap_percentage);
+                float spacing = b.w * snap_percentage;
+                float x_off = 0.0;
+                for (int i = 0; i < count + 1; i++) {
+                    set_rect(cr, {b.x + x_off - std::round(1 * dpi), b.y + std::round(10 * dpi), std::round(2 * dpi), std::round(6 * dpi)});
+                    set_argb(cr, slider_bg);
+                    cairo_fill(cr); 
+
+                    x_off += spacing;
+                }
+            }
+        }
+        
+        {
+            auto data = (Field *) c->user_data;
+            auto b = c->real_bounds;
+            b.w = b.h;
+            b.x += c->real_bounds.w * data->value - b.h * .5;
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
+            set_argb(cr, {1, 1, 1, 1});
+            cairo_fill(cr);
+
+            //b.shrink(1.0);
+            
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
+            set_argb(cr, slider_bg);
+            cairo_stroke(cr);
+
+            b.shrink(5 * dpi);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
+            set_argb(cr, accent);
+            cairo_fill(cr);
+        }
+        */
+
+
+static void make_reset_textfield(Container *parent, std::string title, std::string description, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change) {
+    auto p = make_self_height_sized_parent(parent);
+    
+    make_label_like(p, title, description);
+
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    right->alignment = container_alignment::ALIGN_CENTER;
+    
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 250 * dpi;
+        c->real_bounds.h = 70 * dpi;
+        c->spacing = 5 * dpi;
+    };
+
+    auto field = make_field(right, only_numbers, initial_value, [](std::string latest_text) {
+    });
+    
+    make_button(right, "Apply", [field, on_change]() {
+        auto value = ((Field *) field->user_data)->text;
+        on_change(value);
+    });
+    make_button(right, "Reset", [field, reset_value, on_change]() {
+        ((Field *) field->user_data)->text = reset_value;
+        auto value = ((Field *) field->user_data)->text;
+        on_change(value);
+    });
+}
+
+static void reset_conf() {
+    static long last_time = 0;
+    static bool already_queued = false;
+    long current = get_current_time_in_ms();
+    long delta = current - last_time;
+    if (delta > 200) {
+        last_time = current;
+        main_thread([]() {
+            hypriso->generate_mylar_hyprland_config();
+        });
+    } else {
+        if (!already_queued) {
+            already_queued = true;
+            main_thread([]() {
+                later(100, [](Timer *) {
+                    hypriso->generate_mylar_hyprland_config();
+                    already_queued = false;
+                });
+            });
+        }
+    }
+}
+
 static void fill_keyboard_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -1111,56 +1298,19 @@ static void fill_keyboard_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
-    make_slider(padded_right, "Repeat delay", "", .5, [](float value) {
-        //set->repeat_delay = value;
-        static long last_time = 0;
-        static bool already_queued = false;
-        long current = get_current_time_in_ms();
-        long delta = current - last_time;
-        if (delta > 200) {
-            last_time = current;
-            main_thread([]() {
-                hypriso->generate_mylar_hyprland_config();
-            });
-        } else {
-            if (!already_queued) {
-                already_queued = true;
-                main_thread([]() {
-                    later(100, [](Timer *) {
-                        hypriso->generate_mylar_hyprland_config();
-                        already_queued = false;
-                    });
-                });
-            }
-        }
-    }, 10);
+    bool only_numbers = true;
+    make_reset_textfield(padded_right, "Repeat delay", "", only_numbers, std::to_string(set->repeat_delay), "600", [](std::string value) {
+        set->repeat_delay = std::atoi(value.c_str());
+        reset_conf();
+    });
 
     make_vert_space(padded_right, 4); 
     
-    make_slider(padded_right, "Repeat rate", "", .5, [](float value) {
-        //set->repeat_rate = value;
-        static long last_time = 0;
-        static bool already_queued = false;
-        long current = get_current_time_in_ms();
-        long delta = current - last_time;
-        if (delta > 200) {
-            last_time = current;
-            main_thread([]() {
-                hypriso->generate_mylar_hyprland_config();
-            });
-        } else {
-            if (!already_queued) {
-                already_queued = true;
-                main_thread([]() {
-                    later(100, [](Timer *) {
-                        hypriso->generate_mylar_hyprland_config();
-                        already_queued = false;
-                    });
-                });
-            }
-        }
-    }, 10);
-    
+    make_reset_textfield(padded_right, "Repeat rate", "", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
+        set->repeat_rate = std::atoi(value.c_str());
+        reset_conf();
+    });
+   
     make_vert_space(padded_right, 10); 
     
     make_section_title(padded_right, "Layouts");
@@ -1394,8 +1544,8 @@ void actual_start() {
     RawWindowSettings settings;
     settings.pos.w = 1000;
     settings.pos.h = 760;
-    settings.pos.min_w = 900;
-    settings.pos.min_h = 700;
+    //settings.pos.min_w = 900;
+    //settings.pos.min_h = 700;
     settings.name = "Settings";
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;

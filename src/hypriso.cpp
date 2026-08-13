@@ -2903,6 +2903,21 @@ hl.layer_rule({
    
 )END";
 
+#ifndef NDEBUG
+    std::string debug_mon = R"END(
+    hl.monitor({
+        output   = "",
+        mode     = "highrr",
+        position = "auto",
+        scale    = "1.0",
+    })
+
+    
+    )END";
+    
+    base += debug_mon;
+#endif
+
     if (set->touchpad_acceleration_curve == "Custom") {
         base += "hl.config({ input = { accel_profile = \"custom 0.5351446139 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 13.786 18.360 27.935 33.123\" }})\n\n";
     } else if (set->touchpad_acceleration_curve == "Adaptive") {
