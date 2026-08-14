@@ -1411,8 +1411,21 @@ void load_restore_infos() {
 
     // Target path
     std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/restore.txt";
+    std::filesystem::path cpy_filepath = std::filesystem::path(home) / ".config/mylar/restore.txt.cpy";
 
-    std::ifstream in(filepath);
+    if (!std::filesystem::exists(filepath)) {
+        // No file — silently return
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::copy_file(filepath, cpy_filepath, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) {
+        // Could not copy — silently return
+        return;
+    }
+
+    std::ifstream in(cpy_filepath);
     if (!in) {
         // No file — silently return
         return;
@@ -1486,14 +1499,15 @@ void save_restore_infos() {
 
     // Target path
     std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/restore.txt";
+    std::filesystem::path tmp_filepath = std::filesystem::path(home) / ".config/mylar/restore.txt.tmp";
 
     // Ensure parent directories exist
     std::filesystem::create_directories(filepath.parent_path());
 
-    // Write file (overwrite mode)
-    std::ofstream out(filepath, std::ios::trunc);
+    // Write to temp file first, then copy over restore.txt when done
+    std::ofstream out(tmp_filepath, std::ios::trunc);
     if (!out) {
-        throw std::runtime_error("Failed to write file: " + filepath.string());
+        throw std::runtime_error("Failed to write file: " + tmp_filepath.string());
     }
     out << "#version 3" << "\n";
     for (auto [class_name, info] : restore_infos) {
@@ -1503,7 +1517,14 @@ void save_restore_infos() {
     }
     //out << contents;
     if (!out.good()) {
-        throw std::runtime_error("Error occurred while writing: " + filepath.string());
+        throw std::runtime_error("Error occurred while writing: " + tmp_filepath.string());
+    }
+    out.close();
+
+    std::error_code ec;
+    std::filesystem::copy_file(tmp_filepath, filepath, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec) {
+        throw std::runtime_error("Failed to copy temp file to: " + filepath.string());
     }
 }
 
@@ -1951,6 +1972,8 @@ void heart::end() {
 #endif
     hypriso->on_config_reload = nullptr;
     
+    save_restore_infos();
+    
     settings::stop();
     dock::stop();
     
@@ -1973,7 +1996,6 @@ void heart::end() {
             }
         }
     }
-    save_restore_infos();
     
     hypriso->end();    
 }
