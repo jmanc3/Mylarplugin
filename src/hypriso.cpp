@@ -230,8 +230,6 @@ ConfigSettings *set = new ConfigSettings;
 
 std::vector<SleptWindow> slept_windows;
 
-PollingThread *polling_thread = nullptr;
-
 static int deco_offset_x = 0;
 static int deco_offset_y = 0;
 
@@ -7341,7 +7339,7 @@ Bounds bounds_popup(int id) {
     for (auto hp : hyprpopus) {
         if (hp->id == id) {
             if (auto p = hp->p) {
-                if (p->m_mapped) {
+                if (p->m_mapped && !(p->m_windowOwner.expired() && p->m_layerOwner.expired())) {
                     auto g = p->coordsGlobal();
                     auto s = p->size();
                     return tobounds({g, s});
@@ -8223,182 +8221,6 @@ float HyprIso::fps(int monitor_id) {
         }
     }
     return 60;
-}
-
-void PollingThread::start() {
-    if (running)
-        return;
-
-    if (pipe_read != -1 || pipe_write != -1)
-        stop_and_join();
-
-    int pipefd[2] = {-1, -1};
-    if (::pipe(pipefd) != 0)
-        return;
-
-    pipe_read = pipefd[0];
-    pipe_write = pipefd[1];
-
-    const int readFlags = fcntl(pipe_read, F_GETFL, 0);
-    if (readFlags >= 0)
-        fcntl(pipe_read, F_SETFL, readFlags | O_NONBLOCK);
-
-    const int writeFlags = fcntl(pipe_write, F_GETFL, 0);
-    if (writeFlags >= 0)
-        fcntl(pipe_write, F_SETFL, writeFlags | O_NONBLOCK);
-
-    running = true;
-
-    t = std::thread([this]() {
-        while (running) {
-            std::vector<WatchedFD*> localFds;
-            {
-                std::lock_guard<std::recursive_mutex> lock(fds_mutex);
-                localFds = fds;
-            }
-
-            std::vector<struct pollfd> pollfds;
-            pollfds.reserve(localFds.size() + 1);
-            pollfds.push_back({pipe_read, POLLIN, 0});
-            for (const auto* watched : localFds) {
-                if (watched && watched->fd >= 0)
-                    pollfds.push_back({watched->fd, POLLIN, 0});
-            }
-
-            const int numReady = ::poll(pollfds.data(), pollfds.size(), -1);
-            if (numReady < 0) {
-                if (errno == EINTR)
-                    continue;
-                running = false;
-                break;
-            }
-
-            if (pollfds[0].revents & POLLIN) {
-                char drain[64];
-                while (::read(pipe_read, drain, sizeof(drain)) > 0) {
-                }
-            }
-
-            if (!running)
-                break;
-
-            std::vector<std::pair<std::function<void(WatchedFD *)>, WatchedFD *>> callbacks;
-            std::vector<int> toRemove;
-            for (size_t i = 1; i < pollfds.size(); ++i) {
-                if (pollfds[i].revents & POLLIN) {
-                    auto* watched = localFds[i - 1];
-                    if (watched && watched->on_readable)
-                        callbacks.push_back({watched->on_readable, watched});
-                }
-                if (pollfds[i].revents & (POLLERR | POLLHUP | POLLNVAL))
-                    toRemove.push_back(pollfds[i].fd);
-            }
-
-            for (const auto& cb : callbacks)
-                cb.first(cb.second);
-
-            if (!toRemove.empty()) {
-                std::lock_guard<std::recursive_mutex> lock(fds_mutex);
-                for (const int fd : toRemove)
-                    std::erase_if(fds, [fd](WatchedFD* watched) {
-                        if (!watched)
-                            return true;
-                        if (watched->fd == fd) {
-                            delete watched;
-                            return true;
-                        }
-                        return false;
-                    });
-            }
-        }
-        running = false;
-    });
-}
-
-void PollingThread::poll(int fd, std::function<void(WatchedFD *)> on_readable, void *data, std::string name) {
-    if (fd < 0)
-        return;
-    (void)name;
-
-    {
-        std::lock_guard<std::recursive_mutex> lock(fds_mutex);
-        const auto existing = std::find_if(fds.begin(), fds.end(), [fd](const WatchedFD* watched) {
-            return watched && watched->fd == fd;
-        });
-        if (existing != fds.end()) {
-            (*existing)->on_readable = std::move(on_readable);
-            (*existing)->data = data;
-            (*existing)->name = name;
-        } else {
-            auto* watched = new WatchedFD;
-            watched->fd = fd;
-            watched->data = data;
-            watched->name = name;
-            watched->on_readable = std::move(on_readable);
-            fds.push_back(watched);
-        }
-    }
-
-    if (pipe_write != -1) {
-        later(100, [this](Timer *) {
-			const char wake = 'w';
-        	write(pipe_write, &wake, 1);
-        });
-    }
-}
-
-bool poll_descriptor(int fd, std::function<void (PollingThread::WatchedFD *)> func, void *data, std::string name) {
-    polling_thread->poll(fd, std::move(func), data, name);
-    return true;
-}
-
-void PollingThread::remove(int fd) {
-    if (fd < 0)
-        return;
-
-    {
-        std::lock_guard<std::recursive_mutex> lock(fds_mutex);
-        std::erase_if(fds, [fd](WatchedFD* watched) {
-            if (!watched)
-                return true;
-            if (watched->fd == fd) {
-                delete watched;
-                return true;
-            }
-            return false;
-        });
-    }
-
-    if (pipe_write != -1) {
-        const char wake = 'r';
-        (void)::write(pipe_write, &wake, 1);
-    }
-}
-
-void PollingThread::stop_and_join() {
-    const bool wasRunning = running.exchange(false);
-    if (wasRunning && pipe_write != -1) {
-        const char wake = 's';
-        (void)::write(pipe_write, &wake, 1);
-    }
-
-    if (t.joinable())
-        t.join();
-
-    if (pipe_read != -1) {
-        ::close(pipe_read);
-        pipe_read = -1;
-    }
-
-    if (pipe_write != -1) {
-        ::close(pipe_write);
-        pipe_write = -1;
-    }
-
-    std::lock_guard<std::recursive_mutex> lock(fds_mutex);
-    for (auto* watched : fds)
-        delete watched;
-    fds.clear();
 }
 
 void HyprIso::save_position_info(int id) {

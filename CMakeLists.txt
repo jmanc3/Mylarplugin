@@ -16,18 +16,18 @@ file(GLOB_RECURSE SRC "src/*.cpp")
 
 # --- Fetch Tracy profiler ---
 include(FetchContent)
-FetchContent_Declare(
-    tracy
-    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
-    GIT_TAG master     # or a specific tag, e.g., v0.10
-)
-FetchContent_MakeAvailable(tracy)
+#FetchContent_Declare(
+#    tracy
+#    GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+#    GIT_TAG master     # or a specific tag, e.g., v0.10
+#)
+#FetchContent_MakeAvailable(tracy)
 
 # --- Create shared library ---
 add_library(Mylardesktop SHARED
     ${HEAD}
     ${SRC}
-    ${tracy_SOURCE_DIR}/public/TracyClient.cpp
+#    ${tracy_SOURCE_DIR}/public/TracyClient.cpp
 )
 
 # --- Dependencies ---

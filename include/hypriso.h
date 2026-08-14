@@ -21,6 +21,7 @@ struct Bounds {
 #endif
 
 #include "spring.h"
+#include "polling_thread.h"
 
 #include <ranges>
 #include <string>
@@ -49,29 +50,6 @@ static std::string mylar_font = "Segoe UI Variable";
 static long minimize_anim_time = 100;
 
 struct wl_event_source;
-
-struct PollingThread {
-    struct WatchedFD {
-        int fd = -1;
-        void *data = nullptr;
-        std::string name;
-        std::function<void(WatchedFD *)> on_readable = nullptr;
-    };
-
-    std::thread t;
-    std::vector<WatchedFD *> fds;
-    int pipe_read = -1;
-    int pipe_write = -1;
-    std::recursive_mutex fds_mutex;
-    std::atomic<bool> running = false;
-
-    void start();
-    void poll(int fd, std::function<void(WatchedFD *)> on_readable, void *data, std::string name);
-    void remove(int fd);
-    void stop_and_join();
-};
-
-extern PollingThread *polling_thread;
 
 struct MylarMonitorRule {
     std::string from;
@@ -629,9 +607,6 @@ enum class FileWatchUpdate {
 
 int watch_file(const std::string& path, const std::function<void(FileWatchUpdate, int)>& on_update);
 void remove_watch(int watch_descriptor);
-
-// On it's own thread
-bool poll_descriptor(int fd, std::function<void (PollingThread::WatchedFD *)> func, void *data, std::string name);
 
 // On main thread loop
 bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name);

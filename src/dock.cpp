@@ -582,6 +582,7 @@ static void watch_battery_level() {
         process->kill();
     });
     t.detach();
+    dock_threads.push_back(std::move(t));
 }
 
 static long last_time_volume_adjusted = 0;
@@ -2790,7 +2791,7 @@ void dock::start(std::string monitor_name) {
     current_alignment = get_dock_alignment();
 
     finished = false;
-    //return;
+    
     std::thread t(dock_start, monitor_name);
     t.detach();
     dock_threads.push_back(std::move(t));
@@ -2799,18 +2800,22 @@ void dock::start(std::string monitor_name) {
 void dock::stop(std::string monitor_name) {
     if (monitor_name.empty()) {
         finished = true;
+        
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
-
-            windowing::close_app(d->app);
+            windowing::close_window(d->window->raw_window);
         }
         docks.clear();
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         for (int i = 0; i < dock_threads.size(); i++) {
             if (dock_threads[i].joinable()) {
                 dock_threads[i].join();
             }
         }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         dock_threads.clear();
         cleanup_cached_fonts();   

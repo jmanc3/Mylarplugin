@@ -29,6 +29,8 @@
 #include "audio.h"
 #include "screenshot.h"
 #include "desktop_icons.h"
+#include "polling_thread.h"
+
 #include <cstdio>
 #include <dbus/dbus-shared.h>
 #include <iterator>
@@ -1371,7 +1373,6 @@ static void on_config_reload() {
         //alt_tab::show_reticle(false);
         //alt_tab::visual_offset(0);
     });
-    
 }
 
 Bounds fixed_box(float startx, float starty, float endx, float endy) {
@@ -1863,98 +1864,84 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    later(1000, [](Timer *) {
-    if (!polling_thread) {
-        polling_thread = new PollingThread;
-        polling_thread->start();
-    }
-    
-    hypriso->create_config_variables();
-    audio_state_change_callback(on_audio_change);
-
-    later(1000, [](Timer*) {
-        on_config_reload();
-    });
-    later(2000, [](Timer*) {
-        //dbus_start(DBUS_BUS_SYSTEM);
-        dbus_start(DBUS_BUS_SESSION);
-    });
-
-    later(2100, [](Timer*) {
-        audio_start();
-    });
-
-    later_immediate([](Timer*) {
-        on_any_container_close = any_container_closed;
-        create_actual_root();
-        add_hyprctl_dispatchers();
-
-        hypriso->on_mouse_press = on_mouse_press;
-        hypriso->on_mouse_move = on_mouse_move;
-        hypriso->on_key_press = on_key_press;
-        hypriso->on_scrolled = on_scrolled;
-        hypriso->on_draw_decos = on_draw_decos;
-        hypriso->on_render = on_render;
-        hypriso->is_snapped = is_snapped;
-        hypriso->on_window_open = on_window_open;
+    later(100, [](Timer *) {
+        poll_thread->start();
         
-        hypriso->on_window_closed = on_window_closed;
-        hypriso->on_popup_open = on_popup_open;
-        hypriso->on_popup_closed = on_popup_closed;
-        hypriso->on_title_change = on_title_change;
-        hypriso->on_layer_open = on_layer_open;
-        hypriso->on_layer_closed = on_layer_closed;
-        hypriso->on_layer_change = on_layer_change;
-        hypriso->on_monitor_open = on_monitor_open;
-        hypriso->on_monitor_closed = on_monitor_closed;
-        hypriso->on_drag_start_requested = on_drag_start_requested;
-        hypriso->on_resize_start_requested = on_resize_start_requested;
-        hypriso->on_drag_or_resize_cancel_requested = on_drag_or_resize_cancel_requested;
-        hypriso->on_config_reload = on_config_reload;
-        hypriso->on_activated = on_activated;
-        hypriso->on_config_generated = on_config_generated;
-        hypriso->on_requests_max_or_min = on_requests_max_or_min;
-        hypriso->on_workspace_change = on_workspace_change;
+        hypriso->create_config_variables();
+        audio_state_change_callback(on_audio_change);
 
-        load_restore_infos();
-
-    	hypriso->create_callbacks();
-    	hypriso->create_hooks();
-    	
-        hypriso->add_float_rule();
-
-        later(100, [](Timer *t) {
-            t->keep_running = !icons_loaded;
-            desktop_icons::start();
-            damage_all();
+        later(1000, [](Timer*) {
+            on_config_reload();
+        });
+        later(2000, [](Timer*) {
+            dbus_start(DBUS_BUS_SYSTEM);
+            dbus_start(DBUS_BUS_SESSION);
         });
 
-        if (icon_cache_needs_update()) {
-            std::thread th([] {
-                icon_cache_generate();
-                icon_cache_load();
+        later(2100, [](Timer*) {
+            audio_start();
+        });
+
+        later_immediate([](Timer*) {
+            on_any_container_close = any_container_closed;
+            create_actual_root();
+            add_hyprctl_dispatchers();
+
+            hypriso->on_mouse_press = on_mouse_press;
+            hypriso->on_mouse_move = on_mouse_move;
+            hypriso->on_key_press = on_key_press;
+            hypriso->on_scrolled = on_scrolled;
+            hypriso->on_draw_decos = on_draw_decos;
+            hypriso->on_render = on_render;
+            hypriso->is_snapped = is_snapped;
+            hypriso->on_window_open = on_window_open;
+            
+            hypriso->on_window_closed = on_window_closed;
+            hypriso->on_popup_open = on_popup_open;
+            hypriso->on_popup_closed = on_popup_closed;
+            hypriso->on_title_change = on_title_change;
+            hypriso->on_layer_open = on_layer_open;
+            hypriso->on_layer_closed = on_layer_closed;
+            hypriso->on_layer_change = on_layer_change;
+            hypriso->on_monitor_open = on_monitor_open;
+            hypriso->on_monitor_closed = on_monitor_closed;
+            hypriso->on_drag_start_requested = on_drag_start_requested;
+            hypriso->on_resize_start_requested = on_resize_start_requested;
+            hypriso->on_drag_or_resize_cancel_requested = on_drag_or_resize_cancel_requested;
+            hypriso->on_config_reload = on_config_reload;
+            hypriso->on_activated = on_activated;
+            hypriso->on_config_generated = on_config_generated;
+            hypriso->on_requests_max_or_min = on_requests_max_or_min;
+            hypriso->on_workspace_change = on_workspace_change;
+
+            load_restore_infos();
+
+        	hypriso->create_callbacks();
+        	hypriso->create_hooks();
+        	
+            hypriso->add_float_rule();
+
+            later(100, [](Timer *t) {
+                t->keep_running = !icons_loaded;
+                desktop_icons::start();
+                damage_all();
             });
-            th.detach();
-        } else {
-            icon_cache_load();
-        }
 
-        //dock::start();
-        /*std::thread t([] {
-            start_dock();
-        });
-        t.detach();*/
-        //later(100, [](Timer *) {
-            //overview::open(hypriso->monitor_from_cursor());
-        //});
-        create_rounding_shader();
-        create_default_config();
-        later_immediate([](Timer *) {
-            damage_all();
-        });
+            if (icon_cache_needs_update()) {
+                std::thread th([] {
+                    icon_cache_generate();
+                    icon_cache_load();
+                });
+                th.detach();
+            } else {
+                icon_cache_load();
+            }
 
-        watch_wallpaper_change();
-    });
+            create_rounding_shader();
+            create_default_config();
+            
+            watch_wallpaper_change();
+        });
     });
 }
 
@@ -1962,17 +1949,20 @@ void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    hypriso->on_config_reload = nullptr;
+    
+    settings::stop();
+    dock::stop();
+    
     settings::load_save_settings(true, set);
-    polling_thread->stop_and_join();
-    delete polling_thread;
-    polling_thread = nullptr;
+    poll_thread->stop();
+    
     audio_stop();
     audio_join();
     if (latest_file_watch != -1)
         remove_watch(latest_file_watch);
     desktop_icons::stop();
     dbus_end();
-    dock::stop();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::CLIENT) {
             if (*datum<bool>(c, "snapped")) {
@@ -1984,14 +1974,8 @@ void heart::end() {
         }
     }
     save_restore_infos();
+    
     hypriso->end();    
-    settings::stop();
-
-    //stop_dock();
-
-//#ifdef TRACY_ENABLE
-    //tracy::ShutdownProfiler();
-//#endif
 }
 
 void heart::layout_containers() {

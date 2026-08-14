@@ -1,7 +1,7 @@
 #include "client/windowing.h"
 
-#include "heart.h"
 #include "events.h"
+#include "heart.h"
 #include <wayland-server-protocol.h>
 
 std::vector<MylarWindow *> mylar_windows;
@@ -13,6 +13,13 @@ static MylarWindow *mylar(RawWindow *rw) {
         }
     }
     return nullptr;
+}
+
+static MylarWindow *target_popup_if_exists_instead(MylarWindow *mw) {
+    MylarWindow* m = mw;
+    if (m->popup_window)
+        m = target_popup_if_exists_instead(m->popup_window);
+    return m;
 }
 
 bool on_mouse_move(RawWindow *rw, float x, float y) {
@@ -35,6 +42,11 @@ bool on_mouse_press(RawWindow *rw, int button, int state, float x, float y) {
     y *= rw->dpi;
     auto m = mylar(rw);
     if (!m) return false;
+    auto m2 = target_popup_if_exists_instead(m);
+    if (m2 != m) {
+        windowing::close_window(m2->raw_window);
+        m->popup_window = nullptr;
+    }
     ::layout(m->root, m->root, m->root->real_bounds);
     Event event(x, y, button, state);
     mouse_event(m->root, event);
@@ -156,6 +168,7 @@ MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings s
 MylarWindow *open_mylar_popup(MylarWindow *parent, RawWindowSettings settings) {
     if (!parent || !parent->raw_window)
         return nullptr;
+    assert(!parent->popup_window && "More than one popup window was set at the same time on parent window which shouldn't be possible");
 
     auto m = new MylarWindow;
     m->raw_window = windowing::open_popup(parent->raw_window, settings);
@@ -164,5 +177,8 @@ MylarWindow *open_mylar_popup(MylarWindow *parent, RawWindowSettings settings) {
     m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
     wire_handlers(m);
     mylar_windows.push_back(m);
+
+    parent->popup_window = m;
+
     return m;
 }

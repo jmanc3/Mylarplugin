@@ -8,6 +8,7 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock.h"
+#include <chrono>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
 
 #include <gtk/gtk.h>
@@ -37,6 +38,8 @@ static float optionrighttpad = 14;
 struct RightData : UserData {
     float scroll = 0.0;
 };
+
+std::vector<MylarWindow *> popups;
 
 struct CachedFont {
     std::string name;
@@ -867,6 +870,108 @@ static void fill_dock_settings(Container *root, Container *c) {
     });
 }
 
+static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
+                                                           float dpi,
+                                                           int popup_w,
+                                                           int popup_h) {
+    const int icon_x = (int) std::round(icon->real_bounds.x / dpi);
+    const int icon_y = (int) std::round(icon->real_bounds.y / dpi);
+    const int icon_w = std::max(1, (int) std::round(icon->real_bounds.w / dpi));
+    const int icon_h = std::max(1, (int) std::round(icon->real_bounds.h / dpi));
+
+    RawWindowSettings settings;
+    settings.pos.w = popup_w;
+    settings.pos.h = popup_h;
+    settings.name = "Popup";
+    settings.popup.use_explicit_anchor_rect = true;
+    settings.popup.anchor_rect_x = icon_x;
+    settings.popup.anchor_rect_y = icon_y;
+    settings.popup.anchor_rect_w = icon_w;
+    settings.popup.anchor_rect_h = icon_h;
+    settings.popup.anchor = RawWindowSettings::PopupAnchor::BOTTOM;
+    settings.popup.gravity = RawWindowSettings::PopupGravity::BOTTOM;
+    settings.popup.use_offset = true;
+    settings.popup.offset_y = -8;
+    settings.popup.constraint_adjustment =
+        RawWindowSettings::POPUP_CONSTRAINT_SLIDE_X |
+        RawWindowSettings::POPUP_CONSTRAINT_SLIDE_Y |
+        RawWindowSettings::POPUP_CONSTRAINT_FLIP_X |
+        RawWindowSettings::POPUP_CONSTRAINT_FLIP_Y;
+    return settings;
+}
+
+static void make_dropdown(Container *parent, std::string text, std::function<void()> func) {
+    static float pad_amount = 11;
+    static float text_height = 11;
+    auto pad = parent->child(FILL_SPACE, FILL_SPACE);
+    pad->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        text_height = 11 * dpi;
+        pad_amount = 11 * dpi;
+        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        c->wanted_bounds.w = bounds.w + pad_amount * 2;
+        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+    };
+    pad->when_paint = [text](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        if (c->state.mouse_pressing) {
+            set_argb(cr, {.5, .5, .5, 1});
+        } else if (c->state.mouse_hovering) {
+            set_argb(cr, {.65, .65, .65, 1});
+        } else {
+            set_argb(cr, {.8, .8, .8, 1});
+        }
+        set_rect(cr, c->real_bounds);
+        cairo_fill(cr);
+        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, 
+            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
+            text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+    };
+   pad->when_clicked = [func](Container *root, Container *c) {
+        auto dock = (MylarWindow*)root->user_data;
+        auto cr = dock->raw_window->cr;
+        auto dpi = dock->raw_window->dpi;
+        
+        RawWindowSettings settings = make_icon_anchored_popup_settings(
+            c, dpi, 300, 200);
+
+        auto popup = open_mylar_popup(dock, settings);
+        if (!popup)
+            return;
+        popups.push_back(popup);
+        popup->root->when_paint = [](Container *root, Container *c) {
+            auto popup = (MylarWindow *) root->user_data;
+            auto cr = popup->raw_window->cr;
+            set_argb(cr, {1, 1, 1, 1});
+            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
+            cairo_fill(cr);
+        };
+        popup->root->when_clicked = paint {
+            int k = 12;
+            main_thread([c] {
+                notify(fz("cick {} {}", c->mouse_current_x, c->mouse_current_y));
+            });
+        };
+
+        popup->root->skip_delete = true;
+        popup->root->user_data = popup;
+        popup->root->wanted_bounds.w = FILL_SPACE;
+        popup->root->wanted_bounds.h = FILL_SPACE;
+        //fill_popup_container(dock);
+        windowing::redraw(popup->raw_window);
+        if (func) {
+            func();
+        }
+   };
+}
+
+
 static void make_button(Container *parent, std::string text, std::function<void()> func) {
     static float pad_amount = 11;
     static float text_height = 11;
@@ -1020,6 +1125,9 @@ static void fill_display_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
+    make_dropdown(padded_right, "Monitor 1", []() {
+
+    });
 /*
     make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
@@ -1552,6 +1660,13 @@ void actual_start() {
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;
     fill_root(mylar->root);
+    mylar->raw_window->on_close = [](RawWindow *w) {
+        for (auto p : popups) {
+            windowing::close_window(p->raw_window);
+        }
+        popups.clear();
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    };
 
     windowing::main_loop(settings_app);
 
