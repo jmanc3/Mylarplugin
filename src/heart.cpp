@@ -1411,25 +1411,12 @@ void load_restore_infos() {
 
     // Target path
     std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/restore.txt";
-    std::filesystem::path cpy_filepath = std::filesystem::path(home) / ".config/mylar/restore.txt.cpy";
-
-    if (!std::filesystem::exists(filepath)) {
-        // No file — silently return
+    if (!std::filesystem::exists(filepath))
         return;
-    }
 
-    std::error_code ec;
-    std::filesystem::copy_file(filepath, cpy_filepath, std::filesystem::copy_options::overwrite_existing, ec);
-    if (ec) {
-        // Could not copy — silently return
+    std::ifstream in(filepath);
+    if (!in)
         return;
-    }
-
-    std::ifstream in(cpy_filepath);
-    if (!in) {
-        // No file — silently return
-        return;
-    }
 
     std::string line;
     bool first_line = true;
