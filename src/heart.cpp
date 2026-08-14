@@ -1872,6 +1872,8 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    load_restore_infos();
+            
     later(100, [](Timer *) {
         poll_thread->start();
         
@@ -1921,8 +1923,6 @@ void heart::begin() {
             hypriso->on_config_generated = on_config_generated;
             hypriso->on_requests_max_or_min = on_requests_max_or_min;
             hypriso->on_workspace_change = on_workspace_change;
-
-            load_restore_infos();
 
         	hypriso->create_callbacks();
         	hypriso->create_hooks();
