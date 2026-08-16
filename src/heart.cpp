@@ -2068,7 +2068,7 @@ void heart::layout_containers() {
         }
         set_exists(c, exists);
         
-        if (c->exists) {
+        if (c->exists || hypriso->whitelist_on) {
             auto b = bounds_client(cid);
 
             auto fo = hypriso->floating_offset(cid);
