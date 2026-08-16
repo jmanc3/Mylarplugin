@@ -5658,8 +5658,13 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     w->m_workspace->m_renderOffset->m_Value = off; 
     deco_offset_x = off.x;
     deco_offset_y = off.y;
+
+    auto before_pinned_state = w->m_pinned;
+    w->m_pinned = false;
     
     ourRenderWindow(w, m, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
+
+    w->m_pinned = before_pinned_state;
 
     w->m_workspace->m_renderOffset->m_Value = r;
     deco_offset_x = 0;
@@ -5711,7 +5716,12 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
     g_pHyprRenderer->m_bRenderingSnapshot = true;
     glClearColor(0, 0, 0, 0);
     auto const NOW = Time::steadyNow();
+    auto before_pinned_state = w->m_pinned;
+    w->m_pinned = false;
+ 
     g_pHyprRenderer->renderWindow(w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
+
+    w->m_pinned = before_pinned_state;
     //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
     g_pHyprRenderer->endRender();
     g_pHyprRenderer->m_bRenderingSnapshot = false;
