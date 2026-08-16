@@ -5,6 +5,9 @@
 #include "heart.h"
 #include "hypriso.h"
 #include "layout_thumbnails.h"
+#include "titlebar.h"
+
+#include <linux/input-event-codes.h>
 
 bool screenshotting_wallpaper = false;
 bool running = false;
@@ -127,14 +130,28 @@ void create_overview_for_monitor(int monitor) {
         paint_workspace(rid, hypriso->get_active_workspace_id(rid), openess);
     };
     over->when_clicked = [](Container *root, Container *c) {
-        for (auto o : window_options) {
-            if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
-                hypriso->bring_to_front(o.cid, true);
+        if (c->state.mouse_button_pressed == BTN_LEFT) {
+            for (auto o : window_options) {
+                if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
+                    hypriso->bring_to_front(o.cid, true);
+                }
+            }
+            later_immediate([](Timer *) {
+                overview::close();
+            });
+        } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
+            for (auto o : window_options) {
+                if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
+                    titlebar::titlebar_right_click(o.cid); 
+                }
+            }
+        } else if (c->state.mouse_button_pressed == BTN_MIDDLE) {
+            for (auto o : window_options) {
+                if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
+                    close_window(o.cid);
+                }
             }
         }
-        later_immediate([](Timer *) {
-            overview::close();
-        });
     };
 }
 

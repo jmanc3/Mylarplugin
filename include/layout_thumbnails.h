@@ -150,113 +150,483 @@ public:
         m_cells = cells;
     }
 
-    void calculate() {
-        if (m_cells.empty()) return;
+    // ============================================================
+    // Collision-based deterministic layout
+    // ============================================================
 
-        std::sort(m_cells.begin(), m_cells.end(),
-            [](const ExpoCell* a, const ExpoCell* b) {
-                return a->persistentKey() < b->persistentKey();
-            });
+    void calculate() {
+        if (m_cells.empty())
+            return;
+
+        sortCells();
 
         std::unordered_map<ExpoCell*, Rect> targets;
-        Rect bounds;
-        bool first = true;
 
         for (auto* c : m_cells) {
-            Rect r {
+            targets[c] = {
                 c->naturalX(),
                 c->naturalY(),
                 c->naturalWidth(),
                 c->naturalHeight()
             };
-            targets[c] = r;
-            bounds = first ? r : bounds.united(r);
-            first = false;
         }
 
-        // Push overlapping windows apart
-        bool overlap;
-        int times = 0;
-        do {
-            overlap = false;
-            for (auto* a : m_cells) {
-                for (auto* b : m_cells) {
-                    if (a == b) continue;
+        // --------------------------------------------------------
+        // Separate overlapping cells.
+        //
+        // Each pair is processed exactly once.
+        // --------------------------------------------------------
+
+        for (int iteration = 0; iteration < 300; ++iteration) {
+            bool changed = false;
+
+            for (size_t i = 0; i < m_cells.size(); ++i) {
+                for (size_t j = i + 1; j < m_cells.size(); ++j) {
+
+                    ExpoCell* a = m_cells[i];
+                    ExpoCell* b = m_cells[j];
 
                     Rect& ra = targets[a];
                     Rect& rb = targets[b];
 
-                    Rect ea = ra.translated(-spacing/2, -spacing/2);
-                    Rect eb = rb.translated(-spacing/2, -spacing/2);
+                    Rect ea = ra.translated(
+                        -spacing / 2,
+                        -spacing / 2
+                    );
 
-                    ea.w += spacing; ea.h += spacing;
-                    eb.w += spacing; eb.h += spacing;
+                    Rect eb = rb.translated(
+                        -spacing / 2,
+                        -spacing / 2
+                    );
 
-                    if (ea.intersects(eb)) {
-                        overlap = true;
+                    ea.w += spacing;
+                    ea.h += spacing;
 
-                        Point ca = ra.center();
-                        Point cb = rb.center();
-                        int dx = cb.x - ca.x;
-                        int dy = cb.y - ca.y;
+                    eb.w += spacing;
+                    eb.h += spacing;
 
-                        if (dx == 0 && dy == 0) dx = 1;
+                    if (!ea.intersects(eb))
+                        continue;
 
-                        float len = std::abs(dx) + std::abs(dy);
-                        dx = int(dx / len * accuracy);
-                        dy = int(dy / len * accuracy);
+                    changed = true;
 
-                        ra.translate(-dx, -dy);
-                        rb.translate(dx, dy);
+                    Point ca = ra.center();
+                    Point cb = rb.center();
 
-                        bounds = bounds.united(ra).united(rb);
+                    int dx = cb.x - ca.x;
+                    int dy = cb.y - ca.y;
+
+                    // Deterministic direction when centers coincide.
+                    if (dx == 0 && dy == 0) {
+                        dx = 1;
+                        dy = 0;
                     }
+
+                    int ax = std::abs(dx);
+                    int ay = std::abs(dy);
+
+                    int distance = ax + ay;
+
+                    if (distance == 0)
+                        distance = 1;
+
+                    int moveX =
+                        (dx * accuracy) / distance;
+
+                    int moveY =
+                        (dy * accuracy) / distance;
+
+                    // Guarantee movement.
+                    if (moveX == 0 && moveY == 0) {
+                        if (ax >= ay)
+                            moveX = dx > 0 ? 1 : -1;
+                        else
+                            moveY = dy > 0 ? 1 : -1;
+                    }
+
+                    ra.translate(-moveX, -moveY);
+                    rb.translate(moveX, moveY);
                 }
             }
-        } while (overlap && times++ < 300);
 
-        // Scale to fit area
-        float sx = float(m_area.w) / bounds.w;
-        float sy = float(m_area.h) / bounds.h;
-        float scale = std::min({ sx, sy, 1.0f });
+            if (!changed)
+                break;
+        }
 
-        for (auto& it : targets) {
-            Rect& r = it.second;
-            r.x = int((r.x - bounds.x) * scale);
-            r.y = int((r.y - bounds.y) * scale);
+        // --------------------------------------------------------
+        // Recalculate bounds from FINAL positions.
+        // --------------------------------------------------------
+
+        Rect bounds;
+        bool first = true;
+
+        for (auto* c : m_cells) {
+            const Rect& r = targets[c];
+
+            if (first) {
+                bounds = r;
+                first = false;
+            } else {
+                bounds = bounds.united(r);
+            }
+        }
+
+        if (bounds.w <= 0 || bounds.h <= 0)
+            return;
+
+        // --------------------------------------------------------
+        // Scale to fit the available area.
+        // --------------------------------------------------------
+
+        float sx =
+            float(m_area.w) / float(bounds.w);
+
+        float sy =
+            float(m_area.h) / float(bounds.h);
+
+        float scale =
+            std::min({ sx, sy, 1.0f });
+
+        for (auto* c : m_cells) {
+            Rect& r = targets[c];
+
+            r.x = int(
+                (r.x - bounds.x) * scale
+            );
+
+            r.y = int(
+                (r.y - bounds.y) * scale
+            );
+
             r.w = int(r.w * scale);
             r.h = int(r.h * scale);
         }
 
-        // Center + preserve aspect ratio
+        // --------------------------------------------------------
+        // Preserve aspect ratio.
+        // --------------------------------------------------------
+
         for (auto* c : m_cells) {
             Rect& r = targets[c];
+
             r = centered(c, r);
+
             c->setRect(r);
         }
     }
 
+
+    // ============================================================
+    // Deterministic grid layout
+    // ============================================================
+    //
+    // This is completely independent of calculate().
+    //
+    // The grid is based solely on:
+    //
+    //   - persistentKey()
+    //   - number of cells
+    //   - area size
+    //   - spacing
+    //
+    // Natural X/Y positions do NOT influence placement.
+    //
+    // Same cells + same area = same layout.
+    //
+    // ============================================================
+
+    void calculateGrid() {
+        if (m_cells.empty())
+            return;
+
+        if (m_area.w <= 0 || m_area.h <= 0)
+            return;
+
+        sortCells();
+
+        const int count =
+            static_cast<int>(m_cells.size());
+
+        const int columns =
+            calculateGridColumns(count);
+
+        const int rows =
+            (count + columns - 1) / columns;
+
+        calculateGridLayout(columns, rows);
+    }
+
+
 private:
+
     Rect m_area;
     std::vector<ExpoCell*> m_cells;
 
-    static Rect centered(const ExpoCell* c, const Rect& bounds) {
-        float scale = std::min(
-            float(bounds.w) / c->naturalWidth(),
-            float(bounds.h) / c->naturalHeight()
+
+    // ============================================================
+    // Deterministic ordering shared by both algorithms.
+    // ============================================================
+
+    void sortCells() {
+        std::sort(
+            m_cells.begin(),
+            m_cells.end(),
+            [](const ExpoCell* a, const ExpoCell* b) {
+
+                if (a->persistentKey() !=
+                    b->persistentKey()) {
+
+                    return a->persistentKey() <
+                           b->persistentKey();
+                }
+
+                // Tie breakers in case persistentKey isn't unique.
+
+                if (a->naturalY() != b->naturalY())
+                    return a->naturalY() < b->naturalY();
+
+                if (a->naturalX() != b->naturalX())
+                    return a->naturalX() < b->naturalX();
+
+                if (a->naturalWidth() != b->naturalWidth())
+                    return a->naturalWidth() <
+                           b->naturalWidth();
+
+                return a->naturalHeight() <
+                       b->naturalHeight();
+            }
         );
+    }
 
-        int w = int(c->naturalWidth() * scale);
-        int h = int(c->naturalHeight() * scale);
 
-        Point center = bounds.center();
+    // ============================================================
+    // Grid column selection.
+    // ============================================================
+
+    int calculateGridColumns(int count) const {
+        if (count <= 1)
+            return 1;
+
+        int bestColumns = 1;
+
+        double bestScore =
+            std::numeric_limits<double>::max();
+
+        for (int columns = 1;
+             columns <= count;
+             ++columns) {
+
+            const int rows =
+                (count + columns - 1) / columns;
+
+            const int horizontalSpacing =
+                std::max(0, columns - 1) * spacing;
+
+            const int verticalSpacing =
+                std::max(0, rows - 1) * spacing;
+
+            const int availableWidth =
+                m_area.w - horizontalSpacing;
+
+            const int availableHeight =
+                m_area.h - verticalSpacing;
+
+            if (availableWidth <= 0 ||
+                availableHeight <= 0) {
+
+                continue;
+            }
+
+            const double slotWidth =
+                double(availableWidth) /
+                double(columns);
+
+            const double slotHeight =
+                double(availableHeight) /
+                double(rows);
+
+            if (slotWidth <= 0 ||
+                slotHeight <= 0) {
+
+                continue;
+            }
+
+            const double aspect =
+                slotWidth / slotHeight;
+
+            // Prefer approximately square slots.
+            const double aspectScore =
+                std::abs(std::log(aspect));
+
+            // Slightly penalize unused slots.
+            const int totalSlots =
+                columns * rows;
+
+            const double waste =
+                double(totalSlots - count) /
+                double(totalSlots);
+
+            const double score =
+                aspectScore + waste * 0.15;
+
+            if (score < bestScore) {
+                bestScore = score;
+                bestColumns = columns;
+            }
+        }
+
+        return bestColumns;
+    }
+
+
+    // ============================================================
+    // Actually position the grid.
+    // ============================================================
+
+    void calculateGridLayout(
+        int columns,
+        int rows)
+    {
+        const int count =
+            static_cast<int>(m_cells.size());
+
+        if (columns <= 0 || rows <= 0)
+            return;
+
+        const int horizontalSpacing =
+            std::max(0, columns - 1) * spacing;
+
+        const int verticalSpacing =
+            std::max(0, rows - 1) * spacing;
+
+        const int availableWidth =
+            std::max(
+                1,
+                m_area.w - horizontalSpacing
+            );
+
+        const int availableHeight =
+            std::max(
+                1,
+                m_area.h - verticalSpacing
+            );
+
+        const int slotWidth =
+            std::max(
+                1,
+                availableWidth / columns
+            );
+
+        const int slotHeight =
+            std::max(
+                1,
+                availableHeight / rows
+            );
+
+        const int gridWidth =
+            columns * slotWidth +
+            horizontalSpacing;
+
+        const int gridHeight =
+            rows * slotHeight +
+            verticalSpacing;
+
+        // Center the entire grid in the area.
+        const int offsetX =
+            m_area.x +
+            (m_area.w - gridWidth) / 2;
+
+        const int offsetY =
+            m_area.y +
+            (m_area.h - gridHeight) / 2;
+
+        for (int index = 0;
+             index < count;
+             ++index) {
+
+            ExpoCell* cell =
+                m_cells[index];
+
+            const int row =
+                index / columns;
+
+            const int column =
+                index % columns;
+
+            Rect slot {
+                offsetX +
+                    column * (slotWidth + spacing),
+
+                offsetY +
+                    row * (slotHeight + spacing),
+
+                slotWidth,
+                slotHeight
+            };
+
+            Rect result =
+                centered(cell, slot);
+
+            cell->setRect(result);
+        }
+    }
+
+
+    // ============================================================
+    // Aspect-ratio preserving centering.
+    // ============================================================
+
+    static Rect centered(
+        const ExpoCell* cell,
+        const Rect& bounds)
+    {
+        const int naturalWidth =
+            cell->naturalWidth();
+
+        const int naturalHeight =
+            cell->naturalHeight();
+
+        if (naturalWidth <= 0 ||
+            naturalHeight <= 0) {
+
+            return bounds;
+        }
+
+        const double scale =
+            std::min(
+                double(bounds.w) /
+                    double(naturalWidth),
+
+                double(bounds.h) /
+                    double(naturalHeight)
+            );
+
+        int width =
+            int(std::round(
+                naturalWidth * scale
+            ));
+
+        int height =
+            int(std::round(
+                naturalHeight * scale
+            ));
+
+        width =
+            std::min(width, bounds.w);
+
+        height =
+            std::min(height, bounds.h);
+
+        Point center =
+            bounds.center();
+
         return {
-            center.x - w / 2,
-            center.y - h / 2,
-            w, h
+            center.x - width / 2,
+            center.y - height / 2,
+            width,
+            height
         };
     }
 };
-
- 
+   
 #endif // layout_thumbnails_h_INCLUDED
