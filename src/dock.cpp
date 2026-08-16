@@ -759,6 +759,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                         break;
                     }
                 }
+                dock::redraw();
             };
             root.push_back(pop);
         }
@@ -2857,11 +2858,27 @@ std::string get_launch_command(int cid) {
     return command_launched_by_line;
 }
 
+std::string get_steam_launch_command(const std::string& app_name) {
+    const std::string prefix = "steam_icon_";
+    if (app_name.rfind(prefix, 0) == 0 && app_name.size() > prefix.size())
+        return "steam steam://rungameid/" + app_name.substr(prefix.size());
+    return "";
+}
+
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
     std::string command = get_launch_command(cid);
-    std::string icon = hypriso->class_name(cid);
-    std::string stack_rule = hypriso->class_name(cid);
+    std::string icon = c3ic_fix_wm_class(hypriso->class_name(cid));
+    std::string stack_rule = icon;
+
+    // Steam x11 games
+    if (hypriso->is_x11(cid)) {
+        int id = hypriso->steam_id(cid);
+        if (id != -1 && stack_rule != "steam") {
+            icon = fz("steam_icon_{}", id);
+            command = get_steam_launch_command(icon);
+        }
+    }
     
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);

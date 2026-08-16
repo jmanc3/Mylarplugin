@@ -4966,16 +4966,60 @@ bool HyprIso::has_decorations(int id) {
 }
 
 
-bool HyprIso::is_x11(int id) {
+bool HyprIso::is_x11(int cid) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     for (auto hw : hyprwindows) {
-        if (hw->id == id) {
+        if (hw->id == cid) {
             return hw->w->m_isX11;
         }
     }
     return false;
+}
+
+int HyprIso::steam_id(int cid) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hw : hyprwindows) {
+        if (hw->id != cid || !hw->w->m_isX11 || !hw->w->m_xwaylandSurface ||
+            !g_pXWayland || !g_pXWayland->m_wm)
+            continue;
+
+        const auto xid        = hw->w->m_xwaylandSurface->m_xID;
+        auto*      connection = g_pXWayland->m_wm->getConnection();
+        if (!connection)
+            return -1;
+
+        constexpr char STEAM_GAME[] = "STEAM_GAME";
+        const auto atomCookie = xcb_intern_atom(connection, 1, sizeof(STEAM_GAME) - 1, STEAM_GAME);
+        auto*      atomReply  = xcb_intern_atom_reply(connection, atomCookie, nullptr);
+        if (!atomReply)
+            return -1;
+
+        const auto steamGameAtom = atomReply->atom;
+        free(atomReply);
+        if (steamGameAtom == XCB_ATOM_NONE)
+            return -1;
+
+        const auto propertyCookie =
+            xcb_get_property(connection, 0, xid, steamGameAtom, XCB_ATOM_CARDINAL, 0, 1);
+        auto* propertyReply = xcb_get_property_reply(connection, propertyCookie, nullptr);
+        if (!propertyReply)
+            return -1;
+
+        int steamID = -1;
+        if (propertyReply->type == XCB_ATOM_CARDINAL && propertyReply->format == 32 &&
+            xcb_get_property_value_length(propertyReply) >= sizeof(uint32_t)) {
+            uint32_t value = 0;
+            memcpy(&value, xcb_get_property_value(propertyReply), sizeof(value));
+            steamID = static_cast<int>(value);
+        }
+        free(propertyReply);
+        return steamID;
+    }
+    return -1;
 }
 
 bool HyprIso::is_opaque(int id) {
@@ -7916,6 +7960,7 @@ float HyprIso::zoom_progress(int monitor) {
             }
         }
     }
+
     return 1.0f;
 }
 
