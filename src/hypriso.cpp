@@ -6043,6 +6043,7 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
             if (hw->deco_fb && hw->deco_fb->isAllocated()) {
                 AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
                     auto tex = hw->deco_fb->getTexture();
+                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
                     auto box = tocbox(b);
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.round = rounding;
@@ -6090,6 +6091,7 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     return;
                 AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
                     auto tex = hw->min_fb->getTexture();
+                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
                     auto sss = hw->w_min_mon;
                     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
                     const auto REALPOS = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + (hw->w->m_pinned ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
@@ -6140,6 +6142,7 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
             if (hw->deco_fb && hw->deco_fb->isAllocated()) {
                 AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
                     auto tex = hw->deco_fb->getTexture();
+                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
                     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
                     auto s = hw->w->m_monitor->m_scale;
