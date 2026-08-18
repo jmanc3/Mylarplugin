@@ -82,6 +82,8 @@
 #include <hyprland/src/animation/AnimationManager.hpp>
 // #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
 
+#include <hyprland/src/keybinds/Resolver.hpp>
+
 #include <hyprland/src/animation/WorkspaceAnimationController.hpp>
 
 #include <hyprland/src/desktop/DesktopTypes.hpp>
@@ -148,7 +150,7 @@
 #define protected public
 #include <hyprland/src/render/Renderer.hpp>
 #undef protected
-#include <hyprland/src/managers/KeybindManager.hpp>
+//#include <hyprland/src/managers/KeybindManager.hpp>
 
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/xwayland/XWM.hpp>
@@ -677,7 +679,8 @@ static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
 
     // remove drag status
     if (g_layoutManager->dragController()->target())
-        CKeybindManager::changeMouseBindMode(MBIND_INVALID);
+        g_layoutManager->endDragTarget();
+        //CKeybindManager::changeMouseBindMode(MBIND_INVALID);
 
     auto target = PWINDOW->layoutTarget();
     target->space()->m_algorithm->setFloating(target, should_float, true);
@@ -3434,7 +3437,7 @@ void HyprIso::end() {
     anims.clear();
 
     for (auto g : gestures_created)
-        g_pTrackpadGestures->removeGesture(g.fingerCount, g.direction, g.modMask, g.deltaScale, g.disableInhibit);
+        g_pTrackpadGestures->removeGesture(g.fingerCount, g.direction, (Input::ModifierMask) (g.modMask), g.deltaScale, g.disableInhibit);
     gestures_created.clear();
 }
 
@@ -5422,7 +5425,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     // if window is floating and we have a slide animation, clip it to its full bb
     if (!ignorePosition && pWindow->m_isFloating && !Fullscreen::controller()->isFullscreen(pWindow) && PWORKSPACE->m_renderOffset->isBeingAnimated() && !pWindow->m_pinned) {
         CRegion rg =
-            pWindow->getFullWindowBoundingBox().translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->m_floatingOffset).scale(pMonitor->m_scale);
+            pWindow->getFullWindowBoundingBox().translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->m_floatingOffset).scale(pMonitor->m_scale).round();
         renderdata.clipBox = rg.getExtents();
     }
 
@@ -5439,9 +5442,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             passRedirect    = tis->redirectPass(transformedPass.get());
             renderdata.blur = false;
 
-            for (auto const& t : pWindow->m_transformers) {
-                t->preWindowRender(&renderdata);
-            }
+            pWindow->m_transformers.preWindowRender(&renderdata);
         }
 
         if (renderdata.decorate) {
@@ -5512,12 +5513,11 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 
             CBox currentBox = pWindow->getFullWindowBoundingBox();
             currentBox.translate((pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value()) + pWindow->m_floatingOffset - pMonitor->m_position);
+            CBox            transformedBox = pWindow->m_transformers.transformedExtents(currentBox);
 
             SMotionBlurData windowMotionBlur;
             if (!standalone && !tis->m_bRenderingSnapshot) {
-                for (auto const& t : pWindow->m_transformers) {
-                    t->amendTransformedRenderData(currentBox, &windowMotionBlur);
-                }
+                pWindow->m_transformers.amendTransformedRenderData(transformedBox, &windowMotionBlur);
             }
 
             CBox blurBox = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
@@ -5532,7 +5532,10 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
                 .blurA             = renderdata.fadeAlpha,
                 .blurRound         = renderdata.dontRound ? 0 : std::max(renderdata.rounding - 1, 0),
                 .blurRoundingPower = renderdata.roundingPower,
+                .transformedBox    = transformedBox,
                 .motionBlur        = windowMotionBlur,
+                .standalone        = standalone,
+                .renderingSnapshot = tis->m_bRenderingSnapshot,
             }));
 
             renderdata.blur = windowBlur;
@@ -7682,13 +7685,13 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
 
         CBox monbox = {0, 0, pMonitor->m_transformedSize.x, pMonitor->m_transformedSize.y};
 
-        g_pHyprRenderer->pushMonitorTransformEnabled(true);
+        // g_pHyprRenderer->pushMonitorTransformEnabled(true);
         g_pHyprRenderer->m_renderData.renderModif.enabled = false;
 
         Render::GL::g_pHyprOpenGL->renderTextureMatte(alphaSwapFB->getTexture(), monbox, alphaFB);
 
         g_pHyprRenderer->m_renderData.renderModif.enabled = true;
-        g_pHyprRenderer->popMonitorTransformEnabled();
+        // g_pHyprRenderer->popMonitorTransformEnabled();
 
         g_pHyprRenderer->m_renderData.damage = saveDamage;
 
@@ -7722,19 +7725,24 @@ void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, flo
 
 
 void HyprIso::logout() {
+    // getFromSocket("/dispatch hl.dsp.exit()");
+    /*
     if (g_pKeybindManager->m_dispatchers.contains("exit")) {
        g_pKeybindManager->m_dispatchers["exit"]("");
     } else {
         notify("dispatch `exit` no longer exists, report this issue if encountered");
     }
+    */
 }
 
 void HyprIso::dispatch(std::string command, std::string args) {
+    /*
     if (g_pKeybindManager->m_dispatchers.contains(command)) {
        g_pKeybindManager->m_dispatchers[command](args);
     } else {
         //notify(fz("dispatch {} no longer exists, report this issue if encountered", command));
     }
+    */
 }
 
 void HyprIso::send_false_position(int x, int y) {
@@ -7935,13 +7943,13 @@ void hook_popup_creation_and_destruction() {
 }
 
 void HyprIso::do_default_drag(int cid) {
-    next_check = true;
-    g_pKeybindManager->changeMouseBindMode(MBIND_MOVE);
+    // next_check = true;
+    // g_pKeybindManager->changeMouseBindMode(MBIND_MOVE);
 }
 
 void HyprIso::do_default_resize(int cid) {
-    next_check = true;
-    g_pKeybindManager->changeMouseBindMode(MBIND_RESIZE);
+    // next_check = true;
+    // g_pKeybindManager->changeMouseBindMode(MBIND_RESIZE);
 }
 
 bool HyprIso::is_floating(int cid) {
@@ -8356,7 +8364,7 @@ enum eTrackpadGestureDirection : uint8_t {
 };
 */
 void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit, std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end) {
-    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(std::move(start), std::move(update), std::move(end)), fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit);
+    std::expected<void, std::string> resultFromGesture = g_pTrackpadGestures->addGesture(makeUnique<CExpoGesture>(std::move(start), std::move(update), std::move(end)), fingerCount, (eTrackpadGestureDirection) direction, (Input::ModifierMask) modMask, deltaScale, disableInhibit);
 
     // so we can removeGesture when unloading plugin so a crash doesn't happen
     gestures_created.push_back(GestureHolding(fingerCount, (eTrackpadGestureDirection) direction, modMask, deltaScale, disableInhibit));
@@ -8388,13 +8396,13 @@ Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
     }
 
     int argIndex = 1;
-    uint32_t modMask = 0;
+    Input::ModifierMask modMask;
     float deltaScale = 1.F;
 
     for (; argIndex < data.size(); ++argIndex) {
         const auto& arg = data[argIndex];
         if (arg.starts_with("mod:")) {
-            modMask = g_pKeybindManager->stringToModMask(std::string { arg.substr(4) });
+            modMask = Keybinds::modMaskFromString(std::string { arg.substr(4) });
         } else if (arg.starts_with("scale:")) {
             try {
                 deltaScale = std::clamp(std::stof(std::string { arg.substr(6) }), 0.1F, 10.F);

@@ -6,7 +6,6 @@
 #include <vector>
 
 #define explicit dont_use_cxx_explicit
-#include <cairo.h>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/xkb.h>
 #include <xkbcommon/xkbcommon-x11.h>
