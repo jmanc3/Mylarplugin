@@ -1829,7 +1829,7 @@ void HyprIso::create_callbacks() {
         if (hypriso->on_window_closed)
             on_close_window(w);
     });
-    static auto windowTitle = Event::bus()->m_events.window.close.listen([this](PHLWINDOW w) {
+    static auto windowTitle = Event::bus()->m_events.window.title.listen([this](PHLWINDOW w) {
         if (hypriso->on_title_change) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w) {
