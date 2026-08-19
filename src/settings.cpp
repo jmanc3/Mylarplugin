@@ -20,6 +20,8 @@
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
 #include <pango/pangocairo.h>
+#include <vector>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 static RawApp *settings_app = nullptr;
 
@@ -900,9 +902,10 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
     return settings;
 }
 
-static void make_dropdown(Container *parent, std::string text, std::function<void()> func) {
+static void make_dropdown(Container *parent, std::string text, std::vector<std::string> options, std::function<void(std::string)> func) {
     static float pad_amount = 11;
     static float text_height = 11;
+    static float option_height = 13;
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     pad->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -933,15 +936,17 @@ static void make_dropdown(Container *parent, std::string text, std::function<voi
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
             text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
     };
-   pad->when_clicked = [func](Container *root, Container *c) {
+    static MylarWindow *popup = nullptr; 
+    popup = nullptr;
+    pad->when_clicked = [func, options](Container *root, Container *c) {
         auto dock = (MylarWindow*)root->user_data;
         auto cr = dock->raw_window->cr;
         auto dpi = dock->raw_window->dpi;
         
         RawWindowSettings settings = make_icon_anchored_popup_settings(
-            c, dpi, 300, 200);
+            c, dpi, 300, (std::max(1, (int) options.size()) * 30) * dpi);
 
-        auto popup = open_mylar_popup(dock, settings);
+        popup = open_mylar_popup(dock, settings);
         if (!popup)
             return;
         popups.push_back(popup);
@@ -952,23 +957,57 @@ static void make_dropdown(Container *parent, std::string text, std::function<voi
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
             cairo_fill(cr);
         };
-        popup->root->when_clicked = paint {
-            int k = 12;
-            main_thread([c] {
-                notify(fz("cick {} {}", c->mouse_current_x, c->mouse_current_y));
-            });
-        };
-
+        for (auto m : options) {
+            auto ch = popup->root->child(FILL_SPACE, FILL_SPACE);
+            ch->when_paint = [m](Container *root, Container *c) {
+                auto popup = (MylarWindow *) root->user_data;
+                auto cr = popup->raw_window->cr;
+                auto dpi = popup->raw_window->dpi;
+                
+                if (c->state.mouse_pressing) {
+                    set_argb(cr, {.8, .8, .8, 1});
+                    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
+                } else if (c->state.mouse_hovering) {
+                    set_argb(cr, {.9, .9, .9, 1});
+                    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
+                } else {
+                    set_argb(cr, {1, 1, 1, 1});
+                    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
+                }
+                cairo_fill(cr);
+                
+                Bounds b = draw_text(cr, 0, 0, m, option_height * dpi, false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
+                draw_text(cr, 5 * dpi, center_y(c, b.h), m, option_height * dpi, true, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
+            };
+            ch->when_clicked = [m, func](Container *root, Container *c) {
+                auto popup = (MylarWindow *) root->user_data;
+                if (func) {
+                    func(m);
+                }
+                windowing::timer(settings_app, 1, [](void *data) {
+                    auto rw = (RawWindow *) data;
+                    windowing::close_window(rw);
+                }, popup->raw_window);
+            };
+        }    
         popup->root->skip_delete = true;
         popup->root->user_data = popup;
+        popup->root->type = ::vbox;
         popup->root->wanted_bounds.w = FILL_SPACE;
         popup->root->wanted_bounds.h = FILL_SPACE;
-        //fill_popup_container(dock);
         windowing::redraw(popup->raw_window);
-        if (func) {
-            func();
+    };
+    pad->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (!pressed || !popup)
+            return;
+        if (sym == XKB_KEY_Escape) {
+            windowing::timer(settings_app, 1, [](void *data) {
+                auto rw = (RawWindow *) data;
+                windowing::close_window(rw);
+            }, popup->raw_window); 
         }
-   };
+    };
+   
 }
 
 
@@ -1125,15 +1164,62 @@ static void fill_display_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
-    make_dropdown(padded_right, "Monitor 1", []() {
+    struct MonitorOption {
+        std::string name;
+        std::vector<std::string> option;
+    };
+    std::vector<MonitorOption *> options;
+    auto data = execAndGet(std::string("hyprctl monitors").c_str());
+    
+    std::istringstream stream(data);
+    std::string line;
+    MonitorOption* current = nullptr;
 
-    });
-/*
-    make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
-        set->draw_wallpaper = c;
-        damage_all();
-    });
-    */
+    while (std::getline(stream, line)) {
+        // Remove leading whitespace
+        auto first = line.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+            continue;
+
+        std::string trimmed = line.substr(first);
+
+        // Match:
+        // Monitor eDP-1 (ID 0):
+        // Monitor eDP-2 (ID 1):
+        if (trimmed.rfind("Monitor ", 0) == 0) {
+            std::string monitor = trimmed.substr(8); // after "Monitor "
+
+            // Remove everything from " (ID" onward
+            auto pos = monitor.find(" (ID");
+            if (pos != std::string::npos)
+                monitor.resize(pos);
+            current = new MonitorOption{monitor, {}};
+            options.push_back(current);
+            continue;
+        }
+
+        // Match:
+        // availableModes: 1920x1080@60.00Hz 1920x1080@165.00Hz
+        if (current && trimmed.rfind("availableModes:", 0) == 0) {
+            std::string modes = trimmed.substr(
+                std::string("availableModes:").length()
+            );
+
+            std::istringstream modeStream(modes);
+            std::string mode;
+
+            while (modeStream >> mode) {
+                current->option.push_back(mode);
+            }
+        }
+    }
+    for (auto m : options) {
+        make_dropdown(padded_right, m->name, m->option,[](std::string selected) {
+            main_thread([selected]() {
+                notify(selected);
+            });
+        });
+    }
 }
 
 static void fill_desktop_settings(Container *root, Container *c) {
