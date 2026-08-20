@@ -493,27 +493,34 @@ static Container *make_self_height_sized_parent(Container *parent) {
     return c;
 }
 
-static void make_label_like(Container *parent, std::string title, std::string description) {
+static void make_label_like(Container *parent, std::string title, std::string description, std::string icon = "") {
     auto left = parent->child(FILL_SPACE, FILL_SPACE);
     //static float button_text_pad = 8; 
-    left->when_paint = [title, description](Container *root, Container *c) {
+    left->when_paint = [title, description, icon](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
+        auto size_ico = 16 * dpi;
         auto size_title = 12 * dpi;
         auto size_desc = 11 * dpi;
 
         auto b = c->real_bounds;
         float yoff = optiontopbottompad * dpi;
+        float xoff = 0;
+        if (!icon.empty()) {
+            auto bo = draw_text(cr, 0, 0, icon, size_ico, false, icon_font, -1, -1, {0, 0, 0, .5}, false);
+            draw_text(cr, c->real_bounds.x + optionleftpad * dpi, center_y(c, bo.h), icon, size_ico, true, icon_font, -1, -1, {0, 0, 0, 1}, false);
+            xoff += bo.w + optionleftpad * dpi;
+        }
         {
             auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
             if (description.empty()) {
                 draw_text(cr,
-                    c->real_bounds.x + optionleftpad * dpi, 
+                    c->real_bounds.x + optionleftpad * dpi + xoff, 
                     c->real_bounds.y + optiontopbottompad * dpi, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             } else {
                 draw_text(cr,
-                    c->real_bounds.x + optionleftpad * dpi, 
+                    c->real_bounds.x + optionleftpad * dpi + xoff, 
                     c->real_bounds.y + yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             }
 
@@ -522,11 +529,11 @@ static void make_label_like(Container *parent, std::string title, std::string de
         if (!description.empty()) {
             auto bo = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             draw_text(cr,
-                c->real_bounds.x + optionleftpad * dpi, 
+                c->real_bounds.x + optionleftpad * dpi + xoff, 
                 c->real_bounds.y + yoff, description, size_desc, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
         }
     };
-    left->pre_layout = [title, description](Container *root, Container *c, const Bounds &b) {
+    left->pre_layout = [title, description, icon](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
@@ -980,13 +987,14 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
                 draw_text(cr, 5 * dpi, center_y(c, b.h), m, option_height * dpi, true, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
             };
             ch->when_clicked = [m, func](Container *root, Container *c) {
-                auto popup = (MylarWindow *) root->user_data;
-                if (func) {
+                if (func)
                     func(m);
-                }
+                if (!popup)
+                    return;
                 windowing::timer(settings_app, 1, [](void *data) {
                     auto rw = (RawWindow *) data;
                     windowing::close_window(rw);
+                    popup = nullptr;
                 }, popup->raw_window);
             };
         }    
@@ -1004,12 +1012,22 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
             windowing::timer(settings_app, 1, [](void *data) {
                 auto rw = (RawWindow *) data;
                 windowing::close_window(rw);
+                popup = nullptr;
             }, popup->raw_window); 
         }
     };
    
 }
 
+static void make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::vector<std::string> options, std::function<void(std::string)> on_change) {
+    auto p = make_self_height_sized_parent(parent);
+
+    make_label_like(p, title, description, icon);
+
+    make_dropdown(p, "first", {"secnod"}, [](std::string args) {
+        
+    });
+}
 
 static void make_button(Container *parent, std::string text, std::function<void()> func) {
     static float pad_amount = 11;
@@ -1176,16 +1194,8 @@ static void fill_display_settings(Container *root, Container *c) {
     MonitorOption* current = nullptr;
 
     while (std::getline(stream, line)) {
-        // Remove leading whitespace
-        auto first = line.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos)
-            continue;
+        std::string trimmed = trim(line);
 
-        std::string trimmed = line.substr(first);
-
-        // Match:
-        // Monitor eDP-1 (ID 0):
-        // Monitor eDP-2 (ID 1):
         if (trimmed.rfind("Monitor ", 0) == 0) {
             std::string monitor = trimmed.substr(8); // after "Monitor "
 
@@ -1198,28 +1208,22 @@ static void fill_display_settings(Container *root, Container *c) {
             continue;
         }
 
-        // Match:
-        // availableModes: 1920x1080@60.00Hz 1920x1080@165.00Hz
         if (current && trimmed.rfind("availableModes:", 0) == 0) {
-            std::string modes = trimmed.substr(
-                std::string("availableModes:").length()
-            );
+            std::string modes = trimmed.substr(std::string("availableModes:").length());
 
             std::istringstream modeStream(modes);
             std::string mode;
 
-            while (modeStream >> mode) {
+            while (modeStream >> mode)
                 current->option.push_back(mode);
-            }
         }
     }
-    for (auto m : options) {
-        make_dropdown(padded_right, m->name, m->option,[](std::string selected) {
-            main_thread([selected]() {
-                notify(selected);
-            });
+    std::vector<std::string> scales = {"100%", "125%", "150%", "175%", "200%"};
+    make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", scales, [](std::string selected) {
+        main_thread([selected]() {
+            notify(selected);
         });
-    }
+    });
 }
 
 static void fill_desktop_settings(Container *root, Container *c) {

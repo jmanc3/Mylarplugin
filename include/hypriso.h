@@ -47,6 +47,7 @@ static int titlebar_h = 28;
 //static std::string mylar_font = "Noto Sans";
 //static std::string mylar_font = "SF Pro Rounded";
 static std::string mylar_font = "Segoe UI Variable";
+static std::string icon_font = "Segoe Fluent Icons";
 static long minimize_anim_time = 100;
 
 struct wl_event_source;

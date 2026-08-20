@@ -82,6 +82,10 @@
 #include <hyprland/src/animation/AnimationManager.hpp>
 // #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
 
+#include <hyprland/src/desktop/view/window/WindowEffectsController.hpp>
+
+#include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
+
 #include <hyprland/src/keybinds/Resolver.hpp>
 
 #include <hyprland/src/animation/WorkspaceAnimationController.hpp>
@@ -155,7 +159,7 @@
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/xwayland/XWM.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
-#include <hyprland/src/desktop/view/Window.hpp>
+//#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/errorOverlay/Overlay.hpp>
@@ -163,7 +167,8 @@
 #include <hyprland/src/debug/Overlay.hpp>
 #include <hyprland/src/config/shared/animation/AnimationTree.hpp>
 #include <hyprland/src/output/MonitorResources.hpp>
-
+#include <hyprland/src/desktop/view/window/X11Backend.hpp>
+#include <hyprland/src/desktop/view/window/WaylandBackend.hpp>
 #undef private
 
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
@@ -782,8 +787,8 @@ bool HyprIso::requested_client_side_decorations(int cid) {
         }
         */
 
-        if (w->m_isX11 && w->m_xwaylandSurface) {
-            auto win = w->m_xwaylandSurface->m_xID;
+        if (w->backend().isX11() && w->backend().valid()) {
+            auto win = w->backend().clientID().id;
             if (g_pXWayland && g_pXWayland->m_wm) {
                 auto connection = g_pXWayland->m_wm->getConnection();
 
@@ -807,57 +812,61 @@ void on_open_window(PHLWINDOW w) {
     for (auto m : State::monitorState()->monitors()) {
         on_open_monitor(m);
     }
-    if (auto surface = w->m_xdgSurface) {
-        if (auto toplevel = surface->m_toplevel.lock()) {
-            auto resource = toplevel->m_resource;
-            if (resource) {
-                resource->setMove([](CXdgToplevel*, wl_resource*, uint32_t) {
-                    if (hypriso->on_drag_start_requested) {
-                        if (auto w = get_window_from_mouse()) {
-                            for (auto hw : hyprwindows) {
-                                if (w == hw->w) {
-                                    hypriso->on_drag_start_requested(hw->id);
-                                }
-                            }
-                        }
-                    }
-                });
-                resource->setResize([](CXdgToplevel* t, wl_resource*, uint32_t, xdgToplevelResizeEdge e) {
-                    for (auto w : Desktop::windowState()->windows()) {
-                        if (auto surf = w->m_xdgSurface.lock()) {
-                            if (auto top = surf->m_toplevel.lock()) {
-                                auto resource = top->m_resource;
-                                if (resource.get() == t) {
-                                    auto type = RESIZE_TYPE::NONE;
-                                    if (e == XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
-                                        type = RESIZE_TYPE::NONE;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_TOP) {
-                                        type = RESIZE_TYPE::TOP;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM) {
-                                        type = RESIZE_TYPE::BOTTOM;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_LEFT) {
-                                        type = RESIZE_TYPE::LEFT;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT) {
-                                        type = RESIZE_TYPE::TOP_LEFT;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT) {
-                                        type = RESIZE_TYPE::BOTTOM_LEFT;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_RIGHT) {
-                                        type = RESIZE_TYPE::RIGHT;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT) {
-                                        type = RESIZE_TYPE::TOP_RIGHT;
-                                    } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT) {
-                                        type = RESIZE_TYPE::BOTTOM_RIGHT;
+    if (!w->backend().isX11() && w->backend().valid()) {
+        if (auto surface = ((Desktop::View::CWaylandBackend *) w->m_backend.get())->m_resource) {
+            if (auto toplevel = surface->m_toplevel.lock()) {
+                auto resource = toplevel->m_resource;
+                if (resource) {
+                    resource->setMove([](CXdgToplevel*, wl_resource*, uint32_t) {
+                        if (hypriso->on_drag_start_requested) {
+                            if (auto w = get_window_from_mouse()) {
+                                for (auto hw : hyprwindows) {
+                                    if (w == hw->w) {
+                                        hypriso->on_drag_start_requested(hw->id);
                                     }
-                                    int id = 0;
-                                    for (auto hw : hyprwindows)
-                                        if (hw->w == w)
-                                            id = hw->id;
-                                    hypriso->on_resize_start_requested(id, type);
                                 }
                             }
                         }
-                    }
-                });
+                    });
+                    resource->setResize([](CXdgToplevel* t, wl_resource*, uint32_t, xdgToplevelResizeEdge e) {
+                        for (auto w : Desktop::windowState()->windows()) {
+                            if (!w->backend().isX11() && w->backend().valid()) {
+                                if (auto surf = ((Desktop::View::CWaylandBackend *) w->m_backend.get())->m_resource) {
+                                    if (auto top = surf->m_toplevel.lock()) {
+                                        auto resource = top->m_resource;
+                                        if (resource.get() == t) {
+                                            auto type = RESIZE_TYPE::NONE;
+                                            if (e == XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
+                                                type = RESIZE_TYPE::NONE;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_TOP) {
+                                                type = RESIZE_TYPE::TOP;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM) {
+                                                type = RESIZE_TYPE::BOTTOM;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_LEFT) {
+                                                type = RESIZE_TYPE::LEFT;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT) {
+                                                type = RESIZE_TYPE::TOP_LEFT;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT) {
+                                                type = RESIZE_TYPE::BOTTOM_LEFT;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_RIGHT) {
+                                                type = RESIZE_TYPE::RIGHT;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT) {
+                                                type = RESIZE_TYPE::TOP_RIGHT;
+                                            } else if (e == XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT) {
+                                                type = RESIZE_TYPE::BOTTOM_RIGHT;
+                                            }
+                                            int id = 0;
+                                            for (auto hw : hyprwindows)
+                                                if (hw->w == w)
+                                                    id = hw->id;
+                                            hypriso->on_resize_start_requested(id, type);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             }
         }
     }
@@ -1042,12 +1051,14 @@ void remove_request_listeners() {
 #endif
     
     for (auto& w : Desktop::windowState()->windows()) {
-        if (auto surface = w->m_xdgSurface) {
-            if (auto toplevel = surface->m_toplevel.lock()) {
-                auto resource = toplevel->m_resource;
-                if (resource) {
-                    resource->setMove(nullptr);
-                    resource->setResize(nullptr);
+        if (!w->backend().isX11() && w->backend().valid()) {
+            if (auto surface = ((Desktop::View::CWaylandBackend *) w->m_backend.get())->m_resource) {
+                if (auto toplevel = surface->m_toplevel.lock()) {
+                    auto resource = toplevel->m_resource;
+                    if (resource) {
+                        resource->setMove(nullptr);
+                        resource->setResize(nullptr);
+                    }
                 }
             }
         }
@@ -1082,156 +1093,156 @@ void recheck_csd_for_all_wayland_windows() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    later(10, [](Timer *) {
-        for (auto w : Desktop::windowState()->windows()) {
-            if (w->m_isX11)
-                continue;
-
-            bool remove_csd = false;
-            for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-                if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface->m_surface) {
-                    if (s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT) {
-                        remove_csd = true;
-                    }
-                }
-            }
-
-            for (const auto &[a, b] : NProtocols::xdgDecoration->m_decorations) {
-                if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource) {
-                // if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource && b->m_resource == w->m_xdgSurface->m_toplevel->m_resource) {
-                    if (b->mostRecentlyRequested == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
-                        remove_csd = true;
-                    }
-                }
-            }
-
-
-            bool has_csd = false;
-            for (auto& wd : w->m_windowDecorations)
-                if (wd->getDisplayName() == "MylarBar")
-                    has_csd = true;
-            if (has_csd && remove_csd) {
-                for (auto hw : hyprwindows) {
-                    if (hw->w == w) {
-                        hypriso->on_window_closed(hw->id);
-                    }
-                }
-            } else if (!has_csd && !remove_csd) {
-                for (auto hw : hyprwindows) {
-                    if (hw->w == w) {
-                        hypriso->on_window_open(hw->id);
-                    }
-                }
-            }
-        }
-    });
-}
-
-inline CFunctionHook* g_pOnKDECSD = nullptr;
-typedef uint32_t (*origOnKDECSD)(void*);
-uint32_t hook_OnKDECSD(void* thisptr) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-
-    auto ptr = (CServerDecorationKDE *) thisptr;
-    for (auto hw : hyprwindows) {
-        for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
-                break;
-            }
-        }
-    }
-    //ptr->m_resource
-    //recheck_csd_for_all_wayland_windows();
+    // later(10, [](Timer *) {
+    //     for (auto w : Desktop::windowState()->windows()) {
+    //         if (w->backend().isX11())
+    //             continue;
     //
-    return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
+    //         bool remove_csd = false;
+    //         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
+    //             if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface->m_surface) {
+    //                 if (s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT) {
+    //                     remove_csd = true;
+    //                 }
+    //             }
+    //         }
+    //
+    //         for (const auto &[a, b] : NProtocols::xdgDecoration->m_decorations) {
+    //             if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource) {
+    //             // if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource && b->m_resource == w->m_xdgSurface->m_toplevel->m_resource) {
+    //                 if (b->mostRecentlyRequested == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
+    //                     remove_csd = true;
+    //                 }
+    //             }
+    //         }
+    //
+    //
+    //         bool has_csd = false;
+    //         for (auto& wd : w->presentation().decorations())
+    //             if (wd->getDisplayName() == "MylarBar")
+    //                 has_csd = true;
+    //         if (has_csd && remove_csd) {
+    //             for (auto hw : hyprwindows) {
+    //                 if (hw->w == w) {
+    //                     hypriso->on_window_closed(hw->id);
+    //                 }
+    //             }
+    //         } else if (!has_csd && !remove_csd) {
+    //             for (auto hw : hyprwindows) {
+    //                 if (hw->w == w) {
+    //                     hypriso->on_window_open(hw->id);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // });
 }
 
-inline CFunctionHook* g_pOnKDERequestCSD = nullptr;
-typedef uint32_t (*origOnKDERequestCSD)(void*, uint32_t mode);
-uint32_t hook_OnKDERequestCSD(void* thisptr, uint32_t mode) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    //recheck_csd_for_all_wayland_windows();
-    for (auto hw : hyprwindows) {
-        for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
-                break;
-            }
-        }
-    }
-    
-    return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
-}
+// inline CFunctionHook* g_pOnKDECSD = nullptr;
+// typedef uint32_t (*origOnKDECSD)(void*);
+// uint32_t hook_OnKDECSD(void* thisptr) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//     auto ptr = (CServerDecorationKDE *) thisptr;
+//     for (auto hw : hyprwindows) {
+//         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
+//             if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
+//                 break;
+//             }
+//         }
+//     }
+//     //ptr->m_resource
+//     //recheck_csd_for_all_wayland_windows();
+//     //
+//     return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
+// }
+//
+// inline CFunctionHook* g_pOnKDERequestCSD = nullptr;
+// typedef uint32_t (*origOnKDERequestCSD)(void*, uint32_t mode);
+// uint32_t hook_OnKDERequestCSD(void* thisptr, uint32_t mode) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     //recheck_csd_for_all_wayland_windows();
+//     for (auto hw : hyprwindows) {
+//         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
+//             if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
+//                 break;
+//             }
+//         }
+//     }
+//
+//     return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
+// }
 
-inline CFunctionHook* g_pOnKDEReleaseCSD = nullptr;
-typedef uint32_t (*origOnKDEReleaseCSD)(void*);
-uint32_t hook_OnKDEReleaseCSD(void* thisptr) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-
-    //recheck_csd_for_all_wayland_windows();
-    for (auto hw : hyprwindows) {
-        for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
-                break;
-            }
-        }
-    }
-    return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
-}
-
-
-
-inline CFunctionHook* g_pOnXDGCSD = nullptr;
-typedef zxdgToplevelDecorationV1Mode (*origOnXDGCSD)(void*);
-zxdgToplevelDecorationV1Mode hook_OnXDGCSD(void* thisptr) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    recheck_csd_for_all_wayland_windows();
-    return (*(origOnXDGCSD)g_pOnXDGCSD->m_original)(thisptr);
-}
-
-void detect_csd_request_change() {
-    return;
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    // hook xdg and kde csd request mode, then set timeout for 25 ms, 5 times which checks and updates csd for current windows based on most recent requests
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeDefaultModeCSD");
-        g_pOnKDECSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnKDECSD);
-        g_pOnKDECSD->hook();
-    }
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeModeOnRequestCSD");
-        g_pOnKDERequestCSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnKDERequestCSD);
-        g_pOnKDERequestCSD->hook();
-    }
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeModeOnReleaseCSD");
-        g_pOnKDEReleaseCSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnKDEReleaseCSD);
-        g_pOnKDEReleaseCSD->hook();
-    }
-
-    /*{
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "xdgDefaultModeCSD");
-        g_pOnXDGCSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnXDGCSD);
-        g_pOnXDGCSD->hook();
-    }*/
-
-    // hook props change xwayland function, parse motifs, set or remove decorations as needed
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "readProp");
-        g_pOnReadProp = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnReadProp);
-        g_pOnReadProp->hook();
-    }
-
-}
+// inline CFunctionHook* g_pOnKDEReleaseCSD = nullptr;
+// typedef uint32_t (*origOnKDEReleaseCSD)(void*);
+// uint32_t hook_OnKDEReleaseCSD(void* thisptr) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//
+//     //recheck_csd_for_all_wayland_windows();
+//     for (auto hw : hyprwindows) {
+//         for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
+//             if (hw->w->m_xdgSurface && s->m_surf == hw->w->m_xdgSurface->m_surface) {
+//                 break;
+//             }
+//         }
+//     }
+//     return ORG_KDE_KWIN_SERVER_DECORATION_MANAGER_MODE_CLIENT;
+// }
+//
+//
+//
+// inline CFunctionHook* g_pOnXDGCSD = nullptr;
+// typedef zxdgToplevelDecorationV1Mode (*origOnXDGCSD)(void*);
+// zxdgToplevelDecorationV1Mode hook_OnXDGCSD(void* thisptr) {
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     recheck_csd_for_all_wayland_windows();
+//     return (*(origOnXDGCSD)g_pOnXDGCSD->m_original)(thisptr);
+// }
+//
+// void detect_csd_request_change() {
+//     return;
+// #ifdef TRACY_ENABLE
+//     ZoneScoped;
+// #endif
+//     // hook xdg and kde csd request mode, then set timeout for 25 ms, 5 times which checks and updates csd for current windows based on most recent requests
+//     {
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeDefaultModeCSD");
+//         g_pOnKDECSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnKDECSD);
+//         g_pOnKDECSD->hook();
+//     }
+//     {
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeModeOnRequestCSD");
+//         g_pOnKDERequestCSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnKDERequestCSD);
+//         g_pOnKDERequestCSD->hook();
+//     }
+//     {
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "kdeModeOnReleaseCSD");
+//         g_pOnKDEReleaseCSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnKDEReleaseCSD);
+//         g_pOnKDEReleaseCSD->hook();
+//     }
+//
+//     /*{
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "xdgDefaultModeCSD");
+//         g_pOnXDGCSD = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnXDGCSD);
+//         g_pOnXDGCSD->hook();
+//     }*/
+//
+//     // hook props change xwayland function, parse motifs, set or remove decorations as needed
+//     {
+//         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "readProp");
+//         g_pOnReadProp = HyprlandAPI::createFunctionHook(globals->api, METHODS[0].address, (void*)&hook_OnReadProp);
+//         g_pOnReadProp->hook();
+//     }
+//
+// }
 
 
 #define _NET_WM_MOVERESIZE_SIZE_TOPLEFT     0
@@ -1263,7 +1274,7 @@ std::string get_atom_name(xcb_connection_t* conn, xcb_atom_t atom) {
 
 PHLWINDOW winref_from_x11(xcb_window_t window) {
     for (auto w : Desktop::windowState()->windows()) {
-        if (w->m_isX11 && w->m_xwaylandSurface->m_xID == window) {
+        if (w->backend().valid() && w->backend().isX11() && w->backend().clientID().id == window) {
             return w;
         }
     }
@@ -1550,7 +1561,7 @@ std::string HyprIso::class_name(int id) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == id) {
             if (auto w = hyprwindow->w.get()) {
-                return w->m_class;
+                return w->metadata().appID();
             }
         }
     }
@@ -1564,7 +1575,7 @@ float HyprIso::get_rounding(int id) {
 #endif
     for (auto hw: hyprwindows)
         if (hw->id == id)
-            return hw->w->rounding();
+            return hw->w->presentation().rounding();
     return 0;
 }
 
@@ -2108,56 +2119,66 @@ void hook_shadow_decorations() {
 void hook_popup_creation_and_destruction();
 
 void onUpdateState(Desktop::View::CWindow *ptr) {
-    std::optional<bool>      requestsFS = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreen : ptr->m_xwaylandSurface->m_state.requestsFullscreen;
-    std::optional<MONITORID> requestsID = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreenMonitor : MONITOR_INVALID;
-    std::optional<bool>      requestsMX = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMaximize : ptr->m_xwaylandSurface->m_state.requestsMaximize;
-    std::optional<bool>      requestsMin = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMinimize : ptr->m_xwaylandSurface->m_state.requestsMinimize;
-    
+    // void CWindow::onUpdateState(const SBackendStateRequest& request) {
+    //     requestClientFullscreen({
+    //         .fullscreen        = request.fullscreen,
+    //         .maximized         = request.maximized,
+    //         .fullscreenMonitor = request.fullscreenMonitor,
+    //         .origin            = SClientFullscreenRequest::ORIGIN_BACKEND,
+    //     });
+    // }
 
-    if (requestsFS.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN)) {
-        if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN_OUTPUT)) {
-            if (ptr->m_isMapped) {
-                const auto monitor = State::monitorState()->query().id(requestsID.value()).run();
-                Desktop::globalWindowController()->moveWindowToWorkspace(ptr->m_self.lock(), monitor->m_activeWorkspace);
-                Desktop::focusState()->rawMonitorFocus(monitor);
-            }
 
-            if (!ptr->m_isMapped)
-                ptr->m_wantsInitialFullscreenMonitor = requestsID.value();
-        }
-
-        bool fs = requestsFS.value();
-        if (ptr->m_isMapped) {
-            Fullscreen::controller()->setFullscreenMode(ptr->m_self.lock(), std::nullopt, Fullscreen::FSMODE_FULLSCREEN);
-            // g_pCompositor->changeWindowFullscreenModeClient(ptr->m_self.lock(), Fullscreen::FSMODE_FULLSCREEN, requestsFS.value());
-        }
-
-        if (!ptr->m_isMapped)
-            ptr->m_wantsInitialFullscreen = fs;
-    }
-
-    if (requestsMX.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_MAXIMIZE)) {
-        if (ptr->m_isMapped) {
-            //auto window    = ptr->m_self.lock();
-            //auto state     = sc<int8_t>(window->m_fullscreenState.client);
-            //bool maximized = (state & sc<uint8_t>(FSMODE_MAXIMIZED)) != 0;
-            //g_pCompositor->changeWindowFullscreenModeClient(window, FSMODE_MAXIMIZED, !maximized);
-        }
-    }
-
-    if (requestsMX.has_value() || requestsMin.has_value()) {
-        if (hypriso->on_requests_max_or_min) {
-            for (auto hw : hyprwindows) {
-                if (hw->w.get() == ptr) {
-                    int want = 0; // max
-                    if (requestsMin.has_value())
-                        want = 1;
-                    hypriso->on_requests_max_or_min(hw->id, want);
-                    break;
-                }
-            }
-        }
-    }
+    // std::optional<bool>      requestsFS = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreen : ptr->m_xwaylandSurface->m_state.requestsFullscreen;
+    // std::optional<MONITORID> requestsID = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsFullscreenMonitor : MONITOR_INVALID;
+    // std::optional<bool>      requestsMX = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMaximize : ptr->m_xwaylandSurface->m_state.requestsMaximize;
+    // std::optional<bool>      requestsMin = ptr->m_xdgSurface ? ptr->m_xdgSurface->m_toplevel->m_state.requestsMinimize : ptr->m_xwaylandSurface->m_state.requestsMinimize;
+    //
+    //
+    // if (requestsFS.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN)) {
+    //     if (requestsID.has_value() && (requestsID.value() != MONITOR_INVALID) && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_FULLSCREEN_OUTPUT)) {
+    //         if (ptr->m_isMapped) {
+    //             const auto monitor = State::monitorState()->query().id(requestsID.value()).run();
+    //             Desktop::globalWindowController()->moveWindowToWorkspace(ptr->m_self.lock(), monitor->m_activeWorkspace);
+    //             Desktop::focusState()->rawMonitorFocus(monitor);
+    //         }
+    //
+    //         if (!ptr->m_isMapped)
+    //             ptr->m_wantsInitialFullscreenMonitor = requestsID.value();
+    //     }
+    //
+    //     bool fs = requestsFS.value();
+    //     if (ptr->m_isMapped) {
+    //         Fullscreen::controller()->setFullscreenMode(ptr->m_self.lock(), std::nullopt, Fullscreen::FSMODE_FULLSCREEN);
+    //         // g_pCompositor->changeWindowFullscreenModeClient(ptr->m_self.lock(), Fullscreen::FSMODE_FULLSCREEN, requestsFS.value());
+    //     }
+    //
+    //     if (!ptr->m_isMapped)
+    //         ptr->m_wantsInitialFullscreen = fs;
+    // }
+    //
+    // if (requestsMX.has_value() && !(ptr->m_suppressedEvents & Desktop::View::eSuppressEvents::SUPPRESS_MAXIMIZE)) {
+    //     if (ptr->m_isMapped) {
+    //         //auto window    = ptr->m_self.lock();
+    //         //auto state     = sc<int8_t>(window->m_fullscreenState.client);
+    //         //bool maximized = (state & sc<uint8_t>(FSMODE_MAXIMIZED)) != 0;
+    //         //g_pCompositor->changeWindowFullscreenModeClient(window, FSMODE_MAXIMIZED, !maximized);
+    //     }
+    // }
+    //
+    // if (requestsMX.has_value() || requestsMin.has_value()) {
+    //     if (hypriso->on_requests_max_or_min) {
+    //         for (auto hw : hyprwindows) {
+    //             if (hw->w.get() == ptr) {
+    //                 int want = 0; // max
+    //                 if (requestsMin.has_value())
+    //                     want = 1;
+    //                 hypriso->on_requests_max_or_min(hw->id, want);
+    //                 break;
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 inline CFunctionHook* g_pOnUpdateStateHook = nullptr;
@@ -3100,10 +3121,14 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
     auto win = (*(origVecToWinSurf)g_pOnVecToWinSurf->m_original)((Desktop::CViewHitTester *) thisptr, vc, m, sl);
     bool disabled = false;
     for (auto hw : hyprwindows) {
-        if (hw->w->m_xdgSurface && hw->w->m_xdgSurface->m_surface == win) {
-        // if (hw->w->m_xdgSurface == win) {
-            disabled = win_disabled(hw->w);
-            break;
+        if (hw->w->backend().valid()) {
+            if (auto surface = hw->w->backend().surface()) {
+                if (surface == win) {
+                    // if (hw->w->m_xdgSurface == win) {
+                    disabled = win_disabled(hw->w);
+                    break;
+                }
+            }
         }
     }
     if (hypriso->whitelist_on || disabled) {
@@ -3142,7 +3167,7 @@ void HyprIso::create_hooks() {
     ZoneScoped;
 #endif
     previously_seen_instance_signature = get_previous_instance_signature();
-    detect_csd_request_change();
+    // detect_csd_request_change();
     fix_window_corner_rendering();
     hook_shadow_decorations();
     //disable_default_alt_tab_behaviour();
@@ -3154,7 +3179,7 @@ void HyprIso::create_hooks() {
     hook_maximize_minimize();
     hook_dock_change();
     hook_monitor_arrange();
-    hook_popup_creation_and_destruction();
+    //hook_popup_creation_and_destruction();
     hook_use_shader();
     hook_load_shader();
     // hook_monitor_render();
@@ -3189,7 +3214,7 @@ void client_get_type_and_transientness(HyprWindow* self) {
     self->type = (ObClientType) -1;
     self->transient = false;
     
-    for (const auto& a : self->w->m_xwaylandSurface->m_atoms) {
+    for (const auto& a : ((Desktop::View::CX11Backend *) self->w->m_backend.get())->m_xwaylandSurface->m_atoms) {
         if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DESKTOP"])
             self->type = OB_CLIENT_TYPE_DESKTOP;
         else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DOCK"])
@@ -3219,7 +3244,7 @@ void client_get_type_and_transientness(HyprWindow* self) {
 
     xcb_window_t t;
     auto connection = g_pXWayland->m_wm->getConnection();
-    if (xcb_get_transient_for(connection, self->w->m_xwaylandSurface->m_xID, &t))
+    if (xcb_get_transient_for(connection, self->w->backend().clientID().id, &t))
         self->transient = TRUE;
 
     if (self->type == (ObClientType) -1) {
@@ -3350,7 +3375,7 @@ bool HyprIso::alt_tabbable(int id) {
             bool found = false;
             bool canX11 = false;
             
-            if (h->w->m_isX11) {
+            if (h->w->backend().isX11()) {
                 client_get_type_and_transientness(h);
                 if (h->type == OB_CLIENT_TYPE_NORMAL) {
                     canX11 = true;
@@ -3633,7 +3658,7 @@ bool HyprIso::wants_titlebar(int id) {
 #endif
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == id) {
-            if (hyprwindow->w->m_X11DoesntWantBorders) {
+            if (hyprwindow->w->backend().traits().suggestsNoBorder) {
                 return false;
             }
         }
@@ -3653,12 +3678,12 @@ void HyprIso::reserve_titlebar(int id, int size) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == id) {
             if (auto w = hyprwindow->w.get()) {
-                for (auto& wd : w->m_windowDecorations)
+                for (auto& wd : w->presentation().decorations())
                     if (wd->getDisplayName() == "MylarBar")
                         return;
 
-                auto m = makeUnique<MylarBar>(hyprwindow->w, size);
-                HyprlandAPI::addWindowDecoration(globals->api, hyprwindow->w, std::move(m));
+                auto m = makeShared<MylarBar>(hyprwindow->w, size);
+                HyprlandAPI::addWindowDecoration(globals->api, hyprwindow->w, m);
             }
         }
     }
@@ -3716,7 +3741,7 @@ std::string class_name(ThinClient *w) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == w->id) {
             if (auto w = hyprwindow->w.get()) {
-                return w->m_class;
+                return w->metadata().appID();
             }
         }
     }
@@ -3732,7 +3757,7 @@ std::string HyprIso::title_name(int id) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == id) {
             if (auto w = hyprwindow->w.get()) {
-                return w->m_title;
+                return w->metadata().title();
             }
         }
     }
@@ -3748,7 +3773,7 @@ std::string title_name(ThinClient *w) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == w->id) {
             if (auto w = hyprwindow->w.get()) {
-                return w->m_title;
+                return w->metadata().title();
             }
         }
     }
@@ -3956,7 +3981,10 @@ void HyprIso::set_space_tiling(int space, bool state) {
 void HyprIso::pin(int id, bool state) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            hw->w->m_pinned = state;
+            if (state)
+                hw->w->m_state |= Desktop::View::WINDOW_STATE_PINNED;
+            else
+                hw->w->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
         }
     }
 }
@@ -4858,8 +4886,8 @@ bool HyprIso::resizable(int id) {
         if (hw->id == id) {
             if (!hw->checked_resizable) {
                 hw->checked_resizable = true;
-                if (hw->w->m_isX11 && hw->w->m_xwaylandSurface) {
-                    auto win = hw->w->m_xwaylandSurface->m_xID;
+                if (hw->w->backend().isX11() && hw->w->backend().valid()) {
+                    auto win = hw->w->backend().clientID().id;
                     if (g_pXWayland && g_pXWayland->m_wm) {
                         auto connection = g_pXWayland->m_wm->getConnection();
 
@@ -4895,7 +4923,7 @@ void HyprIso::set_hidden(int id, bool state, bool animate_to_dock) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            hw->w->updateWindowDecos();
+            hw->w->presentation().updateDecorations();
             hw->w->setHidden(state);
             hw->animate_to_dock = animate_to_dock;
             hw->is_hidden = state;
@@ -4946,7 +4974,7 @@ void HyprIso::remove_decorations(int id) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == id) {
             if (auto w = hyprwindow->w.get()) {
-                for (auto& wd : w->m_windowDecorations) {
+                for (auto& wd : w->presentation().decorations()) {
                     if (wd->getDisplayName() == "MylarBar")  {
                         HyprlandAPI::removeWindowDecoration(globals->api, wd.get());
                         return;
@@ -4964,7 +4992,7 @@ bool HyprIso::has_decorations(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            for (const auto &decos : hw->w->m_windowDecorations) {
+            for (const auto &decos : hw->w->presentation().decorations()) {
                if (decos->getDisplayName() == "MylarBar") {
                    return true;
                } 
@@ -4981,7 +5009,7 @@ bool HyprIso::is_x11(int cid) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == cid) {
-            return hw->w->m_isX11;
+            return hw->w->backend().isX11();
         }
     }
     return false;
@@ -4992,11 +5020,11 @@ int HyprIso::steam_id(int cid) {
     ZoneScoped;
 #endif
     for (auto hw : hyprwindows) {
-        if (hw->id != cid || !hw->w->m_isX11 || !hw->w->m_xwaylandSurface ||
+        if (hw->id != cid || !hw->w->backend().isX11() || !hw->w->backend().valid() ||
             !g_pXWayland || !g_pXWayland->m_wm)
             continue;
 
-        const auto xid        = hw->w->m_xwaylandSurface->m_xID;
+        const auto xid        = hw->w->backend().clientID().id;
         auto*      connection = g_pXWayland->m_wm->getConnection();
         if (!connection)
             return -1;
@@ -5037,7 +5065,7 @@ bool HyprIso::is_opaque(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            return hw->w->opaque();
+            return hw->w->presentation().opaque();
         }
     }
     return true;
@@ -5342,17 +5370,18 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     if (pWindow->isHidden() && !standalone)
         return;
 
-    if (!standalone && pWindow->effectiveAlpha() == 0.F && !pWindow->alpha().isBeingAnimated())
+    if (!standalone && pWindow->presentation().alphaTotal() == 0.F && !pWindow->presentation().alpha().isBeingAnimated())
         return;
 
-    if (!pWindow->m_isMapped)
+    if (!pWindow->mapped())
         return;
 
     TRACY_GPU_ZONE("RenderWindow");
 
-    const auto  PWORKSPACE = pWindow->m_workspace;
-    const auto  REALPOS    = pWindow->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + (pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
-    static auto PDIMAROUND = CConfigValue<Config::FLOAT>("decoration:dim_around");
+    const auto PWORKSPACE = pWindow->m_workspace;
+    const auto REALPOS =
+        pWindow->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + ((pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED) ? Vector2D{} : PWORKSPACE->m_renderOffset->value());
+    static auto                      PDIMAROUND = CConfigValue<Config::FLOAT>("decoration:dim_around");
 
     CSurfacePassElement::SRenderData renderdata = {pMonitor, time};
     const auto                       REALSIZE   = pWindow->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
@@ -5367,29 +5396,26 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         renderdata.pos.x = pMonitor->m_position.x;
         renderdata.pos.y = pMonitor->m_position.y;
     } else {
-        const bool ANR = pWindow->isNotResponding();
-        if (ANR && pWindow->m_notRespondingTint->goal() != 0.2F)
-            *pWindow->m_notRespondingTint = 0.2F;
-        else if (!ANR && pWindow->m_notRespondingTint->goal() != 0.F)
-            *pWindow->m_notRespondingTint = 0.F;
+        pWindow->presentation().setNotResponding(pWindow->isNotResponding());
     }
 
     // if (standalone)
         // decorate = false;
 
     // whether to use m_fMovingToWorkspaceAlpha, only if fading out into an invisible ws
-    const bool USE_WORKSPACE_FADE_ALPHA = pWindow->m_monitorMovedFrom != -1 && (!PWORKSPACE || !PWORKSPACE->isVisible());
+    const bool USE_WORKSPACE_FADE_ALPHA = pWindow->presentation().movingFromMonitor() && (!PWORKSPACE || !PWORKSPACE->isVisible());
 
     renderdata.surface   = pWindow->wlSurface()->resource();
     renderdata.dontRound = Fullscreen::controller()->getFullscreenModes(pWindow).internal == Fullscreen::FSMODE_FULLSCREEN;
-    renderdata.fadeAlpha = pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) * pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_LAYOUT) *
-        (pWindow->m_pinned || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
-        (USE_WORKSPACE_FADE_ALPHA ? pWindow->alphaValue(
-                   Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE) : 1.F) * pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE);
-    renderdata.alpha         = pWindow->alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE);
-    renderdata.decorate      = decorate && !pWindow->m_X11DoesntWantBorders && Fullscreen::controller()->getFullscreenModes(pWindow).internal != Fullscreen::FSMODE_FULLSCREEN;
-    renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->rounding() * pMonitor->m_scale;
-    renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->roundingPower();
+    renderdata.fadeAlpha = pWindow->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * pWindow->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) *
+        pWindow->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_LAYOUT) * ((pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED) || USE_WORKSPACE_FADE_ALPHA ? 1.f : PWORKSPACE->m_alpha->value()) *
+        (USE_WORKSPACE_FADE_ALPHA ? pWindow->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE) : 1.F) *
+        pWindow->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE);
+    renderdata.alpha = pWindow->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_ACTIVE);
+    renderdata.decorate =
+        decorate && !pWindow->backend().traits().suggestsNoBorder && Fullscreen::controller()->getFullscreenModes(pWindow).internal != Fullscreen::FSMODE_FULLSCREEN;
+    renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->presentation().rounding() * pMonitor->m_scale;
+    renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->presentation().roundingPower();
     renderdata.blur          = !standalone && tis->shouldBlur(pWindow);
     renderdata.pWindow       = pWindow;
 
@@ -5419,20 +5445,22 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         tis->addPassElement(makeUnique<CRectPassElement>(data));
     }
 
-    renderdata.pos.x += pWindow->m_floatingOffset.x;
-    renderdata.pos.y += pWindow->m_floatingOffset.y;
+    renderdata.pos += pWindow->presentation().floatingOffset();
 
     // if window is floating and we have a slide animation, clip it to its full bb
-    if (!ignorePosition && pWindow->m_isFloating && !Fullscreen::controller()->isFullscreen(pWindow) && PWORKSPACE->m_renderOffset->isBeingAnimated() && !pWindow->m_pinned) {
-        CRegion rg =
-            pWindow->getFullWindowBoundingBox().translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->m_floatingOffset).scale(pMonitor->m_scale).round();
+    if (!ignorePosition && pWindow->isFloating() && !Fullscreen::controller()->isFullscreen(pWindow) && PWORKSPACE->m_renderOffset->isBeingAnimated() &&
+        !(pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED)) {
+        CRegion rg         = pWindow->getFullWindowBoundingBox()
+                                 .translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->presentation().floatingOffset())
+                                 .scale(pMonitor->m_scale)
+                                 .round();
         renderdata.clipBox = rg.getExtents();
     }
 
     // render window decorations first, if not fullscreen full
     if (mode == Render::RENDER_PASS_ALL || mode == Render::RENDER_PASS_MAIN) {
 
-        const bool      TRANSFORMEDWINDOW = !pWindow->m_transformers.empty();
+        const bool      TRANSFORMEDWINDOW = pWindow->effects().hasActiveTransformers();
         UP<Render::CRenderPass> transformedPass;
         UP<Render::CScopeGuard> passRedirect;
         const bool      windowBlur = renderdata.blur;
@@ -5442,18 +5470,18 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             passRedirect    = tis->redirectPass(transformedPass.get());
             renderdata.blur = false;
 
-            pWindow->m_transformers.preWindowRender(&renderdata);
+            pWindow->effects().preWindowRender(&renderdata);
         }
 
         if (renderdata.decorate) {
-            for (auto const& wd : pWindow->m_windowDecorations) {
+            for (auto const& wd : pWindow->presentation().decorations()) {
                 if (wd->getDecorationLayer() != DECORATION_LAYER_BOTTOM)
                     continue;
 
                 wd->draw(pMonitor, fullAlpha);
             }
 
-            for (auto const& wd : pWindow->m_windowDecorations) {
+            for (auto const& wd : pWindow->presentation().decorations()) {
                 if (wd->getDecorationLayer() != DECORATION_LAYER_UNDER)
                     continue;
 
@@ -5462,7 +5490,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         }
 
         static auto PXWLUSENN = CConfigValue<Config::INTEGER>("xwayland:use_nearest_neighbor");
-        if ((pWindow->m_isX11 && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
+        if ((pWindow->backend().isX11() && *PXWLUSENN) || pWindow->m_ruleApplicator->nearestNeighbor().valueOrDefault())
             renderdata.useNearestNeighbor = true;
 
         if (!TRANSFORMEDWINDOW && pWindow->wlSurface()->small() && !pWindow->wlSurface()->m_fillIgnoreSmall && renderdata.blur) {
@@ -5500,7 +5528,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         renderdata.useNearestNeighbor = false;
 
         if (renderdata.decorate) {
-            for (auto const& wd : pWindow->m_windowDecorations) {
+            for (auto const& wd : pWindow->presentation().decorations()) {
                 if (wd->getDecorationLayer() != DECORATION_LAYER_OVER)
                     continue;
 
@@ -5512,12 +5540,13 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
             passRedirect.reset();
 
             CBox currentBox = pWindow->getFullWindowBoundingBox();
-            currentBox.translate((pWindow->m_pinned ? Vector2D{} : PWORKSPACE->m_renderOffset->value()) + pWindow->m_floatingOffset - pMonitor->m_position);
-            CBox            transformedBox = pWindow->m_transformers.transformedExtents(currentBox);
+            currentBox.translate(((pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED) ? Vector2D{} : PWORKSPACE->m_renderOffset->value()) + pWindow->presentation().floatingOffset() -
+                                 pMonitor->m_position);
+            CBox            transformedBox = pWindow->effects().transformedExtents(currentBox);
 
             SMotionBlurData windowMotionBlur;
             if (!standalone && !tis->m_bRenderingSnapshot) {
-                pWindow->m_transformers.amendTransformedRenderData(transformedBox, &windowMotionBlur);
+                pWindow->effects().amendTransformedRenderData(transformedBox, &windowMotionBlur);
             }
 
             CBox blurBox = {renderdata.pos.x - pMonitor->m_position.x, renderdata.pos.y - pMonitor->m_position.y, renderdata.w, renderdata.h};
@@ -5545,10 +5574,10 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     tis->m_renderData.clipBox = CBox();
 
     if (mode == Render::RENDER_PASS_ALL || mode == Render::RENDER_PASS_POPUP) {
-        if (!pWindow->m_isX11) {
-            CBox geom = pWindow->m_xdgSurface->m_current.geometry;
+        if (!pWindow->backend().isX11()) {
+            const auto GEOM = pWindow->backend().geometry().box;
 
-            renderdata.pos -= geom.pos();
+            renderdata.pos -= GEOM.pos();
             renderdata.dontRound       = true; // don't round popups
             renderdata.pMonitor        = pMonitor;
             renderdata.squishOversized = false; // don't squish popups
@@ -5556,7 +5585,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 
             static CConfigValue PBLURIGNOREA = CConfigValue<Config::FLOAT>("decoration:blur:popups_ignorealpha");
 
-            renderdata.blur = tis->shouldBlur(pWindow->m_popupHead);
+            renderdata.blur = tis->shouldBlur(pWindow->popupHead());
 
             if (renderdata.blur) {
                 renderdata.discardMode |= DISCARD_ALPHA;
@@ -5568,9 +5597,9 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 
             renderdata.surfaceCounter = 0;
 
-            pWindow->m_popupHead->breadthfirst(
+            pWindow->popupHead()->breadthfirst(
                 [&tis, &renderdata](WP<Desktop::View::CPopup> popup, void* data) {
-                    if (!popup->aliveAndVisible())
+                    if (!popup->mapped() || !popup->acceptsInput() || !popup->alphaNonZero())
                         return;
 
                     const auto     pos    = popup->coordsRelativeToParent();
@@ -5603,7 +5632,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         }
 
         if (decorate) {
-            for (auto const& wd : pWindow->m_windowDecorations) {
+            for (auto const& wd : pWindow->presentation().decorations()) {
                 if (wd->getDecorationLayer() != DECORATION_LAYER_OVERLAY)
                     continue;
 
@@ -5643,7 +5672,7 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     g_pHyprRenderer->m_bRenderingSnapshot = true;
     glClearColor(0, 0, 0, 0);
 
-    auto fo = w->m_floatingOffset;
+    auto fo = w->presentation().floatingOffset();
     auto before = w->m_hidden;
     w->m_hidden = false;
 
@@ -5668,12 +5697,13 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     deco_offset_x = off.x;
     deco_offset_y = off.y;
 
-    auto before_pinned_state = w->m_pinned;
-    w->m_pinned = false;
-    
+    const auto beforeState = w->m_state;
+
+    w->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
+
     ourRenderWindow(w, m, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
 
-    w->m_pinned = before_pinned_state;
+    w->m_state |= beforeState;
 
     w->m_workspace->m_renderOffset->m_Value = r;
     deco_offset_x = 0;
@@ -5681,7 +5711,7 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
 
     w->m_hidden = before;
 
-    w->m_floatingOffset = fo;
+    w->presentation().setFloatingOffset(fo);
 
     g_pHyprRenderer->endRender();
 
@@ -5725,12 +5755,12 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
     g_pHyprRenderer->m_bRenderingSnapshot = true;
     glClearColor(0, 0, 0, 0);
     auto const NOW = Time::steadyNow();
-    auto before_pinned_state = w->m_pinned;
-    w->m_pinned = false;
- 
+    const auto beforeState = w->m_state;
+    w->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
+
     g_pHyprRenderer->renderWindow(w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
 
-    w->m_pinned = before_pinned_state;
+    w->m_state |= beforeState;
     //(*(tRenderWindow)pRenderWindow)(g_pHyprRenderer.get(), w, m, NOW, false, Render::RENDER_PASS_MAIN, true, true);
     g_pHyprRenderer->endRender();
     g_pHyprRenderer->m_bRenderingSnapshot = false;
@@ -5749,7 +5779,7 @@ void HyprIso::screenshot_all() {
 #endif
     for (auto w : Desktop::windowState()->windows()) {
         bool has_mylar_bar = false;
-        for (const auto &decos : w->m_windowDecorations)
+        for (const auto &decos : w->presentation().decorations())
             if (decos->getDisplayName() == "MylarBar")
                 has_mylar_bar = true;
 
@@ -5771,7 +5801,7 @@ void HyprIso::screenshot(int id) {
 #endif
     for (auto w : Desktop::windowState()->windows()) {
         bool has_mylar_bar = false;
-        for (const auto &decos : w->m_windowDecorations) 
+        for (const auto &decos : w->presentation().decorations())
             if (decos->getDisplayName() == "MylarBar")
                 has_mylar_bar = true;
             
@@ -6103,7 +6133,7 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
                     auto sss = hw->w_min_mon;
                     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
-                    const auto REALPOS = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + (hw->w->m_pinned ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
+                    const auto REALPOS = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + ((hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED) ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
                     const auto REALSIZE = hw->w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
                     auto s = hw->w->m_monitor->m_scale;
 
@@ -6216,7 +6246,7 @@ int HyprIso::parent(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            if (auto w = hw->w->parent()) {
+            if (auto w = hw->w->backend().parent()) {
                 for (auto hw : hyprwindows) {
                     if (hw->w == w) {
                         return hw->id;
@@ -6435,7 +6465,7 @@ Bounds HyprIso::floating_offset(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            return {hw->w->m_floatingOffset.x, hw->w->m_floatingOffset.y, 0, 0};
+            return {hw->w->presentation().floatingOffset().x, hw->w->presentation().floatingOffset().y, 0, 0};
         }
     }
 
@@ -6459,7 +6489,7 @@ Bounds HyprIso::workspace_offset(int id) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             if (hw->w->m_workspace) {
-                if (!hw->w->m_pinned) {
+                if (!(hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED)) {
                     auto off = hw->w->m_workspace->m_renderOffset->value();
                     return {off.x, off.y, 0, 0};
                 }
@@ -7447,7 +7477,7 @@ bool HyprIso::being_animated(int cid) {
 bool HyprIso::is_pinned(int id) {
    for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            return hw->w->m_pinned;
+            return ((bool) (hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED));
         }
    }
    return false;
@@ -7955,7 +7985,7 @@ void HyprIso::do_default_resize(int cid) {
 bool HyprIso::is_floating(int cid) {
     for (auto hw: hyprwindows)
         if (hw->id == cid)
-            return hw->w->m_isFloating;
+            return hw->w->isFloating();
     return false;
 }
 
@@ -7994,7 +8024,7 @@ float HyprIso::zoom_progress(int monitor) {
 int HyprIso::get_pid(int client) {
     for (auto h : hyprwindows) {
         if (h->id == client) {
-            return h->w->getPID();
+            return h->w->backend().pid();
         }
     }
      
@@ -8396,7 +8426,7 @@ Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
     }
 
     int argIndex = 1;
-    Input::ModifierMask modMask;
+    Input::ModifierMask modMask = (Input::ModifierMask) 0;
     float deltaScale = 1.F;
 
     for (; argIndex < data.size(); ++argIndex) {
