@@ -97,9 +97,9 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
 
         auto size = hypriso->thumbnail_size_deco(cid);
         auto b = bounds_client(cid);
-        b.scale(s);
-        b.x -= size.x * s;
-        b.y -= size.y * s;
+        //b.scale(s);
+        b.x -= size.x;
+        b.y -= size.y;
         b.w = size.w;
         b.h = size.h;
         auto r = democell->result();

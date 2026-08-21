@@ -12,8 +12,11 @@
 #include <any>
 #include <sstream>
 #define private public
+#define protected public
+#include <hyprland/src/desktop/view/types/GeometricMovableAnimated.hpp>
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #undef private
+#undef protected
 
 
 #include <cstring>
@@ -46,8 +49,8 @@
 #include <hyprutils/memory/SharedPtr.hpp>
 
 #define private public
-#include <hyprutils/animation/AnimatedVariable.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
+#include <hyprland/src/render/decorations/DecorationPositioner.hpp>
 #undef private
 
 //#include "xdg-decoration-unstable-v1.hpp"
@@ -5454,7 +5457,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
                                  .translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->presentation().floatingOffset())
                                  .scale(pMonitor->m_scale)
                                  .round();
-        renderdata.clipBox = rg.getExtents();
+        //renderdata.clipBox = rg.getExtents();
     }
 
     // render window decorations first, if not fullscreen full
@@ -5656,16 +5659,25 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
         return;
     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-
+    
+    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
+    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
+    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
+ 
+    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
+    float border_size = *PBORDERSIZE;
+    
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
     auto ex = g_pDecorationPositioner->getWindowDecorationExtents(w, false);
     const auto REALSIZE = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     buffer->alloc(
+        m->m_pixelSize.x,
+        m->m_pixelSize.y,
         //m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x + REALSIZE.x, 
-        (ex.topLeft.x + ex.bottomRight.x + REALSIZE.x) * w->m_monitor->m_scale, 
+        //(ex.topLeft.x + ex.bottomRight.x + REALSIZE.x) * w->m_monitor->m_scale, 
         //m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y + REALSIZE.y, 
-        (ex.topLeft.y + ex.bottomRight.y + REALSIZE.y) * w->m_monitor->m_scale, 
+        //(ex.topLeft.y + ex.bottomRight.y + REALSIZE.y) * w->m_monitor->m_scale, 
         DRM_FORMAT_ABGR8888);
     g_pHyprRenderer->beginRender(m, fakeDamage, Render::RENDER_MODE_FULL_FAKE, nullptr, buffer);
 
@@ -5685,29 +5697,41 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     if (hypriso->has_decorations(get_wid(w))) {
         off.y += titlebar_h;
     }
-    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
-    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
-    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
-    
-    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
-    float border_size = *PBORDERSIZE;
+   
     off.x += border_size + shadow_range;
     off.y += border_size + shadow_range;
-    w->m_workspace->m_renderOffset->m_Value = off; 
-    deco_offset_x = off.x;
-    deco_offset_y = off.y;
+    //w->m_workspace->m_renderOffset->m_Value = off; 
+    //deco_offset_x = off.x;
+    //deco_offset_y = off.y;
+    auto goal = w->m_realPosition->m_Goal;
+    auto current = w->m_realPosition->m_Value;
 
     const auto beforeState = w->m_state;
 
     w->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
+    auto before_animated = w->m_workspace->m_renderOffset->isBeingAnimated();
+    w->m_workspace->m_renderOffset->m_bIsBeingAnimated = true;
+
+    w->m_realPosition->setValueAndWarp(m->position());
+    // w->m_realPosition->m_Value = ;
+    w->presentation().refreshValues();
+    g_pDecorationPositioner->onWindowUpdate(w);
+
 
     ourRenderWindow(w, m, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
 
+    w->m_realPosition->setValueAndWarp(goal);
+    g_pDecorationPositioner->onWindowUpdate(w);
+    
+    // w->m_realPosition->m_Goal = goal;
+    // w->m_realPosition->m_Value = current;
     w->m_state |= beforeState;
+    w->m_workspace->m_renderOffset->m_bIsBeingAnimated = before_animated;
 
     w->m_workspace->m_renderOffset->m_Value = r;
     deco_offset_x = 0;
     deco_offset_y = 0;
+    w->presentation().refreshValues();
 
     w->m_hidden = before;
 
@@ -6087,14 +6111,14 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.round = rounding;
                     data.roundingPower = roundingPower;
-                    /*
+                    
                     data.allowCustomUV = true;
                     data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
                     data.primarySurfaceUVBottomRight = Vector2D(
                         std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
                         std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
                     );
-                    */
+                    
                     set_rounding(cornermask);
                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
                     set_rounding(0);
@@ -6435,8 +6459,8 @@ void HyprIso::reload() {
     hypriso->generate_mylar_hyprland_config();
 
     Config::mgr()->reload();
-    // for (auto w : Desktop::windowState()->windows())
-    //     w->updateDecorationValues();
+    for (auto w : Desktop::windowState()->windows())
+        w->presentation().refreshValues();
 
     
     Render::GL::g_pHyprOpenGL->initShaders();

@@ -3533,6 +3533,11 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
 void total_update() {
     main_thread([]() {
         auto clients = snapshot_audio_clients();
+        for (auto client : clients) {
+            if (client.is_master_volume()) {
+                volume_level = std::round(client.get_volume() * 100);
+            }
+        }
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 

@@ -1252,7 +1252,7 @@ static void fill_display_settings(Container *root, Container *c) {
     }
 
     for (auto m : options) {
-        make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "\ue2b2", m->option, [](std::string selected) {
+        make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", m->option, [](std::string selected) {
             main_thread([selected]() {
                 notify(selected);
             });
@@ -1270,7 +1270,7 @@ static void fill_display_settings(Container *root, Container *c) {
     make_vert_space(padded_right, 10);
 
     std::vector<std::string> orientations= {"Landscape", "Vertical"};
-    make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "\ue2b0", orientations, [](std::string selected) {
+    make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", orientations, [](std::string selected) {
         main_thread([selected]() {
             notify(selected);
         });
