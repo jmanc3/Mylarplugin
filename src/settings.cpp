@@ -9,6 +9,7 @@
 #include "client/windowing.h"
 #include "dock.h"
 #include <chrono>
+#include <csetjmp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
 
 #include <gtk/gtk.h>
@@ -911,8 +912,11 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
 
 static void make_dropdown(Container *parent, std::string text, std::vector<std::string> options, std::function<void(std::string)> func) {
     static float pad_amount = 11;
+    static float vron_pad_amount = pad_amount * 1.7;
     static float text_height = 11;
     static float option_height = 13;
+    static float chevron_height = 10;
+    static std::string chevron = "\uE70D";
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     pad->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -920,8 +924,10 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
         auto dpi = mylar->raw_window->dpi;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
-        c->wanted_bounds.w = bounds.w + pad_amount * 2;
+        Bounds bounds = draw_text(cr, chevron_height, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        Bounds vron = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, {1, 1, 1, 1}, true);
+        
+        c->wanted_bounds.w = bounds.w + pad_amount * 2 + vron_pad_amount + vron.w;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
     };
     pad->when_paint = [text](Container *root, Container *c) {
@@ -929,19 +935,30 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         if (c->state.mouse_pressing) {
-            set_argb(cr, {.5, .5, .5, 1});
+            set_argb(cr, {.7, .7, .7, 1});
         } else if (c->state.mouse_hovering) {
-            set_argb(cr, {.65, .65, .65, 1});
+            set_argb(cr, {.9, .9, .9, 1});
         } else {
-            set_argb(cr, {.8, .8, .8, 1});
+            set_argb(cr, {1, 1, 1, 1});
         }
-        set_rect(cr, c->real_bounds);
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
         cairo_fill(cr);
+        set_argb(cr, {.7, .7, .7, 1});
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
+        cairo_stroke(cr);
+        
         Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
         draw_text(cr, 
-            c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, 
+            c->real_bounds.x + pad_amount, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
             text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+
+        auto vron_bounds = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, {1, 1, 1, 1}, false);
+        draw_text(cr, 
+            c->real_bounds.x - pad_amount - vron_bounds.w + c->real_bounds.w, 
+            c->real_bounds.y + c->real_bounds.h * .5 - vron_bounds.h * .5, 
+             chevron, chevron_height, true, icon_font, -1, -1, {0, 0, 0, 1}, false);
     };
     static MylarWindow *popup = nullptr; 
     popup = nullptr;
@@ -1020,12 +1037,27 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
 }
 
 static void make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::vector<std::string> options, std::function<void(std::string)> on_change) {
+    assert(on_change);
     auto p = make_self_height_sized_parent(parent);
 
     make_label_like(p, title, description, icon);
 
-    make_dropdown(p, "first", {"secnod"}, [](std::string args) {
-        
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    right->alignment = container_alignment::ALIGN_CENTER;
+    
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 250 * dpi;
+        c->real_bounds.h = 70 * dpi;
+        c->spacing = 5 * dpi;
+    };
+    right->child(FILL_SPACE, FILL_SPACE);
+    right->parent_bounds_limit_input_bounds = false;
+    
+    make_dropdown(right, options[0], options, [on_change](std::string selected) {
+        on_change(selected);
     });
 }
 
@@ -1218,8 +1250,27 @@ static void fill_display_settings(Container *root, Container *c) {
                 current->option.push_back(mode);
         }
     }
-    std::vector<std::string> scales = {"100%", "125%", "150%", "175%", "200%"};
+
+    for (auto m : options) {
+        make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "\ue2b2", m->option, [](std::string selected) {
+            main_thread([selected]() {
+                notify(selected);
+            });
+        });
+    }
+    make_vert_space(padded_right, 10);
+    
+    std::vector<std::string> scales = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
     make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", scales, [](std::string selected) {
+        main_thread([selected]() {
+            notify(selected);
+        });
+    });
+    
+    make_vert_space(padded_right, 10);
+
+    std::vector<std::string> orientations= {"Landscape", "Vertical"};
+    make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "\ue2b0", orientations, [](std::string selected) {
         main_thread([selected]() {
             notify(selected);
         });
