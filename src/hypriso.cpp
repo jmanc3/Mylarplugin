@@ -5649,6 +5649,72 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     tis->m_renderData.currentWindow.reset();
 }
 
+// Forces an animated variable to a value for the lifetime of this object, then puts the original state back.
+//
+// Assigning through operator= or setValue() restarts the curve, fires the begin callback and (re)registers the
+// variable with the animation manager, which both starts an animation we never wanted and throws away whatever
+// animation was already in flight. Writing the fields directly avoids all of that, and every piece of curve state
+// is saved, so an in-flight animation resumes exactly where it was.
+//
+// Only safe while nothing else assigns to the variable and the animation manager cannot tick, i.e. inside a
+// synchronous block such as a snapshot render.
+template <typename AnimVar>
+struct AnimVarOverride {
+    using VarType = std::remove_cvref_t<decltype(std::declval<AnimVar &>().value())>;
+
+    AnimVarOverride(AnimVar &var, const VarType &value, bool settle = false) : var(var), settled(settle) {
+        saved_value           = var.m_Value;
+        saved_goal            = var.m_Goal;
+        saved_begun           = var.m_Begun;
+        saved_animating       = var.m_bIsBeingAnimated;
+        saved_begin           = var.animationBegin;
+        saved_spring_step     = var.springLastStep;
+        saved_spring_value    = var.m_fSpringValue;
+        saved_spring_velocity = var.m_fSpringVelocity;
+
+        // The goal and the begun value have to move too: readers use goal() to find where a window is headed, and
+        // update() lerps from begun, so leaving them behind makes the variable look mid-flight between the real
+        // position and the overridden one.
+        var.m_Value = value;
+        var.m_Goal  = value;
+        var.m_Begun = value;
+
+        if (settle)
+            var.m_bIsBeingAnimated = false;
+    }
+
+    ~AnimVarOverride() {
+        var.m_Value           = saved_value;
+        var.m_Goal            = saved_goal;
+        var.m_Begun           = saved_begun;
+        var.animationBegin    = saved_begin;
+        var.springLastStep    = saved_spring_step;
+        var.m_fSpringValue    = saved_spring_value;
+        var.m_fSpringVelocity = saved_spring_velocity;
+
+        // m_bIsConnectedToActive is never touched: it mirrors membership of the manager's active list, so writing it
+        // without touching that list would desync the two.
+        if (settled)
+            var.m_bIsBeingAnimated = saved_animating;
+    }
+
+    AnimVarOverride(const AnimVarOverride &)            = delete;
+    AnimVarOverride &operator=(const AnimVarOverride &) = delete;
+
+  private:
+    AnimVar                              &var;
+    bool                                  settled = false;
+
+    VarType                               saved_value{};
+    VarType                               saved_goal{};
+    VarType                               saved_begun{};
+    bool                                  saved_animating = false;
+    std::chrono::steady_clock::time_point saved_begin{};
+    std::chrono::steady_clock::time_point saved_spring_step{};
+    float                                 saved_spring_value    = 1.F;
+    float                                 saved_spring_velocity = 0.F;
+};
+
 void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -5660,20 +5726,15 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
         return;
     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
     
-    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
-    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
-    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
- 
-    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
-    float border_size = *PBORDERSIZE;
-    
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
-    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(w, false);
+    const auto snapshotExtents = w->getFullWindowExtents();
     const auto REALSIZE = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     buffer->alloc(
-        m->m_pixelSize.x,
-        m->m_pixelSize.y,
+        m->pixelSize().x,
+        m->pixelSize().y,
+        //snapshotExtents.bottomRight.x - snapshotExtents.topLeft.x,
+        //snapshotExtents.bottomRight.y - snapshotExtents.topLeft.y,
         //m->m_pixelSize.x + ex.topLeft.x + ex.bottomRight.x + REALSIZE.x, 
         //(ex.topLeft.x + ex.bottomRight.x + REALSIZE.x) * w->m_monitor->m_scale, 
         //m->m_pixelSize.y + ex.topLeft.y + ex.bottomRight.y + REALSIZE.y, 
@@ -5684,60 +5745,58 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     g_pHyprRenderer->m_bRenderingSnapshot = true;
     glClearColor(0, 0, 0, 0);
 
-    auto fo = w->presentation().floatingOffset();
+    // auto fo = w->presentation().floatingOffset();
     auto before = w->m_hidden;
     w->m_hidden = false;
 
-    auto r = w->m_workspace->m_renderOffset->value();
+    // auto r = w->m_workspace->m_renderOffset->value();
 
     const auto REALPOS = w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-    auto mbox = w->m_monitor->logicalBox();
-
-    auto off = Vector2D(-(REALPOS.x - mbox.x), -(REALPOS.y - mbox.y));
-    if (hypriso->has_decorations(get_wid(w))) {
-        off.y += titlebar_h;
-    }
-   
-    off.x += border_size + shadow_range;
-    off.y += border_size + shadow_range;
-    //w->m_workspace->m_renderOffset->m_Value = off; 
-    //deco_offset_x = off.x;
-    //deco_offset_y = off.y;
-    auto goal = w->m_realPosition->m_Goal;
-    auto current = w->m_realPosition->m_Value;
+    const auto snapshotPosition = m->position() + snapshotExtents.topLeft;
+    const auto decorationOffset = snapshotPosition - REALPOS;
+    deco_offset_x = static_cast<int>(std::round(decorationOffset.x));
+    deco_offset_y = static_cast<int>(std::round(decorationOffset.y));
 
     const auto beforeState = w->m_state;
 
     w->m_state &= ~Desktop::View::WINDOW_STATE_PINNED;
-    auto before_animated = w->m_workspace->m_renderOffset->isBeingAnimated();
-    w->m_workspace->m_renderOffset->m_bIsBeingAnimated = true;
+    // auto before_animated = w->m_workspace->m_renderOffset->isBeingAnimated();
+    // w->m_workspace->m_renderOffset->m_bIsBeingAnimated = true;
 
-    w->m_realPosition->setValueAndWarp(m->position());
-    // w->m_realPosition->m_Value = ;
-    w->presentation().refreshValues();
-    g_pDecorationPositioner->onWindowUpdate(w);
+    {
+        // The framebuffer begins at the outer edge of the window snapshot. Move
+        // the main surface inward by its top-left extents so shadows and all other
+        // decorations begin at (0, 0), rather than being clipped there.
+        AnimVarOverride positionOverride(*w->m_realPosition, snapshotPosition);
 
+        w->presentation().refreshValues();
+        // onWindowUpdate skips position-only changes unless a recalculation was requested.
+        // The snapshot moves the window without changing its size, so force new
+        // positioning replies before drawing its decorations in the framebuffer.
+        // g_pDecorationPositioner->forceRecalcFor(w);
+        // g_pDecorationPositioner->onWindowUpdate(w);
 
-    ourRenderWindow(w, m, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
+        ourRenderWindow(w, m, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
 
-    w->m_realPosition->setValueAndWarp(goal);
-    g_pDecorationPositioner->onWindowUpdate(w);
-    
-    // w->m_realPosition->m_Goal = goal;
-    // w->m_realPosition->m_Value = current;
+        // Shadow passes resolve their geometry when the render pass is submitted.
+        // Complete it while the window is still positioned at the snapshot origin.
+        g_pHyprRenderer->endRender();
+    }
+
+    // g_pDecorationPositioner->forceRecalcFor(w);
+    // g_pDecorationPositioner->onWindowUpdate(w);
+
     w->m_state |= beforeState;
-    w->m_workspace->m_renderOffset->m_bIsBeingAnimated = before_animated;
+    // w->m_workspace->m_renderOffset->m_bIsBeingAnimated = before_animated;
 
-    w->m_workspace->m_renderOffset->m_Value = r;
+    // w->m_workspace->m_renderOffset->m_Value = r;
     deco_offset_x = 0;
     deco_offset_y = 0;
     w->presentation().refreshValues();
 
     w->m_hidden = before;
 
-    w->presentation().setFloatingOffset(fo);
-
-    g_pHyprRenderer->endRender();
+    // w->presentation().setFloatingOffset(fo);
 
     g_pHyprRenderer->m_bRenderingSnapshot = false;
 }
@@ -9263,4 +9322,3 @@ SleptWindow::SleptWindow(int cid, int pid) {
 void set_api(void *api) {
     globals->api = api;
 }
-
