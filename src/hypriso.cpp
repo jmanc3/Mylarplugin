@@ -2421,7 +2421,7 @@ std::string get_previous_instance_signature() {
     return previous; 
 }
 
-void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w);
+SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w);
 
 void HyprIso::set_animate_to_dock(int id, bool state) {
     for (auto w : Desktop::windowState()->windows()) {
@@ -5715,20 +5715,34 @@ struct AnimVarOverride {
     float                                 saved_spring_velocity = 0.F;
 };
 
-void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) {
+SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     if (!buffer || !pRenderWindow || !w)
-        return;
+        return {};
     const auto m = w->m_monitor.lock();
     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
-        return;
+        return {};
     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
     
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
-    const auto snapshotExtents = w->getFullWindowExtents();
+    const auto noRounding = std::ranges::any_of(hyprwindows, [w](const auto* hw) { return hw->w == w && hw->no_rounding; });
+    auto       snapshotExtents = w->getFullWindowExtents();
+    if (noRounding) {
+        snapshotExtents = {};
+        for (const auto& decoration : w->presentation().decorations()) {
+            if (decoration->getDisplayName() != "MylarBar")
+                continue;
+
+            const auto extents = decoration->getPositioningInfo().desiredExtents;
+            snapshotExtents.topLeft.x = std::max(snapshotExtents.topLeft.x, extents.topLeft.x);
+            snapshotExtents.topLeft.y = std::max(snapshotExtents.topLeft.y, extents.topLeft.y);
+            snapshotExtents.bottomRight.x = std::max(snapshotExtents.bottomRight.x, extents.bottomRight.x);
+            snapshotExtents.bottomRight.y = std::max(snapshotExtents.bottomRight.y, extents.bottomRight.y);
+        }
+    }
     const auto REALSIZE = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     buffer->alloc(
         m->pixelSize().x,
@@ -5799,6 +5813,8 @@ void screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) 
     // w->presentation().setFloatingOffset(fo);
 
     g_pHyprRenderer->m_bRenderingSnapshot = false;
+
+    return snapshotExtents;
 }
 
 void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
@@ -5814,11 +5830,11 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
     if (include_decorations) {
         bool h = w->m_hidden;
         w->m_hidden = false;
-        screenshot_window_with_decos(hw->deco_fb, w);
-       //m->m_scale
-        hw->w_decos_size = tobounds(w->getFullWindowBoundingBox());
-        hw->w_decos_size.scale(m->m_scale);
-        hw->w_deco_raw = tobounds(w->getFullWindowBoundingBox());
+        const auto snapshotExtents = screenshot_window_with_decos(hw->deco_fb, w);
+        auto       snapshotBounds  = w->getWindowMainSurfaceBox();
+        snapshotBounds.addExtents(snapshotExtents);
+        hw->w_deco_raw   = tobounds(snapshotBounds);
+        hw->w_decos_size = {0, 0, snapshotBounds.w * m->m_scale, snapshotBounds.h * m->m_scale};
         auto tex = hw->deco_fb->getTexture();
         glActiveTexture(GL_TEXTURE0);
         tex->bind();
@@ -6081,23 +6097,16 @@ void HyprIso::screenshot_deco(int id) {
 
 Bounds HyprIso::thumbnail_size_deco(int id) {
     for (auto hw : hyprwindows) {
-        if (hw->id == id && hw->deco_fb) {
-            auto off = Vector2D(0, 0);
-            if (hypriso->has_decorations(hw->id)) {
-                off.y += titlebar_h;
-            }
-            static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
-            static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
-            static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
-            float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
-            float border_size = *PBORDERSIZE;
-            if (hw->no_rounding)
-                border_size = 0;
-            off.x += border_size + shadow_range;
-            off.y += border_size + shadow_range;
-            
-            return Bounds(off.x, off.y, hw->deco_fb->m_size.x, hw->deco_fb->m_size.y);
-        }
+        if (hw->id != id || !hw->deco_fb || !hw->w)
+            continue;
+
+        const auto mainSurfaceBounds = tobounds(hw->w->getWindowMainSurfaceBox());
+        return {
+            mainSurfaceBounds.x - hw->w_deco_raw.x,
+            mainSurfaceBounds.y - hw->w_deco_raw.y,
+            hw->w_deco_raw.w,
+            hw->w_deco_raw.h,
+        };
     }
     return {800, 600, 800, 600};
 }
@@ -6214,28 +6223,24 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                 AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
                     auto tex = hw->min_fb->getTexture();
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-                    auto sss = hw->w_min_mon;
-                    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
-                    const auto REALPOS = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) + ((hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED) ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
-                    const auto REALSIZE = hw->w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
-                    auto s = hw->w->m_monitor->m_scale;
+                    const auto snapshotExtents = hw->w->getFullWindowExtents();
+                    const auto realPosition = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) +
+                        ((hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED) ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
+                    const auto scale = hw->w->m_monitor->m_scale;
 
-                    auto off = Vector2D(0, 0);
-                    if (hypriso->has_decorations(hw->id)) {
-                        off.y += titlebar_h;
+
+                    Bounds bounds = {
+                        realPosition.x - snapshotExtents.topLeft.x,
+                        realPosition.y - snapshotExtents.topLeft.y,
+                        tex->m_size.x / scale,
+                        tex->m_size.y / scale,
+                    };
+                    if (hypriso->is_snapped(hw->id)) {
+                        bounds.x = realPosition.x;
+                        bounds.y = realPosition.y;
                     }
-                    static auto PBORDERSIZE = CConfigValue<Config::INTEGER>("general:border_size");
-                    static auto PSHADOWSIZE = CConfigValue<Config::INTEGER>("decoration:shadow:range");
-                    static auto PSHADOWS = CConfigValue<Config::INTEGER>("decoration:shadow:enabled");
-                    float shadow_range = *PSHADOWS ? *PSHADOWSIZE : 0;
-                    float border_size = *PBORDERSIZE;
-                    off.x += border_size + shadow_range;
-                    off.y += border_size + shadow_range;
-                  
- 
-                    //Bounds bounds = {0.0f, 0.0f, sss.w + ex.topLeft.x + ex.bottomRight.x, sss.h + ex.bottomRight.y + ex.topLeft.y};
-                    Bounds bounds = {REALPOS.x - off.x, REALPOS.y - off.y, tex->m_size.x * (1.0 / s), tex->m_size.y * (1.0 / s)};
-                    bounds.scale(s);
+
+                    bounds.scale(scale);
                     auto lerped = lerp(bounds, b, scalar);
                     if (!hw->w->m_hidden)
                         lerped = lerp(b, bounds, scalar);
