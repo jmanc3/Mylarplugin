@@ -82,6 +82,14 @@ struct ConfigSettings {
 
 extern ConfigSettings *set;
 
+// How far a window's decorations (titlebar, border, shadow, ...) stick out of its main surface.
+struct Extents {
+    double left = 0;
+    double top = 0;
+    double right = 0;
+    double bottom = 0;
+};
+
 struct SurfacePassInfo {
     double pos_x;
     double pos_y;
@@ -518,6 +526,10 @@ Bounds bounds_client_final(int id);
 Bounds bounds_layer(int id);
 Bounds real_bounds_client(int id);
 Bounds bounds_full_client(int id);
+
+// Matches the extents the deco thumbnail (screenshot_deco) was captured with, so bounds_client can be
+// offset onto the thumbnail's top left corner.
+Extents extents_client(int id);
 
 int current_rendering_monitor();
 int current_rendering_window();

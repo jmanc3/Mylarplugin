@@ -5715,6 +5715,28 @@ struct AnimVarOverride {
     float                                 saved_spring_velocity = 0.F;
 };
 
+static SBoxExtents snapshot_extents(PHLWINDOW w) {
+    if (!w)
+        return {};
+
+    const auto noRounding = std::ranges::any_of(hyprwindows, [w](const auto* hw) { return hw->w == w && hw->no_rounding; });
+    if (!noRounding)
+        return w->getFullWindowExtents();
+
+    SBoxExtents snapshotExtents = {};
+    for (const auto& decoration : w->presentation().decorations()) {
+        if (decoration->getDisplayName() != "MylarBar")
+            continue;
+
+        const auto extents = decoration->getPositioningInfo().desiredExtents;
+        snapshotExtents.topLeft.x = std::max(snapshotExtents.topLeft.x, extents.topLeft.x);
+        snapshotExtents.topLeft.y = std::max(snapshotExtents.topLeft.y, extents.topLeft.y);
+        snapshotExtents.bottomRight.x = std::max(snapshotExtents.bottomRight.x, extents.bottomRight.x);
+        snapshotExtents.bottomRight.y = std::max(snapshotExtents.bottomRight.y, extents.bottomRight.y);
+    }
+    return snapshotExtents;
+}
+
 SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -5728,21 +5750,7 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
     
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
-    const auto noRounding = std::ranges::any_of(hyprwindows, [w](const auto* hw) { return hw->w == w && hw->no_rounding; });
-    auto       snapshotExtents = w->getFullWindowExtents();
-    if (noRounding) {
-        snapshotExtents = {};
-        for (const auto& decoration : w->presentation().decorations()) {
-            if (decoration->getDisplayName() != "MylarBar")
-                continue;
-
-            const auto extents = decoration->getPositioningInfo().desiredExtents;
-            snapshotExtents.topLeft.x = std::max(snapshotExtents.topLeft.x, extents.topLeft.x);
-            snapshotExtents.topLeft.y = std::max(snapshotExtents.topLeft.y, extents.topLeft.y);
-            snapshotExtents.bottomRight.x = std::max(snapshotExtents.bottomRight.x, extents.bottomRight.x);
-            snapshotExtents.bottomRight.y = std::max(snapshotExtents.bottomRight.y, extents.bottomRight.y);
-        }
-    }
+    const auto snapshotExtents = snapshot_extents(w);
     const auto REALSIZE = w->size(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     buffer->alloc(
         m->pixelSize().x,
@@ -7445,6 +7453,23 @@ Bounds bounds_client(int wid) {
         }
     }    
     return {0, 0, 0, 0};
+}
+
+Extents extents_client(int wid) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hyprwindow : hyprwindows) {
+        if (hyprwindow->id != wid)
+            continue;
+
+        if (!hyprwindow->w.get())
+            continue;
+
+        const auto extents = snapshot_extents(hyprwindow->w);
+        return {extents.topLeft.x, extents.topLeft.y, extents.bottomRight.x, extents.bottomRight.y};
+    }
+    return {};
 }
 
 Bounds bounds_client_final(int wid) {

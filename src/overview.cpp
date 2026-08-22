@@ -58,10 +58,11 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     std::vector<ExpoCell *> cells;
     for (auto o : clients_on_workspace) {
         auto size = hypriso->thumbnail_size_deco(o);
+        auto extents = extents_client(o);
         auto height = size.h;
         auto width = size.w;
-        auto x = bounds_client(o).x - reserved.x;
-        auto y = bounds_client(o).y - reserved.y;
+        auto x = bounds_client(o).x - extents.left - reserved.x;
+        auto y = bounds_client(o).y - extents.top - reserved.y;
         auto cell = new DemoCell(o, x, y, width, height);
         cells.push_back(cell);
     }
@@ -96,12 +97,13 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
         int cid = democell->persistentKey();
 
         auto size = hypriso->thumbnail_size_deco(cid);
+        auto extents = extents_client(cid);
         auto b = bounds_client(cid);
-        //b.scale(s);
-        b.x -= size.x;
-        b.y -= size.y;
+        b.x -= extents.left;
+        b.y -= extents.top;
         b.w = size.w;
         b.h = size.h;
+        b.scale(s);
         auto r = democell->result();
         auto small_bounds = Bounds(r.x, r.y, r.w, r.h).scale(s);
         small_bounds.x += overx;
