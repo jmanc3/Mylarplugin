@@ -85,6 +85,8 @@
 #include <hyprland/src/animation/AnimationManager.hpp>
 // #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
 
+#include <hyprland/src/render/pass/BackdropScopePassElement.hpp>
+
 #include <hyprland/src/desktop/view/window/WindowEffectsController.hpp>
 
 #include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
@@ -5370,7 +5372,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
     ZoneScoped;
 #endif
     auto tis = g_pHyprRenderer.get();
-    if (pWindow->isHidden() && !standalone)
+        if (pWindow->isHidden() && !standalone)
         return;
 
     if (!standalone && pWindow->presentation().alphaTotal() == 0.F && !pWindow->presentation().alpha().isBeingAnimated())
@@ -5419,7 +5421,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         decorate && !pWindow->backend().traits().suggestsNoBorder && Fullscreen::controller()->getFullscreenModes(pWindow).internal != Fullscreen::FSMODE_FULLSCREEN;
     renderdata.rounding      = standalone || renderdata.dontRound ? 0 : pWindow->presentation().rounding() * pMonitor->m_scale;
     renderdata.roundingPower = standalone || renderdata.dontRound ? 2.0f : pWindow->presentation().roundingPower();
-    renderdata.blur          = !standalone && tis->shouldBlur(pWindow);
+    renderdata.blur          = !standalone && !tis->m_bRenderingSnapshot && pWindow->shouldBlur();
     renderdata.pWindow       = pWindow;
 
     if (standalone) {
@@ -5457,7 +5459,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
                                  .translate(-pMonitor->m_position + PWORKSPACE->m_renderOffset->value() + pWindow->presentation().floatingOffset())
                                  .scale(pMonitor->m_scale)
                                  .round();
-        //renderdata.clipBox = rg.getExtents();
+        renderdata.clipBox = rg.getExtents();
     }
 
     // render window decorations first, if not fullscreen full
@@ -5466,7 +5468,11 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
         const bool      TRANSFORMEDWINDOW = pWindow->effects().hasActiveTransformers();
         UP<Render::CRenderPass> transformedPass;
         UP<Render::CScopeGuard> passRedirect;
-        const bool      windowBlur = renderdata.blur;
+        const bool      windowBlur         = renderdata.blur;
+        const bool      windowBlurUsesLive = windowBlur && !tis->shouldUseNewBlurOptimizations(nullptr, pWindow);
+        const auto      backdropScope      = makeShared<SBackdropScope>();
+
+        tis->addPassElement(makeUnique<CBackdropScopePassElement>(CBackdropScopePassElement::eAction::BEGIN, backdropScope));
 
         if (TRANSFORMEDWINDOW) {
             transformedPass = makeUnique<Render::CRenderPass>();
@@ -5561,6 +5567,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
                 .currentBox        = currentBox,
                 .blurBox           = blurBox,
                 .blur              = windowBlur,
+                .blurUsesLive      = windowBlurUsesLive,
                 .blurA             = renderdata.fadeAlpha,
                 .blurRound         = renderdata.dontRound ? 0 : std::max(renderdata.rounding - 1, 0),
                 .blurRoundingPower = renderdata.roundingPower,
@@ -5572,6 +5579,8 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 
             renderdata.blur = windowBlur;
         }
+
+        tis->addPassElement(makeUnique<CBackdropScopePassElement>(CBackdropScopePassElement::eAction::END, backdropScope));
     }
 
     tis->m_renderData.clipBox = CBox();
@@ -5588,7 +5597,7 @@ void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_
 
             static CConfigValue PBLURIGNOREA = CConfigValue<Config::FLOAT>("decoration:blur:popups_ignorealpha");
 
-            renderdata.blur = tis->shouldBlur(pWindow->popupHead());
+            renderdata.blur = !tis->m_bRenderingSnapshot && pWindow->popupHead()->shouldBlur();
 
             if (renderdata.blur) {
                 renderdata.discardMode |= DISCARD_ALPHA;
