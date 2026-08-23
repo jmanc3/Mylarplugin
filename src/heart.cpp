@@ -905,7 +905,8 @@ static void on_activated(int id) {
     static bool leave = false;
     if (leave)
         return;
-        
+
+    /*
     auto info = ((ClientInfo *)c->user_data);
     if (!info->grouped_with.empty()) {
         later_immediate([info](Timer *) {
@@ -915,7 +916,7 @@ static void on_activated(int id) {
             }
             leave = false;
         });
-    }
+    }*/
 
     if (show_desktop::is_opened()) {
         hypriso->render_whitelist.emplace_back(*datum<int>(c, "cid"));
