@@ -38,6 +38,77 @@ static float optiontopbottompad = 15;
 static float optionleftpad = 14;
 static float optionrighttpad = 14;
 
+struct LineParser {
+    std::string_view input;
+    size_t index = 0;
+
+    explicit LineParser(std::string_view input)
+        : input(input) {}
+
+    bool has_another_line() const {
+        return index < input.size();
+    }
+
+    void next_line() {
+        while (index < input.size()) {
+            char c = input[index++];
+
+            if (c == '\r' || c == '\n') {
+                // Treat \r\n as a single line ending.
+                if (c == '\r' &&
+                    index < input.size() &&
+                    input[index] == '\n') {
+                    ++index;
+                }
+
+                break;
+            }
+        }
+    }
+
+    bool not_end_of_line() const {
+        return index < input.size() &&
+               input[index] != '\n' &&
+               input[index] != '\r';
+    }
+
+    void eat_blank() {
+        while (not_end_of_line()) {
+            char c = input[index];
+
+            if (c != ' ' && c != '\t')
+                break;
+
+            ++index;
+        }
+    }
+
+    std::optional<std::string_view> eat_until(std::string_view delimiter) {
+        size_t start = index;
+
+        while (not_end_of_line()) {
+            if (input.substr(index, delimiter.size()) == delimiter) {
+                auto result = input.substr(start, index - start);
+                index += delimiter.size();
+                return result;
+            }
+
+            ++index;
+        }
+
+        return std::nullopt;
+    }
+
+    std::string_view eat_until_line_end() {
+        size_t start = index;
+
+        while (not_end_of_line())
+            ++index;
+
+        return input.substr(start, index - start);
+    }
+};
+
 struct RightData : UserData {
     float scroll = 0.0;
 };
@@ -1184,6 +1255,67 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     return pad;
 }
 
+static void make_screen_positioner(Container *parent, std::function<void (std::string)> on_clicked) {
+    static int height = 200;
+    auto c = parent->child(::fullycustom, FILL_SPACE, height);
+    struct MonitorInfo : UserData {
+        int start_offset_x = 0;
+        int start_offset_y = 0;
+ 
+        int offset_x = 0;
+        int offset_y = 0;
+    };
+    c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_bounds.h = height * dpi;
+
+        auto main = c->children[0];
+        auto data = (MonitorInfo *) main->user_data;
+        main->real_bounds = Bounds(c->real_bounds.x + 30 + data->offset_x + data->start_offset_x,
+                                   c->real_bounds.y + data->offset_y + data->start_offset_y,
+                                   100, 100);
+        main->wanted_bounds = main->real_bounds;
+        layout(root, main, main->real_bounds);
+    };
+    c->when_paint = paint {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        set_argb(cr, RGBA(0, 0, 0, .1));
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
+        cairo_fill(cr);
+    };
+
+    auto main = c->child(FILL_SPACE, FILL_SPACE);
+    main->when_paint = paint {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        set_argb(cr, RGBA(1, 1, 1, 1));
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
+        cairo_fill(cr);
+    };
+    main->when_drag_start = [](Container *root, Container *c) {
+        auto data = (MonitorInfo *) c->user_data;
+    };
+    main->when_drag = [](Container *root, Container *c) {
+        auto data = (MonitorInfo *) c->user_data;
+        data->offset_x = root->mouse_current_x - root->mouse_initial_x;
+        data->offset_y = root->mouse_current_y - root->mouse_initial_y;
+    };
+    main->when_drag_end = [](Container *root, Container *c) {
+        auto data = (MonitorInfo *) c->user_data;
+        data->start_offset_x += data->offset_x;
+        data->start_offset_y += data->offset_y;
+    };
+ 
+    auto monitor_info = new MonitorInfo;
+    main->user_data = monitor_info;
+}
+
 static void fill_display_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -1214,13 +1346,33 @@ static void fill_display_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
+    make_screen_positioner(padded_right, [](std::string monitor_name) {
+        
+    });
+
+    make_vert_space(padded_right, 10);
+
     struct MonitorOption {
         std::string name;
         std::vector<std::string> option;
     };
     std::vector<MonitorOption *> options;
     auto data = execAndGet(std::string("hyprctl monitors").c_str());
+
+    auto p = LineParser(data);
+    while (p.has_another_line()) {
+        defer(p.next_line());
+
+        p.eat_blank();
+
+        
+
+        auto s = p.eat_until_line_end();
+    }
+
     
+
+    /*
     std::istringstream stream(data);
     std::string line;
     MonitorOption* current = nullptr;
@@ -1250,6 +1402,7 @@ static void fill_display_settings(Container *root, Container *c) {
                 current->option.push_back(mode);
         }
     }
+    */
 
     for (auto m : options) {
         make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", m->option, [](std::string selected) {
@@ -1258,7 +1411,7 @@ static void fill_display_settings(Container *root, Container *c) {
             });
         });
     }
-    make_vert_space(padded_right, 10);
+    make_vert_space(padded_right, 4);
     
     std::vector<std::string> scales = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
     make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", scales, [](std::string selected) {
@@ -1267,7 +1420,7 @@ static void fill_display_settings(Container *root, Container *c) {
         });
     });
     
-    make_vert_space(padded_right, 10);
+    make_vert_space(padded_right, 4);
 
     std::vector<std::string> orientations= {"Landscape", "Vertical"};
     make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", orientations, [](std::string selected) {

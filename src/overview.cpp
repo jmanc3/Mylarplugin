@@ -106,8 +106,8 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
         b.scale(s);
         auto r = democell->result();
         auto small_bounds = Bounds(r.x, r.y, r.w, r.h).scale(s);
-        small_bounds.x += overx;
-        small_bounds.y += overy;
+        small_bounds.x += overx * (1/s);
+        small_bounds.y += overy * (1/s);
         auto final_b = lerp(b, small_bounds, openess);
         hypriso->draw_deco_thumbnail(cid, final_b);
         window_options.push_back({cid, final_b.scale(1/s)});

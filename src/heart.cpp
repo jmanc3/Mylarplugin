@@ -897,16 +897,13 @@ static void on_monitor_closed(int id) {
     dock::stop(hypriso->monitor_name(id));
 }
 
-static void on_activated(int id) {
-    heart::layout_containers();
-    
+static void on_activated(int id) {    
     Container *c = get_cid_container(id);
     if (!c) return;
     static bool leave = false;
     if (leave)
         return;
-
-    /*
+/*
     auto info = ((ClientInfo *)c->user_data);
     if (!info->grouped_with.empty()) {
         later_immediate([info](Timer *) {
@@ -916,7 +913,9 @@ static void on_activated(int id) {
             }
             leave = false;
         });
-    }*/
+    }
+    */
+    heart::layout_containers();
 
     if (show_desktop::is_opened()) {
         hypriso->render_whitelist.emplace_back(*datum<int>(c, "cid"));
