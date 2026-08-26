@@ -1277,8 +1277,10 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
     static int height = 300;
     auto c = parent->child(::fullycustom, FILL_SPACE, height);
     struct MonitorInfo : UserData {
-        int offset_x = 0;
-        int offset_y = 0;
+        int base_offset_x = 0;
+        int base_offset_y = 0;
+        int mouse_offset_x = 0;
+        int mouse_offset_y = 0;
         MonitorOption *o = nullptr;
     };
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -1286,13 +1288,21 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         auto dpi = mylar->raw_window->dpi;
         c->wanted_bounds.h = height * dpi;
 
+        if (c->children.empty())
+            return;
+
         auto main = c->children[0];
-        auto data = (MonitorInfo *) main->user_data;
-        main->real_bounds = Bounds(c->real_bounds.x + c->real_bounds.w * .5 - main->wanted_bounds.w * .5 + data->offset_x,
-                                   c->real_bounds.y + c->real_bounds.h * .5 - main->wanted_bounds.h * .5 + data->offset_y,
-                                   main->wanted_bounds.w, main->wanted_bounds.h);
-        main->wanted_bounds = main->real_bounds;
-        layout(root, main, main->real_bounds);
+        
+        for (auto ch : c->children) {
+            auto data = (MonitorInfo *) ch->user_data;
+            float offsetx = data->base_offset_x + data->mouse_offset_x;
+            float offsety = data->base_offset_y + data->mouse_offset_y;
+            ch->real_bounds = Bounds(c->real_bounds.x + c->real_bounds.w * .5 + offsetx - main->real_bounds.w * .5,
+                                       c->real_bounds.y + c->real_bounds.h * .5 + offsety - main->real_bounds.h * .5,
+                                       ch->wanted_bounds.w, ch->wanted_bounds.h);
+            ch->wanted_bounds = ch->real_bounds;
+            layout(root, ch, ch->real_bounds);
+        }
     };
     c->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
@@ -1305,51 +1315,55 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
     };
 
     float scale_down = .1;
+    for (auto option : options) {
+        auto main = c->child(option->w * scale_down, option->h * scale_down);
+        main->when_paint = paint {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->cr;
+            auto dpi = mylar->raw_window->dpi;
+            auto data = (MonitorInfo *) c->user_data;
+            set_argb(cr, RGBA(1, 1, 1, 1));
+            auto b = c->real_bounds;
+            
+            cairo_save(cr);
+            set_rect(cr, c->parent->real_bounds);
+            cairo_clip(cr);
+            
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
+            cairo_fill(cr);
 
-    auto main = c->child(options[0]->w * scale_down, options[0]->h * scale_down);
-    main->when_paint = paint {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        auto data = (MonitorInfo *) c->user_data;
-        set_argb(cr, RGBA(1, 1, 1, 1));
-        auto b = c->real_bounds;
-        
-        cairo_save(cr);
-        set_rect(cr, c->parent->real_bounds);
-        cairo_clip(cr);
-        
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
-        cairo_fill(cr);
+            auto text = fz("{}\n({}x{})", data->o->name, data->o->w, data->o->h);
+            auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
+            
+            draw_text(cr, 
+                c->real_bounds.x,
+                c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
+                text, 12 * dpi, true, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
 
-        auto text = fz("{}\n{}x{}", data->o->name, data->o->w, data->o->h);
-        auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
+            cairo_reset_clip(cr);
+            cairo_restore(cr);
+        };
+        main->when_drag_start = [](Container *root, Container *c) {
+            auto data = (MonitorInfo *) c->user_data;
+        };
+        main->when_drag = [](Container *root, Container *c) {
+            auto data = (MonitorInfo *) c->user_data;
+            data->mouse_offset_x = root->mouse_current_x - root->mouse_initial_x;
+            data->mouse_offset_y = root->mouse_current_y - root->mouse_initial_y;
+        };
+        main->when_drag_end = [](Container *root, Container *c) {
+            auto data = (MonitorInfo *) c->user_data;
+            data->mouse_offset_x = 0;
+            data->mouse_offset_y = 0;
+        };
+     
+        auto monitor_info = new MonitorInfo;
+        monitor_info->o = option;
+        monitor_info->base_offset_x = monitor_info->o->x * scale_down;
+        monitor_info->base_offset_y = monitor_info->o->y * scale_down;
         
-        draw_text(cr, 
-            c->real_bounds.x,
-            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
-            text, 12 * dpi, true, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
-
-        cairo_reset_clip(cr);
-        cairo_restore(cr);
-    };
-    main->when_drag_start = [](Container *root, Container *c) {
-        auto data = (MonitorInfo *) c->user_data;
-    };
-    main->when_drag = [](Container *root, Container *c) {
-        auto data = (MonitorInfo *) c->user_data;
-        data->offset_x = root->mouse_current_x - root->mouse_initial_x;
-        data->offset_y = root->mouse_current_y - root->mouse_initial_y;
-    };
-    main->when_drag_end = [](Container *root, Container *c) {
-        auto data = (MonitorInfo *) c->user_data;
-        data->offset_x = 0;
-        data->offset_y = 0;
-    };
- 
-    auto monitor_info = new MonitorInfo;
-    monitor_info->o = options[0];
-    main->user_data = monitor_info;
+        main->user_data = monitor_info;        
+    }
 }
 
 static void fill_display_settings(Container *root, Container *c) {
