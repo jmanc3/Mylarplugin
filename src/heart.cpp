@@ -395,7 +395,12 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
     }
 
     key_press(actual_root, key, state, key, key, false, std::to_string(key));
-
+    
+    auto root = actual_root;
+    if (root->consumed_event) {
+        return true;
+    }
+    
     return false;
 }
 

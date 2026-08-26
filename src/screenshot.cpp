@@ -521,6 +521,8 @@ void actual_open_screenshot_tool() {
     };
     
     tool->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        actual_root->consumed_event = true;
+        
         if (key == KEY_ESC && !pressed) {
             later_immediate([](Timer *) {
                 screenshot_tool::close();

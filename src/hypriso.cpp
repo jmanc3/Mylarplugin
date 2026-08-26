@@ -2519,12 +2519,6 @@ std::string prefix = R"END(
                         
 )END";
 
-#ifdef NDEBUG
-prefix += "require(\"user\")\n\n";
-#else
-prefix += "require(\"debug_user\")\n\n";
-#endif
-
 std::string base = prefix + R"END(
 
 -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
@@ -2995,6 +2989,11 @@ hl.layer_rule({
         base += "hl.config({ input = { touchpad = { disable_while_typing = true }}})\n\n";
     }
 
+#ifdef NDEBUG
+        base += "require(\"user\")\n\n";
+#else
+        base += "require(\"debug_user\")\n\n";
+#endif
 
     if (hypriso->on_config_generated)
         hypriso->on_config_generated();

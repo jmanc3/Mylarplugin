@@ -96,6 +96,11 @@ struct LineParser {
             ++index;
         }
 
+        // Return whatever was consumed before reaching the end of the line.
+        if (index > start) {
+            return input.substr(start, index - start);
+        }
+
         return std::nullopt;
     }
 
@@ -395,11 +400,12 @@ static void remove_cached_fonts(cairo_t *cr) {
     }
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold) {
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
     auto layout = get_cached_pango_font(cr, mylar_font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
+    pango_layout_set_alignment(layout, (PangoAlignment) align);
     if (wrap == -1) {
         pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
         pango_layout_set_width(layout, -1);
@@ -1255,15 +1261,25 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     return pad;
 }
 
-static void make_screen_positioner(Container *parent, std::function<void (std::string)> on_clicked) {
-    static int height = 200;
+struct MonitorOption {
+    std::string name;
+    std::vector<std::string> option;
+    float w = 1920;
+    float h = 1080;
+    int fps = 60;
+    int x = 0; 
+    int y = 0; 
+    float scale = 1.0;
+    int transform = 0;
+};
+
+static void make_screen_positioner(Container *parent, std::vector<MonitorOption *> &options, std::function<void (std::string)> on_clicked) {
+    static int height = 300;
     auto c = parent->child(::fullycustom, FILL_SPACE, height);
     struct MonitorInfo : UserData {
-        int start_offset_x = 0;
-        int start_offset_y = 0;
- 
         int offset_x = 0;
         int offset_y = 0;
+        MonitorOption *o = nullptr;
     };
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -1272,9 +1288,9 @@ static void make_screen_positioner(Container *parent, std::function<void (std::s
 
         auto main = c->children[0];
         auto data = (MonitorInfo *) main->user_data;
-        main->real_bounds = Bounds(c->real_bounds.x + 30 + data->offset_x + data->start_offset_x,
-                                   c->real_bounds.y + data->offset_y + data->start_offset_y,
-                                   100, 100);
+        main->real_bounds = Bounds(c->real_bounds.x + c->real_bounds.w * .5 - main->wanted_bounds.w * .5 + data->offset_x,
+                                   c->real_bounds.y + c->real_bounds.h * .5 - main->wanted_bounds.h * .5 + data->offset_y,
+                                   main->wanted_bounds.w, main->wanted_bounds.h);
         main->wanted_bounds = main->real_bounds;
         layout(root, main, main->real_bounds);
     };
@@ -1288,15 +1304,34 @@ static void make_screen_positioner(Container *parent, std::function<void (std::s
         cairo_fill(cr);
     };
 
-    auto main = c->child(FILL_SPACE, FILL_SPACE);
+    float scale_down = .1;
+
+    auto main = c->child(options[0]->w * scale_down, options[0]->h * scale_down);
     main->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
+        auto data = (MonitorInfo *) c->user_data;
         set_argb(cr, RGBA(1, 1, 1, 1));
         auto b = c->real_bounds;
+        
+        cairo_save(cr);
+        set_rect(cr, c->parent->real_bounds);
+        cairo_clip(cr);
+        
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
         cairo_fill(cr);
+
+        auto text = fz("{}\n{}x{}", data->o->name, data->o->w, data->o->h);
+        auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
+        
+        draw_text(cr, 
+            c->real_bounds.x,
+            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
+            text, 12 * dpi, true, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
+
+        cairo_reset_clip(cr);
+        cairo_restore(cr);
     };
     main->when_drag_start = [](Container *root, Container *c) {
         auto data = (MonitorInfo *) c->user_data;
@@ -1308,11 +1343,12 @@ static void make_screen_positioner(Container *parent, std::function<void (std::s
     };
     main->when_drag_end = [](Container *root, Container *c) {
         auto data = (MonitorInfo *) c->user_data;
-        data->start_offset_x += data->offset_x;
-        data->start_offset_y += data->offset_y;
+        data->offset_x = 0;
+        data->offset_y = 0;
     };
  
     auto monitor_info = new MonitorInfo;
+    monitor_info->o = options[0];
     main->user_data = monitor_info;
 }
 
@@ -1346,64 +1382,68 @@ static void fill_display_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
-    make_screen_positioner(padded_right, [](std::string monitor_name) {
-        
-    });
-
-    make_vert_space(padded_right, 10);
-
-    struct MonitorOption {
-        std::string name;
-        std::vector<std::string> option;
-    };
     std::vector<MonitorOption *> options;
     auto data = execAndGet(std::string("hyprctl monitors").c_str());
 
     auto p = LineParser(data);
+    MonitorOption *option = nullptr;
     while (p.has_another_line()) {
         defer(p.next_line());
 
         p.eat_blank();
-
         
+        std::string_view s = p.eat_until_line_end();
+        
+        auto l = LineParser(s);
 
-        auto s = p.eat_until_line_end();
+        try {
+            if (s.starts_with("Monitor")) {
+                option = new MonitorOption;
+                options.push_back(option);
+                
+                l.eat_until(" ");
+                option->name = trim(std::string(*l.eat_until(" ")));
+            } else if (s.contains(" at ")) {
+                option->w = std::stof(trim(std::string(*l.eat_until("x"))));
+                option->h = std::stof(trim(std::string(*l.eat_until("@"))));
+                option->fps = std::round(std::stof(trim(std::string(*l.eat_until(" ")))));
+                l.eat_until(" ");
+                option->x = std::stoi(trim(std::string(*l.eat_until("x"))));
+                option->y = std::stoi(trim(std::string(l.eat_until_line_end())));
+            } else if (s.starts_with("scale")) {
+                l.eat_until(": ");
+                option->scale = std::stof(trim(std::string(l.eat_until_line_end())));
+            } else if (s.starts_with("transform")) {
+                l.eat_until(": ");
+                option->transform = std::stoi(trim(std::string(l.eat_until_line_end())));
+            } else if (s.starts_with("availableModes")) {
+                l.eat_until(": ");
+                while (l.not_end_of_line()) {
+                    auto f = l.eat_until(" ");
+                    option->option.push_back(std::string(*f));
+                }
+            }
+        } catch (...) {
+            main_thread([]() {
+                notify("Failed to parse a monitor please report this issue on github!");
+            });
+            return;
+        }
     }
 
+    make_screen_positioner(padded_right, options, [](std::string monitor_name) {
+        
+    });
+
+    make_vert_space(padded_right, 10);
     
 
-    /*
-    std::istringstream stream(data);
-    std::string line;
-    MonitorOption* current = nullptr;
-
-    while (std::getline(stream, line)) {
-        std::string trimmed = trim(line);
-
-        if (trimmed.rfind("Monitor ", 0) == 0) {
-            std::string monitor = trimmed.substr(8); // after "Monitor "
-
-            // Remove everything from " (ID" onward
-            auto pos = monitor.find(" (ID");
-            if (pos != std::string::npos)
-                monitor.resize(pos);
-            current = new MonitorOption{monitor, {}};
-            options.push_back(current);
-            continue;
-        }
-
-        if (current && trimmed.rfind("availableModes:", 0) == 0) {
-            std::string modes = trimmed.substr(std::string("availableModes:").length());
-
-            std::istringstream modeStream(modes);
-            std::string mode;
-
-            while (modeStream >> mode)
-                current->option.push_back(mode);
-        }
-    }
-    */
-
+    // main_thread([options]() {
+    //     for (auto o : options) {
+    //         notify(fz("{} {}x{}@{} at {}x{}, {}", o->name, o->w, o->h, o->fps, o->x, o->y, o->scale));
+    //     }
+    // });
+        
     for (auto m : options) {
         make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", m->option, [](std::string selected) {
             main_thread([selected]() {
