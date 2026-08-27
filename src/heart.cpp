@@ -1055,7 +1055,9 @@ static void on_render(int id, int stage) {
 
 
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
-        //rect({10, 10, 300, 300}, {0, 0, 0, 1}, 0, 15.0f, 2.0, true);
+        //auto monbg = bounds_monitor(current_monitor);
+        //rect(Bounds(monbg.x, monbg.y, 300, 300).scale(scale(current_monitor)), {1, 0, 1, 1}, 0, 15.0f, 2.0, true);
+        
         auto snap_edge_animation = *datum<float>(actual_root, "snap_edge_animation");
         if (snap_edge_animation != 0.0 && snap_edge_animation != 1.0) {
            int mon = *datum<int>(actual_root, "snap_edge_animation_mon");
