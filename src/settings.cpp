@@ -25,6 +25,7 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 static RawApp *settings_app = nullptr;
+static MylarWindow *settings_mylar = nullptr;
 
 static RGBA left_color = RGBA(.941, .957, .976, 1);
 static RGBA right_color = RGBA(.941, .957, .976, 1);
@@ -906,7 +907,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
     }
 }
 
-static void make_vert_space(Container *parent, float amount) {
+static Container *make_vert_space(Container *parent, float amount) {
     auto pad = parent->child(FILL_SPACE, 8);
     pad->pre_layout = [amount](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -914,6 +915,7 @@ static void make_vert_space(Container *parent, float amount) {
         auto dpi = mylar->raw_window->dpi;
         c->wanted_bounds.h = amount * dpi;
     };
+    return pad;
 }
 
 static void fill_dock_settings(Container *root, Container *c) {
@@ -1113,7 +1115,7 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
    
 }
 
-static void make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::vector<std::string> options, std::function<void(std::string)> on_change) {
+static Container *make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::string selected, std::vector<std::string> options, std::function<void(std::string)> on_change) {
     assert(on_change);
     auto p = make_self_height_sized_parent(parent);
 
@@ -1133,9 +1135,11 @@ static void make_dropdown_option(Container *parent, std::string title, std::stri
     right->child(FILL_SPACE, FILL_SPACE);
     right->parent_bounds_limit_input_bounds = false;
     
-    make_dropdown(right, options[0], options, [on_change](std::string selected) {
+    make_dropdown(right, selected, options, [on_change](std::string selected) {
         on_change(selected);
     });
+    
+    return p;
 }
 
 static void make_button(Container *parent, std::string text, std::function<void()> func) {
@@ -1266,7 +1270,7 @@ struct MonitorOption {
     std::vector<std::string> option;
     float w = 1920;
     float h = 1080;
-    int fps = 60;
+    float fps = 60;
     int x = 0; 
     int y = 0; 
     float scale = 1.0;
@@ -1369,13 +1373,15 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             cairo_reset_clip(cr);
             cairo_restore(cr);
         };
-        main->when_drag_start = [](Container *root, Container *c) {
+        main->when_drag_start = [on_clicked](Container *root, Container *c) {
             auto data = (MonitorInfo *) c->user_data;
             for (auto ch : c->parent->children) {
                 auto data = (MonitorInfo *) ch->user_data;
                 data->selected = false;
             }
             data->selected = true;
+            if (on_clicked)
+                on_clicked(data->o->name);
         };
         main->when_drag = [](Container *root, Container *c) {
             auto data = (MonitorInfo *) c->user_data;
@@ -1398,6 +1404,50 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         
         main->user_data = monitor_info;        
     }
+}
+
+static void change_display_options(MonitorOption *m) {
+    auto right = container_by_name("settings_right", settings_mylar->root);
+    if (!right)
+        return;
+    assert(!right->children.empty());
+    auto padded_right = right->children[0];
+    for (int i = padded_right->children.size() - 1; i >= 0; i--) {
+        if (padded_right->children[i]->name == "removable") {
+            delete padded_right->children[i];
+            padded_right->children.erase(padded_right->children.begin() + i);
+        }
+    }
+    
+    auto res = fz("{}x{}@{:.2f}Hz", m->w, m->h, m->fps);
+    auto p = make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", res, m->option, [](std::string selected) {
+        main_thread([selected]() {
+            notify(selected);
+        });
+    });
+    p->name = "removable";
+    p = make_vert_space(padded_right, 4);
+    p->name = "removable";
+
+    std::vector<std::string> scales = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
+    res = fz("{}%", std::round(m->scale * 100));
+    p = make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", res, scales, [](std::string selected) {
+        main_thread([selected]() {
+            notify(selected);
+        });
+    });
+    p->name = "removable";
+    
+    p = make_vert_space(padded_right, 4);
+    p->name = "removable";
+
+    std::vector<std::string> orientations= {"Landscape", "Vertical"};
+    p = make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", "Landscape", orientations, [](std::string selected) {
+        main_thread([selected]() {
+            notify(selected);
+        });
+    });
+    p->name = "removable";
 }
 
 static void fill_display_settings(Container *root, Container *c) {
@@ -1431,7 +1481,8 @@ static void fill_display_settings(Container *root, Container *c) {
     make_vert_space(padded_right, 10);
 
     std::vector<MonitorOption *> options;
-    auto data = execAndGet(std::string("hyprctl monitors").c_str());
+    //auto data = execAndGet(std::string("hyprctl monitors").c_str());
+    auto data = execAndGet(std::string("cat /tmp/out").c_str());
 
     auto p = LineParser(data);
     MonitorOption *option = nullptr;
@@ -1454,7 +1505,7 @@ static void fill_display_settings(Container *root, Container *c) {
             } else if (s.contains(" at ")) {
                 option->w = std::stof(trim(std::string(*l.eat_until("x"))));
                 option->h = std::stof(trim(std::string(*l.eat_until("@"))));
-                option->fps = std::round(std::stof(trim(std::string(*l.eat_until(" ")))));
+                option->fps = std::stof(trim(std::string(*l.eat_until(" "))));
                 l.eat_until(" ");
                 option->x = std::stoi(trim(std::string(*l.eat_until("x"))));
                 option->y = std::stoi(trim(std::string(l.eat_until_line_end())));
@@ -1479,44 +1530,24 @@ static void fill_display_settings(Container *root, Container *c) {
         }
     }
 
-    make_screen_positioner(padded_right, options, [](std::string monitor_name) {
+    if (options.size() > 0) {
+        make_screen_positioner(padded_right, options, [options](std::string monitor_name) {
+            for (auto o : options) {
+                if (o->name == monitor_name) {
+                    change_display_options(o);
+                    return;
+                }
+            }
+        });
         
-    });
-
-    make_vert_space(padded_right, 10);
-    
-
-    // main_thread([options]() {
-    //     for (auto o : options) {
-    //         notify(fz("{} {}x{}@{} at {}x{}, {}", o->name, o->w, o->h, o->fps, o->x, o->y, o->scale));
-    //     }
-    // });
+        make_vert_space(padded_right, 10);
+    }
         
     for (auto m : options) {
-        make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", m->option, [](std::string selected) {
-            main_thread([selected]() {
-                notify(selected);
-            });
-        });
+        change_display_options(m);
         break;
     }
-    make_vert_space(padded_right, 4);
-    
-    std::vector<std::string> scales = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
-    make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", scales, [](std::string selected) {
-        main_thread([selected]() {
-            notify(selected);
-        });
-    });
-    
-    make_vert_space(padded_right, 4);
 
-    std::vector<std::string> orientations= {"Landscape", "Vertical"};
-    make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", orientations, [](std::string selected) {
-        main_thread([selected]() {
-            notify(selected);
-        });
-    });
 }
 
 static void fill_desktop_settings(Container *root, Container *c) {
@@ -2042,6 +2073,7 @@ void actual_start() {
     settings.name = "Settings";
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;
+    settings_mylar = mylar;
     fill_root(mylar->root);
     mylar->raw_window->on_close = [](RawWindow *w) {
         for (auto p : popups) {
