@@ -1282,7 +1282,9 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         int mouse_offset_x = 0;
         int mouse_offset_y = 0;
         MonitorOption *o = nullptr;
+        bool selected = false;
     };
+    static float scale_down = .1;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto dpi = mylar->raw_window->dpi;
@@ -1292,13 +1294,31 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             return;
 
         auto main = c->children[0];
+
+        int min_x = INT_MAX;
+        int min_y = INT_MAX;
+        int max_x = 0;
+        int max_y = 0;
+        for (auto ch : c->children) {
+            auto data = (MonitorInfo *) ch->user_data;
+            if (data->o->x < min_x)
+                min_x = data->o->x;
+             if (data->o->y < min_y)
+                min_y = data->o->y;
+             if (data->o->x + data->o->w > max_x)
+                max_x = data->o->x + data->o->w;
+             if (data->o->y + data->o->h > max_y)
+                max_y = data->o->y + data->o->h;
+        }
+        float sizew = (float) (max_x - min_x) * scale_down;
+        float sizeh = (float) (max_y - min_y) * scale_down;
         
         for (auto ch : c->children) {
             auto data = (MonitorInfo *) ch->user_data;
             float offsetx = data->base_offset_x + data->mouse_offset_x;
             float offsety = data->base_offset_y + data->mouse_offset_y;
-            ch->real_bounds = Bounds(c->real_bounds.x + c->real_bounds.w * .5 + offsetx - main->real_bounds.w * .5,
-                                       c->real_bounds.y + c->real_bounds.h * .5 + offsety - main->real_bounds.h * .5,
+            ch->real_bounds = Bounds(c->real_bounds.x + c->real_bounds.w * .5 + offsetx - sizew * .5,
+                                       c->real_bounds.y + c->real_bounds.h * .5 + offsety - sizeh * .5,
                                        ch->wanted_bounds.w, ch->wanted_bounds.h);
             ch->wanted_bounds = ch->real_bounds;
             layout(root, ch, ch->real_bounds);
@@ -1314,7 +1334,7 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         cairo_fill(cr);
     };
 
-    float scale_down = .1;
+    bool first = true;
     for (auto option : options) {
         auto main = c->child(option->w * scale_down, option->h * scale_down);
         main->when_paint = paint {
@@ -1332,6 +1352,12 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
             cairo_fill(cr);
 
+            if (data->selected) {
+                set_argb(cr, accent);
+                drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 2.0 * dpi);
+                cairo_stroke(cr);
+            }
+
             auto text = fz("{}\n({}x{})", data->o->name, data->o->w, data->o->h);
             auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
             
@@ -1345,6 +1371,11 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         };
         main->when_drag_start = [](Container *root, Container *c) {
             auto data = (MonitorInfo *) c->user_data;
+            for (auto ch : c->parent->children) {
+                auto data = (MonitorInfo *) ch->user_data;
+                data->selected = false;
+            }
+            data->selected = true;
         };
         main->when_drag = [](Container *root, Container *c) {
             auto data = (MonitorInfo *) c->user_data;
@@ -1356,11 +1387,14 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             data->mouse_offset_x = 0;
             data->mouse_offset_y = 0;
         };
+        main->when_clicked = main->when_drag_start;
      
         auto monitor_info = new MonitorInfo;
         monitor_info->o = option;
         monitor_info->base_offset_x = monitor_info->o->x * scale_down;
         monitor_info->base_offset_y = monitor_info->o->y * scale_down;
+        monitor_info->selected = first;
+        first = false;
         
         main->user_data = monitor_info;        
     }
@@ -1397,7 +1431,7 @@ static void fill_display_settings(Container *root, Container *c) {
     make_vert_space(padded_right, 10);
 
     std::vector<MonitorOption *> options;
-    auto data = execAndGet(std::string("hyprctl monitors").c_str());
+    auto data = execAndGet(std::string("cat /tmp/out").c_str());
 
     auto p = LineParser(data);
     MonitorOption *option = nullptr;
@@ -1464,6 +1498,7 @@ static void fill_display_settings(Container *root, Container *c) {
                 notify(selected);
             });
         });
+        break;
     }
     make_vert_space(padded_right, 4);
     
