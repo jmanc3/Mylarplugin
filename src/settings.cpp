@@ -1431,7 +1431,7 @@ static void fill_display_settings(Container *root, Container *c) {
     make_vert_space(padded_right, 10);
 
     std::vector<MonitorOption *> options;
-    auto data = execAndGet(std::string("cat /tmp/out").c_str());
+    auto data = execAndGet(std::string("hyprctl monitors").c_str());
 
     auto p = LineParser(data);
     MonitorOption *option = nullptr;
