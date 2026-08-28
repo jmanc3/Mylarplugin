@@ -81,6 +81,7 @@ struct ConfigSettings {
     bool hotcorners = true;
     bool desktop_icons = true;
     std::string desktop_folder = "~/Desktop";
+    std::string overview_layout_type = "Grid";
 
     std::vector<MylarMonitorRule> monitor_rules;
     std::vector<MylarMonitor> monitors;

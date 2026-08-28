@@ -71,7 +71,11 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
 
     layout.setCells(cells);
     layout.setAreaSize(reserved.w - reserved.x - pad, reserved.h - reserved.y - pad);
-    layout.calculate();
+    if (set->overview_layout_type == "Grid") {
+        layout.calculateGrid();
+    } else {
+        layout.calculate();
+    }
 
     int minX = INT_MAX;
     int minY = INT_MAX;

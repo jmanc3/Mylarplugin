@@ -320,6 +320,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "desktop_icons", &settings->desktop_icons);
     bind(std::string, "desktop_folder", &settings->desktop_folder);
+    bind(std::string, "overview_layout_type", &settings->overview_layout_type);
     
     #undef bind
 }
@@ -1695,7 +1696,11 @@ static void fill_desktop_settings(Container *root, Container *c) {
         });
 
         t.detach();
-    }); 
+    });
+
+    make_dropdown_option(padded_right, "Overview", "Change layout type", "", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
+        set->overview_layout_type = new_type;
+    });
 }
 
 static void fill_wallpaper_settings(Container *root, Container *c) {
