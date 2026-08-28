@@ -1489,7 +1489,14 @@ static void change_display_options(MonitorOption *m) {
     p = make_vert_space(padded_right, 4);
     p->name = "removable";
 
-    std::vector<std::string> scales = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
+    std::vector<std::string> scales = {"Automatic"};
+    int count = 10;
+    for (int i = 0; i < count; i++) {
+        int add = i * count;
+        int amount = 100 + add;
+        scales.push_back(fz("{}%", amount));
+    }
+    
     res = fz("{}%", std::round(m->scale * 100));
     p = make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", res, scales, [m](std::string selected) {
         current_to_wanted(m); 
