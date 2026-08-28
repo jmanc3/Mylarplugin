@@ -59,6 +59,11 @@ struct MylarMonitorRule {
     bool mirrors = false;
 };
 
+struct MylarMonitor {
+    std::string name;
+    std::string lua_config;
+};
+
 struct ConfigSettings {
     int version = 1;
     std::string touchpad_acceleration_curve = "Custom";
@@ -78,6 +83,7 @@ struct ConfigSettings {
     std::string desktop_folder = "~/Desktop";
 
     std::vector<MylarMonitorRule> monitor_rules;
+    std::vector<MylarMonitor> monitors;
 };
 
 extern ConfigSettings *set;

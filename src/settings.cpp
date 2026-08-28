@@ -629,7 +629,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
     };
 }
 
-static void make_section_title(Container *parent, std::string title) {
+static Container *make_section_title(Container *parent, std::string title) {
     auto section_title = parent->child(FILL_SPACE, FILL_SPACE);
     section_title->pre_layout = [title](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -649,6 +649,7 @@ static void make_section_title(Container *parent, std::string title) {
             c->real_bounds.x, 
             c->real_bounds.y, title, size_title, true, mylar_font, c->real_bounds.w, -1, {0, 0, 0, 1}, true);
     };
+    return section_title;
 }
 
 static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change) {
@@ -992,8 +993,8 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
 static void make_dropdown(Container *parent, std::string text, std::vector<std::string> options, std::function<void(std::string)> func) {
     static float pad_amount = 11;
     static float vron_pad_amount = pad_amount * 1.7;
-    static float text_height = 11;
-    static float option_height = 13;
+    static float text_height = 9;
+    static float option_height = 11;
     static float chevron_height = 10;
     static std::string chevron = "\uE70D";
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
@@ -1047,7 +1048,7 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
         auto dpi = dock->raw_window->dpi;
         
         RawWindowSettings settings = make_icon_anchored_popup_settings(
-            c, dpi, 300, (std::max(1, (int) options.size()) * 30) * dpi);
+            c, dpi, 300, (std::max(1, (int) options.size()) * 25) * dpi);
 
         popup = open_mylar_popup(dock, settings);
         if (!popup)
@@ -1275,6 +1276,10 @@ struct MonitorOption {
     int y = 0; 
     float scale = 1.0;
     int transform = 0;
+
+    std::string wanted_mode_line;
+    float wanted_scale;
+    int wanted_transform = 0;
 };
 
 static void make_screen_positioner(Container *parent, std::vector<MonitorOption *> &options, std::function<void (std::string)> on_clicked) {
@@ -1374,6 +1379,7 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             cairo_restore(cr);
         };
         main->when_drag_start = [on_clicked](Container *root, Container *c) {
+            c->z_index = 100;
             auto data = (MonitorInfo *) c->user_data;
             for (auto ch : c->parent->children) {
                 auto data = (MonitorInfo *) ch->user_data;
@@ -1389,6 +1395,7 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             data->mouse_offset_y = root->mouse_current_y - root->mouse_initial_y;
         };
         main->when_drag_end = [](Container *root, Container *c) {
+            c->z_index = 0;
             auto data = (MonitorInfo *) c->user_data;
             data->mouse_offset_x = 0;
             data->mouse_offset_y = 0;
@@ -1406,6 +1413,46 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
     }
 }
 
+static void current_to_wanted(MonitorOption *m) {
+    m->wanted_mode_line = fz("{}x{}@{:.2f}", m->w, m->h, m->fps);
+    m->wanted_scale = m->scale;
+    m->wanted_transform = m->transform;
+}
+
+static void fill_display_settings(Container *root);
+
+static void apply_wanted(MonitorOption *m) {
+    std::string wanted_scale = std::to_string(m->wanted_scale); 
+    if (m->wanted_scale == -1) {
+        wanted_scale = "auto";
+    }
+    std::ostringstream ss;
+        ss << "hl.monitor({ output = \"" << m->name << "\", mode = \"" << m->wanted_mode_line << "\", position = \"auto\", "
+        << "scale = " << wanted_scale
+        << ", transform = " << m->wanted_transform
+        << " })";
+
+    auto str = ss.str();
+    main_thread([str, m]() {
+        MylarMonitor mon;
+        mon.name = m->name;
+        mon.lua_config = str;
+
+        bool found = false;
+        for (auto &hm : set->monitors) {
+            if (hm.name == m->name) {
+                found = true;
+                hm.lua_config = str;
+            }
+        }
+            
+        if (!found)
+            set->monitors.push_back(mon);
+        
+        hypriso->reload();
+    });
+}
+
 static void change_display_options(MonitorOption *m) {
     auto right = container_by_name("settings_right", settings_mylar->root);
     if (!right)
@@ -1419,11 +1466,24 @@ static void change_display_options(MonitorOption *m) {
         }
     }
     
+    auto p = make_vert_space(padded_right, 20);
+    p->name = "removable";
+    
+    p = make_section_title(padded_right, fz(" {}", m->name));
+    p->name = "removable";
+    
+    p = make_vert_space(padded_right, 10);
+    p->name = "removable";
+    
     auto res = fz("{}x{}@{:.2f}Hz", m->w, m->h, m->fps);
-    auto p = make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", res, m->option, [](std::string selected) {
-        main_thread([selected]() {
-            notify(selected);
-        });
+    p = make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", res, m->option, [m](std::string selected) {
+        current_to_wanted(m); 
+        
+        m->wanted_mode_line = selected;
+        m->wanted_mode_line.pop_back();
+        m->wanted_mode_line.pop_back();
+       
+        apply_wanted(m);
     });
     p->name = "removable";
     p = make_vert_space(padded_right, 4);
@@ -1431,10 +1491,16 @@ static void change_display_options(MonitorOption *m) {
 
     std::vector<std::string> scales = {"Automatic", "100%", "125%", "150%", "175%", "200%"};
     res = fz("{}%", std::round(m->scale * 100));
-    p = make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", res, scales, [](std::string selected) {
-        main_thread([selected]() {
-            notify(selected);
-        });
+    p = make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", res, scales, [m](std::string selected) {
+        current_to_wanted(m); 
+        if (selected == "Automatic") {
+            m->wanted_scale = -1;
+        } else {
+            selected.pop_back();
+            float f = stof(selected);
+            m->wanted_scale = f / 100.0f;
+        }
+        apply_wanted(m);
     });
     p->name = "removable";
     
@@ -1442,15 +1508,19 @@ static void change_display_options(MonitorOption *m) {
     p->name = "removable";
 
     std::vector<std::string> orientations= {"Landscape", "Vertical"};
-    p = make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", "Landscape", orientations, [](std::string selected) {
-        main_thread([selected]() {
-            notify(selected);
-        });
+    p = make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", "Landscape", orientations, [m](std::string selected) {
+        current_to_wanted(m); 
+        if (selected == "Landscape") {
+            m->wanted_transform = 0;
+        } else if (selected == "Vertical") {
+            m->wanted_transform = 1;
+        }
+        apply_wanted(m);
     });
     p->name = "removable";
 }
 
-static void fill_display_settings(Container *root, Container *c) {
+static void fill_display_settings(Container *root) {
     auto right = container_by_name("settings_right", root);
     if (!right)
         return;
@@ -1482,6 +1552,7 @@ static void fill_display_settings(Container *root, Container *c) {
 
     std::vector<MonitorOption *> options;
     auto data = execAndGet(std::string("hyprctl monitors").c_str());
+    // no/checkin
     //auto data = execAndGet(std::string("cat /tmp/out").c_str());
 
     auto p = LineParser(data);
@@ -1999,7 +2070,7 @@ void create_tab_option(Container *parent, std::string label) {
         } else if (label == "Desktop") {
             fill_desktop_settings(root, c);
         } else if (label == "Display") {
-            fill_display_settings(root, c);
+            fill_display_settings(root);
         }
     };
 }
