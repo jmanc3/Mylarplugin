@@ -991,7 +991,7 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
     return settings;
 }
 
-static void make_dropdown(Container *parent, std::string text, std::vector<std::string> options, std::function<void(std::string)> func) {
+static void make_dropdown(Container *parent, std::string text_, std::vector<std::string> options, std::function<void(std::string)> func) {
     static float pad_amount = 11;
     static float vron_pad_amount = pad_amount * 1.7;
     static float text_height = 9;
@@ -999,22 +999,30 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
     static float chevron_height = 10;
     static std::string chevron = "\uE70D";
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
-    pad->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
+    struct TextData : UserData {
+        std::string text;
+    };
+    auto text_data = new TextData;
+    text_data->text = text_;
+    pad->user_data = text_data;
+    pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
+        auto td = (TextData *) c->user_data;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, chevron_height, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        Bounds bounds = draw_text(cr, chevron_height, 0, td->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
         Bounds vron = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, {1, 1, 1, 1}, true);
         
         c->wanted_bounds.w = bounds.w + pad_amount * 2 + vron_pad_amount + vron.w;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
     };
-    pad->when_paint = [text](Container *root, Container *c) {
+    pad->when_paint = [](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
+        auto td = (TextData *) c->user_data;
         if (c->state.mouse_pressing) {
             set_argb(cr, {.7, .7, .7, 1});
         } else if (c->state.mouse_hovering) {
@@ -1029,11 +1037,11 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
         cairo_stroke(cr);
         
-        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        Bounds bounds = draw_text(cr, 0, 0, td->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
         draw_text(cr, 
             c->real_bounds.x + pad_amount, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+            td->text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
 
         auto vron_bounds = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, {1, 1, 1, 1}, false);
         draw_text(cr, 
@@ -1047,6 +1055,7 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
         auto dock = (MylarWindow*)root->user_data;
         auto cr = dock->raw_window->cr;
         auto dpi = dock->raw_window->dpi;
+        auto td = (TextData *) c->user_data;
         
         RawWindowSettings settings = make_icon_anchored_popup_settings(
             c, dpi, 300, (std::max(1, (int) options.size()) * 25) * dpi);
@@ -1084,11 +1093,12 @@ static void make_dropdown(Container *parent, std::string text, std::vector<std::
                 Bounds b = draw_text(cr, 0, 0, m, option_height * dpi, false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
                 draw_text(cr, 5 * dpi, center_y(c, b.h), m, option_height * dpi, true, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
             };
-            ch->when_clicked = [m, func](Container *root, Container *c) {
+            ch->when_clicked = [td, m, func](Container *root, Container *c) {
                 if (func)
                     func(m);
                 if (!popup)
                     return;
+                td->text = m;
                 windowing::timer(settings_app, 1, [](void *data) {
                     auto rw = (RawWindow *) data;
                     windowing::close_window(rw);
@@ -1697,6 +1707,8 @@ static void fill_desktop_settings(Container *root, Container *c) {
 
         t.detach();
     });
+    
+    make_vert_space(padded_right, 14);
 
     make_dropdown_option(padded_right, "Overview", "Change layout type", "", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
         set->overview_layout_type = new_type;
