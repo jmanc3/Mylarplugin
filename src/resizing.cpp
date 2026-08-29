@@ -476,6 +476,8 @@ void paint_resize_edge(Container *actual_root, Container *c) {
 
         // debug border
         //border(b, {1, 0, 1, .3}, resize_edge_size());
+        RGBA accent = RGBA(.0, .52, .9, 1);
+        RGBA main = RGBA(1, 1, 1, 1);
 
         {
             auto vert_dot_amount = *datum<float>(c, "vertical_bar_dot_amount_shown");
@@ -492,7 +494,8 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                 if (pos == (int) RESIZE_TYPE::RIGHT) {
                     bb.x += b.w;
                 }
-                rect(bb, {0, 0, 0, vert_amount});
+                accent.a = vert_amount;
+                rect(bb, accent);
                 auto cc = bb;
                 hypriso->damage_entire(rid);
 
@@ -503,7 +506,8 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                 bb.y += bb.h * .5;
                 bb.y -= h * .5;
                 bb.h = h;
-                rect(bb, {.5, .5, .5, vert_amount * vert_dot_amount}, 0, 0.0, 2.0);
+                main.a = vert_amount * vert_dot_amount;
+                rect(bb, main, 0, 0.0, 2.0);
             }
         }
         {
@@ -519,7 +523,8 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                 if (pos == (int) RESIZE_TYPE::BOTTOM) {
                     bb.y += b.h;
                 }
-                rect(bb, {0, 0, 0, vert_amount});
+                accent.a = vert_amount;
+                rect(bb, accent);
                 auto cc = bb;
                 hypriso->damage_entire(rid);
 
@@ -530,7 +535,8 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                 bb.x += bb.w * .5;
                 bb.x -= w * .5;
                 bb.w = w;
-                rect(bb, {.5, .5, .5, vert_amount * vert_dot_amount}, 0, 0.0, 2.0);
+                main.a = vert_amount * vert_dot_amount;
+                rect(bb, main, 0, 0.0, 2.0);
             }
         }
     }
