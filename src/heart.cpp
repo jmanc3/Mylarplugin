@@ -1933,7 +1933,7 @@ void heart::begin() {
             hypriso->on_workspace_change = on_workspace_change;
 
         	hypriso->create_callbacks();
-        	//hypriso->create_hooks();
+        	hypriso->create_hooks();
         	
             hypriso->add_float_rule();
 
