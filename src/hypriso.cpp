@@ -4960,7 +4960,8 @@ void HyprIso::bring_to_front(int id, bool focus) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             Desktop::windowState()->raise(hw->w);
-            Desktop::focusState()->fullWindowFocus(hw->w, Desktop::eFocusReason::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
+            if (focus)
+                Desktop::focusState()->fullWindowFocus(hw->w, Desktop::eFocusReason::FOCUS_REASON_SWITCH_TO_WINDOW_HARD);
         }
     }
 }

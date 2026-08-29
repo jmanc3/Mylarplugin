@@ -117,6 +117,7 @@ void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
     if (hypriso->get_active_workspace_id(snap_mon) != hypriso->get_active_workspace_id_client(cid)) {
         hypriso->move_to_workspace(cid, hypriso->get_active_workspace(snap_mon));
     }
+    hypriso->whitelist_on = true;
     hypriso->render_whitelist.push_back(cid);
     if (hypriso->has_decorations(cid)) {
         hypriso->move_resize(cid, p.x, p.y + titlebar_h, p.w, p.h - titlebar_h, false);
@@ -176,7 +177,7 @@ void possibly_close_if_none_left() {
        }
     }
     if (!any_seen) {
-        snap_assist::close();
+        snap_assist::close(true);
     }
 }
     
@@ -917,6 +918,7 @@ void actual_open(int monitor, int cid) {
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
 
+    hypriso->whitelist_on = true;
     for (auto i : ids)
         hypriso->render_whitelist.push_back(i);
 }
@@ -954,14 +956,16 @@ static void actual_close() {
            actual_root->children.erase(actual_root->children.begin() + i);
        }
     }
+    hypriso->whitelist_on = false;
     hypriso->render_whitelist.clear();
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
 }
 
-void snap_assist::close() {
-    if (!snap_assist::is_showing())
-        return;
+void snap_assist::close(bool force) {
+    if (!force)
+        if (!snap_assist::is_showing())
+            return;
     if (skip_close)
         return;
     bool first = true;

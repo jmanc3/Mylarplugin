@@ -908,7 +908,7 @@ static void on_activated(int id) {
     static bool leave = false;
     if (leave)
         return;
-/*
+    
     auto info = ((ClientInfo *)c->user_data);
     if (!info->grouped_with.empty()) {
         later_immediate([info](Timer *) {
@@ -919,7 +919,6 @@ static void on_activated(int id) {
             leave = false;
         });
     }
-    */
     heart::layout_containers();
 
     if (show_desktop::is_opened()) {
@@ -1055,6 +1054,7 @@ static void on_render(int id, int stage) {
 
 
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
+        //log(fz("{} {}", hypriso->whitelist_on, hypriso->render_whitelist.size()));
         //auto monbg = bounds_monitor(current_monitor);
         //rect(Bounds(monbg.x, monbg.y, 300, 300).scale(scale(current_monitor)), {1, 0, 1, 1}, 0, 15.0f, 2.0, true);
         

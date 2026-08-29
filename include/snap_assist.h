@@ -3,7 +3,7 @@
 
 namespace snap_assist {
     void open(int monitor, int cid);
-    void close();
+    void close(bool force = false);
     void click(int id, int button, int state, float x, float y);
 
     void fix_order();
