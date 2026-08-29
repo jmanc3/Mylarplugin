@@ -1054,6 +1054,7 @@ static void on_render(int id, int stage) {
 
 
     if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
+        //log(fz("{}", current_monitor));
         //log(fz("{} {}", hypriso->whitelist_on, hypriso->render_whitelist.size()));
         //auto monbg = bounds_monitor(current_monitor);
         //rect(Bounds(monbg.x, monbg.y, 300, 300).scale(scale(current_monitor)), {1, 0, 1, 1}, 0, 15.0f, 2.0, true);
@@ -1932,7 +1933,7 @@ void heart::begin() {
             hypriso->on_workspace_change = on_workspace_change;
 
         	hypriso->create_callbacks();
-        	hypriso->create_hooks();
+        	//hypriso->create_hooks();
         	
             hypriso->add_float_rule();
 

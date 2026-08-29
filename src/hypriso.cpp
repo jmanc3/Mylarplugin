@@ -1819,6 +1819,8 @@ void setup_wake_main_thread() {
     }, nullptr);
 }
 
+PHLMONITORREF rendering_monitor;
+
 void HyprIso::create_callbacks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1867,6 +1869,10 @@ void HyprIso::create_callbacks() {
 
         if (hypriso->on_layer_change)
             hypriso->on_layer_change();
+    });
+
+    static auto activeMonitor = Event::bus()->m_events.render.preChecks.listen([this](const PHLMONITOR &m) {
+        rendering_monitor = m;
     });
     
     static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
@@ -3821,12 +3827,18 @@ int current_rendering_monitor() {
     ZoneScoped;
 #endif
 
-    if (auto m = g_pHyprRenderer->m_renderData.pMonitor.lock()) {
+    // if (auto m = g_pHyprRenderer->m_renderData.pMonitor.lock()) {
+    if (auto m = rendering_monitor.lock()) {
         for (auto hyprmonitor : hyprmonitors) {
             if (hyprmonitor->m == m) {
                 return hyprmonitor->id;
             }
         }
+    }
+    for (auto hyprmonitor : hyprmonitors) {
+        if (auto m = hyprmonitor->m)
+            return hyprmonitor->id;
+        break;
     }
     return -1;
 }
