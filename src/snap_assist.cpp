@@ -262,7 +262,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 do_snap(parent_data->monitor, data->cid, (int) parent_data->pos, b);
                 auto snap_edge_animation = datum<float>(actual_root, "snap_edge_animation");
                 *snap_edge_animation = 0.0;
-                animate(snap_edge_animation, 1.0, 450, actual_root->lifetime);
+                spring_animate(snap_edge_animation, 1.0, 450, actual_root->lifetime);
                 *datum<int>(actual_root, "snap_edge_animation_mon") = get_monitor(data->cid);
                 auto mou = mouse();
                 *datum<float>(actual_root, "snap_edge_animation_x") = mou.x;
@@ -860,7 +860,7 @@ void actual_open(int monitor, int cid) {
             snap_helper->interactable = false;
         }
         helper_data->visibility = 0.0;
-        animate(&helper_data->visibility, 1.0, fade_in_time(), snap_helper->lifetime);
+        spring_animate(&helper_data->visibility, 1.0, fade_in_time() * 4, snap_helper->lifetime);
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         snap_helper->receive_events_even_if_obstructed = true;
@@ -981,13 +981,13 @@ void snap_assist::close(bool force) {
            helper_data->should_slide = false;
            if (first) {
                first = false;
-               animate(&helper_data->visibility, 0.0, fade_in_time(), child->lifetime, [](bool normal_end) {
+               spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime, [](bool normal_end) {
                    if (normal_end) {
                        later_immediate([](Timer *) { actual_close(); });
                    }
                });
            } else {
-               animate(&helper_data->visibility, 0.0, fade_in_time(), child->lifetime);
+               spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime);
            }
        }
     }
