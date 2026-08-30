@@ -1,5 +1,6 @@
 #include "edit_pin.h"
 
+#include "container.h"
 #include "heart.h"
 
 #include "client/raw_windowing.h"
@@ -10,6 +11,8 @@
 #include <cairo.h>
 #include <climits>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <algorithm>
 #include <cstdio>
 #include <pango/pango-font.h>
@@ -879,7 +882,7 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, b
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-static void button(Container *root, std::string text, std::function<void(Container *, Container *)> on_click) {
+static void button(Container *root, std::function<std::string()> get_text, std::function<void(Container *, Container *)> on_click) {
     int size = 12;
     
     auto child = root->child(FILL_SPACE, FILL_SPACE);
@@ -921,7 +924,7 @@ static void button(Container *root, std::string text, std::function<void(Contain
             self->state.mouse_pressing = false;
     };
     child->name = child->uuid;
-    child->when_paint = [size, text](Container *root, Container *c) {
+    child->when_paint = [size, get_text](Container *root, Container *c) {
         auto mylar = (PinData*)root->user_data;
         auto cr = mylar->window->raw_window->cr;
         auto dpi = mylar->window->raw_window->dpi;
@@ -946,21 +949,60 @@ static void button(Container *root, std::string text, std::function<void(Contain
             cairo_stroke(cr);
             cairo_set_line_width(cr, hehe);
         }
+        auto text = get_text();
 
         auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5,
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, text, size * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
     };
-    child->pre_layout = [size, text](Container* root, Container* c, const Bounds& b) {
+    child->pre_layout = [size, get_text](Container* root, Container* c, const Bounds& b) {
         auto mylar = (PinData*)root->user_data;
         auto cr = mylar->window->raw_window->cr;
         auto dpi = mylar->window->raw_window->dpi;
+        auto text = get_text();
 
         auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
         c->wanted_bounds.w = bounds.w + 50 * dpi;
     };
 };
+
+bool desktop_file_exists(std::string wm_class) {
+    const char *home = getenv("HOME");
+    std::string desktop_path(home);
+    desktop_path += "/Desktop/" + wm_class + ".desktop";
+    return std::filesystem::exists(desktop_path);
+}
+
+static void clicked_create_destroy_desktop_file(std::string wm_class, std::string icon, std::string command) {
+    const char *home = getenv("HOME");
+    std::string desktop_path(home);
+    desktop_path += "/Desktop/" + wm_class + ".desktop";
+
+    try {
+        if (std::filesystem::exists(desktop_path)) {
+            if (std::filesystem::exists(desktop_path)) {
+                std::filesystem::remove(desktop_path);
+            }
+        } else {
+            std::filesystem::path path(desktop_path);
+            std::filesystem::create_directories(path.parent_path());
+            
+            std::ofstream outFile(desktop_path);
+            if (!outFile) {
+                throw std::ios_base::failure("Failed to open file for writing.");
+            }
+            
+            outFile << "[Desktop Entry]\n";
+            outFile << "Icon=" << icon << "\n";
+            outFile << "Exec=" << command << "\n";
+            outFile << "StartupWMClass=" << wm_class << "\n";
+            outFile << "Name=" << wm_class << "\n";
+            outFile.close();
+        }
+    } catch (const std::exception &e) {
+    }
+}
 
 static void fill_root(Container *root) {
     root->when_paint = paint_bg;
@@ -1030,9 +1072,23 @@ static void fill_root(Container *root) {
             c->wanted_bounds.h = 32 * dpi;
             c->spacing = 10 * dpi;
         };
-        parent->alignment = ALIGN_RIGHT;
+        //parent->alignment = ALIGN_RIGHT;
+        static bool has_desktop_file = false;
+        has_desktop_file = desktop_file_exists(((PinData *) root->user_data)->stacking_rule);
+        button(parent, []() { return has_desktop_file ? "Remove desktop file" : "Create desktop file"; }, [](Container *root, Container *c) {
+            auto stacking_rule_container = container_by_name("stacking_rule_container", root);
+            auto stacking_rule_data = (LabelData*)stacking_rule_container->user_data;
+            auto command_container = container_by_name("command_container", root);
+            auto command_data = (LabelData*)command_container->user_data;
+            auto icon_container = container_by_name("icon_container", root);
+            auto icon_data = (LabelData*)icon_container->user_data;
+ 
+            clicked_create_destroy_desktop_file(stacking_rule_data->text, icon_data->text, command_data->text);
+            has_desktop_file = desktop_file_exists(((PinData *) root->user_data)->stacking_rule);
+        });
+        parent->child(FILL_SPACE, FILL_SPACE);
         
-        button(parent, "Save & Quit", [](Container *root, Container *c) {
+        button(parent, []() { return "Save & Quit"; }, [](Container *root, Container *c) {
             auto mylar = (PinData*)root->user_data;
             auto stacking_rule_container = container_by_name("stacking_rule_container", root);
             auto stacking_rule_data = (LabelData*)stacking_rule_container->user_data;
@@ -1044,7 +1100,7 @@ static void fill_root(Container *root) {
             dock::edit_pin(pin_data->original_stacking_rule, stacking_rule_data->text, icon_data->text, command_data->text);
             windowing::close_window(mylar->window->raw_window); 
         });
-        button(parent, "Close", [](Container *root, Container *c) {
+        button(parent, []() { return "Close"; }, [](Container *root, Container *c) {
             auto mylar = (PinData*)root->user_data;
             windowing::close_window(mylar->window->raw_window);
         });

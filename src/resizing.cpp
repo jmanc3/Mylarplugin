@@ -477,7 +477,7 @@ void paint_resize_edge(Container *actual_root, Container *c) {
         // debug border
         //border(b, {1, 0, 1, .3}, resize_edge_size());
         RGBA accent = RGBA(.0, .52, .9, 1);
-        RGBA main = RGBA(1, 1, 1, 1);
+        RGBA main = RGBA(.9, .9, .9, 1);
 
         {
             auto vert_dot_amount = *datum<float>(c, "vertical_bar_dot_amount_shown");
