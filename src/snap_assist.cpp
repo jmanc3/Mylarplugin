@@ -571,9 +571,15 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
             auto close = thumb->child(FILL_SPACE, FILL_SPACE);
             close->when_paint = [](Container *actual_root, Container *c) {
+                auto parent_data = (HelperData *) c->parent->parent->user_data;
+                auto data = (SnapThumb *) c->parent->user_data;
+                if (parent_data->closing)
+                    return;
+                
                 auto root = get_rendering_root();
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+                
                 renderfix
                 clip(to_parent(root, c->parent), s);
 
@@ -945,6 +951,7 @@ void snap_assist::open(int monitor, int cid) {
 }
 
 static void actual_close() {
+    hypriso->input_bypass_whitelist = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
@@ -968,7 +975,7 @@ void snap_assist::close(bool force) {
             return;
     if (skip_close)
         return;
-    bool first = true;
+    bool already_started_closing = false;
     bool any_animated = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
@@ -979,12 +986,17 @@ void snap_assist::close(bool force) {
                continue;
            helper_data->closing = true;
            helper_data->should_slide = false;
-           if (first) {
-               first = false;
+           if (!already_started_closing) {
+               already_started_closing = true;
                spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime, [](bool normal_end) {
                    if (normal_end) {
                        later_immediate([](Timer *) { actual_close(); });
                    }
+               }, [](float x) {
+                   if (x < .4) {
+                       hypriso->input_bypass_whitelist = true;
+                   }
+                   return x; 
                });
            } else {
                spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime);

@@ -3121,9 +3121,9 @@ PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint16_t propertie
     ZoneScoped;
 #endif
     auto win = (*(origVecToWin)g_pOnVecToWin->m_original)((Desktop::CViewHitTester *) thisptr, pos, properties, pIgnoreWindow);
-    if (hypriso->whitelist_on || win_disabled(win)) {
-        return nullptr;
-    }
+    if (!hypriso->input_bypass_whitelist)
+        if (hypriso->whitelist_on || win_disabled(win))
+            return nullptr;
     return win;
 }
 
@@ -3146,9 +3146,9 @@ SP<CWLSurfaceResource> hook_onVecToWinSurf(void* thisptr, const Vector2D& vc, PH
             }
         }
     }
-    if (hypriso->whitelist_on || disabled) {
-        return nullptr;
-    }
+    if (!hypriso->input_bypass_whitelist)
+        if (hypriso->whitelist_on || disabled)
+            return nullptr;
     return win;
 }
 
