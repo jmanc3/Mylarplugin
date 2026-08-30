@@ -6208,7 +6208,11 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
             if (hw->deco_fb && hw->deco_fb->isAllocated()) {
                 AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
                     auto tex = hw->deco_fb->getTexture();
+                    
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+                    if (std::abs(hw->w_decos_size.w - b.w) < 50)
+                        tex->minFilter = GL_NEAREST;
+                    
                     auto box = tocbox(b);
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.round = rounding;
