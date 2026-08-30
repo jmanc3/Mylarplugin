@@ -121,7 +121,7 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
 void create_overview_for_monitor(int monitor) {
     auto over = actual_root->child(FILL_SPACE, FILL_SPACE);
     //openess = 1.0;
-    spring_animate(&openess, 1.0, overview_open_time_ms, over->lifetime);
+    spring_animate(&openess, 1.0, {overview_open_time_ms / 2000.0, 0.97}, over->lifetime);
     over->custom_type = (int) TYPE::OVERVIEW;
     over->pre_layout = [monitor](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds = bounds_reserved_monitor(monitor);
@@ -201,6 +201,7 @@ void overview::open(int monitor) {
 
 void overview_actual_close() {
     hypriso->whitelist_on = false;
+    hypriso->input_bypass_whitelist = false;
     openess = 0.0;
     running = false;
 
@@ -222,8 +223,13 @@ void overview::close(bool focus) {
         auto c = m->children[i];
         if (c->custom_type == (int) TYPE::OVERVIEW) {
             if (!is_being_animating(&openess) || !is_being_animating_to(&openess, 0.0))
-                animate(&openess, 0.0, 200, c->lifetime, [](bool) {
+                spring_animate(&openess, 0.0, {overview_open_time_ms / 2000.0, 1.0}, c->lifetime, [](bool) {
                     overview_actual_close();
+                }, [](float x) {
+                    if (x < .3) {
+                        hypriso->input_bypass_whitelist = true;
+                    }
+                    return x;
                 });
         }
     }
