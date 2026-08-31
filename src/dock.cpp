@@ -1,6 +1,7 @@
 #include "dock.h"
 
 #include "container.h"
+#include "events.h"
 #include "heart.h"
 #include "dock_thumbnails.h"
 
@@ -411,7 +412,7 @@ static RGBA color_dock_sel_accent_color() {
     return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_accent_color", default_color);
 }
 
-static void paint_root(Container *root, Container *c) {
+static void paint_root_func(Container *root, Container *c) {
     auto dock = (Dock *) root->user_data;
     auto mylar = dock->window;
     auto cr = mylar->raw_window->cr;
@@ -1820,9 +1821,11 @@ static void fill_applications_container(Dock *dock) {
         c->wanted_pad = Bounds(pad_amount, pad_amount, pad_amount, pad_amount).scale(dpi);
     };
     
-    make_field(padded, false, "", [](std::string text) {
+    auto field = make_field(padded, false, "", [](std::string text) {
         
     });
+
+    set_active(root, {field}, root, true, false);
 }
 
 static void fill_projection_container(Dock *dock);
@@ -2248,7 +2251,7 @@ static void fill_brightness_container(Dock *dock) {
 }
 
 static void fill_root(Container *root) {
-    root->when_paint = paint_root;
+    root->when_paint = paint_root_func;
     root->type = ::hbox;
     root->receive_events_even_if_obstructed = true;
     root->when_mouse_enters_container = paint {
