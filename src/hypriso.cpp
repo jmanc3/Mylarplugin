@@ -3194,7 +3194,7 @@ void HyprIso::create_hooks() {
     hook_maximize_minimize();
     hook_dock_change();
     hook_monitor_arrange();
-    //hook_popup_creation_and_destruction();
+    hook_popup_creation_and_destruction();
     hook_use_shader();
     hook_load_shader();
     // hook_monitor_render();
@@ -8108,6 +8108,21 @@ void hook_onPopupDestroy(void* thisptr) {
     (*(origPopupDestroy)g_pOnPopupDestroy->m_original)((Desktop::View::CPopup *) thisptr);
 }
 
+//SP<CPopup> CPopup::create(SP<IPopupBackend> backend, WP<CPopup> pOwner) {
+inline CFunctionHook* g_pPopupCreate = nullptr;
+typedef SP<Desktop::View::CPopup> (*origPopupCreate)(SP<Desktop::View::IPopupBackend> backend, WP<Desktop::View::CPopup> pOwner);
+SP<Desktop::View::CPopup> hook_onPopupCreate(SP<Desktop::View::IPopupBackend> backend, WP<Desktop::View::CPopup> pOwner) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    //auto popup = (Desktop::View::CPopup *) thisptr;
+
+    auto b = (*(origPopupCreate)g_pPopupCreate->m_original)(backend, pOwner);
+    if (b)
+        popup_created(b);
+    return b;
+}
+
 void hook_popup_creation_and_destruction() {
     //return;
     int hooked = 0;
@@ -8115,18 +8130,9 @@ void hook_popup_creation_and_destruction() {
         static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "create");
         for (auto m : METHODS) {
             if (m.demangled.find("CPopup::create") != std::string::npos) {
-                if (m.demangled.find("CWindow") != std::string::npos) {
-                    g_pOnPopupWindowCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupWindowCreate);
-                    g_pOnPopupWindowCreate->hook();
-
-                    hooked++;
-                } else if (m.demangled.find("CLayerSurface") != std::string::npos) {
-                    g_pOnPopupLayerCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupLayerCreate);
-                    g_pOnPopupLayerCreate->hook();
-                    hooked++;
-                } else if (m.demangled.find("CXDGPopupResource") != std::string::npos) {
-                    g_pOnPopupSubpopupCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupSubpopupCreate);
-                    g_pOnPopupSubpopupCreate->hook();                        
+                if (m.demangled.find("IPopupBackend") != std::string::npos) {
+                    g_pPopupCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupCreate);
+                    g_pPopupCreate->hook();
                     hooked++;
                 }
             }
@@ -8145,8 +8151,8 @@ void hook_popup_creation_and_destruction() {
     }
     
 
-    if (hooked != 4) {
-        notify("failed to hook popup creation and destruction, report to fix");
+    if (hooked != 2) {
+        notify(std::format("{} failed to hook popup creation and destruction, report to fix", hooked));
     }
 }
 
