@@ -1245,6 +1245,7 @@ static void minimize_overview_combined_gesture() {
     
     static const float minimum_before_activation = 2.0 * slow;
     static const float maximum_offset = 250.0f * slow;
+    static const float fastest_speed = 22;
     static bool started_minimize = false;
 
     static long start = 0;
@@ -1257,7 +1258,12 @@ static void minimize_overview_combined_gesture() {
         y_offset += s.y * slow;
         started_minimize = show_desktop::get_scalar() > .5;
         start = get_current_time_in_ms();
+        request_refresh();
     }, [](Bounds s) {
+        if (s.y > fastest_speed)
+            s.y = fastest_speed;
+        if (s.y < -fastest_speed)
+            s.y = -fastest_speed;
         // update
         y_offset += s.y * slow;
         if (y_offset > maximum_offset)
@@ -1292,6 +1298,7 @@ static void minimize_overview_combined_gesture() {
                 show_desktop::set_scalar(0.0);
             }
         }
+        request_refresh();
     }, []() {
         end = get_current_time_in_ms();
         
@@ -1307,6 +1314,7 @@ static void minimize_overview_combined_gesture() {
             request_refresh();
         }
         y_offset = 0.0;
+        request_refresh();
     });
 }
 

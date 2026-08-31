@@ -12,7 +12,7 @@
 bool screenshotting_wallpaper = false;
 bool running = false;
 float openess = 0.0f;
-float overview_open_time_ms = 600;
+float overview_open_time_ms = 700;
 
 struct WindowOption {
     int cid;
@@ -28,7 +28,7 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     mb.scale(s);
     
     auto wallpaper_bounds = mb;
-    hypriso->draw_wallpaper(monitor_id, wallpaper_bounds);
+    //hypriso->draw_wallpaper(monitor_id, wallpaper_bounds);
     rect(wallpaper_bounds, {0, 0, 0, .7f}, 0, 0, 2.0, true);
 
     //rect(mb, RGBA(.16, .16, .16, 1.0));
@@ -172,7 +172,9 @@ bool screenshots(int monitor) {
     }
 
     // TODO: every monitor needs it's own screenshot
+    screenshotting_wallpaper = true;
     hypriso->screenshot_wallpaper(monitor);
+    screenshotting_wallpaper = false;
 
     for (auto c : actual_root->children) 
         if (c->custom_type == (int) TYPE::OVERVIEW)
@@ -182,6 +184,9 @@ bool screenshots(int monitor) {
 }
 
 void overview::open(int monitor) {
+    drag_workspace_switcher::open();
+    drag_workspace_switcher::force_hold_open(true);
+    
     later_immediate([monitor](Timer *) {
         screenshots(monitor);
         hypriso->whitelist_on = true;
@@ -190,8 +195,6 @@ void overview::open(int monitor) {
             auto mid = *datum<int>(m, "cid");
             create_overview_for_monitor(mid);
         }
-        drag_workspace_switcher::open();
-        drag_workspace_switcher::force_hold_open(true);
     });
 
     later(1000.0f / hypriso->fps(monitor), [monitor](Timer *t) {
@@ -202,6 +205,7 @@ void overview::open(int monitor) {
 void overview_actual_close() {
     hypriso->whitelist_on = false;
     hypriso->input_bypass_whitelist = false;
+    hypriso->simulateMouseMovement();
     openess = 0.0;
     running = false;
 
@@ -227,7 +231,10 @@ void overview::close(bool focus) {
                     overview_actual_close();
                 }, [](float x) {
                     if (x < .3) {
+                        bool sim = !hypriso->input_bypass_whitelist;
                         hypriso->input_bypass_whitelist = true;
+                        if (sim)
+                            hypriso->simulateMouseMovement();
                     }
                     return x;
                 });

@@ -967,6 +967,7 @@ static void actual_close() {
     hypriso->render_whitelist.clear();
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
+    hypriso->simulateMouseMovement();
 }
 
 void snap_assist::close(bool force) {
@@ -994,7 +995,10 @@ void snap_assist::close(bool force) {
                    }
                }, [](float x) {
                    if (x < .4) {
+                       bool sim = !hypriso->input_bypass_whitelist;
                        hypriso->input_bypass_whitelist = true;
+                       if (sim)
+                           hypriso->simulateMouseMovement();
                    }
                    return x; 
                });

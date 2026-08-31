@@ -6249,6 +6249,10 @@ double easeIn(double x) {
     return x * x;
 }
 
+double easeInExpo(double x) {
+    return x == 1.0 ? 1.0 : 1.0 - std::pow(2, -10 * x);
+}
+
 void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -6258,14 +6262,19 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
             if (hw->min_fb && hw->min_fb->isAllocated()) {
                 if (!hw->animate_to_dock)
                     return;
+
                 AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
                     auto tex = hw->min_fb->getTexture();
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-                    const auto snapshotExtents = hw->w->getFullWindowExtents();
-                    const auto realPosition = hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) +
-                        ((hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED) ? Vector2D{} : hw->w->m_workspace->m_renderOffset->value());
-                    const auto scale = hw->w->m_monitor->m_scale;
 
+                    const auto snapshotExtents = hw->w->getFullWindowExtents();
+                    const auto realPosition =
+                        hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) +
+                        ((hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED)
+                            ? Vector2D{}
+                            : hw->w->m_workspace->m_renderOffset->value());
+
+                    const auto scale = hw->w->m_monitor->m_scale;
 
                     Bounds bounds = {
                         realPosition.x - snapshotExtents.topLeft.x,
@@ -6273,26 +6282,52 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                         tex->m_size.x / scale,
                         tex->m_size.y / scale,
                     };
+
                     if (hypriso->is_snapped(hw->id)) {
                         bounds.x = realPosition.x;
                         bounds.y = realPosition.y;
+                        
+                        if (hypriso->has_decorations(hw->id)) {
+                            bounds.y -= titlebar_h;
+                        }
                     }
 
                     bounds.scale(scale);
-                    auto lerped = lerp(bounds, b, scalar);
+                    // Calculate the aspect-correct box that fits inside b.
+                    const float textureAspect = (float)tex->m_size.x / (float)tex->m_size.y;
+                    const float targetAspect = b.w / b.h;
+                    Bounds aspectBox = b;
+
+                    if (textureAspect > targetAspect) {
+                        // Texture is wider: fit to width.
+                        aspectBox.h = b.w / textureAspect;
+                        aspectBox.y += (b.h - aspectBox.h) / 2.0;
+                    } else {
+                        // Texture is taller: fit to height.
+                        aspectBox.w = b.h * textureAspect;
+                        aspectBox.x += (b.w - aspectBox.w) / 2.0;
+                    }
+
+                    auto lerped = lerp(bounds, aspectBox, scalar);
+
                     if (!hw->w->m_hidden)
-                        lerped = lerp(b, bounds, scalar);
+                        lerped = lerp(aspectBox, bounds, scalar);
+
                     auto box = tocbox(lerped);
                     box.round();
+
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.allowCustomUV = false;
                     data.round = 0.0;
-                    data.a = scalar;
+                    data.a = easeInExpo(scalar);
                     data.roundingPower = 2.0;
+
                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
                 });
-                g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
-                    //border(hw->w_min_size, {1, 0, 0, 1}, 10);
+
+                g_pHyprRenderer->m_renderPass.add(
+                    makeUnique<AnyPass>(std::move(anydata))
+                );
             }
         }
     }
