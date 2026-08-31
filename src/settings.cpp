@@ -1198,7 +1198,7 @@ struct Field : UserData {
     std::string text;
 };
 
-bool is_digits(const std::string& s) {
+static bool is_digits(const std::string& s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 

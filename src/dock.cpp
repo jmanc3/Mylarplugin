@@ -1,5 +1,6 @@
 #include "dock.h"
 
+#include "container.h"
 #include "heart.h"
 #include "dock_thumbnails.h"
 
@@ -427,6 +428,47 @@ static void paint_root(Container *root, Container *c) {
     auto color = color_dock_color();
     cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
     cairo_fill(cr);
+}
+
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
+    auto layout = get_cached_pango_font(cr, mylar_font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    
+    //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
+    pango_layout_set_text(layout, text.data(), text.size());
+    pango_layout_set_alignment(layout, (PangoAlignment) align);
+    if (wrap == -1) {
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+        pango_layout_set_width(layout, -1);
+        pango_layout_set_height(layout, -1);
+        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
+    } else {
+        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_width(layout, wrap * PANGO_SCALE);
+        pango_layout_set_height(layout, h);
+        if (h != -1)
+            pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
+    }
+    set_argb(cr, color);
+    PangoRectangle ink;
+    PangoRectangle logical;
+    pango_layout_get_pixel_extents(layout, &ink, &logical);
+    if (draw) {
+        cairo_move_to(cr, std::round(x), std::round(y));
+        pango_cairo_show_layout(cr, layout);
+    }
+    return Bounds(ink.width, ink.height, logical.width, logical.height);
+}
+
+static void paint_label(Container *root, Container *c, std::string text) {
+    auto mylar = (MylarWindow*)root->user_data;
+    auto cr = mylar->raw_window->cr;
+    auto dpi = mylar->raw_window->dpi;
+    auto size = 12 * dpi;
+
+    auto b = draw_text(cr, 0, 0, text, size, false, mylar_font, -1, 0, {0, 0, 0, 1}, false);
+    draw_text(cr, 
+        c->real_bounds.x + 12 * dpi, 
+        c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, mylar_font, -1, 0, {0, 0, 0, 1},  false);
 }
 
 static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
@@ -1674,22 +1716,113 @@ static void fill_bluetooth_container(Dock *dock) {
     };
 }
 
+struct Field : UserData {
+    std::string text;
+};
+
+static bool is_digits(const std::string& s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); });
+}
+
+static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (std::string)> on_change) {
+    static float pad_amount = 11;
+    static float text_height = 11;
+    auto pad = parent->child(FILL_SPACE, FILL_SPACE);
+    auto field = new Field;
+    field->text = initial_value;
+    pad->user_data = field;
+    pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock*)root->user_data;
+        auto cr = dock->applications->raw_window->cr;
+        auto dpi = dock->applications->raw_window->dpi;
+        text_height = 11 * dpi;
+        pad_amount = 11 * dpi;
+        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        c->wanted_bounds.w = FILL_SPACE;
+        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+    };
+    pad->when_key_event = [only_numbers, on_change](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (!c->active && !c->parent->active)
+            return;
+        if (!pressed)
+            return;
+        auto field = (Field *) c->user_data;
+        auto start = field->text;
+        defer(if (start != field->text) { on_change(field->text); });
+        
+        if (sym == XKB_KEY_BackSpace && !field->text.empty()) {
+            field->text.pop_back();
+        }
+        
+        if (is_text) {
+            if (only_numbers && !is_digits(text))
+                return;
+            field->text += text;
+        }
+    };
+  
+    pad->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock*)root->user_data;
+        auto cr = dock->applications->raw_window->cr;
+        auto dpi = dock->applications->raw_window->dpi;
+        auto field = (Field *) c->user_data;
+
+        set_argb(cr, c->active ? accent : RGBA(.8, .8, .8, 1));
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
+        cairo_stroke(cr);
+
+        set_argb(cr, {1, 1, 1, 1});
+        auto minus_border = c->real_bounds;
+        minus_border.shrink(std::round(1 * dpi));
+        b = minus_border;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
+        //set_rect(cr, minus_border);
+        cairo_fill(cr);
+        
+        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+
+        float over = ((c->real_bounds.h - bounds.h) * .5);
+        
+        if (c->active) {
+            set_argb(cr, {0, 0, 0, 1});
+            auto cursor_width = std::round(1.0 * dpi);
+            auto cursor_bounds = Bounds(c->real_bounds.x + over + bounds.w, 
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
+                cursor_width, bounds.h);
+            set_rect(cr, cursor_bounds);
+            cairo_fill(cr);
+        }
+        
+        draw_text(cr, 
+            c->real_bounds.x + over, 
+            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
+            field->text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+    };
+    return pad;
+}
+
 static void fill_applications_container(Dock *dock) {
-    dock->applications->root->when_paint = [](Container *root, Container *c) {
+    auto root = dock->applications->root;
+    root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->applications->raw_window->cr;
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->applications->raw_window->dpi, 1.0);
         cairo_fill(cr);
     };
-    dock->applications->root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        /*
-        main_thread([is_text, text]() {
-            if (is_text)
-                notify(text);
-        });
-        */
+
+    static const float pad_amount = 16;
+    auto padded = root->child(FILL_SPACE, FILL_SPACE);
+    padded->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto dpi = dock->applications->raw_window->dpi;
+        c->wanted_pad = Bounds(pad_amount, pad_amount, pad_amount, pad_amount).scale(dpi);
     };
+    
+    make_field(padded, false, "", [](std::string text) {
+        
+    });
 }
 
 static void fill_projection_container(Dock *dock);
