@@ -1,5 +1,6 @@
 #include "overview.h"
 #include "container.h"
+#include "dock.h"
 #include "drag_workspace_switcher.h"
 #include "first.h"
 #include "heart.h"
@@ -57,12 +58,13 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     ExpoLayout layout;
     std::vector<ExpoCell *> cells;
     for (auto o : clients_on_workspace) {
+        auto b = bounds_client(o);
         auto size = hypriso->thumbnail_size_deco(o);
         auto extents = extents_client(o);
         auto height = size.h;
         auto width = size.w;
-        auto x = bounds_client(o).x - extents.left - reserved.x;
-        auto y = bounds_client(o).y - extents.top - reserved.y;
+        auto x = b.x - extents.left - reserved.x;
+        auto y = b.y - extents.top - reserved.y;
         auto cell = new DemoCell(o, x, y, width, height);
         cells.push_back(cell);
     }
@@ -96,6 +98,8 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     auto overx = reserved.w - minX - maxW;
     auto overy = reserved.h - minY - maxH;
 
+    auto monitor_name = hypriso->monitor_name(monitor_id);
+
     for (int i = 0; i < cells.size(); i++) {
         auto democell = ((DemoCell *) cells[i]);
         int cid = democell->persistentKey();
@@ -108,6 +112,14 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
         b.w = size.w;
         b.h = size.h;
         b.scale(s);
+
+        if (hypriso->is_hidden(cid)) {
+            auto bounds = dock::get_location(monitor_name, cid);
+            bounds.y += wallpaper_bounds.h;
+            bounds.scale(s);
+            b = lerp(bounds, b, openess);
+        }
+        
         auto r = democell->result();
         auto small_bounds = Bounds(r.x, r.y, r.w, r.h).scale(s);
         small_bounds.x += overx * (1/s);
@@ -140,6 +152,7 @@ void create_overview_for_monitor(int monitor) {
             for (auto o : window_options) {
                 if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
                     hypriso->bring_to_front(o.cid, true);
+                    hypriso->set_hidden(o.cid, false, false);
                 }
             }
             later_immediate([](Timer *) {
