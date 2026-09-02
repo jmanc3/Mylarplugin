@@ -54,6 +54,7 @@ static int pixel_spacing = 1;
 static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 static RGBA accent = RGBA(.0, .52, .9, 1);
+static RGBA border_color = RGBA(0.0, 0.0, 0.0, 1.0);
 
 static std::vector<std::thread> dock_threads;
 
@@ -1717,6 +1718,9 @@ static void fill_bluetooth_container(Dock *dock) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->bluetooth->raw_window->dpi, 1.0);
         cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->bluetooth->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
     };
 }
 
@@ -1916,7 +1920,10 @@ static void fill_applications_container(Dock *dock) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->applications->raw_window->dpi, 1.0);
         cairo_fill(cr);
-    };
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->applications->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
+     };
 
     static const float pad_amount = 16;
     auto padded = root->child(FILL_SPACE, FILL_SPACE);
@@ -2166,6 +2173,9 @@ static void fill_extra_container(Container *root) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
         cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
     };
     auto top = root->child(::hbox, FILL_SPACE, FILL_SPACE);
     static auto button_pad = 10;
@@ -2377,6 +2387,9 @@ static void fill_wifi_container(Dock *dock) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->wifi->raw_window->dpi, 1.0);
         cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->wifi->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
     };
 }
 
@@ -2387,6 +2400,9 @@ static void fill_battery_container(Dock *dock) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->battery->raw_window->dpi, 1.0);
         cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->battery->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
     };
 }
 
@@ -2397,6 +2413,9 @@ static void fill_brightness_container(Dock *dock) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->brightness->raw_window->dpi, 1.0);
         cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->brightness->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
     };
     auto parent = dock->brightness->root->child(::vbox, FILL_SPACE, FILL_SPACE);
     parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -2785,6 +2804,9 @@ static void fill_root(Container *root) {
                 set_argb(cr, {1, 1, 1, 1});
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->volume->raw_window->dpi, 1.0);
                 cairo_fill(cr);
+                set_argb(cr, border_color);
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->volume->raw_window->dpi, 1.0);
+                cairo_stroke(cr);
             };
             // Because we need to fill items on first frame
             audio_read([]() {
@@ -3901,6 +3923,9 @@ static void fill_projection_container(Dock *dock) {
         set_argb(cr, {1, 1, 1, 1});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->projection->raw_window->dpi, 1.0);
         cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->projection->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
     };
 
     auto parent = scroll->content;

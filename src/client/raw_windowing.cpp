@@ -472,7 +472,6 @@ void on_window_render(wl_window *win) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
- 
     if (win->resize_next) {
         wl_window_resize_buffer(win, win->logical_width, win->logical_height);
         win->resize_next = false;
@@ -580,8 +579,11 @@ bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_hei
         win->on_render = on_window_render;
     }
 
-    if (win->viewport)
+    if (win->viewport) {
+        wl_surface_set_buffer_scale(win->surface, std::ceil(win->current_fractional_scale * 120.0));
+        
         wp_viewport_set_destination(win->viewport, win->logical_width, win->logical_height);
+    }
 
     return true;
 }
