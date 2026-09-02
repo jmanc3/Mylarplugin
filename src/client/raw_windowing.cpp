@@ -178,10 +178,9 @@ struct wl_context {
     xkb_mod_index_t mod_ctrl;
     xkb_mod_index_t mod_super;
     int most_recently_pressed = -1;
-    bool key_repeat_going_to_happen = false;
+    int key_repeat_timer_fd = -1;
     int key_repeat_rate = 100;
     int key_repeat_delay = 100;
-    int key_repeat_type = 0;
     uint32_t last_pointer_button_serial = 0;
     pending_pointer_frame_event pointer_axis_pending;
 
@@ -338,6 +337,13 @@ void timerfd_update(int tfd, uint32_t ms) {
     ts.it_value.tv_nsec = (ms % 1000) * 1000000L;
     // interval stays zero: still one-shot
     timerfd_settime(tfd, 0, &ts, NULL);
+}
+
+static void timerfd_stop(int tfd) {
+    if (tfd < 0)
+        return;
+    struct itimerspec ts = {};
+    timerfd_settime(tfd, 0, &ts, nullptr);
 }
 
 static void config_surface(wl_window *win, uint32_t w, uint32_t h) {
@@ -1211,6 +1217,8 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
     //(void) wl_keyboard; (void) serial; (void) surface;
     printf("keyboard: leave (lost focus)\n");
     auto ctx = (wl_context *) data;
+    ctx->most_recently_pressed = -1;
+    timerfd_stop(ctx->key_repeat_timer_fd);
     for (auto w : ctx->windows) {
         if (w->surface == surface) {
             w->has_keyboard_focus = false;
@@ -1223,12 +1231,8 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
     }
 }
 
-static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
-                                uint32_t serial, uint32_t time, uint32_t key, uint32_t state);
-
-static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
-                                uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
-    wl_context *ctx = (wl_context *) data;
+static void keyboard_emit_key(wl_context *ctx, uint32_t key, uint32_t state,
+                              bool update_xkb_state) {
     wl_window *win = nullptr;
     for (auto w : ctx->windows)
         if (w->has_keyboard_focus)
@@ -1242,7 +1246,7 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
         return;
 
     /* ---- CRITICAL: update XKB key state ---- */
-    if (ctx->xkb_state) {
+    if (ctx->xkb_state && update_xkb_state) {
         enum xkb_key_direction dir =
             (state == WL_KEYBOARD_KEY_STATE_PRESSED)
                 ? XKB_KEY_DOWN
@@ -1292,43 +1296,25 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
 
     if (win->on_render)
         win->on_render(win);
+}
+
+static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
+                                uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
+    wl_context *ctx = (wl_context *) data;
+    keyboard_emit_key(ctx, key, state, true);
 
     if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-        ctx->most_recently_pressed = key;
-        if (!ctx->key_repeat_going_to_happen) {
-            ctx->key_repeat_going_to_happen = true;
-            PolledFunction pf;
-            int time_ms = ctx->key_repeat_delay;
-            if (ctx->key_repeat_type == 1)
-                time_ms = (int) std::round(1000.0f / ((float ) ctx->key_repeat_rate));
-            ctx->key_repeat_type = 1;
-            pf.fd = create_timerfd_ms(time_ms);
-            pf.name = "Popping func";
-            pf.func = [ctx](PolledFunction f) {
-                for (int i = 0; i < ctx->polled_fds.size(); i++) {
-                    if (ctx->polled_fds[i].fd == f.fd) {
-                        close(f.fd);
-                        ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
-                        break;
-                    }
-                }
-                ctx->key_repeat_going_to_happen = false;
-                ctx->key_repeat_type = 1;
-                keyboard_handle_key(ctx, nullptr, 0, 0, ctx->most_recently_pressed, WL_KEYBOARD_KEY_STATE_PRESSED);
-            };
-            ctx->polled_fds.push_back(pf);
-        } else {
-            for (int i = 0; i < ctx->polled_fds.size(); i++) {
-                if (ctx->polled_fds[i].name == "Popping func") {
-                    timerfd_update(ctx->polled_fds[i].fd, ctx->key_repeat_delay);
-                }
-            }
+        const xkb_keycode_t keycode = key + 8;
+        const bool repeatable = ctx->keymap && xkb_keymap_key_repeats(ctx->keymap, keycode);
+        if (repeatable && ctx->key_repeat_rate > 0) {
+            ctx->most_recently_pressed = key;
+            timerfd_update(ctx->key_repeat_timer_fd, ctx->key_repeat_delay);
         }
     } else {
         if (ctx->most_recently_pressed == key) {
             ctx->most_recently_pressed = -1;
+            timerfd_stop(ctx->key_repeat_timer_fd);
         }
-        ctx->key_repeat_type = 0;
     }
 }
 
@@ -1703,6 +1689,30 @@ void windowing::main_loop(RawApp *app) {
     };
 
     ctx->polled_fds.push_back(wake_pf);
+
+    // Keep one stable repeat descriptor in the poll set. Creating/removing it
+    // from a Wayland callback would invalidate the poll snapshot being walked.
+    ctx->key_repeat_timer_fd = create_timerfd_ms(0);
+    timerfd_stop(ctx->key_repeat_timer_fd);
+    if (ctx->key_repeat_timer_fd >= 0) {
+        PolledFunction repeat_pf;
+        repeat_pf.fd = ctx->key_repeat_timer_fd;
+        repeat_pf.name = "key repeat";
+        repeat_pf.func = [ctx](PolledFunction pf) {
+            uint64_t expirations = 0;
+            if (!(pf.revents & POLLIN) || read(pf.fd, &expirations, sizeof expirations) < 0)
+                return;
+            if (ctx->most_recently_pressed < 0 || ctx->key_repeat_rate <= 0) {
+                timerfd_stop(pf.fd);
+                return;
+            }
+            keyboard_emit_key(ctx, static_cast<uint32_t>(ctx->most_recently_pressed),
+                              WL_KEYBOARD_KEY_STATE_PRESSED, false);
+            const uint32_t interval_ms = std::max(1, 1000 / ctx->key_repeat_rate);
+            timerfd_update(pf.fd, interval_ms);
+        };
+        ctx->polled_fds.push_back(repeat_pf);
+    }
 
     while (ctx->running) {
         // A Wayland read must always be paired: prepare_read() before poll(),
