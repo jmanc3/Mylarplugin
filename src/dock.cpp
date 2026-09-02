@@ -1952,15 +1952,20 @@ static void fill_applications_container(Dock *dock) {
                     active_option = 0;
                 } else if (sym == XKB_KEY_Return) {
                     if (auto o = container_by_name("option_scroll", root)) {
+                        bool none_matched = true;
                         for (auto ch: o->children) {
                             if (ch->exists) {
                                 auto s = (Script *) ch->user_data;
                                 if (s->selected) {
                                     launch_command(s->full_path);
                                     active_option = 0;
-                                    break;
+                                    none_matched = false;
                                 }
                             }
+                        }
+                        if (none_matched) {
+                            if (!total.empty())
+                                launch_command(total);
                         }
                     }
                     windowing::close_window(dock->applications->raw_window);
