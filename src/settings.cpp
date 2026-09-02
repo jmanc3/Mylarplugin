@@ -36,8 +36,8 @@ static RGBA bool_border = option_widget_bg_color;
 static RGBA accent = RGBA(.0, .52, .9, 1);
 
 static float optiontopbottompad = 15;
-static float optionleftpad = 14;
-static float optionrighttpad = 14;
+static float optionleftpad = 60;
+static float optionrighttpad = 25;
 
 struct LineParser {
     std::string_view input;
@@ -593,10 +593,16 @@ static void make_label_like(Container *parent, std::string title, std::string de
         }
         {
             auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
+            auto regular = draw_text(cr, 0, 0, title, size_title, false, mylar_font, -1, -1, {0, 0, 0, .5}, false);
+            float desc_yoff = c->real_bounds.h * .5 - bo.h * .5;
+            bool not_wrapped = std::abs(regular.h - bo.h) < 4;
+            if (!not_wrapped) {
+                desc_yoff = yoff;
+            }
             if (description.empty()) {
                 draw_text(cr,
                     c->real_bounds.x + 60 * dpi, 
-                    c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+                    c->real_bounds.y + desc_yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             } else {
                 draw_text(cr,
                     c->real_bounds.x + 60 * dpi, 
