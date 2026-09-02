@@ -1822,10 +1822,12 @@ struct Script : UserData {
     int historical_ranking = -1;
     int match_level = 100;
     std::string full_path;
-
+    
     std::string path;
 
     bool path_is_full_command = false;
+
+    bool selected = false;
 };
 
 void scripts_load(std::vector<Script *> &temp_scripts) {
@@ -1936,6 +1938,8 @@ static void fill_applications_container(Dock *dock) {
 
     static std::string field_text;
     field_text = "";
+    static int active_option = 0;
+    active_option = 0;
     
     auto field = make_field(padded, false, "", [](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
            int mods, bool is_text, std::string text, std::string total) {
@@ -1945,17 +1949,27 @@ static void fill_applications_container(Dock *dock) {
                 auto dock = (Dock *) root->user_data;
                 if (sym == XKB_KEY_Escape) {
                     windowing::close_window(dock->applications->raw_window);
+                    active_option = 0;
                 } else if (sym == XKB_KEY_Return) {
                     if (auto o = container_by_name("option_scroll", root)) {
                         for (auto ch: o->children) {
                             if (ch->exists) {
                                 auto s = (Script *) ch->user_data;
-                                launch_command(s->full_path);
-                                break;
+                                if (s->selected) {
+                                    launch_command(s->full_path);
+                                    active_option = 0;
+                                    break;
+                                }
                             }
                         }
                     }
                     windowing::close_window(dock->applications->raw_window);
+                } else if (sym == XKB_KEY_Up) {
+                    active_option--;
+                } else if (sym == XKB_KEY_Down) {
+                    active_option++;
+                } else if (is_text) {
+                    active_option = 0;
                 }
             }
         });
@@ -1971,11 +1985,30 @@ static void fill_applications_container(Dock *dock) {
         auto dpi = dock->applications->raw_window->dpi;
         c->spacing = 5 * dpi;
 
+        int alive_count = 0;
         for (auto ch: c->children) {
             auto s = (Script *) ch->user_data;
+            s->selected = false;
             auto name = s->name;
             auto full = s->full_path;
             ch->exists = name.starts_with(field_text);
+            if (ch->exists)
+                alive_count++;
+        }
+        if (alive_count != 0) {
+            if (active_option < 0)
+                active_option = 0;
+            if (active_option > alive_count - 1)
+                active_option = alive_count - 1;
+        }
+        int index_of_alive_child = 0;
+        for (auto ch: c->children) {
+            auto s = (Script *) ch->user_data;
+            if (ch->exists) {
+                if (index_of_alive_child == active_option)
+                    s->selected = true;
+                index_of_alive_child++;
+            }
         }
     };
 
@@ -1994,7 +2027,11 @@ static void fill_applications_container(Dock *dock) {
             auto full = s->full_path;
             auto dpi = dock->applications->raw_window->dpi;
             auto cr = dock->applications->raw_window->cr;
-            set_argb(cr, {0, 0, 0, .15});
+            if (s->selected) {
+                set_argb(cr, accent);
+            } else {
+                set_argb(cr, {0, 0, 0, .15});
+            }
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
                             c->real_bounds.h,
                             10 * dock->applications->raw_window->dpi,
