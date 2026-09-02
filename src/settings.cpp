@@ -536,7 +536,7 @@ static Container *make_self_height_sized_parent(Container *parent) {
         bcopy.h = tallest;
 
         layout(root, right, right->real_bounds);
-        modify_all(right, -optionrighttpad * dpi, 0);
+        modify_all(right, -25 * dpi, 0);
         
         modify_all(right, 0, tallest * .5 - right->real_bounds.h * .5);
         modify_all(left, 0, tallest * .5 - left->real_bounds.h * .5);
@@ -587,21 +587,19 @@ static void make_label_like(Container *parent, std::string title, std::string de
 
         auto b = c->real_bounds;
         float yoff = optiontopbottompad * dpi;
-        float xoff = 0;
         if (!icon.empty()) {
             auto bo = draw_text(cr, 0, 0, icon, size_ico, false, icon_font, -1, -1, {0, 0, 0, .5}, false);
-            draw_text(cr, c->real_bounds.x + optionleftpad * dpi, center_y(c, bo.h), icon, size_ico, true, icon_font, -1, -1, {0, 0, 0, 1}, false);
-            xoff += bo.w + optionleftpad * dpi;
+            draw_text(cr, c->real_bounds.x + 19 * dpi, center_y(c, bo.h), icon, size_ico, true, icon_font, -1, -1, {0, 0, 0, 1}, false);
         }
         {
             auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
             if (description.empty()) {
                 draw_text(cr,
-                    c->real_bounds.x + optionleftpad * dpi + xoff, 
+                    c->real_bounds.x + 60 * dpi, 
                     c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             } else {
                 draw_text(cr,
-                    c->real_bounds.x + optionleftpad * dpi + xoff, 
+                    c->real_bounds.x + 60 * dpi, 
                     c->real_bounds.y + yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             }
 
@@ -610,7 +608,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
         if (!description.empty()) {
             auto bo = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             draw_text(cr,
-                c->real_bounds.x + optionleftpad * dpi + xoff, 
+                c->real_bounds.x + 60 * dpi, 
                 c->real_bounds.y + yoff, description, size_desc, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
         }
     };
