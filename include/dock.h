@@ -26,6 +26,8 @@ namespace dock {
 
     void toggle_dock_merge();
 
+    void open_applications();
+
     Bounds get_location(std::string name, int cid);
     Bounds get_item_location(std::string monitor_name, std::string item_name);
 };

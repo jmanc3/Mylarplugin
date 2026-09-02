@@ -1682,8 +1682,12 @@ void add_hyprctl_dispatchers() {
         damage_all();
         return 0;
     });
-
-
+    hypriso->add_hyprctl_dispatcher("applications", [](lua_State *) {
+        later(10, [](Timer *) {
+            dock::open_applications();
+        });
+        return 0;
+    });
 
     hypriso->add_hyprctl_dispatcher("right_click_activate", [](lua_State *) {
         for (auto m : actual_root->children) {

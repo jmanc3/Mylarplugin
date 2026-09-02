@@ -32,7 +32,7 @@ static RGBA right_color = RGBA(.941, .957, .976, 1);
 static RGBA option_color = RGBA(.87, .87, .87, 1);
 static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
 static RGBA slider_bg = option_widget_bg_color;
-static RGBA bool_border = RGBA(.70, .70, .70, 1);
+static RGBA bool_border = option_widget_bg_color;
 static RGBA accent = RGBA(.0, .52, .9, 1);
 
 static float optiontopbottompad = 15;
@@ -545,6 +545,7 @@ static Container *make_self_height_sized_parent(Container *parent) {
 
         c->real_bounds = bcopy;
     };
+    static const float border_rounding = 5;
     c->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
@@ -554,18 +555,18 @@ static Container *make_self_height_sized_parent(Container *parent) {
         RGBA bg_color;
         if (c->state.mouse_hovering || c->state.mouse_pressing) {
             bg_color = RGBA(.965, .965, .965, 1);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
             set_argb(cr, bg_color);
             cairo_fill(cr);
         } else {
             //draw_round_rect(client, ArgbColor(.984, .984, .984, 1), c->real_bounds, 5 * config->dpi, 0);
             bg_color = RGBA(.984, .988, .992, 1);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
             set_argb(cr, bg_color);
             cairo_fill(cr);
         }
 
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 7 * dpi, 1.0);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
         set_argb(cr, RGBA(.818, .818, .818, 1));
         cairo_stroke(cr);
     };
@@ -597,7 +598,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
             if (description.empty()) {
                 draw_text(cr,
                     c->real_bounds.x + optionleftpad * dpi + xoff, 
-                    c->real_bounds.y + optiontopbottompad * dpi, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+                    c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             } else {
                 draw_text(cr,
                     c->real_bounds.x + optionleftpad * dpi + xoff, 
@@ -627,6 +628,9 @@ static void make_label_like(Container *parent, std::string title, std::string de
             auto bo2 = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, b.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
             c->real_bounds.h = bo1.h + bo2.h + optiontopbottompad * dpi * 2;
         }
+
+        if (c->real_bounds.h < 70 * dpi)
+            c->real_bounds.h = 70 * dpi;
     };
 }
 
@@ -672,35 +676,76 @@ static void make_bool(Container *parent, std::string title, std::string descript
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
         auto data = (BoolInfo *) c->user_data;
-        auto half_amount = .46f;
-        auto half = std::round(b.h * half_amount);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, half, std::floor(1.0 * dpi));
+        
+        float data_openess = 0.0; // hovering
+        float data_slide_amount = 0.0; // on off left or right toggle side
+        float data_slide_open = 0.0;
+        float data_open_amount = 0.0;
+        if (c->state.mouse_hovering)
+            data_openess = 1.0;
         if (data->on) {
+            data_slide_amount = 1.0;
+            //data_slide_open = 1.0;
+            //data_open_amount = 1.0;
+        }
+        
+        float circ_size_small = 12;
+        float circ_size_big = 14;
+        float circ_anim_time = 70;
+        float circ_size = circ_size_small + (circ_size_big - circ_size_small) * data_openess;
+        
+        float circ_extra_width = 5.5 * data_slide_open;
+
+        auto border = b;
+
+        // Border
+        if (data->on) {
+            set_rect(cr, border);
+            drawRoundedRect(cr, border.x, border.y, border.w, border.h, 10 * dpi, std::floor(1.0 * dpi));
             set_argb(cr, accent);
             cairo_fill(cr);
         } else {
-            set_argb(cr, bool_border);
+            set_rect(cr, border);
+            drawRoundedRect(cr, border.x, border.y, border.w, border.h, 10 * dpi, std::floor(1.0 * dpi));
+            set_argb(cr, RGBA(.537, .537, .537, 1));
             cairo_stroke(cr);
         }
 
-        b.shrink(4.5 * dpi);
-        half = std::round(b.h * half_amount);
+        float left = b.x + 4 * dpi - ((circ_size - circ_size_small) * .5) * dpi;
+        float right = b.x + b.w - circ_size * dpi + ((circ_size - circ_size_small) * .5) * dpi - 4 * dpi - circ_extra_width * data_openess;
+        float position = (right - left) * data_slide_amount + left;
+      
+        b.x = position;
+        b.y = b.y + b.h / 2 - (circ_size * .5) * dpi;
+        b.w = circ_size * dpi + circ_extra_width * data_open_amount;
+        b.h = circ_size * dpi;
+        // Dot
         if (data->on) {
-            drawRoundedRect(cr, b.x + b.w - b.h, b.y, b.h, b.h, half, std::floor(1.0 * dpi));
-            set_argb(cr, {1, 1, 1, 1});
+            set_rect(cr, b);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, circ_size * .5 * dpi, 1.0);
+            set_argb(cr, RGBA(1, 1, 1, 1));
             cairo_fill(cr);
         } else {
-            drawRoundedRect(cr, b.x, b.y, b.h, b.h, half, std::floor(1.0 * dpi));
-            set_argb(cr, bool_border);
+            set_rect(cr, b);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, circ_size * .5 * dpi, 1.0);
+            set_argb(cr, RGBA(.365, .365, .365, 1));
             cairo_fill(cr);
         }
+
+        // On/Off text
+        std::string text = data->on ? "On" : "Off";
+        auto tb = draw_text(cr, 0, 0, text, 11 * dpi, false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
+        draw_text(cr, 
+            c->real_bounds.x - tb.w - 12 * dpi, 
+            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, text, 11 * dpi, 
+            true, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
     };
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        c->real_bounds.w = 45 * dpi;
-        c->real_bounds.h = 26 * dpi;
+        c->real_bounds.w = 40 * dpi;
+        c->real_bounds.h = 20 * dpi;
     };
     right->when_clicked = [on_change](Container *root, Container *c) {
         auto data = (BoolInfo *) c->user_data;

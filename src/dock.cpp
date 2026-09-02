@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <dirent.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -34,11 +35,13 @@
 #include <pango/pango-types.h>
 #include <pango/pangocairo.h>
 #include <random>
+#include <sstream>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 #define BTN_LEFT		0x110
 #define BTN_RIGHT		0x111
@@ -1725,7 +1728,9 @@ static bool is_digits(const std::string& s) {
     return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
-static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (std::string)> on_change) {
+static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (Container *root, Container *c, int key, bool pressed,
+                                                 xkb_keysym_t sym, int mods, bool is_text,
+                                                 std::string text, std::string total)> on_change) {
     static float pad_amount = 11;
     static float text_height = 11;
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
@@ -1745,11 +1750,11 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     pad->when_key_event = [only_numbers, on_change](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         if (!c->active && !c->parent->active)
             return;
+        auto field = (Field *) c->user_data;
+        defer(on_change(root, c, key, pressed, sym, mods, is_text, text, field->text););
         if (!pressed)
             return;
-        auto field = (Field *) c->user_data;
         auto start = field->text;
-        defer(if (start != field->text) { on_change(field->text); });
         
         if (sym == XKB_KEY_BackSpace && !field->text.empty()) {
             field->text.pop_back();
@@ -1803,6 +1808,106 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     return pad;
 }
 
+struct Script : UserData {
+    std::string name;
+    std::vector<std::string> keywords;
+    std::vector<std::string> categories;
+    std::string generic_name;
+    std::string lowercase_name;
+    int priority = -1;
+    int historical_ranking = -1;
+    int match_level = 100;
+    std::string full_path;
+
+    std::string path;
+
+    bool path_is_full_command = false;
+};
+
+void scripts_load(std::vector<Script *> &temp_scripts) {
+    temp_scripts.clear();
+
+    // go through every directory in $PATH environment variable
+    // add to our scripts list if the files we check are executable
+    std::string paths = std::string(getenv("PATH"));
+
+    std::replace(paths.begin(), paths.end(), ':', ' ');
+
+    std::stringstream ss(paths);
+    std::string string_path;
+    while (ss >> string_path) {
+        if (auto *dir = opendir(string_path.c_str())) {
+            struct dirent *dp;
+            while ((dp = readdir(dir)) != NULL) {
+                struct stat st, ln;
+
+                // This is what determines if its an executable and its from dmenu and
+                // its not good. oh well
+                static int flag[26];
+#define FLAG(x) (flag[(x) - 'a'])
+
+                const char *path = string_path.c_str();
+                if ((!stat(path, &st) &&
+                     (FLAG('a') || dp->d_name[0] != '.') /* hidden files      */
+                     && (!FLAG('b') || S_ISBLK(st.st_mode)) /* block special     */
+                     && (!FLAG('c') || S_ISCHR(st.st_mode)) /* character special */
+                     && (!FLAG('d') || S_ISDIR(st.st_mode)) /* directory         */
+                     && (!FLAG('e') || access(path, F_OK) == 0) /* exists            */
+                     && (!FLAG('f') || S_ISREG(st.st_mode)) /* regular file      */
+                     && (!FLAG('g') || st.st_mode & S_ISGID) /* set-group-id flag */
+                     && (!FLAG('h') ||
+                         (!lstat(path, &ln) && S_ISLNK(ln.st_mode))) /* symbolic link */
+                     && (!FLAG('p') || S_ISFIFO(st.st_mode)) /* named pipe        */
+                     && (!FLAG('r') || access(path, R_OK) == 0) /* readable          */
+                     && (!FLAG('s') || st.st_size > 0) /* not empty         */
+                     && (!FLAG('u') || st.st_mode & S_ISUID) /* set-user-id flag  */
+                     && (!FLAG('w') || access(path, W_OK) == 0) /* writable          */
+                     && (!FLAG('x') || access(path, X_OK) == 0)) !=
+                    FLAG('v')) {
+                    /* executable        */
+
+                    if (!(FLAG('q'))) {
+                        bool already_have_this_script = false;
+                        std::string name = std::string(dp->d_name);
+                        for (auto *script: temp_scripts) {
+                            if (script->name == name) {
+                                already_have_this_script = true;
+                                break;
+                            }
+                        }
+                        if (already_have_this_script)
+                            continue;
+
+                        auto *script = new Script();
+                        script->name = name;
+                        script->lowercase_name = script->name;
+                        std::transform(script->lowercase_name.begin(),
+                                       script->lowercase_name.end(),
+                                       script->lowercase_name.begin(), ::tolower);
+
+                        script->full_path = path;
+                        script->full_path += "/" + name;
+                        script->path = path;
+                        if (!script->path.empty()) {
+                            if (script->path[script->path.length() - 1] == '/' ||
+                                script->path[script->path.length() - 1] == '\\') {
+                                script->path.erase(script->path.begin() +
+                                                   (script->path.length() - 1));
+                            }
+                        }
+
+                        temp_scripts.push_back(script);
+                    }
+                }
+            }
+            closedir(dir);
+        }
+    }
+
+    if (temp_scripts.empty())
+        return;
+}
+
 static void fill_applications_container(Dock *dock) {
     auto root = dock->applications->root;
     root->when_paint = [](Container *root, Container *c) {
@@ -1819,11 +1924,92 @@ static void fill_applications_container(Dock *dock) {
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->applications->raw_window->dpi;
         c->wanted_pad = Bounds(pad_amount, pad_amount, pad_amount, pad_amount).scale(dpi);
+        c->spacing = 8 * dpi;
     };
+
+    static std::string field_text;
+    field_text = "";
     
-    auto field = make_field(padded, false, "", [](std::string text) {
+    auto field = make_field(padded, false, "", [](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+           int mods, bool is_text, std::string text, std::string total) {
         
-    });
+            field_text = total;
+            if (pressed) {
+                auto dock = (Dock *) root->user_data;
+                if (sym == XKB_KEY_Escape) {
+                    windowing::close_window(dock->applications->raw_window);
+                } else if (sym == XKB_KEY_Return) {
+                    if (auto o = container_by_name("option_scroll", root)) {
+                        for (auto ch: o->children) {
+                            if (ch->exists) {
+                                auto s = (Script *) ch->user_data;
+                                launch_command(s->full_path);
+                                break;
+                            }
+                        }
+                    }
+                    windowing::close_window(dock->applications->raw_window);
+                }
+            }
+        });
+
+    std::vector<Script *> scripts;
+    scripts_load(scripts);
+
+    auto option_scroll = padded->child(FILL_SPACE, FILL_SPACE);
+    option_scroll->name = "option_scroll";
+    option_scroll->pre_layout = [](Container *root, Container *c,
+                                   const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto dpi = dock->applications->raw_window->dpi;
+        c->spacing = 5 * dpi;
+
+        for (auto ch: c->children) {
+            auto s = (Script *) ch->user_data;
+            auto name = s->name;
+            auto full = s->full_path;
+            ch->exists = name.starts_with(field_text);
+        }
+    };
+
+    for (auto s: scripts) {
+        auto o = option_scroll->child(FILL_SPACE, FILL_SPACE);
+        o->user_data = s;
+        o->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dock = (Dock *) root->user_data;
+            auto dpi = dock->applications->raw_window->dpi;
+            c->wanted_bounds.h = 36 * dpi;
+        };
+        o->when_paint = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto s = (Script *) c->user_data;
+            auto name = s->name;
+            auto full = s->full_path;
+            auto dpi = dock->applications->raw_window->dpi;
+            auto cr = dock->applications->raw_window->cr;
+            set_argb(cr, {0, 0, 0, .15});
+            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w,
+                            c->real_bounds.h,
+                            10 * dock->applications->raw_window->dpi,
+                            std::round(1.0 * dpi));
+            cairo_stroke(cr);
+
+            // static Bounds draw_text(cairo_t *cr, int x, int y, std::string text,
+            // int size, bool draw, std::string font, int wrap, int h, RGBA color,
+            // bool bold, int align = 0) {
+            std::string text = fz("{} ({})", name, full);
+            auto b = draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, 13 * dpi,
+                               false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
+            draw_text(cr, std::round(c->real_bounds.x + (c->real_bounds.h - b.h) * .5),
+                      std::round(center_y(c, b.h)), text, std::round(13 * dpi), true, mylar_font, -1, -1,
+                      RGBA(0, 0, 0, 1), false, 0);
+        };
+        o->when_clicked = [](Container *root, Container *c) {
+            auto s = (Script *) c->user_data;
+            auto full = s->full_path;
+            launch_command(full);
+        };
+    }
 
     set_active(root, {field}, root, true, false);
 }
@@ -2265,6 +2451,7 @@ static void fill_root(Container *root) {
 
     {
         auto super = simple_dock_item(root, ICON("\uF4A5"), ICON("Applications"));
+        super->name = "super";
         super->when_clicked = paint {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
@@ -4594,3 +4781,18 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, b
 }
 
 */
+
+void dock::open_applications() {
+    auto monitor_id = hypriso->monitor_from_cursor();
+    auto monitor_name = hypriso->monitor_name(monitor_id);
+    for (auto d: docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (d->creation_settings.monitor_name == monitor_name) {
+            if (auto s = container_by_name("super", d->window->root)) {
+                if (s->when_clicked) {
+                    s->when_clicked(d->window->root, s);
+                }
+            }
+        }
+    }
+}

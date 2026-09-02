@@ -2933,6 +2933,8 @@ hl.layer_rule({
     hl.layer_rule({ match = { namespace = "Dock" }, blur = true })
 })
 
+hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
+
    
 )END";
 
