@@ -99,6 +99,18 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
     auto overy = reserved.h - minY - maxH;
 
     auto monitor_name = hypriso->monitor_name(monitor_id);
+    
+    for (int i = 0; i < cells.size(); i++) {
+        auto democell = ((DemoCell *) cells[i]);
+        int cid = democell->persistentKey();
+        Bounds b = *datum<Bounds>(get_cid_container(cid), "overview_offset");
+        if (!(b.x == 0 && b.y == 0)) {
+            cells.erase(cells.begin() + i);
+            cells.push_back(democell);
+            break;
+        }
+    }
+     
 
     for (int i = 0; i < cells.size(); i++) {
         auto democell = ((DemoCell *) cells[i]);
@@ -125,8 +137,58 @@ static void paint_workspace(int monitor_id, int rendering_workspace_id, float op
         small_bounds.x += overx * (1/s);
         small_bounds.y += overy * (1/s);
         auto final_b = lerp(b, small_bounds, openess);
+
+        auto offset = *datum<Bounds>(get_cid_container(cid), "overview_offset");
+        final_b.x += offset.x * s;
+        final_b.y += offset.y * s;
+        
         hypriso->draw_deco_thumbnail(cid, final_b);
         window_options.push_back({cid, final_b.scale(1/s)});
+    }
+}
+
+static void possibly_send_cid_to_workspace(int cid) {
+    auto monitor = hypriso->monitor_from_cursor();
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto c = actual_root->children[i];
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            for (auto ch : c->children) {
+                if (bounds_contains(ch->real_bounds, actual_root->mouse_current_x, actual_root->mouse_current_y)) {
+                    auto space = *datum<int>(ch, "workspace");
+                    if (space == -1) {
+                        // next avaialable
+                        auto spaces = hypriso->get_workspaces(monitor);
+                        int next = 1;
+                        if (!spaces.empty())
+                            next = spaces[spaces.size() - 1] + 1;
+                        later_immediate([monitor, cid, next](Timer *) {                                
+                            //hypriso->set_hidden(cid, false);
+                            hypriso->move_to_workspace(cid, next, false);
+                            hypriso->bring_to_front(cid, false);
+
+                            int active = hypriso->get_active_workspace_id(monitor);
+                            for (auto o : hypriso->get_workspace_ids(monitor)) {
+                                hypriso->screenshot_space(monitor, o);
+                            }
+                        });
+                    } else {
+                        later_immediate([monitor, cid, space](Timer *) {
+                            auto before = hypriso->get_active_workspace_id(monitor);
+                            hypriso->bring_to_front(cid, false);
+                            hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
+                            
+                            int active = hypriso->get_active_workspace_id(monitor);
+                            for (auto o : hypriso->get_workspace_ids(monitor)) {
+                                if (active != o)
+                                hypriso->screenshot_space(monitor, o);
+                            }
+                        });
+                    }
+
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -135,6 +197,7 @@ void create_overview_for_monitor(int monitor) {
     //openess = 1.0;
     spring_animate(&openess, 1.0, {overview_open_time_ms / 2000.0, 0.97}, over->lifetime);
     over->custom_type = (int) TYPE::OVERVIEW;
+    over->when_drag_end_is_click = false;
     over->pre_layout = [monitor](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds = bounds_reserved_monitor(monitor);
         c->real_bounds = c->wanted_bounds;
@@ -146,6 +209,34 @@ void create_overview_for_monitor(int monitor) {
             return;
 
         paint_workspace(rid, hypriso->get_active_workspace_id(rid), openess);
+    };
+    
+    static int cid_target;    
+    cid_target = -1;
+    over->when_drag_start = [](Container *root, Container *c) {
+        cid_target = -1;
+        for (auto o : window_options) {
+            if (bounds_contains(o.b, root->mouse_current_x, root->mouse_current_y)) {
+                cid_target = o.cid;
+                break;
+            }
+        }
+        if (cid_target != -1)
+            *datum<Bounds>(get_cid_container(cid_target), "overview_offset") = Bounds(0, 0, root->mouse_current_x, root->mouse_current_y);
+    };
+    over->when_drag = [](Container *root, Container *c) {
+        if (cid_target != -1) {
+            auto b = datum<Bounds>(get_cid_container(cid_target), "overview_offset");
+            b->x = root->mouse_current_x - b->w;
+            b->y = root->mouse_current_y - b->h;
+        }
+    };
+    over->when_drag_end = [](Container *root, Container *c) {
+        if (cid_target != -1) {
+            *datum<Bounds>(get_cid_container(cid_target), "overview_offset") = Bounds(0, 0, root->mouse_current_x, root->mouse_current_y);
+            possibly_send_cid_to_workspace(cid_target);
+        }
+        cid_target = -1;
     };
     over->when_clicked = [](Container *root, Container *c) {
         if (c->state.mouse_button_pressed == BTN_LEFT) {

@@ -7709,8 +7709,7 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
         alphaFB->alloc(w, h, DRM_FORMAT_ABGR8888);
 
         // Save current FB
-        auto LASTFB = g_pHyprRenderer->m_renderData.currentFB->getTexture();
-        // g_pHyprRenderer
+        const auto LASTFB = g_pHyprRenderer->m_renderData.currentFB;
 
         // 1. Render matte
         matteFB->bind();

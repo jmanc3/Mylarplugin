@@ -137,8 +137,10 @@ void on_close(RawWindow *rw) {
     auto m = mylar(rw);
     if (!m) return;
     for (int i = mylar_windows.size() - 1; i >= 0; i--)
-        if (m == mylar_windows[i])
+        if (m == mylar_windows[i]) {
+            //delete m->root;
             mylar_windows.erase(mylar_windows.begin() + i);
+        }
 }
 
 static void wire_handlers(MylarWindow *m) {
