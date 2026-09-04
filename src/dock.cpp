@@ -2336,6 +2336,10 @@ static void fill_extra_container(Container *root) {
         }
         if (i == 2) {
             b->when_clicked = [](Container *root, Container *c) {
+                auto dock = (Dock *) root->user_data;
+                auto window = get_window(dock);
+                windowing::close_window(window->raw_window);
+                
                 system("hyprctl kill");
             };
         }

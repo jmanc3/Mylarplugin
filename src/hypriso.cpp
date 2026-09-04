@@ -3178,10 +3178,55 @@ static void hook_vec_to_win() {
     }
 }
 
+inline CFunctionHook *g_pProcessMouseDownKill = nullptr;
+
+typedef void (*origProcessMouseDownKill)(CInputManager *,
+                                         const IPointer::SButtonEvent &);
+
+static void hook_processMouseDownKill(CInputManager *thisptr,
+                                      const IPointer::SButtonEvent &e) {
+    if (e.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        const auto PWINDOW = Desktop::viewState()->hitTest().windowAt(
+            thisptr->getMouseCoordsInternal(), Desktop::View::RESERVED_EXTENTS |
+                                               Desktop::View::INPUT_EXTENTS |
+                                               Desktop::View::ALLOW_FLOATING);
+
+        // Mylar's client windows are created in-process. Never let kill mode send
+        // SIGKILL to one of them (which would also kill the compositor/plugin).
+        if (PWINDOW && PWINDOW->backend().pid() == getpid()) {
+            PWINDOW->sendClose();
+
+            auto release = e;
+            release.state = WL_POINTER_BUTTON_STATE_RELEASED;
+            (*(origProcessMouseDownKill) g_pProcessMouseDownKill->m_original)(thisptr,
+                                                                              release);
+            return;
+        }
+    }
+
+    (*(origProcessMouseDownKill) g_pProcessMouseDownKill->m_original)(thisptr, e);
+}
+
+static void hook_mouse_down_kill() {
+    static const auto METHODS =
+            HyprlandAPI::findFunctionsByName(globals->api, "processMouseDownKill");
+    for (const auto &m: METHODS) {
+        if (m.demangled.find("CInputManager::processMouseDownKill") ==
+            std::string::npos)
+            continue;
+
+        g_pProcessMouseDownKill = HyprlandAPI::createFunctionHook(
+            globals->api, m.address, (void *) &hook_processMouseDownKill);
+        g_pProcessMouseDownKill->hook();
+        return;
+    }
+
+    notify("Couldn't hook processMouseDownKill");
+}
 
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
-    ZoneScoped;
+  ZoneScoped;
 #endif
     previously_seen_instance_signature = get_previous_instance_signature();
     // detect_csd_request_change();
@@ -3203,6 +3248,7 @@ void HyprIso::create_hooks() {
     hook_hidden_state_change();
     hook_default_config();
     hook_vec_to_win();
+    hook_mouse_down_kill();
     //create_custom_shaders();
 }
 
