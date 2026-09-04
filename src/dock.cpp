@@ -3596,15 +3596,25 @@ static Container *add_volume_option(Container *parent) {
         c->wanted_bounds.h = top_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
     label_icon->when_clicked = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         if (!audio_data->merged || audio_data->pid <= 0)
             return;
+
+        auto visible_row_count = audio_c->parent->children.size();
+        auto child_row_count = audio_data->uuids.size();
         if (expanded_audio_pids.find(audio_data->pid) != expanded_audio_pids.end()) {
             expanded_audio_pids.erase(audio_data->pid);
+            visible_row_count = visible_row_count > child_row_count
+                ? visible_row_count - child_row_count
+                : 1;
         } else {
             expanded_audio_pids.insert(audio_data->pid);
+            visible_row_count += child_row_count;
         }
+
+        resize_volume_popup_for_rows(dock, visible_row_count);
         dock::change_in_audio();
     };
     label_icon->when_paint = [](Container *root, Container *c) { 
