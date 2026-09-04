@@ -2890,6 +2890,9 @@ static void fill_root(Container *root) {
             last_time_volume_adjusted = get_current_time_in_ms();
             set_master_volume(volume_level);
         };
+        volume->when_mouse_enters_container = [](Container *root, Container *c) {
+            dock::change_in_audio();
+        };
     }
 
     {
