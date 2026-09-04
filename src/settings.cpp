@@ -640,12 +640,13 @@ static void make_label_like(Container *parent, std::string title, std::string de
 
 static Container *make_section_title(Container *parent, std::string title) {
     auto section_title = parent->child(FILL_SPACE, FILL_SPACE);
+    static float size = 13;
     section_title->pre_layout = [title](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        auto size_title = 12 * dpi;
-        auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w, -1, {0, 0, 0, 1}, true);
+        auto size_title = size * dpi;
+        auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w, -1, {0, 0, 0, 1}, false);
         c->wanted_bounds.h = bo.h;
         c->real_bounds.h = bo.h;
     };
@@ -653,18 +654,18 @@ static Container *make_section_title(Container *parent, std::string title) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        auto size_title = 12 * dpi;
+        auto size_title = size * dpi;
         draw_text(cr,
             c->real_bounds.x, 
-            c->real_bounds.y, title, size_title, true, mylar_font, c->real_bounds.w, -1, {0, 0, 0, 1}, true);
+            c->real_bounds.y, title, size_title, true, mylar_font, c->real_bounds.w, -1, {0, 0, 0, 1}, false);
     };
     return section_title;
 }
 
-static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change) {
+static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change, std::string icon = "") {
     auto p = make_self_height_sized_parent(parent);
 
-    make_label_like(p, title, description);
+    make_label_like(p, title, description, icon);
 
     struct BoolInfo : UserData {
         bool on = false;
@@ -759,10 +760,10 @@ static void make_bool(Container *parent, std::string title, std::string descript
     };
 }
 
-static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, int notches = 0) {
+static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, int notches = 0, std::string icon = "") {
     auto p = make_self_height_sized_parent(parent);
     
-    make_label_like(p, title, description);
+    make_label_like(p, title, description, icon);
 
     struct SliderInfo : UserData {
         float value = .5;
@@ -862,10 +863,10 @@ static void make_slider(Container *parent, std::string title, std::string descri
     };
 }
 
-static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected, std::string default_value) {
+static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected, std::string default_value, std::string icon = "") {
     auto p = make_self_height_sized_parent(parent);
     
-    make_label_like(p, title, description);
+    make_label_like(p, title, description, icon);
     
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     right->when_paint = paint {
@@ -1007,7 +1008,7 @@ static void fill_dock_settings(Container *root, Container *c) {
         } else {
             dock::stop();
         }
-    });
+    }, "\ue75b");
 }
 
 static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
@@ -1536,7 +1537,7 @@ static void change_display_options(MonitorOption *m) {
     p->name = "removable";
     
     auto res = fz("{}x{}@{:.2f}Hz", m->w, m->h, m->fps);
-    p = make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "", res, m->option, [m](std::string selected) {
+    p = make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "\uE7F4", res, m->option, [m](std::string selected) {
         current_to_wanted(m); 
         
         m->wanted_mode_line = selected;
@@ -1575,7 +1576,7 @@ static void change_display_options(MonitorOption *m) {
     p->name = "removable";
 
     std::vector<std::string> orientations= {"Landscape", "Vertical"};
-    p = make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "", "Landscape", orientations, [m](std::string selected) {
+    p = make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "\uE7AD", "Landscape", orientations, [m](std::string selected) {
         current_to_wanted(m); 
         if (selected == "Landscape") {
             m->wanted_transform = 0;
@@ -1725,7 +1726,7 @@ static void fill_desktop_settings(Container *root, Container *c) {
             desktop_icons::start();
             damage_all();
         });
-    });
+    }, "\uec6c");
     
     make_vert_space(padded_right, 4);
     
@@ -1759,7 +1760,7 @@ static void fill_desktop_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 14);
 
-    make_dropdown_option(padded_right, "Overview", "Change layout type", "", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
+    make_dropdown_option(padded_right, "Overview", "Change layout type", "\uE8A9", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
         set->overview_layout_type = new_type;
     });
 }
@@ -1797,7 +1798,7 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
     make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
         damage_all();
-    });
+    }, "\uE8b9");
 
     make_vert_space(padded_right, 4); 
 
@@ -1882,10 +1883,10 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
         */
 
 
-static void make_reset_textfield(Container *parent, std::string title, std::string description, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change) {
+static void make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change) {
     auto p = make_self_height_sized_parent(parent);
     
-    make_label_like(p, title, description);
+    make_label_like(p, title, description, icon);
 
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     right->alignment = container_alignment::ALIGN_CENTER;
@@ -1967,14 +1968,14 @@ static void fill_keyboard_settings(Container *root, Container *c) {
     make_vert_space(padded_right, 10);
 
     bool only_numbers = true;
-    make_reset_textfield(padded_right, "Repeat delay", "", only_numbers, std::to_string(set->repeat_delay), "600", [](std::string value) {
+    make_reset_textfield(padded_right, "Repeat delay", "Delay before a held key starts repeating, in milliseconds", "\ue916", only_numbers, std::to_string(set->repeat_delay), "600", [](std::string value) {
         set->repeat_delay = std::atoi(value.c_str());
         reset_conf();
     });
 
     make_vert_space(padded_right, 4); 
     
-    make_reset_textfield(padded_right, "Repeat rate", "", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
+    make_reset_textfield(padded_right, "Repeat rate", "Number of key repeats per second", "\ue8ee", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
         set->repeat_rate = std::atoi(value.c_str());
         reset_conf();
     });
@@ -2014,29 +2015,29 @@ static void fill_mouse_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10); 
 
-    make_bool(padded_right, "Natural scrolling", "Phone like scrolling behaviour", set->natural_scrolling_mouse, [](bool value) {
+    make_bool(padded_right, "Reverse scrolling direction", "Phone like scrolling behaviour", set->natural_scrolling_mouse, [](bool value) {
         set->natural_scrolling_mouse = value;
         main_thread([]() {
             hypriso->generate_mylar_hyprland_config();
         });
-    });
+    }, "\uece7");
     
     make_vert_space(padded_right, 4); 
 
     make_button_group(padded_right, 
         "Primary mouse button", 
-        "",
+        "Which side performs the main function of the mouse",
         {"Left", "Right"}, 
         [](std::string selected) {
             set->primary_mouse_button = selected;
             main_thread([]() {
                 hypriso->generate_mylar_hyprland_config();
             });
-        }, set->primary_mouse_button);
+        }, set->primary_mouse_button, "\ue962");
     
     make_vert_space(padded_right, 4); 
     
-    make_slider(padded_right, "Cursor speed", "", set->cursor_speed, [](float value) {
+    make_slider(padded_right, "Cursor speed", "Sets the speed factor of the cursor", set->cursor_speed, [](float value) {
         set->cursor_speed = value;
         static long last_time = 0;
         static bool already_queued = false;
@@ -2058,7 +2059,7 @@ static void fill_mouse_settings(Container *root, Container *c) {
                 });
             }
         }
-    });
+    }, 0, "\uec49");
 
     make_vert_space(padded_right, 10); 
     
@@ -2066,43 +2067,43 @@ static void fill_mouse_settings(Container *root, Container *c) {
 
     make_vert_space(padded_right, 10); 
     
-    make_bool(padded_right, "Natural scrolling", "Phone like scrolling behaviour", set->natural_scrolling_touchpad, [](bool value) {
+    make_bool(padded_right, "Reverse scrolling direction", "Phone like scrolling behaviour", set->natural_scrolling_touchpad, [](bool value) {
         set->natural_scrolling_touchpad = value;
         main_thread([]() {
             hypriso->generate_mylar_hyprland_config();
         });
-    });
+    }, "\uece7");
     
     make_vert_space(padded_right, 4); 
 
-    make_bool(padded_right, "Disable while typing", "", set->touchpad_disable_while_typing, [](bool value) {
+    make_bool(padded_right, "Disable while typing", "Prevents touchpad from receiving input while typing", set->touchpad_disable_while_typing, [](bool value) {
         set->touchpad_disable_while_typing = value;
         main_thread([]() {
             hypriso->generate_mylar_hyprland_config();
         });
-    });
+    }, "\uefa5");
 
     make_vert_space(padded_right, 4); 
 
     make_button_group(padded_right, 
         "Touchpad acceleration", 
-        "Acceleration makes precision clicks easier by understanding that if the movement is slower, the mouse should travel less distance, and if it’s faster, it should travel a further distance",
+        "Cursor moves different distances depending on how fast you flick",
         {"Custom", "Adaptive", "Flat"}, 
         [](std::string selected) {
             set->touchpad_acceleration_curve = selected;
             main_thread([]() {
                 hypriso->generate_mylar_hyprland_config();
             });
-        }, set->touchpad_acceleration_curve);
+        }, set->touchpad_acceleration_curve, "\uec49");
 
     make_vert_space(padded_right, 4);
 
-    make_bool(padded_right, "Hotcorners", "", set->hotcorners, [](bool value) {
+    make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
         set->hotcorners = value;
         main_thread([]() {
             hypriso->generate_mylar_hyprland_config();
         });
-    });
+    }, "\ue8b0");
 }
 
 void create_tab_option(Container *parent, std::string label) {
