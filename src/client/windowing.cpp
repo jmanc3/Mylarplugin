@@ -111,6 +111,8 @@ void on_render(RawWindow *rw, int w, int h) {
     log("on_render");
     if (!rw->cr)
         return;
+    if (!rw->fractional_scale_set_once)
+        return;
     auto m = mylar(rw);
     if (!m) return;
     m->root->real_bounds = Bounds(0, 0, w, h);
@@ -143,6 +145,10 @@ void on_close(RawWindow *rw) {
         }
 }
 
+void on_scale_change(RawWindow *rw, float dpi) {
+    windowing::redraw(rw);
+}
+
 static void wire_handlers(MylarWindow *m) {
     m->raw_window->on_mouse_move = on_mouse_move;
     m->raw_window->on_mouse_press = on_mouse_press;
@@ -154,6 +160,7 @@ static void wire_handlers(MylarWindow *m) {
     m->raw_window->on_render = on_render;
     m->raw_window->on_resize = on_resize;
     m->raw_window->on_close = on_close;
+    m->raw_window->on_scale_change = on_scale_change;
 }
 
 MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings) {

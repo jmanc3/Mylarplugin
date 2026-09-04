@@ -60,6 +60,27 @@ static std::vector<std::thread> dock_threads;
 
 static void write_saved_pins_to_file(Container *icons);
 
+struct Script : UserData {
+    std::string name;
+    std::vector<std::string> keywords;
+    std::vector<std::string> categories;
+    std::string generic_name;
+    std::string lowercase_name;
+    int priority = -1;
+    int historical_ranking = -1;
+    int match_level = 100;
+    std::string full_path;
+    
+    std::string path;
+
+    bool path_is_full_command = false;
+
+    bool selected = false;
+};
+
+static std::vector<Script *> scripts;
+static bool scripts_loaded = false;
+
 class Window {
 public:
     int cid; // unique id
@@ -198,6 +219,7 @@ struct Dock : UserData {
     Windows *collection = nullptr;
     bool first_fill = true;
     RawWindowSettings creation_settings;
+
     //bool vertical = false;
 };
 
@@ -1812,24 +1834,6 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     return pad;
 }
 
-struct Script : UserData {
-    std::string name;
-    std::vector<std::string> keywords;
-    std::vector<std::string> categories;
-    std::string generic_name;
-    std::string lowercase_name;
-    int priority = -1;
-    int historical_ranking = -1;
-    int match_level = 100;
-    std::string full_path;
-    
-    std::string path;
-
-    bool path_is_full_command = false;
-
-    bool selected = false;
-};
-
 void scripts_load(std::vector<Script *> &temp_scripts) {
     temp_scripts.clear();
 
@@ -1914,8 +1918,7 @@ void scripts_load(std::vector<Script *> &temp_scripts) {
         return;
 }
 
-static void fill_applications_container(Dock *dock) {
-    auto root = dock->applications->root;
+static void fill_applications_container(Container *root) {
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->applications->raw_window->cr;
@@ -1925,7 +1928,7 @@ static void fill_applications_container(Dock *dock) {
         set_argb(cr, border_color);
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->applications->raw_window->dpi, 1.0);
         cairo_stroke(cr);
-     };
+    };
 
     static const float pad_amount = 16;
     auto padded = root->child(FILL_SPACE, FILL_SPACE);
@@ -1978,9 +1981,6 @@ static void fill_applications_container(Dock *dock) {
                 }
             }
         });
-
-    std::vector<Script *> scripts;
-    scripts_load(scripts);
 
     auto option_scroll = padded->child(FILL_SPACE, FILL_SPACE);
     option_scroll->name = "option_scroll";
@@ -2531,8 +2531,7 @@ static void fill_root(Container *root) {
             dock->applications->root->user_data = dock;
             dock->applications->root->wanted_bounds.w = FILL_SPACE;
             dock->applications->root->wanted_bounds.h = FILL_SPACE;
-            
-            fill_applications_container(dock);
+            fill_applications_container(dock->applications->root);
             
             windowing::redraw(dock->applications->raw_window);
         };
@@ -3173,7 +3172,11 @@ static int get_dock_alignment() {
     return hypriso->get_varint("plugin:mylardesktop:dock", 3);
 }
 
-void dock::start(std::string monitor_name) {
+static void start_loading_scripts() {
+    scripts_load(scripts);
+}
+
+void dock::start(std::string monitor_name) {    
     if (monitor_name == "FALLBACK")
         return;
     current_alignment = get_dock_alignment();
@@ -3183,6 +3186,13 @@ void dock::start(std::string monitor_name) {
     std::thread t(dock_start, monitor_name);
     t.detach();
     dock_threads.push_back(std::move(t));
+
+    if (!scripts_loaded) {
+        scripts_loaded = true;
+        std::thread t(start_loading_scripts);
+        t.detach();
+        dock_threads.push_back(std::move(t));        
+    }
 }
 
 void dock::stop(std::string monitor_name) {
@@ -4855,10 +4865,16 @@ void dock::open_applications() {
     for (auto d: docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (d->creation_settings.monitor_name == monitor_name) {
-            if (auto s = container_by_name("super", d->window->root)) {
-                if (s->when_clicked) {
-                    s->when_clicked(d->window->root, s);
-                }
+            if (windowing::has_window(d->applications->raw_window)) {
+                later_immediate([d](Timer *) {
+                    windowing::close_window(d->applications->raw_window);
+                });
+            } else {
+                if (auto s = container_by_name("super", d->window->root)) {
+                    if (s->when_clicked) {
+                        s->when_clicked(d->window->root, s);
+                    }
+                }                
             }
         }
     }

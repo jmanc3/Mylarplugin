@@ -123,6 +123,7 @@ struct RawWindow {
     int id = -1;
 
     float dpi = 1.0;
+    bool fractional_scale_set_once = false;
 
     RawApp *creator = nullptr;
     
@@ -174,7 +175,10 @@ namespace windowing {
     void set_popup_size(RawWindow *window, int width, int height, const RawWindowSettings &settings);
     void redraw(RawWindow *window);
 
-    void close_window(RawWindow *window);   
+    bool has_window(RawWindow *window);
+    
+    // bool denotes if window found
+    bool close_window(RawWindow *window);
     
     void close_app(RawApp *app);
 

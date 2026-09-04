@@ -222,6 +222,7 @@ struct wl_window {
     struct wl_surface *cursor_surface = nullptr;
 
     float current_fractional_scale = 1.0; // default value
+    bool fractional_scale_set_once = false;
 
     std::function<void(wl_window *)> on_render = nullptr;
 
@@ -602,8 +603,15 @@ static void handle_fractional_scale_preferred_scale(
     uint32_t scale)
 {
     auto win = (wl_window *) data;
+    bool found = false;
+    for (auto w : windows)
+        if (w == win)
+            found = true;
+    if (!found)
+        return;
     if (!win->rw)
         return;
+    win->rw->fractional_scale_set_once = true;
     win->current_fractional_scale = ((float) scale) / 120.0f;
 
     if (win->rw) {
@@ -2231,21 +2239,36 @@ void windowing::set_popup_size(RawWindow *window, int width, int height, const R
     set_popup_size_impl(window, width, height, &settings);
 }
 
-void windowing::close_window(RawWindow *window) {
+bool windowing::has_window(RawWindow *window) {
+    for (auto w : windows)
+        if (w->rw == window)
+            return true;
+    return false;
+}
+
+bool windowing::close_window(RawWindow *window) {
+    bool found = false;
+    for (auto w : windows)
+        if (w->rw == window)
+            found = true;
+    if (!found)
+        return false;
+ 
     wl_context *ctx = nullptr;
     for (auto c : apps)
         if (c->id == window->creator->id)
             ctx = c;
     if (!ctx)
-        return;
+        return false;
     wl_window *win = nullptr;
     for (auto w : windows)
         if (w->id == window->id)
             win = w;
     if (!win)
-        return;
+        return false;
     win->marked_for_closing = true;
     write(ctx->wake_pipe[1], "x", 1);
+    return true;
 }
 
 void windowing::close_app(RawApp *app) {
