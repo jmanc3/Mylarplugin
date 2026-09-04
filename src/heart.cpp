@@ -1683,9 +1683,7 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("applications", [](lua_State *) {
-        later(10, [](Timer *) {
-            dock::open_applications();
-        });
+        dock::open_applications();
         return 0;
     });
 
