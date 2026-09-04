@@ -4865,19 +4865,17 @@ void dock::open_applications() {
     for (auto d: docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (d->creation_settings.monitor_name == monitor_name) {
-            if (d->applications) {
-                if (windowing::has_window(d->applications->raw_window)) {
-                    later_immediate([d](Timer *) {
-                        windowing::close_window(d->applications->raw_window);
-                    });
+            bool closed_window = false;
+            if (d->applications)
+                closed_window = windowing::close_window(d->applications->raw_window);
+            if (closed_window)
+                return;
+            
+            if (auto s = container_by_name("super", d->window->root)) {
+                if (s->when_clicked) {
+                    s->when_clicked(d->window->root, s);
                 }
-            } else {
-                if (auto s = container_by_name("super", d->window->root)) {
-                    if (s->when_clicked) {
-                        s->when_clicked(d->window->root, s);
-                    }
-                }                
-            }
+            }                
         }
     }
 }
