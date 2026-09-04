@@ -2321,7 +2321,7 @@ static void fill_extra_container(Container *root) {
             auto s = window->raw_window->dpi;
             c->wanted_pad = Bounds(button_pad * s, button_pad * s, button_pad * s, button_pad * s);
         };
-        static std::vector<std::string> argsa = {"\uEBC6", "\uE722", "\uE087"};
+        static std::vector<std::string> argsa = {"\uEBC6", "\uE722", "\uF140"};
         auto b = l->child(FILL_SPACE, FILL_SPACE);
         if (i == 1) {
             b->when_clicked = [](Container *root, Container *c) {
@@ -2332,6 +2332,11 @@ static void fill_extra_container(Container *root) {
                 windowing::timer(dock->app, 100, [](void *data) {
                     system("hyprctl dispatch \"hl.plugin.mylar.screenshot_tool()\"");
                 }, nullptr);
+            };
+        }
+        if (i == 2) {
+            b->when_clicked = [](Container *root, Container *c) {
+                system("hyprctl kill");
             };
         }
         if (i == 0) {
@@ -2380,8 +2385,6 @@ static void fill_extra_container(Container *root) {
             };
         }
         b->when_paint = [i](Container *root, Container *c) {
-            if (i >= 2)
-                return;
             auto dock = (Dock *) root->user_data;
             auto window = get_window(dock);
             auto cr = window->raw_window->cr;
