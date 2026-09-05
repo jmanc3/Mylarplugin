@@ -694,7 +694,7 @@ static void snap_icons_to_grid(Container *desktop, const std::vector<Container *
     }
 }
 
-static std::vector<Container *> icons_for_drag(Container *desktop, Container *primary) {
+static std::vector<Container *> icons_for_action(Container *desktop, Container *primary) {
     auto *pico = (IcoContainerData *)primary->user_data;
     std::vector<Container *> result;
     if (!pico->is_selected) {
@@ -767,6 +767,124 @@ static void delete_selected_desktop_icons(Container *desktop) {
     damage_all();
 }
 
+static void open_desktop_path(const std::string& path) {
+    auto *quoted = g_shell_quote(path.c_str());
+    launch_command(std::string("xdg-open ") + quoted);
+    g_free(quoted);
+}
+
+static void open_desktop_item(const DesktopItem& item) {
+    if (item.extension == ".desktop" && !item.exec.empty())
+        launch_command(item.exec);
+    else
+        open_desktop_path(item.full_filepath);
+}
+
+static bool is_editable_desktop_item(const DesktopItem& item) {
+    if (item.is_folder)
+        return false;
+    auto *file = g_file_new_for_path(item.full_filepath.c_str());
+    auto *info = g_file_query_info(file,
+        G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE "," G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE,
+        G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
+    bool editable = false;
+    if (info) {
+        const auto *type = g_file_info_get_content_type(info);
+        editable = type && g_content_type_is_a(type, "text/plain") &&
+                   g_file_info_get_attribute_boolean(info, G_FILE_ATTRIBUTE_ACCESS_CAN_WRITE);
+        g_object_unref(info);
+    }
+    g_object_unref(file);
+    return editable;
+}
+
+static void create_icon_popup(Container *icon) {
+    // Folder watches can replace items while the popup is open; capture values.
+    std::vector<DesktopItem> items;
+    std::vector<std::string> editable_paths;
+    for (auto *selected : icons_for_action(icon->parent, icon)) {
+        auto *item = *datum<DesktopItem *>(selected, "DesktopItem");
+        if (!item)
+            continue;
+        items.push_back(*item);
+        if (is_editable_desktop_item(*item))
+            editable_paths.push_back(item->full_filepath);
+        ((IcoContainerData *)selected->user_data)->last_time_pressed = 0;
+    }
+    if (items.empty())
+        return;
+
+    std::vector<PopOption> options;
+    PopOption open;
+    open.text = items.size() == 1 ? "Open" : fz("Open {} Items", items.size());
+    open.on_clicked = [items]() {
+        for (const auto& item : items)
+            open_desktop_item(item);
+    };
+    options.push_back(open);
+
+    if (!editable_paths.empty()) {
+        PopOption edit;
+        edit.text = items.size() == 1 ? "Edit" :
+            (editable_paths.size() == 1 ? "Edit 1 Text File" : fz("Edit {} Text Files", editable_paths.size()));
+        edit.on_clicked = [editable_paths]() {
+            auto *editor = g_app_info_get_default_for_type("text/plain", FALSE);
+            if (!editor) {
+                notify("No default text editor is configured.");
+                return;
+            }
+            GList *files = nullptr;
+            for (const auto& path : editable_paths)
+                files = g_list_prepend(files, g_file_new_for_path(path.c_str()));
+            files = g_list_reverse(files);
+            GError *error = nullptr;
+            if (!g_app_info_launch(editor, files, nullptr, &error)) {
+                notify(fz("Unable to edit desktop files: {}", error ? error->message : "Unknown error"));
+                g_clear_error(&error);
+            }
+            g_list_free_full(files, g_object_unref);
+            g_object_unref(editor);
+        };
+        options.push_back(edit);
+    }
+
+    PopOption manager;
+    manager.text = items.size() == 1 ? "Open in File Manager" :
+        fz("Open {} Items in File Manager", items.size());
+    manager.on_clicked = [items]() {
+        std::unordered_set<std::string> opened;
+        for (const auto& item : items) {
+            const auto path = item.is_folder ? item.full_filepath :
+                std::filesystem::path(item.full_filepath).parent_path().string();
+            if (opened.insert(path).second)
+                open_desktop_path(path);
+        }
+    };
+    options.push_back(manager);
+
+    PopOption separator;
+    separator.seperator = true;
+    options.push_back(separator);
+    PopOption remove;
+    remove.text = items.size() == 1 ? "Remove" : fz("Remove {} Items", items.size());
+    remove.on_clicked = [items]() {
+        for (const auto& item : items) {
+            auto *file = g_file_new_for_path(item.full_filepath.c_str());
+            GError *error = nullptr;
+            if (!g_file_trash(file, nullptr, &error)) {
+                notify(fz("Unable to remove {}: {}", item.name, error ? error->message : "Unknown error"));
+                g_clear_error(&error);
+            }
+            g_object_unref(file);
+        }
+        on_change_in_desktop_folder();
+        damage_all();
+    };
+    options.push_back(remove);
+    const auto m = mouse();
+    popup::open(options, m.x - 1, m.y + 1);
+}
+
 static void update_desktop_selection(Container* desktop, const Bounds& selection) {
     for (auto* child : desktop->children) {
         auto* ico          = (IcoContainerData*)(child->user_data);
@@ -819,7 +937,9 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     c->when_mouse_leaves_container = c->when_mouse_motion;
     c->when_drag_end_is_click = false;
     c->when_drag_start = [](Container* actual_root, Container* c) {
-        auto icons = icons_for_drag(c->parent, c);
+        if (c->state.mouse_button_pressed != BTN_LEFT)
+            return;
+        auto icons = icons_for_action(c->parent, c);
         for (auto *icon : icons) {
             auto *ico = (IcoContainerData *)icon->user_data;
             ico->is_settling = false;
@@ -869,6 +989,13 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         save_icon_positions(c->parent);
     };
     c->when_clicked = [](Container* actual_root, Container* c) {
+        actual_root->consumed_event = true;
+        if (c->state.mouse_button_pressed == BTN_RIGHT) {
+            create_icon_popup(c);
+            return;
+        }
+        if (c->state.mouse_button_pressed != BTN_LEFT)
+            return;
         auto ico = (IcoContainerData *) c->user_data;
         bool shift_down = *datum<bool>(c->parent, "shift_held");
         if (!shift_down)
@@ -876,10 +1003,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         auto current = get_current_time_in_ms();
         if ((current - ico->last_time_pressed) < 700) {
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
-            if (item->extension == ".desktop")
-                launch_command(item->exec);
-            else
-                launch_command(fz("xdg-open \"{}\"", item->full_filepath));
+            open_desktop_item(*item);
         } else {
             ico->is_selected = true;
         }
