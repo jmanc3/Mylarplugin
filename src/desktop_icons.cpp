@@ -69,7 +69,8 @@ static float vert_pad() {
     return 16;
 }
 
-int two_line_height = 24;
+// Label height in logical pixels; scale only when rendering.
+static int two_line_height = 24;
  
 struct DesktopItem {
     std::string full_filepath;
@@ -351,12 +352,24 @@ struct IcoContainerData : UserData {
     TextureInfo label_shadow;
     int icon_shadow_source = -1;
     
-    ~IcoContainerData() {
-        //notify(fz("{} was deleted", name));
-        auto text_img = *datum<TextureInfo>(c, "label");
-        free_text_texture(text_img.id);
+    float texture_scale = 0;
+
+    void clear_textures() {
+        for (const auto *key : {"label", "icon", "folder", "text-plain"}) {
+            auto *texture = datum<TextureInfo>(c, key);
+            free_text_texture(texture->id);
+            *texture = TextureInfo();
+        }
         free_text_texture(icon_shadow.id);
         free_text_texture(label_shadow.id);
+        icon_shadow = TextureInfo();
+        label_shadow = TextureInfo();
+        icon_shadow_source = -1;
+        *datum<bool>(c, "icon_attempted") = false;
+    }
+
+    ~IcoContainerData() {
+        clear_textures();
     }
 };
 
@@ -591,8 +604,7 @@ static IconGridMetrics icon_grid_metrics(Container *desktop, float s) {
     m.vpad = vert_pad();
     auto ico_width = conf_icon_size();
     m.width = ico_width + (13 * 2);
-    float shrink = 1 / s;
-    m.height = ico_width + two_line_height * shrink + 13;
+    m.height = ico_width + two_line_height + 13;
     m.start_x = desktop->real_bounds.x + m.hpad;
     m.start_y = desktop->real_bounds.y + m.vpad * .3f;
     const float cell_w = m.width + m.hpad;
@@ -906,22 +918,11 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     ico->name = item->name;
     ico->c = c;
     c->user_data = ico;
-    auto s = scale(hypriso->monitor_from_cursor());
     *datum<DesktopItem *>(c, "DesktopItem") = item;
-    *datum<TextureInfo>(c, "label") = TextureInfo();
-    {
-        auto path = one_shot_icon(conf_icon_size() * s, {"folder"});
-        *datum<TextureInfo>(c, "folder") = gen_texture(path, conf_icon_size() * s);
-    }
-    {
-        auto path = one_shot_icon(conf_icon_size() * s, {"text-plain"});
-        *datum<TextureInfo>(c, "text-plain") = gen_texture(path, conf_icon_size() * s);
-    }
-    {
-        *datum<TextureInfo>(c, "icon") = TextureInfo();
-        *datum<bool>(c, "icon_attempted") = false;
-    }
-     
+    for (const auto *key : {"label", "icon", "folder", "text-plain"})
+        *datum<TextureInfo>(c, key) = TextureInfo();
+    *datum<bool>(c, "icon_attempted") = false;
+
     c->when_mouse_motion = [](Container* actual_root, Container* c) {
         auto ico = (IcoContainerData *) c->user_data;
         bool is_active = c->state.mouse_hovering || c->state.mouse_pressing;
@@ -1022,6 +1023,14 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
 
             auto* ico = (IcoContainerData*)(c->user_data);
+            if (ico->texture_scale != s) {
+                ico->clear_textures();
+                ico->texture_scale = s;
+                for (const auto *key : {"folder", "text-plain"}) {
+                    const auto path = one_shot_icon(conf_icon_size() * s, {key});
+                    *datum<TextureInfo>(c, key) = gen_texture(path, conf_icon_size() * s);
+                }
+            }
             float overview_alpha = 1.0 - overview::get_openess();
 
             {
@@ -1082,7 +1091,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             
             TextureInfo text_img = *datum<TextureInfo>(c, "label");
             if (text_img.id == -1) {
-                text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, two_line_height, 1);
+                text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, std::ceil(two_line_height * s), 1);
                 *datum<TextureInfo>(c, "label") = text_img;
                 free_text_texture(ico->label_shadow.id);
                 ico->label_shadow = generate_dropshadow_texture(text_img.id, 2 * s);
@@ -1136,7 +1145,7 @@ static void create_root_popup() {
 }
 
 void desktop_icons::start() {
-    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size() * scale(hypriso->monitor_from_cursor()), RGBA(1, 1, 1, 1));
+    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size(), RGBA(1, 1, 1, 1));
     two_line_height = in.h;
     free_text_texture(in.id);
     // each monitor needs its own desktop pane possibly every workspace
