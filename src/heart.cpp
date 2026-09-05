@@ -1035,14 +1035,14 @@ static void paint_initial_clock_time() {
                       local_time.tm_hour % 12 == 0 ? 12 : local_time.tm_hour % 12,
                       local_time.tm_min, local_time.tm_hour < 12 ? "AM" : "PM");
         cached.text = gen_text_texture(mylar_font, time_text, 140 * s, RGBA(1, 1, 1, 1));
-        cached.shadow = generate_dropshadow_texture(cached.text.id, 10 * s);
+        cached.shadow = generate_dropshadow_texture(cached.text.id, 10 * s, .43);
 
         const char* home = std::getenv("HOME");
         std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/flourish.svg";
         if (std::filesystem::exists(filepath)) {
             auto col = RGBA(1, 1, 1, 1);
             cached.flourish = gen_texture(filepath, 600 * s, &col);
-            cached.flourish_shadow = generate_dropshadow_texture(cached.flourish.id, 10 * s);
+            cached.flourish_shadow = generate_dropshadow_texture(cached.flourish.id, 10 * s, .43);
         }
     }
     if (cached.text.id == -1)
