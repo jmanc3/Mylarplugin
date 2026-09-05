@@ -27,13 +27,107 @@
 static RawApp *settings_app = nullptr;
 static MylarWindow *settings_mylar = nullptr;
 
-static RGBA left_color = RGBA(.941, .957, .976, 1);
-static RGBA right_color = RGBA(.941, .957, .976, 1);
-static RGBA option_color = RGBA(.87, .87, .87, 1);
-static RGBA option_widget_bg_color = RGBA(.84, .84, .84, 1);
-static RGBA slider_bg = option_widget_bg_color;
-static RGBA bool_border = option_widget_bg_color;
-static RGBA accent = RGBA(.0, .52, .9, 1);
+struct SettingsTheme {
+    RGBA background;
+    RGBA row_background;
+    RGBA row_hover;
+    RGBA row_border;
+    RGBA text;
+    RGBA text_secondary;
+    RGBA accent;
+    RGBA toggle_border;
+    RGBA toggle_knob_on;
+    RGBA toggle_knob_off;
+    RGBA slider_track;
+    RGBA slider_thumb;
+    RGBA segment_background;
+    RGBA segment_selected;
+    RGBA dropdown_background;
+    RGBA dropdown_hover;
+    RGBA dropdown_pressed;
+    RGBA dropdown_border;
+    RGBA popup_background;
+    RGBA popup_hover;
+    RGBA popup_pressed;
+    RGBA button_background;
+    RGBA button_hover;
+    RGBA button_pressed;
+    RGBA field_background;
+    RGBA field_border;
+    RGBA monitor_background;
+    RGBA monitor_surface;
+    RGBA navigation_hover;
+    RGBA navigation_pressed;
+};
+
+static const SettingsTheme dark_theme = {
+    .background = RGBA(0x15 / 255.0f, 0x1A / 255.0f, 0x21 / 255.0f, 1),
+    .row_background = RGBA(0x20 / 255.0f, 0x27 / 255.0f, 0x31 / 255.0f, 1),
+    .row_hover = RGBA(0x27 / 255.0f, 0x2F / 255.0f, 0x3B / 255.0f, 1),
+    .row_border = RGBA(0x44 / 255.0f, 0x52 / 255.0f, 0x67 / 255.0f, 1),
+    .text = RGBA(0xE7 / 255.0f, 0xEC / 255.0f, 0xF3 / 255.0f, 1),
+    .text_secondary = RGBA(0xA9 / 255.0f, 0xB4 / 255.0f, 0xC3 / 255.0f, 1),
+    .accent = RGBA(0x4D / 255.0f, 0xA3 / 255.0f, 0xFF / 255.0f, 1),
+    .toggle_border = RGBA(0x44 / 255.0f, 0x52 / 255.0f, 0x67 / 255.0f, 1),
+    .toggle_knob_on = RGBA(0xF7 / 255.0f, 0xFB / 255.0f, 0xFF / 255.0f, 1),
+    .toggle_knob_off = RGBA(0xAD / 255.0f, 0xB9 / 255.0f, 0xC9 / 255.0f, 1),
+    .slider_track = RGBA(0x44 / 255.0f, 0x52 / 255.0f, 0x67 / 255.0f, 1),
+    .slider_thumb = RGBA(0xF7 / 255.0f, 0xFB / 255.0f, 0xFF / 255.0f, 1),
+    .segment_background = RGBA(0x1B / 255.0f, 0x22 / 255.0f, 0x2C / 255.0f, 1),
+    .segment_selected = RGBA(0x34 / 255.0f, 0x46 / 255.0f, 0x5D / 255.0f, 1),
+    .dropdown_background = RGBA(0x31 / 255.0f, 0x3A / 255.0f, 0x46 / 255.0f, 1),
+    .dropdown_hover = RGBA(0x3B / 255.0f, 0x46 / 255.0f, 0x54 / 255.0f, 1),
+    .dropdown_pressed = RGBA(0x46 / 255.0f, 0x54 / 255.0f, 0x66 / 255.0f, 1),
+    .dropdown_border = RGBA(0x44 / 255.0f, 0x52 / 255.0f, 0x67 / 255.0f, 1),
+    .popup_background = RGBA(0x1B / 255.0f, 0x22 / 255.0f, 0x2C / 255.0f, 1),
+    .popup_hover = RGBA(0x3B / 255.0f, 0x46 / 255.0f, 0x54 / 255.0f, 1),
+    .popup_pressed = RGBA(0x46 / 255.0f, 0x54 / 255.0f, 0x66 / 255.0f, 1),
+    .button_background = RGBA(0x31 / 255.0f, 0x3A / 255.0f, 0x46 / 255.0f, 1),
+    .button_hover = RGBA(0x3B / 255.0f, 0x46 / 255.0f, 0x54 / 255.0f, 1),
+    .button_pressed = RGBA(0x46 / 255.0f, 0x54 / 255.0f, 0x66 / 255.0f, 1),
+    .field_background = RGBA(0x1B / 255.0f, 0x22 / 255.0f, 0x2C / 255.0f, 1),
+    .field_border = RGBA(0x44 / 255.0f, 0x52 / 255.0f, 0x67 / 255.0f, 1),
+    .monitor_background = RGBA(0x1B / 255.0f, 0x22 / 255.0f, 0x2C / 255.0f, 1),
+    .monitor_surface = RGBA(0x20 / 255.0f, 0x27 / 255.0f, 0x31 / 255.0f, 1),
+    .navigation_hover = RGBA(0x3B / 255.0f, 0x46 / 255.0f, 0x54 / 255.0f, 1),
+    .navigation_pressed = RGBA(0x46 / 255.0f, 0x54 / 255.0f, 0x66 / 255.0f, 1),
+};
+
+static const SettingsTheme light_theme = {
+    .background = RGBA(.941, .957, .976, 1),
+    .row_background = RGBA(.984, .988, .992, 1),
+    .row_hover = RGBA(.965, .965, .965, 1),
+    .row_border = RGBA(.818, .818, .818, 1),
+    .text = RGBA(0, 0, 0, 1),
+    .text_secondary = RGBA(0, 0, 0, .5),
+    .accent = RGBA(0, .52, .9, 1),
+    .toggle_border = RGBA(.537, .537, .537, 1),
+    .toggle_knob_on = RGBA(1, 1, 1, 1),
+    .toggle_knob_off = RGBA(.365, .365, .365, 1),
+    .slider_track = RGBA(.84, .84, .84, 1),
+    .slider_thumb = RGBA(1, 1, 1, 1),
+    .segment_background = RGBA(.84, .84, .84, 1),
+    .segment_selected = RGBA(1, 1, 1, 1),
+    .dropdown_background = RGBA(1, 1, 1, 1),
+    .dropdown_hover = RGBA(.9, .9, .9, 1),
+    .dropdown_pressed = RGBA(.7, .7, .7, 1),
+    .dropdown_border = RGBA(.7, .7, .7, 1),
+    .popup_background = RGBA(1, 1, 1, 1),
+    .popup_hover = RGBA(.9, .9, .9, 1),
+    .popup_pressed = RGBA(.8, .8, .8, 1),
+    .button_background = RGBA(.8, .8, .8, 1),
+    .button_hover = RGBA(.65, .65, .65, 1),
+    .button_pressed = RGBA(.5, .5, .5, 1),
+    .field_background = RGBA(1, 1, 1, 1),
+    .field_border = RGBA(.8, .8, .8, 1),
+    .monitor_background = RGBA(0, 0, 0, .1),
+    .monitor_surface = RGBA(1, 1, 1, 1),
+    .navigation_hover = RGBA(0, 0, 0, .2),
+    .navigation_pressed = RGBA(0, 0, 0, .1),
+};
+
+// Select light_theme here to use the original light palette.
+static const SettingsTheme &theme = light_theme;
 
 static float optiontopbottompad = 15;
 static float optionleftpad = 60;
@@ -440,10 +534,10 @@ static void paint_label(Container *root, Container *c, std::string text) {
     auto dpi = mylar->raw_window->dpi;
     auto size = 12 * dpi;
 
-    auto b = draw_text(cr, 0, 0, text, size, false, mylar_font, -1, 0, {0, 0, 0, 1}, false);
+    auto b = draw_text(cr, 0, 0, text, size, false, mylar_font, -1, 0, theme.text, false);
     draw_text(cr, 
         c->real_bounds.x + 12 * dpi, 
-        c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, mylar_font, -1, 0, {0, 0, 0, 1},  false);
+        c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, mylar_font, -1, 0, theme.text,  false);
 }
 
 static void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height,
@@ -557,20 +651,19 @@ static Container *make_self_height_sized_parent(Container *parent) {
 
         RGBA bg_color;
         if (c->state.mouse_hovering || c->state.mouse_pressing) {
-            bg_color = RGBA(.965, .965, .965, 1);
+            bg_color = theme.row_hover;
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
             set_argb(cr, bg_color);
             cairo_fill(cr);
         } else {
-            //draw_round_rect(client, ArgbColor(.984, .984, .984, 1), c->real_bounds, 5 * config->dpi, 0);
-            bg_color = RGBA(.984, .988, .992, 1);
+            bg_color = theme.row_background;
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
             set_argb(cr, bg_color);
             cairo_fill(cr);
         }
 
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
-        set_argb(cr, RGBA(.818, .818, .818, 1));
+        set_argb(cr, theme.row_border);
         cairo_stroke(cr);
     };
 
@@ -591,12 +684,12 @@ static void make_label_like(Container *parent, std::string title, std::string de
         auto b = c->real_bounds;
         float yoff = optiontopbottompad * dpi;
         if (!icon.empty()) {
-            auto bo = draw_text(cr, 0, 0, icon, size_ico, false, icon_font, -1, -1, {0, 0, 0, .5}, false);
-            draw_text(cr, c->real_bounds.x + 19 * dpi, center_y(c, bo.h), icon, size_ico, true, icon_font, -1, -1, {0, 0, 0, 1}, false);
+            auto bo = draw_text(cr, 0, 0, icon, size_ico, false, icon_font, -1, -1, theme.text_secondary, false);
+            draw_text(cr, c->real_bounds.x + 19 * dpi, center_y(c, bo.h), icon, size_ico, true, icon_font, -1, -1, theme.text, false);
         }
         {
-            auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
-            auto regular = draw_text(cr, 0, 0, title, size_title, false, mylar_font, -1, -1, {0, 0, 0, .5}, false);
+            auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text_secondary, false);
+            auto regular = draw_text(cr, 0, 0, title, size_title, false, mylar_font, -1, -1, theme.text_secondary, false);
             float desc_yoff = c->real_bounds.h * .5 - bo.h * .5;
             bool not_wrapped = std::abs(regular.h - bo.h) < 4;
             if (!not_wrapped) {
@@ -605,20 +698,20 @@ static void make_label_like(Container *parent, std::string title, std::string de
             if (description.empty()) {
                 draw_text(cr,
                     c->real_bounds.x + 60 * dpi, 
-                    c->real_bounds.y + desc_yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+                    c->real_bounds.y + desc_yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text, false);
             } else {
                 draw_text(cr,
                     c->real_bounds.x + 60 * dpi, 
-                    c->real_bounds.y + yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+                    c->real_bounds.y + yoff, title, size_title, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text, false);
             }
 
             yoff += bo.h;
         }
         if (!description.empty()) {
-            auto bo = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+            auto bo = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text, false);
             draw_text(cr,
                 c->real_bounds.x + 60 * dpi, 
-                c->real_bounds.y + yoff, description, size_desc, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, .5}, false);
+                c->real_bounds.y + yoff, description, size_desc, true, mylar_font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text_secondary, false);
         }
     };
     left->pre_layout = [title, description, icon](Container *root, Container *c, const Bounds &b) {
@@ -628,11 +721,11 @@ static void make_label_like(Container *parent, std::string title, std::string de
         auto size_title = 12 * dpi;
         auto size_desc = 11 * dpi;
  
-        auto bo1 = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+        auto bo1 = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text, false);
         if (description.empty()) {
             c->real_bounds.h = bo1.h + optiontopbottompad * dpi * 2;
         } else {
-            auto bo2 = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, b.w - ((optionleftpad + optionrighttpad) * dpi), -1, {0, 0, 0, 1}, false);
+            auto bo2 = draw_text(cr, 0, 0, description, size_desc, false, mylar_font, b.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text, false);
             c->real_bounds.h = bo1.h + bo2.h + optiontopbottompad * dpi * 2;
         }
 
@@ -649,7 +742,7 @@ static Container *make_section_title(Container *parent, std::string title) {
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         auto size_title = size * dpi;
-        auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w, -1, {0, 0, 0, 1}, false);
+        auto bo = draw_text(cr, 0, 0, title, size_title, false, mylar_font, b.w, -1, theme.text, false);
         c->wanted_bounds.h = bo.h;
         c->real_bounds.h = bo.h;
     };
@@ -660,21 +753,17 @@ static Container *make_section_title(Container *parent, std::string title) {
         auto size_title = size * dpi;
         draw_text(cr,
             c->real_bounds.x, 
-            c->real_bounds.y, title, size_title, true, mylar_font, c->real_bounds.w, -1, {0, 0, 0, 1}, false);
+            c->real_bounds.y, title, size_title, true, mylar_font, c->real_bounds.w, -1, theme.text, false);
     };
     return section_title;
 }
 
-static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change, std::string icon = "") {
-    auto p = make_self_height_sized_parent(parent);
-
-    make_label_like(p, title, description, icon);
-
+static void make_bool_control(Container *parent, bool initial_value, std::function<void(bool)> on_change) {
     struct BoolInfo : UserData {
         bool on = false;
     };
 
-    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    auto right = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     auto bool_info = new BoolInfo;
     bool_info->on = initial_value;
     right->user_data = bool_info;
@@ -710,12 +799,12 @@ static void make_bool(Container *parent, std::string title, std::string descript
         if (data->on) {
             set_rect(cr, border);
             drawRoundedRect(cr, border.x, border.y, border.w, border.h, 10 * dpi, std::floor(1.0 * dpi));
-            set_argb(cr, accent);
+            set_argb(cr, theme.accent);
             cairo_fill(cr);
         } else {
             set_rect(cr, border);
             drawRoundedRect(cr, border.x, border.y, border.w, border.h, 10 * dpi, std::floor(1.0 * dpi));
-            set_argb(cr, RGBA(.537, .537, .537, 1));
+            set_argb(cr, theme.toggle_border);
             cairo_stroke(cr);
         }
 
@@ -731,29 +820,29 @@ static void make_bool(Container *parent, std::string title, std::string descript
         if (data->on) {
             set_rect(cr, b);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, circ_size * .5 * dpi, 1.0);
-            set_argb(cr, RGBA(1, 1, 1, 1));
+            set_argb(cr, theme.toggle_knob_on);
             cairo_fill(cr);
         } else {
             set_rect(cr, b);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, circ_size * .5 * dpi, 1.0);
-            set_argb(cr, RGBA(.365, .365, .365, 1));
+            set_argb(cr, theme.toggle_knob_off);
             cairo_fill(cr);
         }
 
         // On/Off text
         std::string text = data->on ? "On" : "Off";
-        auto tb = draw_text(cr, 0, 0, text, 11 * dpi, false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
+        auto tb = draw_text(cr, 0, 0, text, 11 * dpi, false, mylar_font, -1, -1, theme.text, false, 0);
         draw_text(cr, 
             c->real_bounds.x - tb.w - 12 * dpi, 
             c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, text, 11 * dpi, 
-            true, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
+            true, mylar_font, -1, -1, theme.text, false, 0);
     };
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        c->real_bounds.w = 40 * dpi;
-        c->real_bounds.h = 20 * dpi;
+        c->wanted_bounds.w = c->real_bounds.w = 40 * dpi;
+        c->wanted_bounds.h = c->real_bounds.h = 20 * dpi;
     };
     right->when_clicked = [on_change](Container *root, Container *c) {
         auto data = (BoolInfo *) c->user_data;
@@ -761,6 +850,12 @@ static void make_bool(Container *parent, std::string title, std::string descript
         if (on_change)
             on_change(data->on);
     };
+}
+
+static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change, std::string icon = "") {
+    auto p = make_self_height_sized_parent(parent);
+    make_label_like(p, title, description, icon);
+    make_bool_control(p, initial_value, on_change);
 }
 
 static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, int notches = 0, std::string icon = "") {
@@ -793,7 +888,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
             b.h = h;
 
             drawRoundedRect(cr, b.x - std::round(5 * dpi), b.y, b.w + std::round(10 * dpi), b.h, h * .5, 1.0);
-            set_argb(cr, slider_bg);
+            set_argb(cr, theme.slider_track);
             cairo_fill(cr); 
 
             if (notches != 0) {
@@ -803,7 +898,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
                 float x_off = 0.0;
                 for (int i = 0; i < count + 1; i++) {
                     set_rect(cr, {b.x + x_off - std::round(1 * dpi), b.y + std::round(10 * dpi), std::round(2 * dpi), std::round(6 * dpi)});
-                    set_argb(cr, slider_bg);
+                    set_argb(cr, theme.slider_track);
                     cairo_fill(cr); 
 
                     x_off += spacing;
@@ -817,18 +912,18 @@ static void make_slider(Container *parent, std::string title, std::string descri
             b.w = b.h;
             b.x += c->real_bounds.w * data->value - b.h * .5;
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
-            set_argb(cr, {1, 1, 1, 1});
+            set_argb(cr, theme.slider_thumb);
             cairo_fill(cr);
 
             //b.shrink(1.0);
             
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
-            set_argb(cr, slider_bg);
+            set_argb(cr, theme.slider_track);
             cairo_stroke(cr);
 
             b.shrink(5 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
-            set_argb(cr, accent);
+            set_argb(cr, theme.accent);
             cairo_fill(cr);
         }
 
@@ -878,7 +973,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
-        set_argb(cr, option_widget_bg_color);
+        set_argb(cr, theme.segment_background);
         cairo_fill(cr);
     };
     right->pre_layout = [options](Container *root, Container *c, const Bounds &b) {
@@ -891,7 +986,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
         float h = 10;
         std::vector<float> ow;
         for (auto o : options) {
-            auto bo1 = draw_text(cr, 0, 0, o, size, false, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+            auto bo1 = draw_text(cr, 0, 0, o, size, false, mylar_font, -1, -1, theme.text, false);
             ow.push_back(bo1.w);
             w += bo1.w;
             h = bo1.h;
@@ -939,15 +1034,15 @@ static void make_button_group(Container *parent, std::string title, std::string 
             }
 
             if (data->selected) {
-                set_argb(cr, {1, 1, 1, 1});
+                set_argb(cr, theme.segment_selected);
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 8 * dpi, 1.0);
                 cairo_fill(cr);
             }
 
-            auto bo = draw_text(cr, 0, 0, o, size, false, mylar_font, -1, -1, {0, 0, 0, .5}, false);
+            auto bo = draw_text(cr, 0, 0, o, size, false, mylar_font, -1, -1, theme.text_secondary, false);
             draw_text(cr,
                 c->real_bounds.x + c->real_bounds.w * .5 - bo.w * .5, 
-                c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, o, size, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+                c->real_bounds.y + c->real_bounds.h * .5 - bo.h * .5, o, size, true, mylar_font, -1, -1, theme.text, false);
         };
         option->when_clicked = [o, on_selected](Container *root, Container *c) {
             for (auto ch : c->parent->children) {
@@ -1065,8 +1160,8 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
         auto td = (TextData *) c->user_data;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, chevron_height, 0, td->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
-        Bounds vron = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, {1, 1, 1, 1}, true);
+        Bounds bounds = draw_text(cr, chevron_height, 0, td->text, text_height, false, mylar_font, -1, -1, theme.text, true);
+        Bounds vron = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, theme.text, true);
         
         c->wanted_bounds.w = bounds.w + pad_amount * 2 + vron_pad_amount + vron.w;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
@@ -1077,30 +1172,30 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
         auto dpi = mylar->raw_window->dpi;
         auto td = (TextData *) c->user_data;
         if (c->state.mouse_pressing) {
-            set_argb(cr, {.7, .7, .7, 1});
+            set_argb(cr, theme.dropdown_pressed);
         } else if (c->state.mouse_hovering) {
-            set_argb(cr, {.9, .9, .9, 1});
+            set_argb(cr, theme.dropdown_hover);
         } else {
-            set_argb(cr, {1, 1, 1, 1});
+            set_argb(cr, theme.dropdown_background);
         }
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
         cairo_fill(cr);
-        set_argb(cr, {.7, .7, .7, 1});
+        set_argb(cr, theme.dropdown_border);
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
         cairo_stroke(cr);
         
-        Bounds bounds = draw_text(cr, 0, 0, td->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        Bounds bounds = draw_text(cr, 0, 0, td->text, text_height, false, mylar_font, -1, -1, theme.text, false);
         draw_text(cr, 
             c->real_bounds.x + pad_amount, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            td->text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+            td->text, text_height, true, mylar_font, -1, -1, theme.text, false);
 
-        auto vron_bounds = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, {1, 1, 1, 1}, false);
+        auto vron_bounds = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, theme.text, false);
         draw_text(cr, 
             c->real_bounds.x - pad_amount - vron_bounds.w + c->real_bounds.w, 
             c->real_bounds.y + c->real_bounds.h * .5 - vron_bounds.h * .5, 
-             chevron, chevron_height, true, icon_font, -1, -1, {0, 0, 0, 1}, false);
+             chevron, chevron_height, true, icon_font, -1, -1, theme.text, false);
     };
     static MylarWindow *popup = nullptr; 
     popup = nullptr;
@@ -1120,7 +1215,7 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
         popup->root->when_paint = [](Container *root, Container *c) {
             auto popup = (MylarWindow *) root->user_data;
             auto cr = popup->raw_window->cr;
-            set_argb(cr, {1, 1, 1, 1});
+            set_argb(cr, theme.popup_background);
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
             cairo_fill(cr);
         };
@@ -1132,19 +1227,19 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
                 auto dpi = popup->raw_window->dpi;
                 
                 if (c->state.mouse_pressing) {
-                    set_argb(cr, {.8, .8, .8, 1});
+                    set_argb(cr, theme.popup_pressed);
                     drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
                 } else if (c->state.mouse_hovering) {
-                    set_argb(cr, {.9, .9, .9, 1});
+                    set_argb(cr, theme.popup_hover);
                     drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
                 } else {
-                    set_argb(cr, {1, 1, 1, 1});
+                    set_argb(cr, theme.popup_background);
                     drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
                 }
                 cairo_fill(cr);
                 
-                Bounds b = draw_text(cr, 0, 0, m, option_height * dpi, false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
-                draw_text(cr, 5 * dpi, center_y(c, b.h), m, option_height * dpi, true, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false);
+                Bounds b = draw_text(cr, 0, 0, m, option_height * dpi, false, mylar_font, -1, -1, theme.text, false);
+                draw_text(cr, 5 * dpi, center_y(c, b.h), m, option_height * dpi, true, mylar_font, -1, -1, theme.text, false);
             };
             ch->when_clicked = [td, m, func](Container *root, Container *c) {
                 if (func)
@@ -1217,7 +1312,7 @@ static void make_button(Container *parent, std::string text, std::function<void(
         auto dpi = mylar->raw_window->dpi;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, theme.text, true);
         c->wanted_bounds.w = bounds.w + pad_amount * 2;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
     };
@@ -1226,25 +1321,54 @@ static void make_button(Container *parent, std::string text, std::function<void(
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
         if (c->state.mouse_pressing) {
-            set_argb(cr, {.5, .5, .5, 1});
+            set_argb(cr, theme.button_pressed);
         } else if (c->state.mouse_hovering) {
-            set_argb(cr, {.65, .65, .65, 1});
+            set_argb(cr, theme.button_hover);
         } else {
-            set_argb(cr, {.8, .8, .8, 1});
+            set_argb(cr, theme.button_background);
         }
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
-        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, theme.text, false);
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+            text, text_height, true, mylar_font, -1, -1, theme.text, false);
     };
    pad->when_clicked = [func](Container *root, Container *c) {
        if (func) {
            func();
        }
    };
+}
+
+static void make_bool_with_button(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change, std::string button_text, std::function<void()> on_click, std::string icon = "") {
+    auto p = make_self_height_sized_parent(parent);
+    make_label_like(p, title, description, icon);
+
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    right->alignment = container_alignment::ALIGN_CENTER | container_alignment::ALIGN_RIGHT;
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 250 * dpi;
+        c->real_bounds.h = 70 * dpi;
+        c->spacing = 5 * dpi;
+    };
+
+    // The toggle paints its On/Off label to the left of its own bounds.
+    auto label_space = right->child(FILL_SPACE, FILL_SPACE);
+    label_space->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto on = draw_text(cr, 0, 0, "On", 11 * dpi, false, mylar_font, -1, -1, theme.text, false, 0);
+        auto off = draw_text(cr, 0, 0, "Off", 11 * dpi, false, mylar_font, -1, -1, theme.text, false, 0);
+        c->wanted_bounds.w = std::max(on.w, off.w) + 12 * dpi;
+    };
+
+    make_bool_control(right, initial_value, on_change);
+    make_button(right, button_text, on_click);
 }
 
 struct Field : UserData {
@@ -1268,7 +1392,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         auto dpi = mylar->raw_window->dpi;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, mylar_font, -1, -1, theme.text, true);
         c->wanted_bounds.w = FILL_SPACE;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
     };
@@ -1298,22 +1422,22 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         auto dpi = mylar->raw_window->dpi;
         auto field = (Field *) c->user_data;
 
-        set_argb(cr, c->active ? accent : RGBA(.8, .8, .8, 1));
+        set_argb(cr, c->active ? theme.accent : theme.field_border);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
 
-        set_argb(cr, {1, 1, 1, 1});
+        set_argb(cr, theme.field_background);
         auto minus_border = c->real_bounds;
         minus_border.shrink(std::round(1 * dpi));
         set_rect(cr, minus_border);
         cairo_fill(cr);
         
-        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, mylar_font, -1, -1, theme.text, false);
 
         float over = ((c->real_bounds.h - bounds.h) * .5);
         
         if (c->active) {
-            set_argb(cr, {0, 0, 0, 1});
+            set_argb(cr, theme.text);
             auto cursor_width = std::round(1.0 * dpi);
             auto cursor_bounds = Bounds(c->real_bounds.x + c->real_bounds.w - cursor_width - over, 
                 c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
@@ -1325,7 +1449,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w - bounds.w - over, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            field->text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+            field->text, text_height, true, mylar_font, -1, -1, theme.text, false);
     };
     return pad;
 }
@@ -1401,7 +1525,7 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        set_argb(cr, RGBA(0, 0, 0, .1));
+        set_argb(cr, theme.monitor_background);
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
         cairo_fill(cr);
@@ -1415,7 +1539,7 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             auto cr = mylar->raw_window->cr;
             auto dpi = mylar->raw_window->dpi;
             auto data = (MonitorInfo *) c->user_data;
-            set_argb(cr, RGBA(1, 1, 1, 1));
+            set_argb(cr, theme.monitor_surface);
             auto b = c->real_bounds;
             
             cairo_save(cr);
@@ -1426,18 +1550,18 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             cairo_fill(cr);
 
             if (data->selected) {
-                set_argb(cr, accent);
+                set_argb(cr, theme.accent);
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 2.0 * dpi);
                 cairo_stroke(cr);
             }
 
             auto text = fz("{}\n({}x{})", data->o->name, data->o->w, data->o->h);
-            auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
+            auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, mylar_font, c->real_bounds.w, -1, theme.text, false, 1);
             
             draw_text(cr, 
                 c->real_bounds.x,
                 c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
-                text, 12 * dpi, true, mylar_font, c->real_bounds.w, -1, RGBA(0, 0, 0, 1), false, 1);
+                text, 12 * dpi, true, mylar_font, c->real_bounds.w, -1, theme.text, false, 1);
 
             cairo_reset_clip(cr);
             cairo_restore(cr);
@@ -1722,18 +1846,14 @@ static void fill_desktop_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
-    make_bool(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
+    make_bool_with_button(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
         set->desktop_icons = c;
         main_thread([]() {
             desktop_icons::stop();
             desktop_icons::start();
             damage_all();
         });
-    }, "\uec6c");
-    
-    make_vert_space(padded_right, 4);
-    
-    make_button(padded_right, "Change folder", []() {
+    }, "Change folder", []() {
         static bool chooser_open = false;
         if (chooser_open)
             return;
@@ -1759,7 +1879,7 @@ static void fill_desktop_settings(Container *root, Container *c) {
         });
 
         t.detach();
-    });
+    }, "\uec6c");
     
     make_vert_space(padded_right, 14);
 
@@ -1798,14 +1918,10 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
-    make_bool(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
+    make_bool_with_button(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
         damage_all();
-    }, "\uE8b9");
-
-    make_vert_space(padded_right, 4); 
-
-    make_button(padded_right, "Choose file", []() {
+    }, "Choose file", []() {
         static bool chooser_open = false;
         if (chooser_open)
             return;
@@ -1833,57 +1949,9 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
         });
 
         t.detach();
-    }); 
+    }, "\uE8b9");
 }
 
-
-/*
-        {
-            auto b = c->real_bounds;
-            float h = 8.5 * dpi;
-            b.y += b.h * .5 - h * .5;
-            b.h = h;
-
-            drawRoundedRect(cr, b.x - std::round(5 * dpi), b.y, b.w + std::round(10 * dpi), b.h, h * .5, 1.0);
-            set_argb(cr, slider_bg);
-            cairo_fill(cr); 
-
-            if (notches != 0) {
-                float snap_percentage = 1.0f / ((float) notches);
-                int count = std::round(1.0f / snap_percentage);
-                float spacing = b.w * snap_percentage;
-                float x_off = 0.0;
-                for (int i = 0; i < count + 1; i++) {
-                    set_rect(cr, {b.x + x_off - std::round(1 * dpi), b.y + std::round(10 * dpi), std::round(2 * dpi), std::round(6 * dpi)});
-                    set_argb(cr, slider_bg);
-                    cairo_fill(cr); 
-
-                    x_off += spacing;
-                }
-            }
-        }
-        
-        {
-            auto data = (Field *) c->user_data;
-            auto b = c->real_bounds;
-            b.w = b.h;
-            b.x += c->real_bounds.w * data->value - b.h * .5;
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
-            set_argb(cr, {1, 1, 1, 1});
-            cairo_fill(cr);
-
-            //b.shrink(1.0);
-            
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
-            set_argb(cr, slider_bg);
-            cairo_stroke(cr);
-
-            b.shrink(5 * dpi);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
-            set_argb(cr, accent);
-            cairo_fill(cr);
-        }
-        */
 
 
 static void make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change) {
@@ -2124,13 +2192,13 @@ void create_tab_option(Container *parent, std::string label) {
             auto b = c->real_bounds;
             b.shrink(3 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-            set_argb(cr, {0, 0, 0, .1});
+            set_argb(cr, theme.navigation_pressed);
             cairo_fill(cr);
         } else if (c->state.mouse_hovering) {
             auto b = c->real_bounds;
             b.shrink(3 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-            set_argb(cr, {0, 0, 0, .2});
+            set_argb(cr, theme.navigation_hover);
             cairo_fill(cr);
         }
         paint_label(root, c, label);
@@ -2170,7 +2238,7 @@ void fill_root(Container *root) {
     root->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
-        set_argb(cr, right_color);
+        set_argb(cr, theme.background);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
     };
@@ -2185,7 +2253,7 @@ void fill_root(Container *root) {
         return;
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
-        set_argb(cr, left_color);
+        set_argb(cr, theme.background);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
     };
@@ -2199,7 +2267,7 @@ void fill_root(Container *root) {
         return;
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
-        set_argb(cr, right_color);
+        set_argb(cr, theme.background);
         set_rect(cr, c->real_bounds);
         cairo_fill(cr);
     };
