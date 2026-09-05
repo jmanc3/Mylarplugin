@@ -2123,6 +2123,46 @@ static void fill_applications_container(Container *root) {
 
 static void fill_projection_container(Dock *dock);
 
+static void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value) {
+    static constexpr float dotr = 17;
+    static constexpr float thickness = 8;
+    float final_thickness = std::round(thickness * dpi);
+    float final_dotr = std::round(dotr * dpi);
+    {
+        auto b = c->real_bounds;
+        b.y += b.h * .5 - final_thickness * .5;
+        b.h = final_thickness;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
+        set_argb(cr, {0, 0, 0, .1});
+        cairo_fill(cr);
+    }
+
+    {
+        auto b = c->real_bounds;
+        b.x += b.w * value - final_dotr * .5;
+        b.w = final_dotr;
+        b.y += b.h * .5 - final_dotr * .5;
+        b.h = final_dotr;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
+        set_argb(cr, {1, 1, 1, 1});
+        cairo_fill(cr);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
+        auto bigger = b;
+        bigger.scale_from_center(1.4);
+        bool dot_intersected = bounds_contains(bigger, root->mouse_current_x, root->mouse_current_y);
+        if ((c->state.mouse_hovering || c->state.mouse_pressing) && dot_intersected) {
+            b.scale_from_center(.7);
+        } else {
+            b.scale_from_center(.55);
+        }
+        set_argb(cr, {0, 0, 0, .1});
+        cairo_stroke(cr);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
+        set_argb(cr, accent);
+        cairo_fill(cr);
+    }
+}
+
 Container *make_self_sizing_slider(Container *root, 
                             std::function<std::string (Container *)> left_text,
                             std::function<std::string (Container *)> right_text,
@@ -2167,7 +2207,7 @@ Container *make_self_sizing_slider(Container *root,
         auto dpi = window->raw_window->dpi;
         auto cr = window->raw_window->cr;
         c->wanted_bounds.h = height * dpi;
-        c->wanted_bounds.w = height * dpi;
+        c->wanted_bounds.w = height * dpi * 1.2;
     };
     right->when_paint = [right_text, get_window](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -2177,7 +2217,7 @@ Container *make_self_sizing_slider(Container *root,
         auto right = right_text(c);
         auto b = draw_text(cr, 0, 0, right, 12 * dpi, false);
         draw_text(cr, 
-            c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
+            c->real_bounds.x + c->real_bounds.w - b.w, 
             c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, right, 12 * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
     };
     slider->when_paint = [get_window, get_value](Container *root, Container *c) {
@@ -2186,16 +2226,7 @@ Container *make_self_sizing_slider(Container *root,
         auto dpi = window->raw_window->dpi;
         auto cr = window->raw_window->cr;
         
-        set_argb(cr, accent);
-        set_rect(cr, c->real_bounds);
-        cairo_fill(cr);
-
-        auto value = get_value(c);
-        set_argb(cr, {1, 1, 1, .5});
-        auto b = c->real_bounds;
-        b.w *= value;
-        set_rect(cr, b);
-        cairo_fill(cr);
+        paint_slider(root, c, cr, dpi, get_value(c));
     };
     slider->when_clicked = [on_value_change](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
@@ -2531,9 +2562,9 @@ static void fill_brightness_container(Dock *dock) {
         c->wanted_pad = Bounds(8 * s, 8 * s, 8 * s, 8 * s);
     };
     
-    make_self_sizing_label(parent, "Brightness", 12, [](Dock *d) { return d->brightness; });
+    //make_self_sizing_label(parent, "Screen brightness", 12, [](Dock *d) { return d->brightness; });
     
-    make_vert_space(parent, 4, [](Dock *d) { return d->brightness; });
+    //make_vert_space(parent, 4, [](Dock *d) { return d->brightness; });
 
     struct SliderInfo : UserData {
         float amount = 0;
@@ -2834,8 +2865,7 @@ static void fill_root(Container *root) {
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
 
-            RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, volume_popup_w, volume_popup_w * .23);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, 32 * dpi);
 
             dock->brightness = open_mylar_popup(mylar, settings);
             if (!dock->brightness)
@@ -3569,8 +3599,6 @@ static int audio_container = 3824729;
 static std::unordered_set<int> expanded_audio_pids;
 
 static Container *fill_out_volume_slider(Container *c) {
-    static float dotr = 17;
-    static float thickness = 8;
     c->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->volume->raw_window->cr;
@@ -3578,43 +3606,7 @@ static Container *fill_out_volume_slider(Container *c) {
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         
-        float final_thickness = std::round(thickness * dpi);
-        float final_dotr = std::round(dotr * dpi);
-        {
-            auto b = c->real_bounds; 
-            //b.x += dotr;
-            //b.w -= dotr * 2;
-            b.y += b.h * .5 - final_thickness * .5;
-            b.h = final_thickness;
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
-            set_argb(cr, {0, 0, 0, .1});
-            cairo_fill(cr);
-        }
-
-        {
-            auto b = c->real_bounds; 
-            b.x += b.w * audio_data->level - final_dotr * .5;
-            b.w = final_dotr;
-            b.y += b.h * .5 - final_dotr * .5;
-            b.h = final_dotr;
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
-            set_argb(cr, {1, 1, 1, 1});
-            cairo_fill(cr);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
-            auto bigger = b;
-            bigger.scale_from_center(1.4);
-            bool dot_intersected = bounds_contains(bigger, root->mouse_current_x, root->mouse_current_y); 
-            if ((c->state.mouse_hovering || c->state.mouse_pressing) && dot_intersected) {
-                b.scale_from_center(.7);
-            } else {
-                b.scale_from_center(.55);
-            }
-            set_argb(cr, {0, 0, 0, .1});
-            cairo_stroke(cr);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
-            set_argb(cr, accent);
-            cairo_fill(cr);
-        }
+        paint_slider(root, c, cr, dpi, audio_data->level);
         
     };
 
