@@ -1991,10 +1991,25 @@ static void fill_applications_container(Container *root) {
     auto scroll_content = scroll->content;
     scroll->name = "scroll_content";
     scroll->pre_layout = [](Container *root, Container *c_, const Bounds &b) {
-        auto c = ((ScrollContainer *) c_)->content;
+        auto scroll = ((ScrollContainer *) c_);
+        auto data = (ScrollData *) scroll->user_data;
+        auto c = scroll->content;
+        if (data->func) {
+            DrawContext ctx = data->func(root);
+            int amount = std::round(12.0f * (ctx.dpi));
+            scroll->right->children[0]->wanted_bounds.h = amount;
+            scroll->right->children[2]->wanted_bounds.h = amount;
+            scroll->bottom->children[0]->wanted_bounds.w = amount;
+            scroll->bottom->children[2]->wanted_bounds.w = amount;
+            scroll->settings.right_width = amount; 
+            scroll->settings.right_arrow_height = amount; 
+            scroll->settings.bottom_height = amount; 
+            scroll->settings.bottom_arrow_width = amount; 
+        }
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->applications->raw_window->dpi;
         c->spacing = 5 * dpi;
+        
 
         int alive_count = 0;
         for (auto ch: c->children) {
