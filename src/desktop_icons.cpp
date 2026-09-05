@@ -18,6 +18,7 @@
 #include <hyprutils/path/Path.hpp>
 #include <linux/input-event-codes.h>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -51,6 +52,13 @@ static bool conf_vertical() {
     return hypriso->get_varint("plugin:mylardesktop:desktop_vertical", 1) != 0;
 }
 
+static std::string conf_sort_by() {
+    const auto& mode = set->desktop_sort_by;
+    if (mode == "size" || mode == "type" || mode == "date_modified")
+        return mode;
+    return "name";
+}
+
 static std::string conf_desktop_folder() {
     return set->desktop_folder;
 }
@@ -82,6 +90,10 @@ struct DesktopItem {
     std::string exec;
     bool is_folder = false;
     std::vector<std::string> icons_for_mime;
+    std::string name_sort_key;
+    std::string type_sort_key;
+    std::optional<goffset> sort_size;
+    std::optional<std::pair<guint64, guint32>> sort_modified;
 };
 
 static std::vector<DesktopItem*> desktop_items;
@@ -97,6 +109,83 @@ static std::string lowercase(std::string value) {
         return std::tolower(character);
     });
     return value;
+}
+
+static std::string natural_sort_key(const std::string& value) {
+    auto *valid = g_utf8_make_valid(value.data(), value.size());
+    auto *folded = g_utf8_casefold(valid, -1);
+    auto *key = g_utf8_collate_key_for_filename(folded, -1);
+    std::string result(key);
+    g_free(key);
+    g_free(folded);
+    g_free(valid);
+    return result;
+}
+
+static void refresh_sort_metadata(DesktopItem& item) {
+    item.name_sort_key = natural_sort_key(item.name);
+    item.type_sort_key.clear();
+    item.sort_size.reset();
+    item.sort_modified.reset();
+
+    auto *file = g_file_new_for_path(item.full_filepath.c_str());
+    auto *info = g_file_query_info(file,
+        G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE ","
+        G_FILE_ATTRIBUTE_TIME_MODIFIED "," G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC,
+        G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
+    g_object_unref(file);
+    if (!info)
+        return;
+
+    if (!item.is_folder && g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_STANDARD_SIZE))
+        item.sort_size = g_file_info_get_size(info);
+    if (g_file_info_has_attribute(info, G_FILE_ATTRIBUTE_TIME_MODIFIED)) {
+        item.sort_modified = std::pair{
+            g_file_info_get_attribute_uint64(info, G_FILE_ATTRIBUTE_TIME_MODIFIED),
+            g_file_info_get_attribute_uint32(info, G_FILE_ATTRIBUTE_TIME_MODIFIED_USEC)};
+    }
+    if (const auto *type = g_file_info_get_content_type(info)) {
+        auto *description = g_content_type_get_description(type);
+        if (description) {
+            item.type_sort_key = natural_sort_key(description);
+            g_free(description);
+        }
+    }
+    g_object_unref(info);
+}
+
+static void sort_desktop_items() {
+    const auto mode = conf_sort_by();
+    const bool ascending = set->desktop_sort_ascending;
+    std::ranges::sort(desktop_items, [&mode, ascending](const DesktopItem* lhs, const DesktopItem* rhs) {
+        if (lhs->is_folder != rhs->is_folder)
+            return lhs->is_folder;
+
+        const auto ordered_before = [ascending](const auto& left, const auto& right) {
+            return ascending ? left < right : right < left;
+        };
+
+        if (mode == "size" && !lhs->is_folder) {
+            if (lhs->sort_size.has_value() != rhs->sort_size.has_value())
+                return lhs->sort_size.has_value();
+            if (lhs->sort_size != rhs->sort_size)
+                return ordered_before(lhs->sort_size, rhs->sort_size);
+        } else if (mode == "type") {
+            if (lhs->type_sort_key.empty() != rhs->type_sort_key.empty())
+                return !lhs->type_sort_key.empty();
+            if (lhs->type_sort_key != rhs->type_sort_key)
+                return ordered_before(lhs->type_sort_key, rhs->type_sort_key);
+        } else if (mode == "date_modified") {
+            if (lhs->sort_modified.has_value() != rhs->sort_modified.has_value())
+                return lhs->sort_modified.has_value();
+            if (lhs->sort_modified != rhs->sort_modified)
+                return ordered_before(lhs->sort_modified, rhs->sort_modified);
+        }
+
+        if (lhs->name_sort_key != rhs->name_sort_key)
+            return ordered_before(lhs->name_sort_key, rhs->name_sort_key);
+        return ordered_before(lhs->full_filepath, rhs->full_filepath);
+    });
 }
 
 static std::string trim_copy(std::string value);
@@ -158,6 +247,7 @@ static void refresh_desktop_item(DesktopItem& item, const std::filesystem::path&
 
     if (item.extension == ".desktop")
         read_desktop_file(item, path);
+    refresh_sort_metadata(item);
 }
 
 static void add_icon_candidate(std::vector<std::string>& candidates, const std::string& candidate) {
@@ -283,12 +373,7 @@ void on_change_in_desktop_folder() {
         auto it = existing.find(scannedItem.full_filepath);
         if (it != existing.end()) {
             auto* item = it->second;
-            item->name = scannedItem.name;
-            item->extension = scannedItem.extension;
-            item->icon = scannedItem.icon;
-            item->exec = scannedItem.exec;
-            item->is_folder = scannedItem.is_folder;
-            item->icons_for_mime = scannedItem.icons_for_mime;
+            *item = scannedItem;
             continue;
         }
 
@@ -296,11 +381,7 @@ void on_change_in_desktop_folder() {
         desktop_items.push_back(item);
     }
 
-    std::ranges::sort(desktop_items, [](const DesktopItem* lhs, const DesktopItem* rhs) {
-        if (lhs->is_folder != rhs->is_folder)
-            return lhs->is_folder > rhs->is_folder;
-        return lowercase(lhs->name) < lowercase(rhs->name);
-    });
+    sort_desktop_items();
 }
 
 void watch_desktop_folder() {
@@ -1110,9 +1191,11 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
 
 }
 
-static void arrange_desktop_icons(bool vertical) {
-    set->desktop_vertical_override = vertical ? 1 : 0;
-    settings::load_save_settings(true, set);
+static void arrange_desktop_icons() {
+    const bool vertical = conf_vertical();
+    for (auto *item : desktop_items)
+        refresh_sort_metadata(*item);
+    sort_desktop_items();
 
     for (auto *desktop : actual_root->children) {
         if (desktop->custom_type != (int)TYPE::DESKTOP_ICONS)
@@ -1120,7 +1203,7 @@ static void arrange_desktop_icons(bool vertical) {
 
         const auto metrics = icon_grid_metrics(desktop, scale(*datum<int>(desktop, "monitor")));
         std::unordered_set<long long> occupied;
-        // desktop_items is sorted folders first, then by name, independent of dragged positions.
+        // Apply the chosen order without changing selection or relying on saved grid slots.
         for (auto *item : desktop_items) {
             for (auto *icon : desktop->children) {
                 if (*datum<DesktopItem *>(icon, "DesktopItem") != item)
@@ -1153,10 +1236,50 @@ static void create_root_popup() {
             PopOption orientation;
             orientation.text = vertical ? "Vertical" : "Horizontal";
             orientation.checked = conf_vertical() == vertical;
-            orientation.on_clicked = [vertical]() { arrange_desktop_icons(vertical); };
+            orientation.on_clicked = [vertical]() {
+                set->desktop_vertical_override = vertical ? 1 : 0;
+                settings::load_save_settings(true, set);
+                arrange_desktop_icons();
+            };
             view.submenu.push_back(orientation);
         }
         root.push_back(view);
+    }
+    {
+        PopOption sort;
+        sort.text = "Sort by";
+        const std::pair<const char *, const char *> modes[] = {
+            {"Name", "name"},
+            {"Size", "size"},
+            {"Item type", "type"},
+            {"Date modified", "date_modified"},
+        };
+        for (const auto& [label, mode] : modes) {
+            PopOption option;
+            option.text = label;
+            option.checked = conf_sort_by() == mode;
+            option.on_clicked = [mode = std::string(mode)]() {
+                set->desktop_sort_by = mode;
+                settings::load_save_settings(true, set);
+                arrange_desktop_icons();
+            };
+            sort.submenu.push_back(option);
+        }
+        PopOption separator;
+        separator.seperator = true;
+        sort.submenu.push_back(separator);
+        for (const bool ascending : {true, false}) {
+            PopOption direction;
+            direction.text = ascending ? "Ascending" : "Descending";
+            direction.checked = set->desktop_sort_ascending == ascending;
+            direction.on_clicked = [ascending]() {
+                set->desktop_sort_ascending = ascending;
+                settings::load_save_settings(true, set);
+                arrange_desktop_icons();
+            };
+            sort.submenu.push_back(direction);
+        }
+        root.push_back(sort);
     }
     {
         PopOption pop;

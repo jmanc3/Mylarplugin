@@ -320,6 +320,8 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "desktop_icons", &settings->desktop_icons);
     bind(int, "desktop_vertical_override", &settings->desktop_vertical_override);
+    bind(std::string, "desktop_sort_by", &settings->desktop_sort_by);
+    bind(bool, "desktop_sort_ascending", &settings->desktop_sort_ascending);
     bind(std::string, "desktop_folder", &settings->desktop_folder);
     bind(std::string, "overview_layout_type", &settings->overview_layout_type);
     
