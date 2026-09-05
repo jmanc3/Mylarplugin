@@ -294,6 +294,8 @@ struct HyprIso {
     void create_callbacks();
 
     uint32_t keycode_to_keysym(int keycode);
+    
+    bool session_active();
 
     // So things can be cleaned
     void end(); 
@@ -559,7 +561,7 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color, float max_w, float max_h, int alignment = 0);
 // Adds ceil(size) transparent pixels on each side; draw at (x - padding, y - padding).
 TextureInfo generate_dropshadow_texture(int id, float size, float darken = 1.0);
-TextureInfo gen_texture(std::string path, float h);
+TextureInfo gen_texture(std::string path, float h, RGBA *dye = nullptr);
 TextureInfo gen_texture_png(std::string path);
 
 void draw_texture(TextureInfo info, int x, int y, float a = 1.0, float clip_w = 0.0);

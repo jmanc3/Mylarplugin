@@ -2943,6 +2943,11 @@ hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
 
 hl.bind("SUPER_L + D", hl.plugin.mylar.toggle_desktop_show)
 
+hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
+hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
+hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
+hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
+
    
 )END";
 
@@ -4548,16 +4553,103 @@ void load_icon_full_path(cairo_surface_t** surface, std::string path) {
 //     return tex;
 // }
 
-SP<Render::ITexture> loadAsset(const std::string& filename, int target_size) {
+void dye_surface(cairo_surface_t *surface, RGBA argb_color) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (surface == nullptr)
+        return;
+    cairo_surface_flush(surface);
+    
+    unsigned char *data = cairo_image_surface_get_data(surface);
+    int width = cairo_image_surface_get_width(surface);
+    int height = cairo_image_surface_get_height(surface);
+    int stride = cairo_image_surface_get_stride(surface);
+    
+    for (int y = 0; y < height; y++) {
+        auto row = (uint32_t *) data;
+        data += stride;
+        
+        for (int x = 0; x < width; x++) {
+            unsigned int color = *row;
+            
+            unsigned int alpha = ((color >> 24) & 0xFF);
+            
+            unsigned int red = std::floor(argb_color.r * 255);
+            unsigned int green = std::floor(argb_color.g * 255);
+            unsigned int blue = std::floor(argb_color.b * 255);
+            
+            // pre multiplied alpha
+            // a r g b
+            // unsigned int set_argb = (0x44 << 24) | (0x44 << 16) | (0x00 << 8) |
+            // 0x44; https://microsoft.github.io/Win2D/html/PremultipliedAlpha.htm
+            // https://www.cairographics.org/manual/cairo-Image-Surfaces.html#cairo-format-t
+            unsigned int set_color = (alpha << 24) | ((red * alpha / 255) << 16) |
+                                     (green * alpha / 255 << 8) | blue * alpha / 255;
+            
+            *row = set_color;
+            row++;
+        }
+    }
+}
+
+void tint_surface(cairo_surface_t *surface, RGBA argb_color) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (surface == nullptr)
+        return;
+    cairo_surface_flush(surface);
+
+    unsigned char *data = cairo_image_surface_get_data(surface);
+    int width = cairo_image_surface_get_width(surface);
+    int height = cairo_image_surface_get_height(surface);
+    int stride = cairo_image_surface_get_stride(surface);
+
+    for (int y = 0; y < height; y++) {
+        auto row = (uint32_t *) data;
+        data += stride;
+
+        for (int x = 0; x < width; x++) {
+            uint32_t color = *row;
+
+            uint8_t a = (color >> 24) & 0xFF;
+            uint8_t r = (color >> 16) & 0xFF;
+            uint8_t g = (color >> 8)  & 0xFF;
+            uint8_t b = (color)       & 0xFF;
+
+            // Convert tint color to 0–255 range
+            uint8_t tint_r = static_cast<uint8_t>(argb_color.r * 255);
+            uint8_t tint_g = static_cast<uint8_t>(argb_color.g * 255);
+            uint8_t tint_b = static_cast<uint8_t>(argb_color.b * 255);
+
+            // Multiply source color by tint color (tinting)
+            // Values are premultiplied by alpha already in Cairo
+            uint8_t new_r = (r * tint_r) / 255;
+            uint8_t new_g = (g * tint_g) / 255;
+            uint8_t new_b = (b * tint_b) / 255;
+
+            *row = (a << 24) | (new_r << 16) | (new_g << 8) | new_b;
+            row++;
+        }
+    }
+
+    cairo_surface_mark_dirty(surface);
+}
+
+SP<Render::ITexture> loadAsset(const std::string& filename, int target_size, RGBA *dye) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
 
     cairo_surface_t* icon = nullptr;
     load_icon_full_path(&icon, filename, target_size);
-
+    
     if (!icon)
         return {};
+    
+    if (dye)
+        dye_surface(icon, *dye);
 
     auto tex = g_pHyprRenderer->createTexture(icon);
 
@@ -4595,12 +4687,12 @@ void draw_to_texture(TextureInfo info, std::function<void()> func) {
     }
 }
 
-TextureInfo gen_texture(std::string path, float h) {
+TextureInfo gen_texture(std::string path, float h, RGBA *dye) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     //log("gen texture");
-    auto tex = loadAsset(path, h);
+    auto tex = loadAsset(path, h, dye);
     if (tex) {
         auto t = new Texture;
         t->texture = tex;
@@ -4945,6 +5037,8 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (info.id == -1)
+        return;
     bool clip = hypriso->clip;
     CBox clipbox = tocbox(hypriso->clipbox);
     CBox cb = tocbox(b);
@@ -9610,4 +9704,8 @@ SleptWindow::SleptWindow(int cid, int pid) {
 
 void set_api(void *api) {
     globals->api = api;
+}
+
+bool HyprIso::session_active() {
+    return g_pCompositor->m_sessionActive;
 }

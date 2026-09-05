@@ -972,11 +972,19 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
 
 static void paint_initial_clock_time() {
     using Clock = std::chrono::steady_clock;
+    if (!hypriso->session_active())
+        return;
+    static bool first_pass = true;
+    defer(first_pass = false);
     static const auto start_time = Clock::now();
+
     static bool finished = false;
     struct ClockTextures {
         TextureInfo text;
         TextureInfo shadow;
+
+        TextureInfo flourish;
+        TextureInfo flourish_shadow;
     };
     static std::unordered_map<int, ClockTextures> textures;
 
@@ -994,6 +1002,8 @@ static void paint_initial_clock_time() {
         for (const auto& [monitor, cached] : textures) {
             free_text_texture(cached.text.id);
             free_text_texture(cached.shadow.id);
+            free_text_texture(cached.flourish.id);
+            free_text_texture(cached.flourish_shadow.id);
         }
         textures.clear();
         finished = true;
@@ -1012,7 +1022,7 @@ static void paint_initial_clock_time() {
     if (monitor_bounds.w <= 0 || monitor_bounds.h <= 0)
         return;
 
-    // Each monitor gets one pair at its own scale, retained until the fade ends.
+    // Each monitor gets its own textures at its scale, retained until the fade ends.
     auto [entry, inserted] = textures.try_emplace(monitor);
     auto& cached = entry->second;
     if (inserted) {
@@ -1025,7 +1035,15 @@ static void paint_initial_clock_time() {
                       local_time.tm_hour % 12 == 0 ? 12 : local_time.tm_hour % 12,
                       local_time.tm_min, local_time.tm_hour < 12 ? "AM" : "PM");
         cached.text = gen_text_texture(mylar_font, time_text, 140 * s, RGBA(1, 1, 1, 1));
-        cached.shadow = generate_dropshadow_texture(cached.text.id, 16 * s);
+        cached.shadow = generate_dropshadow_texture(cached.text.id, 10 * s);
+
+        const char* home = std::getenv("HOME");
+        std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/flourish.svg";
+        if (std::filesystem::exists(filepath)) {
+            auto col = RGBA(1, 1, 1, 1);
+            cached.flourish = gen_texture(filepath, 600 * s, &col);
+            cached.flourish_shadow = generate_dropshadow_texture(cached.flourish.id, 10 * s);
+        }
     }
     if (cached.text.id == -1)
         return;
@@ -1047,9 +1065,28 @@ static void paint_initial_clock_time() {
     const auto previous_clipbox = hypriso->clipbox;
     hypriso->clip = true;
     hypriso->clipbox = Bounds(center_x - clip_width * 0.5, reveal_bounds.y, clip_width, reveal_bounds.h);
+
     if (cached.shadow.id != -1)
         draw_texture(cached.shadow, shadow_bounds, alpha);
     draw_texture(cached.text, text_bounds, alpha);
+
+    if (cached.flourish.id != -1) {
+        const double flourish_center_y = text_bounds.y + std::max(text_bounds.h, shadow_bounds.h);
+        const Bounds flourish_bounds(center_x - cached.flourish.w * 0.5,
+                                     flourish_center_y - cached.flourish.h * 0.5,
+                                     cached.flourish.w, cached.flourish.h);
+        const Bounds flourish_shadow_bounds(center_x - cached.flourish_shadow.w * 0.5,
+                                            flourish_center_y - cached.flourish_shadow.h * 0.5,
+                                            cached.flourish_shadow.w, cached.flourish_shadow.h);
+        const auto& flourish_reveal_bounds = cached.flourish_shadow.id != -1 ? flourish_shadow_bounds : flourish_bounds;
+        const double flourish_clip_width = flourish_reveal_bounds.w * reveal;
+        hypriso->clipbox = Bounds(center_x - flourish_clip_width * 0.5, flourish_reveal_bounds.y,
+                                 flourish_clip_width, flourish_reveal_bounds.h);
+        if (cached.flourish_shadow.id != -1)
+            draw_texture(cached.flourish_shadow, flourish_shadow_bounds, alpha);
+        draw_texture(cached.flourish, flourish_bounds, alpha);
+    }
+
     hypriso->clip = previous_clip;
     hypriso->clipbox = previous_clipbox;
 }
