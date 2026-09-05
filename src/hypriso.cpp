@@ -4735,6 +4735,139 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
     return {};
 }
 
+TextureInfo generate_dropshadow_texture(int id, float size) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (!std::isfinite(size) || size < 0)
+        return {};
+
+    SP<Render::ITexture> source;
+    for (auto t : hyprtextures) {
+        if (t->info.id == id) {
+            source = t->texture;
+            break;
+        }
+    }
+    if (!source || !source->m_texID || source->m_type != Render::TEXTURE_RGBA)
+        return {};
+
+    Render::GL::g_pHyprOpenGL->makeEGLCurrent();
+    const int source_w = source->m_size.x;
+    const int source_h = source->m_size.y;
+    GLint max_size = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max_size);
+    if (source_w <= 0 || source_h <= 0 || source_w > max_size || source_h > max_size ||
+        size > (max_size - std::max(source_w, source_h)) / 2)
+        return {};
+
+    const int radius = static_cast<int>(std::ceil(size));
+    const int w = source_w + 2 * radius;
+    const int h = source_h + 2 * radius;
+    std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4, 0);
+
+    // This can run while building a render pass: leave its framebuffer, texture,
+    // PBO bindings and pixel-store settings exactly as they were, even on failure.
+    struct TransferState {
+        GLint framebuffer = 0, texture = 0, pack_buffer = 0, unpack_buffer = 0;
+        const GLenum stores[8] = {GL_PACK_ALIGNMENT, GL_PACK_ROW_LENGTH, GL_PACK_SKIP_PIXELS, GL_PACK_SKIP_ROWS,
+                                  GL_UNPACK_ALIGNMENT, GL_UNPACK_ROW_LENGTH, GL_UNPACK_SKIP_PIXELS, GL_UNPACK_SKIP_ROWS};
+        GLint values[8] = {};
+        GLuint read_fb = 0;
+
+        TransferState() {
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &framebuffer);
+            glGetIntegerv(GL_TEXTURE_BINDING_2D, &texture);
+            glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+            glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
+            for (int i = 0; i < 8; ++i) {
+                glGetIntegerv(stores[i], &values[i]);
+                glPixelStorei(stores[i], i % 4 == 0 ? 1 : 0);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+            glGenFramebuffers(1, &read_fb);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fb);
+        }
+
+        ~TransferState() {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+            glDeleteFramebuffers(1, &read_fb);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pack_buffer);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpack_buffer);
+            for (int i = 0; i < 8; ++i)
+                glPixelStorei(stores[i], values[i]);
+        }
+    } transfer_state;
+
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, source->m_texID, 0);
+    if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        return {};
+
+    // Read directly into the center of the padded image. Keep the source row
+    // order: uploading these rows again preserves the original texture orientation.
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glPixelStorei(GL_PACK_ROW_LENGTH, w);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, radius);
+    glPixelStorei(GL_PACK_SKIP_ROWS, radius);
+    glReadPixels(0, 0, source_w, source_h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    if (glGetError() != GL_NO_ERROR)
+        return {};
+
+    // Black with the original coverage alpha, including antialiased edges.
+    for (size_t i = 0; i < pixels.size(); i += 4)
+        pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+
+    if (radius > 0) {
+        // Truncate the Gaussian at three standard deviations, within the padding.
+        const double sigma = static_cast<double>(size) / 3.0;
+        std::vector<float> kernel(2 * radius + 1);
+        float total = 0;
+        for (int i = -radius; i <= radius; ++i) {
+            const double distance = i / sigma;
+            const float weight = std::exp(-0.5f * distance * distance);
+            kernel[i + radius] = weight;
+            total += weight;
+        }
+        for (auto& weight : kernel)
+            weight /= total;
+
+        std::vector<float> horizontal(static_cast<size_t>(w) * h, 0);
+        for (int y = radius; y < radius + source_h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                float alpha = 0;
+                for (int i = std::max(-radius, -x); i <= std::min(radius, w - 1 - x); ++i)
+                    alpha += pixels[(static_cast<size_t>(y) * w + x + i) * 4 + 3] * kernel[i + radius];
+                horizontal[static_cast<size_t>(y) * w + x] = alpha;
+            }
+        }
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                float alpha = 0;
+                for (int i = std::max(-radius, -y); i <= std::min(radius, h - 1 - y); ++i)
+                    alpha += horizontal[static_cast<size_t>(y + i) * w + x] * kernel[i + radius];
+                pixels[(static_cast<size_t>(y) * w + x) * 4 + 3] = static_cast<uint8_t>(std::clamp(std::lround(alpha), 0L, 255L));
+            }
+        }
+    }
+
+    auto tex = g_pHyprRenderer->createTexture(w, h, pixels.data());
+    if (!tex || !tex->ok())
+        return {};
+    tex->bind();
+    tex->setTexParameter(GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    tex->setTexParameter(GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    auto t = new Texture;
+    t->texture = tex;
+    t->info.id = unique_id++;
+    t->info.w = w;
+    t->info.h = h;
+    hyprtextures.push_back(t);
+    return t->info;
+}
+
 static SP<Render::ITexture> draw_text(std::string text, int size = 10, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}, int alignment = 0) {
     PangoFontMap*         fontMap    = pango_cairo_font_map_get_default();
     PangoContext*         context    = pango_font_map_create_context(fontMap);

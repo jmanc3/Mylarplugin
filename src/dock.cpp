@@ -1980,9 +1980,10 @@ static void fill_applications_container(Container *root) {
                 active_option = 0;
             }
         }
-   });
+    });
 
-    auto scroll = make_newscrollpane_as_child(padded, ScrollPaneSettings(1.0), [](Container *root) {
+    auto scroll_parent = padded->child(FILL_SPACE, FILL_SPACE);
+    auto scroll = make_newscrollpane_as_child(scroll_parent, ScrollPaneSettings(1.0), [](Container *root) {
         auto dock = ((Dock *) root->user_data);
         return DrawContext({dock->applications->raw_window->cr, dock->applications->raw_window->dpi, [dock]() {
             windowing::redraw(dock->applications->raw_window);
@@ -2009,8 +2010,6 @@ static void fill_applications_container(Container *root) {
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->applications->raw_window->dpi;
         c->spacing = 5 * dpi;
-        
-
         int alive_count = 0;
         for (auto ch: c->children) {
             auto s = (Script *) ch->user_data;
@@ -2082,6 +2081,44 @@ static void fill_applications_container(Container *root) {
     }
 
     set_active(root, {field}, root, true, false);
+
+    auto bottom = padded->child(::hbox, FILL_SPACE, 32);
+    bottom->alignment = ALIGN_RIGHT;
+    bottom->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dock = (Dock *) root->user_data;
+        auto dpi = dock->applications->raw_window->dpi;
+        c->wanted_bounds.h = 32 * dpi;
+        c->wanted_pad = Bounds(pad_amount, pad_amount, pad_amount, pad_amount).scale(dpi);
+        c->spacing = 8 * dpi;
+        for (auto ch : c->children) {
+            ch->wanted_bounds.w = c->wanted_bounds.h;
+            ch->wanted_bounds.h = c->wanted_bounds.h;
+        }
+    };
+    static std::vector<std::string> icon = { "\uE713", "\uE7E8" };
+    for (int i = 0; i < 2; i++) {
+        auto b = bottom->child(32, 32);
+        b->when_paint = [i](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto dpi = dock->applications->raw_window->dpi;
+            auto cr = dock->applications->raw_window->cr;
+            if (c->state.mouse_pressing) {
+                set_argb(cr, {.5, .5, .5, 1});
+                set_rect(cr, c->real_bounds);
+                cairo_fill(cr);
+            } else if (c->state.mouse_hovering) {
+                set_argb(cr, {.65, .65, .65, 1});
+                set_rect(cr, c->real_bounds);
+                cairo_fill(cr);
+            }
+
+            
+            auto b = draw_text(cr, 0, 0, icon[i], 12 * dpi, false, "Segoe Fluent Icons");
+            draw_text(cr, 
+                c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
+                c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, icon[i], 12 * dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+        };
+    }
 }
 
 static void fill_projection_container(Dock *dock);

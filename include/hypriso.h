@@ -47,6 +47,7 @@ static int titlebar_h = 28;
 //static std::string mylar_font = "Noto Sans";
 //static std::string mylar_font = "SF Pro Rounded";
 static std::string mylar_font = "Segoe UI Variable";
+//static std::string icon_font = "Segoe Fluent Icons";
 static std::string icon_font = "Segoe Fluent Icons";
 static long minimize_anim_time = 100;
 
@@ -553,6 +554,8 @@ void set_window_corner_mask(int id, int cornermask);
 void free_text_texture(int id);
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color);
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color, float max_w, float max_h, int alignment = 0);
+// Adds ceil(size) transparent pixels on each side; draw at (x - padding, y - padding).
+TextureInfo generate_dropshadow_texture(int id, float size);
 TextureInfo gen_texture(std::string path, float h);
 TextureInfo gen_texture_png(std::string path);
 

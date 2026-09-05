@@ -32,7 +32,9 @@
 #include "polling_thread.h"
 
 #include <cstdio>
+#include <ctime>
 #include <dbus/dbus-shared.h>
+#include <gio/gio.h>
 #include <iterator>
 #include <filesystem>
 #include <fstream>
@@ -45,6 +47,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <linux/input-event-codes.h>
 #include <thread>
 
@@ -980,6 +983,90 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
     };
 }
 
+static void paint_initial_clock_time() {
+    using Clock = std::chrono::steady_clock;
+    static const auto start_time = Clock::now();
+    static bool finished = false;
+    struct ClockTextures {
+        TextureInfo text;
+        TextureInfo shadow;
+    };
+    static std::unordered_map<int, ClockTextures> textures;
+
+    constexpr double delay_ms = 1500;
+    constexpr double reveal_ms = 1000;
+    constexpr double hold_ms = 3000;
+    constexpr double fade_ms = 500;
+    constexpr double fade_start_ms = delay_ms + reveal_ms + hold_ms;
+
+    if (finished)
+        return;
+
+    const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start_time).count();
+    if (elapsed >= fade_start_ms + fade_ms) {
+        for (const auto& [monitor, cached] : textures) {
+            free_text_texture(cached.text.id);
+            free_text_texture(cached.shadow.id);
+        }
+        textures.clear();
+        finished = true;
+        request_refresh();
+        return;
+    }
+
+    // Keep frames coming even when the desktop is otherwise idle.
+    request_refresh();
+    if (elapsed <= delay_ms)
+        return;
+
+    const int monitor = current_rendering_monitor();
+    const auto s = scale(monitor);
+    const auto monitor_bounds = bounds_monitor(monitor);
+    if (monitor_bounds.w <= 0 || monitor_bounds.h <= 0)
+        return;
+
+    // Each monitor gets one pair at its own scale, retained until the fade ends.
+    auto [entry, inserted] = textures.try_emplace(monitor);
+    auto& cached = entry->second;
+    if (inserted) {
+        const std::time_t now = std::time(nullptr);
+        std::tm local_time{};
+        if (!localtime_r(&now, &local_time))
+            return;
+        char time_text[16];
+        std::snprintf(time_text, sizeof(time_text), "%d:%02d %s",
+                      local_time.tm_hour % 12 == 0 ? 12 : local_time.tm_hour % 12,
+                      local_time.tm_min, local_time.tm_hour < 12 ? "AM" : "PM");
+        cached.text = gen_text_texture(mylar_font, time_text, 140 * s, RGBA(1, 1, 1, 1));
+        cached.shadow = generate_dropshadow_texture(cached.text.id, 16 * s);
+    }
+    if (cached.text.id == -1)
+        return;
+
+    const double center_x = monitor_bounds.w * s * 0.5;
+    // 80% up from the bottom places the clock near the top edge.
+    const double center_y = monitor_bounds.h * s * 0.1;
+    const Bounds text_bounds(center_x - cached.text.w * 0.5, center_y - cached.text.h * 0.5,
+                             cached.text.w, cached.text.h);
+    const Bounds shadow_bounds(center_x - cached.shadow.w * 0.5, center_y - cached.shadow.h * 0.5,
+                               cached.shadow.w, cached.shadow.h);
+    const auto& reveal_bounds = cached.shadow.id != -1 ? shadow_bounds : text_bounds;
+    const double progress = std::clamp((elapsed - delay_ms) / reveal_ms, 0.0, 1.0);
+    const double reveal = progress * progress * (3.0 - 2.0 * progress);
+    const double clip_width = reveal_bounds.w * reveal;
+    const float alpha = reveal * (1.0 - std::clamp((elapsed - fade_start_ms) / fade_ms, 0.0, 1.0));
+
+    const bool previous_clip = hypriso->clip;
+    const auto previous_clipbox = hypriso->clipbox;
+    hypriso->clip = true;
+    hypriso->clipbox = Bounds(center_x - clip_width * 0.5, reveal_bounds.y, clip_width, reveal_bounds.h);
+    if (cached.shadow.id != -1)
+        draw_texture(cached.shadow, shadow_bounds, alpha);
+    draw_texture(cached.text, text_bounds, alpha);
+    hypriso->clip = previous_clip;
+    hypriso->clipbox = previous_clipbox;
+}
+
 static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_BEGIN) {
         heart::layout_containers();
@@ -1130,6 +1217,8 @@ static void on_render(int id, int stage) {
                 }
             }
         }
+
+        paint_initial_clock_time();
     }
 }
 
