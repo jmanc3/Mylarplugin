@@ -1712,6 +1712,15 @@ void add_hyprctl_dispatchers() {
         dock::toggle_dock_merge();
         return 0;
     });
+    hypriso->add_hyprctl_dispatcher("toggle_desktop_show", [](lua_State *) {
+        if (show_desktop::is_opened()) {
+            show_desktop::stop_animation();
+        } else {
+            show_desktop::start_animation();
+        }
+        damage_all();
+        return 0;
+    });
     hypriso->add_hyprctl_dispatcher("desktop_hide", [](lua_State *) {
         show_desktop::stop_animation();
         damage_all();

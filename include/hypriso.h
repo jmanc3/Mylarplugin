@@ -558,7 +558,7 @@ void free_text_texture(int id);
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color);
 TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA color, float max_w, float max_h, int alignment = 0);
 // Adds ceil(size) transparent pixels on each side; draw at (x - padding, y - padding).
-TextureInfo generate_dropshadow_texture(int id, float size);
+TextureInfo generate_dropshadow_texture(int id, float size, float darken = 1.0);
 TextureInfo gen_texture(std::string path, float h);
 TextureInfo gen_texture_png(std::string path);
 

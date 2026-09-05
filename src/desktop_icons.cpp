@@ -35,7 +35,7 @@ static RGBA color_sel_border_color() {
 }
 
 static float conf_font_size() {
-    return hypriso->get_varfloat("plugin:mylardesktop:desktop_font_size", 12);
+    return hypriso->get_varfloat("plugin:mylardesktop:desktop_font_size", 14);
 }
 
 static float conf_icon_size() {
@@ -1139,7 +1139,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                 if (info.id != -1) {
                     if (ico->icon_shadow_source != info.id) {
                         free_text_texture(ico->icon_shadow.id);
-                        ico->icon_shadow = generate_dropshadow_texture(info.id, 4 * s);
+                        ico->icon_shadow = generate_dropshadow_texture(info.id, 8 * s, .5);
                         ico->icon_shadow_source = info.id;
                     }
                     const int x = c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5;
@@ -1177,13 +1177,13 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                 text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, std::ceil(two_line_height * s), 1);
                 *datum<TextureInfo>(c, "label") = text_img;
                 free_text_texture(ico->label_shadow.id);
-                ico->label_shadow = generate_dropshadow_texture(text_img.id, 2 * s);
+                ico->label_shadow = generate_dropshadow_texture(text_img.id, 3 * s, 2.0);
             }
             const int text_x = c->real_bounds.x;
             const int text_y = c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s;
             if (ico->label_shadow.id != -1) {
                 const int padding = (ico->label_shadow.w - text_img.w) / 2;
-                draw_texture(ico->label_shadow, text_x - padding, text_y - padding + s, overview_alpha * 0.9f);
+                draw_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.9f);
             }
             draw_texture(text_img, text_x, text_y, overview_alpha);
         }

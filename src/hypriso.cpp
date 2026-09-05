@@ -1713,7 +1713,7 @@ void HyprIso::create_config_variables() {
     values->dock_sel_accent_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_accent_color", "", Config::ParserUtils::parseColor("rgba(ffffff88)").value());
     values->sel_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_color", "", Config::ParserUtils::parseColor("rgba(5ce0ff25)").value());
     values->sel_border_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_border_color", "", Config::ParserUtils::parseColor("rgba(5fe5fff1)").value());
-    values->desktop_font_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_font_size", "", Hyprlang::FLOAT{12});
+    values->desktop_font_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_font_size", "", Hyprlang::FLOAT{14});
     values->desktop_icon_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_icon_size", "", Hyprlang::FLOAT{68});
     values->desktop_pad = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_pad", "", Hyprlang::FLOAT{12});
     values->desktop_vertical = makeShared<Config::Values::CIntValue>("plugin:mylardesktop:desktop_vertical", "", Hyprlang::INT{1});
@@ -2940,6 +2940,8 @@ hl.layer_rule({
 })
 
 hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
+
+hl.bind("SUPER_L + D", hl.plugin.mylar.toggle_desktop_show)
 
    
 )END";
@@ -4735,7 +4737,7 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
     return {};
 }
 
-TextureInfo generate_dropshadow_texture(int id, float size) {
+TextureInfo generate_dropshadow_texture(int id, float size, float darken) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4847,7 +4849,7 @@ TextureInfo generate_dropshadow_texture(int id, float size) {
                 float alpha = 0;
                 for (int i = std::max(-radius, -y); i <= std::min(radius, h - 1 - y); ++i)
                     alpha += horizontal[static_cast<size_t>(y + i) * w + x] * kernel[i + radius];
-                pixels[(static_cast<size_t>(y) * w + x) * 4 + 3] = static_cast<uint8_t>(std::clamp(std::lround(alpha), 0L, 255L));
+                pixels[(static_cast<size_t>(y) * w + x) * 4 + 3] = static_cast<uint8_t>(std::clamp(std::lround(alpha * darken), 0L, 255L));
             }
         }
     }
