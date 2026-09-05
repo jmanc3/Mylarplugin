@@ -81,6 +81,7 @@ struct ConfigSettings {
     bool draw_wallpaper = true;
     bool hotcorners = true;
     bool desktop_icons = true;
+    int desktop_vertical_override = 1; // -1: Hyprland config, 0: horizontal, 1: vertical
     std::string desktop_folder = "~/Desktop";
     std::string overview_layout_type = "Grid";
 

@@ -145,22 +145,8 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
     x = mou.x;
     y = mou.y;
     
+    const bool any_closed = popup::dismiss_outside(x, y);
     auto pierced = pierced_containers(actual_root, x, y);
-    bool any_closed = false;
-    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-       auto child = actual_root->children[i];
-       if (child->custom_type == (int) TYPE::OUR_POPUP) {
-           bool was_pierced = false;
-           for (auto p : pierced)
-               if (p == child)
-                   was_pierced = true;
-           if (!was_pierced) {
-               delete child;
-               actual_root->children.erase(actual_root->children.begin() + i);
-               any_closed = true;
-           }
-       }
-    }
     bool any_desktop_icons_pierced = false;
     if (!pierced.empty())
         any_desktop_icons_pierced = pierced[0]->custom_type == (int) TYPE::DESKTOP_ICON;

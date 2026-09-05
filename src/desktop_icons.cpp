@@ -46,6 +46,8 @@ static float conf_pad() {
 }
 
 static bool conf_vertical() {
+    if (set->desktop_vertical_override == 0 || set->desktop_vertical_override == 1)
+        return set->desktop_vertical_override == 1;
     return hypriso->get_varint("plugin:mylardesktop:desktop_vertical", 1) != 0;
 }
 
@@ -1108,9 +1110,54 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
 
 }
 
+static void arrange_desktop_icons(bool vertical) {
+    set->desktop_vertical_override = vertical ? 1 : 0;
+    settings::load_save_settings(true, set);
+
+    for (auto *desktop : actual_root->children) {
+        if (desktop->custom_type != (int)TYPE::DESKTOP_ICONS)
+            continue;
+
+        const auto metrics = icon_grid_metrics(desktop, scale(*datum<int>(desktop, "monitor")));
+        std::unordered_set<long long> occupied;
+        // desktop_items is sorted folders first, then by name, independent of dragged positions.
+        for (auto *item : desktop_items) {
+            for (auto *icon : desktop->children) {
+                if (*datum<DesktopItem *>(icon, "DesktopItem") != item)
+                    continue;
+                auto *ico = (IcoContainerData *)icon->user_data;
+                const auto [x, y] = next_available_slot(occupied, metrics.cols, metrics.rows, vertical);
+                occupied.insert(grid_key(x, y));
+                damage_icon(icon);
+                ico->is_dragging = false;
+                icon->z_index = 0;
+                ico->x_pos = x;
+                ico->y_pos = y;
+                begin_icon_settle(icon);
+                break;
+            }
+        }
+        save_icon_positions(desktop);
+    }
+    damage_all();
+    request_refresh();
+}
+
 static void create_root_popup() {
     auto m = mouse();
     std::vector<PopOption> root;
+    {
+        PopOption view;
+        view.text = "View";
+        for (const bool vertical : {true, false}) {
+            PopOption orientation;
+            orientation.text = vertical ? "Vertical" : "Horizontal";
+            orientation.checked = conf_vertical() == vertical;
+            orientation.on_clicked = [vertical]() { arrange_desktop_icons(vertical); };
+            view.submenu.push_back(orientation);
+        }
+        root.push_back(view);
+    }
     {
         PopOption pop;
         pop.text = "Configure Display Settings...";   

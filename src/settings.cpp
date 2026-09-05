@@ -319,6 +319,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "desktop_icons", &settings->desktop_icons);
+    bind(int, "desktop_vertical_override", &settings->desktop_vertical_override);
     bind(std::string, "desktop_folder", &settings->desktop_folder);
     bind(std::string, "overview_layout_type", &settings->overview_layout_type);
     

@@ -8,6 +8,12 @@
 struct PopupUserData : UserData {
     int cid = -1;
     int mid = -1;
+    std::string root_uuid;
+    std::string parent_uuid;
+    std::string owner_row_uuid;
+    std::string child_uuid;
+    std::string requested_row_uuid;
+    bool closing = false;
 };
 
 struct PopOption {
@@ -24,11 +30,14 @@ struct PopOption {
     std::vector<PopOption> submenu;
 
     bool closes_on_click = true;
+    bool checked = false;
 
     std::function<void()> on_clicked = nullptr;
 };
 
 namespace popup {
+    // Coordinates are global logical pixels.
     void open(std::vector<PopOption> root, int x, int y, int cid = -1);
     void close(std::string container_uuid);
+    bool dismiss_outside(int x, int y);
 }
