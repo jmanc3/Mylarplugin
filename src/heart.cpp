@@ -980,7 +980,7 @@ static void paint_initial_clock_time() {
     };
     static std::unordered_map<int, ClockTextures> textures;
 
-    constexpr double delay_ms = 1500;
+    constexpr double delay_ms = 2500;
     constexpr double reveal_ms = 1000;
     constexpr double hold_ms = 3000;
     constexpr double fade_ms = 500;
