@@ -8,6 +8,7 @@
 
 #include "container.h"
 #include "show_desktop.h"
+#include "desktop_gesture.h"
 #include "simple_dbus.h"
 #include "hypriso.h"
 #include "titlebar.h"
@@ -1314,81 +1315,45 @@ static void on_drag_or_resize_cancel_requested() {
 }
 
 static void minimize_overview_combined_gesture() {
-    static float y_offset = 0.0;
-
-    static float slow = .42;
-    
-    static const float minimum_before_activation = 2.0 * slow;
-    static const float maximum_offset = 250.0f * slow;
-    static const float fastest_speed = 22;
-    static bool started_minimize = false;
-
+    static desktop_gesture::State gesture;
     static long start = 0;
-    static long end = 0;
+    static int monitor = -1;
+
+    const auto activate = []() {
+        if (gesture.owner == desktop_gesture::Owner::Overview) {
+            overview::begin_gesture(monitor);
+        } else if (gesture.owner == desktop_gesture::Owner::ShowDesktop) {
+            minimize_gesture_count++;
+            show_desktop::start();
+        }
+    };
 
     // down stroke results in higher y, vice versa
-    make_gesture(3, 6, 0, 1.0, false, [](Bounds s) { 
-        minimize_gesture_count++;
-        // start
-        y_offset += s.y * slow;
-        started_minimize = show_desktop::get_scalar() > .5;
+    make_gesture(3, 6, 0, 1.0, false, [activate](Bounds) {
+        gesture.begin(overview::is_showing(), show_desktop::is_opened(), overview::get_openess(), show_desktop::get_scalar());
         start = get_current_time_in_ms();
+        monitor = hypriso->monitor_from_cursor();
+        activate();
+        // Hyprland delivers the begin event's movement again to update.
         request_refresh();
-    }, [](Bounds s) {
-        if (s.y > fastest_speed)
-            s.y = fastest_speed;
-        if (s.y < -fastest_speed)
-            s.y = -fastest_speed;
-        // update
-        y_offset += s.y * slow;
-        if (y_offset > maximum_offset)
-            y_offset = maximum_offset;
-        if (y_offset < -maximum_offset)
-            y_offset = -maximum_offset;
- 
-        if (y_offset > minimum_before_activation) {
-            if (!show_desktop::is_opened())
-                show_desktop::start();
-            if (!started_minimize) {
-                float scalar = (y_offset - minimum_before_activation) / (maximum_offset - minimum_before_activation);
-                if (scalar <= 0.0)
-                    scalar = 0.0;
-                if (scalar > 1.0)
-                    scalar = 1.0;
-                show_desktop::set_scalar(scalar);
-            }
-        } else if (y_offset < -minimum_before_activation) {
-            if (started_minimize) {
-                float scalar = (std::abs(y_offset) - minimum_before_activation) / (maximum_offset - minimum_before_activation);
-                if (scalar <= 0.0)
-                    scalar = 0.0;
-                if (scalar > 1.0)
-                    scalar = 1.0;
-                show_desktop::set_scalar(1.0 - scalar);
-            }
-        } else {
-            if (started_minimize) {
-                show_desktop::set_scalar(1.0);
-            } else {
-                show_desktop::set_scalar(0.0);
-            }
-        }
+    }, [activate](Bounds s) {
+        const auto previous_owner = gesture.owner;
+        gesture.update(s.y);
+        if (gesture.owner != previous_owner)
+            activate();
+
+        if (gesture.owner == desktop_gesture::Owner::Overview && overview::is_showing())
+            overview::overwrite_openess(gesture.progress());
+        else if (gesture.owner == desktop_gesture::Owner::ShowDesktop && show_desktop::is_opened())
+            show_desktop::set_scalar(gesture.progress());
         request_refresh();
     }, []() {
-        end = get_current_time_in_ms();
-        
-        if (show_desktop::is_opened()) {
-            auto scalar = show_desktop::get_scalar();
-            if (scalar < .01) {
-                show_desktop::stop();
-            } else if (scalar > .99) {
-                show_desktop::set_scalar(1.0);
-            } else {
-                show_desktop::minimize_animate_out(start, end, y_offset, scalar);
-            }
-            request_refresh();
-        }
-        y_offset = 0.0;
+        const auto end = get_current_time_in_ms();
+        if (gesture.owner == desktop_gesture::Owner::Overview)
+            overview::end_gesture(start, end, gesture.y_offset);
+        else if (gesture.owner == desktop_gesture::Owner::ShowDesktop && show_desktop::is_opened())
+            show_desktop::minimize_animate_out(start, end, gesture.y_offset, show_desktop::get_scalar());
+        gesture = {};
         request_refresh();
     });
 }

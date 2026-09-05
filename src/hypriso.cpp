@@ -8723,7 +8723,7 @@ class CExpoGesture : public ITrackpadGesture {
     void begin(const ITrackpadGesture::STrackpadGestureBegin& e) {
         ITrackpadGesture::begin(e);
         if (start_func)
-            start_func({e.swipe->delta.x, e.swipe->delta.x, 0, 0});
+            start_func({e.swipe->delta.x, e.swipe->delta.y, 0, 0});
         //notify(fz("begin {} {} {}", (int) e.direction, {e.swipe->delta.x, e.swipe->delta.x, 0, 0}, e.swipe->timeMs));
     }
     void update(const ITrackpadGesture::STrackpadGestureUpdate& e) {

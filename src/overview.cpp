@@ -7,6 +7,9 @@
 #include "hypriso.h"
 #include "layout_thumbnails.h"
 #include "titlebar.h"
+#include "desktop_gesture.h"
+#include "show_desktop.h"
+#include "spring.h"
 
 #include <linux/input-event-codes.h>
 
@@ -14,6 +17,12 @@ bool screenshotting_wallpaper = false;
 bool running = false;
 float openess = 0.0f;
 float overview_open_time_ms = 700;
+static bool initialized = false;
+static unsigned int lifecycle = 0;
+static unsigned int animation_generation = 0;
+static bool animating = false;
+static float animation_target = 0.0f;
+static int overview_monitor = -1;
 
 struct WindowOption {
     int cid;
@@ -194,8 +203,6 @@ static void possibly_send_cid_to_workspace(int cid) {
 
 void create_overview_for_monitor(int monitor) {
     auto over = actual_root->child(FILL_SPACE, FILL_SPACE);
-    //openess = 1.0;
-    spring_animate(&openess, 1.0, {overview_open_time_ms / 2000.0, 0.97}, over->lifetime);
     over->custom_type = (int) TYPE::OVERVIEW;
     over->when_drag_end_is_click = false;
     over->pre_layout = [monitor](Container *root, Container *c, const Bounds &b) {
@@ -287,31 +294,64 @@ bool screenshots(int monitor) {
     return ret;
 }
 
-void overview::open(int monitor) {
+static void set_input_bypass(bool bypass) {
+    if (hypriso->input_bypass_whitelist == bypass)
+        return;
+    hypriso->input_bypass_whitelist = bypass;
+    hypriso->simulateMouseMovement();
+}
+
+static void hold_overview_open() {
     drag_workspace_switcher::open();
-    drag_workspace_switcher::force_hold_open(true);
-    
-    later_immediate([monitor](Timer *) {
+    // drag_workspace_switcher::force_hold_open(true);
+    set_input_bypass(false);
+}
+
+static bool initialize_overview(int monitor) {
+    if (running) {
+        if (initialized)
+            hold_overview_open();
+        return true;
+    }
+    if (show_desktop::is_opened())
+        return false;
+
+    // Reserve ownership before deferred rendering setup can run.
+    running = true;
+    overview_monitor = monitor;
+    const auto generation = ++lifecycle;
+    later_immediate([monitor, generation](Timer *) {
+        if (!running || generation != lifecycle)
+            return;
         screenshots(monitor);
         hypriso->whitelist_on = true;
-        running = true;
         for (auto m : actual_monitors) {
             auto mid = *datum<int>(m, "cid");
             create_overview_for_monitor(mid);
         }
+        initialized = true;
+        hold_overview_open();
+        request_refresh();
     });
 
-    later(1000.0f / hypriso->fps(monitor), [monitor](Timer *t) {
-        t->keep_running = screenshots(monitor);
+    later(1000.0f / hypriso->fps(monitor), [monitor, generation](Timer *t) {
+        t->keep_running = running && generation == lifecycle;
+        if (t->keep_running && initialized)
+            t->keep_running = screenshots(monitor);
     });
+    return true;
 }
 
 void overview_actual_close() {
-    hypriso->whitelist_on = false;
-    hypriso->input_bypass_whitelist = false;
-    hypriso->simulateMouseMovement();
+    const bool was_initialized = initialized;
+    lifecycle++;
+    animation_generation++;
+    animating = false;
+    initialized = false;
     openess = 0.0;
     running = false;
+    drag_workspace_switcher::close();
+    window_options.clear();
 
     auto m = actual_root;
     for (int i = m->children.size() - 1; i >= 0; i--) {
@@ -321,33 +361,93 @@ void overview_actual_close() {
             m->children.erase(m->children.begin() + i);
         }
     }
+    if (was_initialized) {
+        hypriso->whitelist_on = false;
+        hypriso->input_bypass_whitelist = false;
+        hypriso->simulateMouseMovement();
+    }
+    damage_all();
     request_refresh();
+}
+
+static void animate_overview(float target, float velocity, SpringParams params, bool gesture_release = false) {
+    const auto generation = ++animation_generation;
+    animating = false;
+    if (openess == target) {
+        if (target == 0.0f)
+            overview_actual_close();
+        return;
+    }
+
+    animating = true;
+    animation_target = target;
+    const auto initial_progress = openess;
+    later((1000.0f / hypriso->fps(overview_monitor)) * .8,
+          [generation, initial_progress, target, velocity, params, gesture_release, start = 0L](Timer *t) mutable {
+        t->keep_running = running && generation == animation_generation;
+        if (!t->keep_running || !initialized)
+            return;
+        const auto now = get_current_time_in_ms();
+        if (start == 0)
+            start = now;
+        const auto state = springEvaluate((now - start) / 1000.0, initial_progress, target, velocity, params);
+        const bool finished = gesture_release
+            ? (target == 0.0f ? state.value <= .001 : state.value >= .999)
+            : (std::abs(state.value - target) <= .001 && std::abs(state.velocity) <= .001);
+        openess = finished ? target : static_cast<float>(state.value);
+        if (target == 0.0f && openess < .3f)
+            set_input_bypass(true);
+        if (finished) {
+            animating = false;
+            t->keep_running = false;
+            if (target == 0.0f)
+                overview_actual_close();
+        }
+        request_refresh();
+    });
+}
+
+void overview::open(int monitor) {
+    if (!initialize_overview(monitor))
+        return;
+    if (!animating || animation_target != 1.0f)
+        animate_overview(1.0f, 0.0f, {overview_open_time_ms / 2000.0, .97});
 }
 
 void overview::close(bool focus) {
     drag_workspace_switcher::close();
-    auto m = actual_root;
-    for (int i = m->children.size() - 1; i >= 0; i--) {
-        auto c = m->children[i];
-        if (c->custom_type == (int) TYPE::OVERVIEW) {
-            if (!is_being_animating(&openess) || !is_being_animating_to(&openess, 0.0))
-                spring_animate(&openess, 0.0, {overview_open_time_ms / 2000.0, 1.0}, c->lifetime, [](bool) {
-                    overview_actual_close();
-                }, [](float x) {
-                    if (x < .3) {
-                        bool sim = !hypriso->input_bypass_whitelist;
-                        hypriso->input_bypass_whitelist = true;
-                        if (sim)
-                            hypriso->simulateMouseMovement();
-                    }
-                    return x;
-                });
-        }
+    if (!running || (animating && animation_target == 0.0f))
+        return;
+    if (initialized)
+        set_input_bypass(true);
+    animate_overview(0.0f, 0.0f, {overview_open_time_ms / 2000.0, 1.0});
+}
+
+void overview::begin_gesture(int monitor) {
+    if (!initialize_overview(monitor))
+        return;
+    animation_generation++;
+    animating = false;
+    openess = std::clamp(openess, 0.0f, 1.0f);
+    request_refresh();
+}
+
+void overview::end_gesture(long start, long end, float y_offset) {
+    if (!running)
+        return;
+    if (openess < .01f) {
+        overview_actual_close();
+    } else if (openess > .99f) {
+        overwrite_openess(1.0f);
+    } else {
+        const auto release = desktop_gesture::release(start, end, -y_offset, openess);
+        animate_overview(release.target, release.velocity, {.3, 1.0}, true);
     }
 }
 
 void overview::instant_close() {
-    overview::close();
+    if (running)
+        overview_actual_close();
 }
 
 void overview::click(int id, int button, int state, float x, float y) {
@@ -355,7 +455,14 @@ void overview::click(int id, int button, int state, float x, float y) {
 }
 
 void overview::overwrite_openess(float a) {
-
+    if (!running)
+        return;
+    animation_generation++;
+    animating = false;
+    openess = std::clamp(a, 0.0f, 1.0f);
+    if (initialized)
+        set_input_bypass(false);
+    request_refresh();
 }
 
 void overview::fake_paint(int id) {
@@ -376,4 +483,3 @@ bool overview::is_showing() {
 float overview::get_openess() {
     return openess;
 }
-

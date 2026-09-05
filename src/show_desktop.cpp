@@ -7,19 +7,22 @@
 #include "overview.h"
 #include "snap_assist.h"
 #include "spring.h"
+#include "desktop_gesture.h"
 
 static bool is_open = false;
+static bool opening = false;
+static unsigned int lifecycle = 0;
 
 bool show_desktop::is_opened() {
-    return is_open;
+    return is_open || opening;
 }
 
 void show_desktop::start() {
-    if (is_open || overview::is_showing() || snap_assist::is_showing())
+    if (is_opened() || overview::is_showing() || snap_assist::is_showing())
         return;
     bool any_client_visible = false;
     for (auto c : actual_root->children) {
-        if (c->custom_type != (int) TYPE::CLIENT) {
+        if (c->custom_type == (int) TYPE::CLIENT) {
             auto cid = *datum<int>(c, "cid");
             if (!hypriso->is_hidden(cid) && !is_slept(cid))
                 any_client_visible = true;
@@ -28,7 +31,11 @@ void show_desktop::start() {
     if (!any_client_visible)
         return;
     
-    later_immediate([](Timer *) {
+    opening = true;
+    const auto generation = ++lifecycle;
+    later_immediate([generation](Timer *) {
+        if (!opening || generation != lifecycle)
+            return;
         for (auto c : actual_root->children) {
             if (c->custom_type != (int) TYPE::CLIENT)
                 continue;
@@ -38,14 +45,18 @@ void show_desktop::start() {
         }
  
         is_open = true;
+        opening = false;
         hypriso->whitelist_on = true;
         damage_all();
-        later(20, [](Timer *) { hypriso->simulateMouseMovement(); });
+        later(20, [generation](Timer *) {
+            if (is_open && generation == lifecycle)
+                hypriso->simulateMouseMovement();
+        });
     });
 
-    later((1000.0f / hypriso->fps(current_rendering_monitor())) * .5, [](Timer *t) {
-        t->keep_running = is_open;
-        if (!is_open)
+    later((1000.0f / hypriso->fps(current_rendering_monitor())) * .5, [generation](Timer *t) {
+        t->keep_running = is_opened() && generation == lifecycle;
+        if (!t->keep_running || !is_open)
             return;
         if (show_desktop::get_scalar() != 1.0) {
             for (auto c : actual_root->children) {
@@ -73,9 +84,12 @@ static void actual_stop() {
 }
 
 void show_desktop::stop() {
+    minimize_gesture_count++;
+    lifecycle++;
+    opening = false;
+    show_desktop::set_scalar(0);
     if (!is_open)
         return;
-    show_desktop::set_scalar(0);
 
     damage_all();
     actual_stop();
@@ -92,7 +106,7 @@ float show_desktop::get_scalar() {
 }
 
 void show_desktop::render() {
-    if (!show_desktop::is_opened() || show_desktop::get_scalar() == 1.0)
+    if (!is_open || show_desktop::get_scalar() == 1.0)
         return;
     
     auto current_monitor = current_rendering_monitor();
@@ -133,7 +147,7 @@ int minimize_gesture_count = 0;
 static void actual_spring_anim(long end, float initialVelocity, float scalar_at_start, float target, int start_count) {
     later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target, start_count](Timer *t) {
         t->keep_running = true;
-        if (minimize_gesture_count != start_count) {
+        if (minimize_gesture_count != start_count || !show_desktop::is_opened()) {
             request_refresh();
             t->keep_running = false;
             return;
@@ -164,45 +178,36 @@ static void actual_spring_anim(long end, float initialVelocity, float scalar_at_
 }
 
 void show_desktop::minimize_animate_out(long start, long end, float y_offset, float scalar_at_start) {
-    //constexpr static float slow = .42;
-    constexpr static float slow = 1.0;
-    
-    const auto gestureDuration = std::max(end - start, 1L) / 1000.0;
-    const auto gestureVelocity = std::abs(y_offset) / (250.0 * .42) / gestureDuration;
-    constexpr auto flickVelocity = 0.6 * slow;
-    const bool isFlick = gestureVelocity >= flickVelocity;
-
-    // Flicks can complete with less travel: 0.15 to open, 0.85 to close.
-    // Slow releases still require crossing the midpoint.
-    double target;
-    if (isFlick && y_offset > 0)
-        target = scalar_at_start >= 0.01f ? 1.0 : 0.0;
-    else if (isFlick && y_offset < 0)
-        target = scalar_at_start <= 0.99f ? 0.0 : 1.0;
-    else
-        target = scalar_at_start < 0.5f ? 0.0 : 1.0;
-
-    auto initialVelocity = target < scalar_at_start ? -gestureVelocity : gestureVelocity;
-    initialVelocity *= .8;
-    float start_count = minimize_gesture_count;
-
-    actual_spring_anim(end, initialVelocity, scalar_at_start, target, start_count);
+    if (!is_opened())
+        return;
+    if (scalar_at_start < .01f) {
+        stop();
+        return;
+    }
+    minimize_gesture_count++;
+    if (scalar_at_start > .99f) {
+        set_scalar(1.0f);
+        return;
+    }
+    const auto release = desktop_gesture::release(start, end, y_offset, scalar_at_start);
+    actual_spring_anim(end, release.velocity, scalar_at_start, release.target, minimize_gesture_count);
 }
 
 void show_desktop::start_animation() {
-    if (show_desktop::is_opened()) {
-        minimize_gesture_count++;
-        actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 1.0, minimize_gesture_count);
-    } else {
-        show_desktop::start();
-        later(10, [](Timer *) {
-            minimize_gesture_count++;
-            actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 1.0, minimize_gesture_count);
-        });
-    }
+    start();
+    if (!is_opened())
+        return;
+    minimize_gesture_count++;
+    actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 1.0, minimize_gesture_count);
 }
 
 void show_desktop::stop_animation() {
+    if (!is_opened())
+        return;
+    if (opening) {
+        stop();
+        return;
+    }
     minimize_gesture_count++;
     actual_spring_anim(get_current_time_in_ms(), 0.0, get_scalar(), 0.0, minimize_gesture_count);
 }

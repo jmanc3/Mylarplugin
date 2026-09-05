@@ -13,6 +13,7 @@
 
 static bool switcher_showing = false;
 static bool hold_open = false;
+static unsigned int switcher_generation = 0;
 
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
@@ -61,7 +62,6 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
 }
 
 void drag_switcher_actual_open() {
-    hold_open = false;
     auto c = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
     *datum<float>(c, "openess") = 0.0;
     auto peaking_amount = datum<float>(c, "peaking_amount");
@@ -403,8 +403,12 @@ void drag_workspace_switcher::open() {
         return;
     }
     switcher_showing = true;
+    hold_open = false;
+    const auto generation = ++switcher_generation;
 
-    later_immediate([](Timer *) {
+    later_immediate([generation](Timer *) {
+        if (!switcher_showing || generation != switcher_generation)
+            return;
         auto mon = target_monitor();
         auto ids = hypriso->get_workspace_ids(mon);
         for (auto id : ids)
@@ -422,7 +426,11 @@ void drag_workspace_switcher::open() {
     auto monitor = target_monitor();
     auto fps = hypriso->fps(monitor);
     
-    later(1000.0f / fps, [](Timer *t) {
+    later(1000.0f / fps, [generation](Timer *t) {
+        if (!switcher_showing || generation != switcher_generation) {
+            t->keep_running = false;
+            return;
+        }
         auto monitor = target_monitor();
         t->keep_running = true;
         bool found = false;
@@ -446,7 +454,11 @@ void drag_workspace_switcher::open() {
         }
         overview::fake_paint(-1);
     });
-    later(1000.0f / 30.0f, [](Timer *t) {
+    later(1000.0f / 30.0f, [generation](Timer *t) {
+        if (!switcher_showing || generation != switcher_generation) {
+            t->keep_running = false;
+            return;
+        }
         auto monitor = target_monitor();
         t->keep_running = true;
         bool found = false;
@@ -515,6 +527,7 @@ void drag_workspace_switcher::close_visually() {
 }
 
 void drag_workspace_switcher::close() {
+    switcher_generation++;
     hold_open = false;
     actual_drag_workspace_switcher_close();
     return;

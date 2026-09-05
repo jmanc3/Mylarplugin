@@ -10,6 +10,8 @@ namespace overview {
     void click(int id, int button, int state, float x, float y);
 
     void overwrite_openess(float a);
+    void begin_gesture(int monitor);
+    void end_gesture(long start, long end, float y_offset);
 
     // When screenshoting a workspace, we need to fake paint the final output because the actual overview has too much state
     // in animating in and out and draggging that we don't want to deal with recreating every time we simply want a screenshot
