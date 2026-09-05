@@ -1945,47 +1945,53 @@ static void fill_applications_container(Container *root) {
     active_option = 0;
     
     auto field = make_field(padded, false, "", [](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
-           int mods, bool is_text, std::string text, std::string total) {
-        
-            field_text = total;
-            if (pressed) {
-                auto dock = (Dock *) root->user_data;
-                if (sym == XKB_KEY_Escape) {
-                    windowing::close_window(dock->applications->raw_window);
-                    active_option = 0;
-                } else if (sym == XKB_KEY_Return) {
-                    if (auto o = container_by_name("option_scroll", root)) {
-                        bool none_matched = true;
-                        for (auto ch: o->children) {
-                            if (ch->exists) {
-                                auto s = (Script *) ch->user_data;
-                                if (s->selected) {
-                                    launch_command(s->full_path);
-                                    active_option = 0;
-                                    none_matched = false;
-                                }
+                                                  int mods, bool is_text, std::string text, std::string total) {
+        field_text = total;
+        if (pressed) {
+            auto dock = (Dock *) root->user_data;
+            if (sym == XKB_KEY_Escape) {
+                windowing::close_window(dock->applications->raw_window);
+                active_option = 0;
+            } else if (sym == XKB_KEY_Return) {
+                if (auto o_ = container_by_name("scroll_content", root)) {
+                    auto o = ((ScrollContainer *) o_)->content;
+                    bool none_matched = true;
+                    for (auto ch: o->children) {
+                        if (ch->exists) {
+                            auto s = (Script *) ch->user_data;
+                            if (s->selected) {
+                                launch_command(s->full_path);
+                                active_option = 0;
+                                none_matched = false;
                             }
                         }
-                        if (none_matched) {
-                            if (!total.empty())
-                                launch_command(total);
-                        }
                     }
-                    windowing::close_window(dock->applications->raw_window);
-                } else if (sym == XKB_KEY_Up) {
-                    active_option--;
-                } else if (sym == XKB_KEY_Down) {
-                    active_option++;
-                } else if (is_text) {
-                    active_option = 0;
+                    if (none_matched) {
+                        if (!total.empty())
+                            launch_command(total);
+                    }
                 }
+                windowing::close_window(dock->applications->raw_window);
+            } else if (sym == XKB_KEY_Up) {
+                active_option--;
+            } else if (sym == XKB_KEY_Down) {
+                active_option++;
+            } else if (is_text) {
+                active_option = 0;
             }
-        });
+        }
+   });
 
-    auto option_scroll = padded->child(FILL_SPACE, FILL_SPACE);
-    option_scroll->name = "option_scroll";
-    option_scroll->pre_layout = [](Container *root, Container *c,
-                                   const Bounds &b) {
+    auto scroll = make_newscrollpane_as_child(padded, ScrollPaneSettings(1.0), [](Container *root) {
+        auto dock = ((Dock *) root->user_data);
+        return DrawContext({dock->applications->raw_window->cr, dock->applications->raw_window->dpi, [dock]() {
+            windowing::redraw(dock->applications->raw_window);
+        }});
+    });
+    auto scroll_content = scroll->content;
+    scroll->name = "scroll_content";
+    scroll->pre_layout = [](Container *root, Container *c_, const Bounds &b) {
+        auto c = ((ScrollContainer *) c_)->content;
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->applications->raw_window->dpi;
         c->spacing = 5 * dpi;
@@ -2015,10 +2021,10 @@ static void fill_applications_container(Container *root) {
                 index_of_alive_child++;
             }
         }
-    };
+    };    
 
     for (auto s: scripts) {
-        auto o = option_scroll->child(FILL_SPACE, FILL_SPACE);
+        auto o = scroll_content->child(FILL_SPACE, FILL_SPACE);
         o->user_data = s;
         o->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
@@ -2839,7 +2845,7 @@ static void fill_root(Container *root) {
             dock->volume->root->user_data = dock;
             dock->volume->root->wanted_bounds.w = FILL_SPACE;
             dock->volume->root->wanted_bounds.h = FILL_SPACE;
-            auto scroll = make_newscrollpane_as_child(dock->volume->root, ScrollPaneSettings(1.0), [](Container *root) {
+            auto scroll = make_newscrollpane_as_child(dock->volume->root, ScrollPaneSettings(dpi), [](Container *root) {
                 auto dock = ((Dock *) root->user_data);
                 return DrawContext({dock->volume->raw_window->cr, dock->volume->raw_window->dpi, [dock]() {
                     windowing::redraw(dock->volume->raw_window);

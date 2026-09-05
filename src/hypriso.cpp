@@ -2486,6 +2486,12 @@ void hook_onSetHidden(void* thisptr, bool state) {
                 if (!hw->min_fb)
                     hw->min_fb = g_pHyprRenderer->createFB();
                 screenshot_window_with_decos(hw->min_fb, hw->w);
+                glActiveTexture(GL_TEXTURE0);
+                auto tex = hw->min_fb->getTexture();
+                tex->bind();
+                glGenerateMipmap(GL_TEXTURE_2D);
+                tex->unbind();
+ 
                 hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
                 hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
                 hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
