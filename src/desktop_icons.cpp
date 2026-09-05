@@ -347,11 +347,16 @@ struct IcoContainerData : UserData {
     float settle_from_x = 0;
     float settle_from_y = 0;
     long settle_start_ms = 0;
+    TextureInfo icon_shadow;
+    TextureInfo label_shadow;
+    int icon_shadow_source = -1;
     
     ~IcoContainerData() {
         //notify(fz("{} was deleted", name));
         auto text_img = *datum<TextureInfo>(c, "label");
         free_text_texture(text_img.id);
+        free_text_texture(icon_shadow.id);
+        free_text_texture(label_shadow.id);
     }
 };
 
@@ -892,6 +897,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
 
+            auto* ico = (IcoContainerData*)(c->user_data);
             float overview_alpha = 1.0 - overview::get_openess();
 
             {
@@ -915,13 +921,21 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
                 }
 
                 if (info.id != -1) {
-                    draw_texture(info, 
-                        c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5, 
-                        c->real_bounds.y + 2 * s, overview_alpha);
+                    if (ico->icon_shadow_source != info.id) {
+                        free_text_texture(ico->icon_shadow.id);
+                        ico->icon_shadow = generate_dropshadow_texture(info.id, 4 * s);
+                        ico->icon_shadow_source = info.id;
+                    }
+                    const int x = c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5;
+                    const int y = c->real_bounds.y + 2 * s;
+                    if (ico->icon_shadow.id != -1) {
+                        const int padding = (ico->icon_shadow.w - info.w) / 2;
+                        draw_texture(ico->icon_shadow, x - padding, y - padding + 2 * s, overview_alpha * 0.6f);
+                    }
+                    draw_texture(info, x, y, overview_alpha);
                 }
             }
             
-            auto* ico = (IcoContainerData*)(c->user_data);
             auto border_bounds = c->real_bounds;
             auto border_thickness = std::round(1 * s);
             border_bounds.shrink(border_thickness);
@@ -946,10 +960,16 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             if (text_img.id == -1) {
                 text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, two_line_height, 1);
                 *datum<TextureInfo>(c, "label") = text_img;
+                free_text_texture(ico->label_shadow.id);
+                ico->label_shadow = generate_dropshadow_texture(text_img.id, 2 * s);
             }
-            draw_texture(text_img, 
-                c->real_bounds.x,
-                c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s, overview_alpha);
+            const int text_x = c->real_bounds.x;
+            const int text_y = c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s;
+            if (ico->label_shadow.id != -1) {
+                const int padding = (ico->label_shadow.w - text_img.w) / 2;
+                draw_texture(ico->label_shadow, text_x - padding, text_y - padding + s, overview_alpha * 0.9f);
+            }
+            draw_texture(text_img, text_x, text_y, overview_alpha);
         }
     };
 
