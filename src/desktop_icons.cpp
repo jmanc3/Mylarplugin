@@ -1208,7 +1208,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     c->when_paint = [](Container* actual_root, Container* c) {
         // Overview paints icons over its wallpaper cards with a per-frame fade.
         // Wallpaper captures must stay free of icons throughout the transition.
-        if (overview::is_showing())
+        if (overview::suppresses_desktop_icons())
             return;
         auto root = get_rendering_root();
         if (!root)
@@ -1479,7 +1479,7 @@ void desktop_icons::start() {
             delete_selected_desktop_icons(c);
     };
     c->after_paint = [](Container* actual_root, Container* c) {
-        if (overview::is_showing())
+        if (overview::suppresses_desktop_icons())
             return;
         
         auto root = get_rendering_root();

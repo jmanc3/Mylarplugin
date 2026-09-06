@@ -974,6 +974,10 @@ static void paint_initial_clock_time() {
     using Clock = std::chrono::steady_clock;
     if (!hypriso->session_active())
         return;
+    // Start the clock timer only after the monitor's startup zoom has finished.
+    if (hypriso->zoom_progress(current_rendering_monitor()) < 1.F)
+        return;
+
     static bool first_pass = true;
     defer(first_pass = false);
     static const auto start_time = Clock::now();
@@ -988,7 +992,7 @@ static void paint_initial_clock_time() {
     };
     static std::unordered_map<int, ClockTextures> textures;
 
-    constexpr double delay_ms = 300;
+    constexpr double delay_ms = 600;
     constexpr double reveal_ms = 1000;
     constexpr double hold_ms = 3000;
     constexpr double fade_ms = 500;

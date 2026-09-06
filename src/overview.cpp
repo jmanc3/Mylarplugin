@@ -20,6 +20,7 @@ bool running = false;
 float openess = 0.0f;
 float overview_open_time_ms = 700;
 static bool initialized = false;
+static bool capturing_overview = false;
 static unsigned int lifecycle = 0;
 static unsigned int animation_generation = 0;
 static bool animating = false;
@@ -829,6 +830,9 @@ void create_overview_for_monitor(int monitor) {
 static void screenshots() {
     if (!scene)
         return;
+    const bool previous_capture = capturing_overview;
+    capturing_overview = true;
+    defer(capturing_overview = previous_capture);
     const auto now = get_current_time_in_ms();
     std::map<int, int> active_workspaces;
     std::map<int, int> priority_counts;
@@ -1129,6 +1133,12 @@ void overview::should_force_paint(bool state) {
 
 bool overview::is_showing() {
     return running;
+}
+
+bool overview::suppresses_desktop_icons() {
+    // Keep the live desktop visible until deferred overview setup completes.
+    // Captures must still exclude icons so the cards can fade them separately.
+    return running && (initialized || capturing_overview);
 }
 
 bool overview::is_closing() {

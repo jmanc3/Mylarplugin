@@ -23,6 +23,7 @@ namespace overview {
     void should_force_paint(bool state);
 
     bool is_showing();
+    bool suppresses_desktop_icons();
     bool is_closing();
 
     float get_openess();
