@@ -8,6 +8,7 @@
 #include "layout_thumbnails.h"
 #include "titlebar.h"
 #include "desktop_gesture.h"
+#include "desktop_icons.h"
 #include "show_desktop.h"
 #include "spring.h"
 
@@ -15,7 +16,6 @@
 #include <map>
 #include <memory>
 
-bool screenshotting_wallpaper = false;
 bool running = false;
 float openess = 0.0f;
 float overview_open_time_ms = 700;
@@ -465,6 +465,13 @@ static void paint_monitor(int monitor_id) {
         auto b = render_bounds(wallpaper, monitor_id);
         render_drop_shadow(monitor_id, 1, {.1, .1, .1, progress}, 14 * s * progress, 2.0, b, 50 * s);
         hypriso->draw_wallpaper(monitor_id, b, 14 * s * progress);
+        // Fade the live icon layer every frame instead of baking its opacity
+        // into the wallpaper capture, which refreshes much less frequently.
+        if (!snapshot) {
+            hypriso->clipbox = render_bounds(visible, monitor_id);
+            desktop_icons::paint_overview(monitor_id, b, 1.0f - progress);
+            hypriso->clipbox = render_bounds(mb, monitor_id);
+        }
         b.shrink(2);
         border(b, {1, 1, 1, .05}, 1, 0, 14 * s * progress);
         if (!snapshot && !workspace.retiring)
@@ -742,7 +749,6 @@ static void screenshots() {
         captured = true;
     }
     std::erase_if(scene->window_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
-    screenshotting_wallpaper = true;
     for (auto m : actual_monitors) {
         const int mid = *datum<int>(m, "cid");
         const auto previous = scene->wallpaper_captures.find(mid);
@@ -752,7 +758,6 @@ static void screenshots() {
         scene->wallpaper_captures[mid] = get_current_time_in_ms();
         captured = true;
     }
-    screenshotting_wallpaper = false;
     std::erase_if(scene->wallpaper_captures, [&active_workspaces](const auto &entry) { return !active_workspaces.contains(entry.first); });
     if (captured)
         damage_all();
@@ -788,7 +793,7 @@ static bool initialize_overview(int monitor) {
     later_immediate([monitor, generation](Timer *) {
         if (!running || generation != lifecycle)
             return;
-q        const bool taking_desktop = scene->taking_desktop;
+        const bool taking_desktop = scene->taking_desktop;
         const auto scalar = std::clamp(show_desktop::get_scalar(), 0.0f, 1.0f);
         if (taking_desktop) {
             // Cancel desktop rendering and capture timers before taking any
@@ -930,7 +935,6 @@ void overview::open(int monitor) {
 }
 
 void overview::close(bool focus) {
-    drag_workspace_switcher::close();
     if (!running || (animating && animation_target == 0.0f))
         return;
     if (initialized)

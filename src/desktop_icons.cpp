@@ -994,6 +994,117 @@ static void update_desktop_selection(Container* desktop, const Bounds& selection
     }
 }
 
+static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, float overview_alpha) {
+    auto root = get_rendering_root();
+    if (!root)
+        return;
+    const auto s = scale(monitor);
+    renderfix
+    const auto monitor_bounds = bounds_monitor(monitor);
+    const double factor = bounds.w / (monitor_bounds.w * s);
+    auto transform = [&](Bounds b) {
+        return Bounds(bounds.x + b.x * factor, bounds.y + b.y * factor, b.w * factor, b.h * factor);
+    };
+    auto paint_texture = [&](TextureInfo info, double x, double y, float alpha) {
+        draw_texture(info, transform(Bounds(x, y, info.w, info.h)), alpha);
+    };
+
+    DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
+
+    auto* ico = (IcoContainerData*)(c->user_data);
+    if (ico->texture_scale != s) {
+        ico->clear_textures();
+        ico->texture_scale = s;
+        for (const auto *key : {"folder", "text-plain"}) {
+            const auto path = one_shot_icon(conf_icon_size() * s, {key});
+            *datum<TextureInfo>(c, key) = gen_texture(path, conf_icon_size() * s);
+        }
+    }
+
+    {
+        TextureInfo info;
+
+        if (!*datum<bool>(c, "icon_attempted")) {
+            *datum<bool>(c, "icon_attempted") = true;
+            auto path = one_shot_icon(conf_icon_size() * s, item->icons_for_mime);
+            auto generated = gen_texture(path, conf_icon_size() * s);
+            *datum<TextureInfo>(c, "icon") = generated;
+        }
+
+        info = *datum<TextureInfo>(c, "icon");
+
+        if (info.id == -1) {
+            if (item->is_folder) {
+                info = *datum<TextureInfo>(c, "folder");
+            } else {
+                info = *datum<TextureInfo>(c, "text-plain");
+            }
+        }
+
+        if (info.id != -1) {
+            if (ico->icon_shadow_source != info.id) {
+                free_text_texture(ico->icon_shadow.id);
+                ico->icon_shadow = generate_dropshadow_texture(info.id, 8 * s, .5);
+                ico->icon_shadow_source = info.id;
+            }
+            const int x = c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5;
+            const int y = c->real_bounds.y + 2 * s;
+            if (ico->icon_shadow.id != -1) {
+                const int padding = (ico->icon_shadow.w - info.w) / 2;
+                paint_texture(ico->icon_shadow, x - padding, y - padding + 2 * s, overview_alpha * 0.6f);
+            }
+            paint_texture(info, x, y, overview_alpha);
+        }
+    }
+
+    auto border_bounds = c->real_bounds;
+    auto border_thickness = std::round(1 * s);
+    border_bounds.shrink(border_thickness);
+    auto sel_color = color_sel_color();
+    auto sel_border_color = color_sel_border_color();
+    sel_color.a *= overview_alpha;
+    sel_border_color.a *= overview_alpha;
+
+    if (c->state.mouse_pressing) {
+        rect(transform(c->real_bounds), sel_color);
+        border(transform(border_bounds), sel_border_color, border_thickness * factor);
+    } else if (c->state.mouse_hovering) {
+        rect(transform(c->real_bounds), sel_color);
+        border(transform(border_bounds), sel_border_color, border_thickness * factor);
+    } else if (ico->is_selected) {
+        rect(transform(c->real_bounds), sel_color);
+        border(transform(border_bounds), sel_border_color, border_thickness * factor);
+    }
+
+
+    TextureInfo text_img = *datum<TextureInfo>(c, "label");
+    if (text_img.id == -1) {
+        text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, std::ceil(two_line_height * s), 1);
+        *datum<TextureInfo>(c, "label") = text_img;
+        free_text_texture(ico->label_shadow.id);
+        ico->label_shadow = generate_dropshadow_texture(text_img.id, 3 * s, 2.0);
+    }
+    const int text_x = c->real_bounds.x;
+    const int text_y = c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s;
+    if (ico->label_shadow.id != -1) {
+        const int padding = (ico->label_shadow.w - text_img.w) / 2;
+        paint_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.9f);
+    }
+    paint_texture(text_img, text_x, text_y, overview_alpha);
+}
+
+void desktop_icons::paint_overview(int monitor, const Bounds &bounds, float alpha) {
+    alpha = std::clamp(alpha, 0.0f, 1.0f);
+    if (alpha == 0.0f)
+        return;
+    for (auto desktop : actual_root->children) {
+        if (desktop->custom_type != (int) TYPE::DESKTOP_ICONS || *datum<int>(desktop, "monitor") != monitor)
+            continue;
+        for (auto icon : desktop->children)
+            paint_desktop_icon(icon, monitor, bounds, alpha);
+    }
+}
+
 void create_desktop_icon(Container *parent, DesktopItem *item) {
     auto c = parent->child(FILL_SPACE, FILL_SPACE);
     c->custom_type = (int) TYPE::DESKTOP_ICON;
@@ -1095,98 +1206,18 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     };
    
     c->when_paint = [](Container* actual_root, Container* c) {
-        if (!screenshotting_wallpaper && overview::is_showing())
+        // Overview paints icons over its wallpaper cards with a per-frame fade.
+        // Wallpaper captures must stay free of icons throughout the transition.
+        if (overview::is_showing())
             return;
-        
         auto root = get_rendering_root();
+        if (!root)
+            return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (stage == (int)STAGE::RENDER_POST_WALLPAPER) {
-            renderfix
-            
-            DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
-
-            auto* ico = (IcoContainerData*)(c->user_data);
-            if (ico->texture_scale != s) {
-                ico->clear_textures();
-                ico->texture_scale = s;
-                for (const auto *key : {"folder", "text-plain"}) {
-                    const auto path = one_shot_icon(conf_icon_size() * s, {key});
-                    *datum<TextureInfo>(c, key) = gen_texture(path, conf_icon_size() * s);
-                }
-            }
-            float overview_alpha = 1.0 - overview::get_openess();
-
-            {
-                TextureInfo info;
-
-                if (!*datum<bool>(c, "icon_attempted")) {
-                    *datum<bool>(c, "icon_attempted") = true;
-                    auto path = one_shot_icon(conf_icon_size() * s, item->icons_for_mime);
-                    auto generated = gen_texture(path, conf_icon_size() * s);
-                    *datum<TextureInfo>(c, "icon") = generated;
-                }
-
-                info = *datum<TextureInfo>(c, "icon");
-
-                if (info.id == -1) {
-                    if (item->is_folder) {
-                        info = *datum<TextureInfo>(c, "folder");
-                    } else {
-                        info = *datum<TextureInfo>(c, "text-plain");
-                    }
-                }
-
-                if (info.id != -1) {
-                    if (ico->icon_shadow_source != info.id) {
-                        free_text_texture(ico->icon_shadow.id);
-                        ico->icon_shadow = generate_dropshadow_texture(info.id, 8 * s, .5);
-                        ico->icon_shadow_source = info.id;
-                    }
-                    const int x = c->real_bounds.x + c->real_bounds.w * .5 - info.w * .5;
-                    const int y = c->real_bounds.y + 2 * s;
-                    if (ico->icon_shadow.id != -1) {
-                        const int padding = (ico->icon_shadow.w - info.w) / 2;
-                        draw_texture(ico->icon_shadow, x - padding, y - padding + 2 * s, overview_alpha * 0.6f);
-                    }
-                    draw_texture(info, x, y, overview_alpha);
-                }
-            }
-            
-            auto border_bounds = c->real_bounds;
-            auto border_thickness = std::round(1 * s);
-            border_bounds.shrink(border_thickness);
-            auto sel_color = color_sel_color();
-            auto sel_border_color = color_sel_border_color();
-            sel_color.a *= overview_alpha;
-            sel_border_color.a *= overview_alpha;
-            
-            if (c->state.mouse_pressing) {
-                rect(c->real_bounds, sel_color);
-                border(border_bounds, sel_border_color, border_thickness);
-            } else if (c->state.mouse_hovering) {
-                rect(c->real_bounds, sel_color);
-                border(border_bounds, sel_border_color, border_thickness);
-            } else if (ico->is_selected) {
-                rect(c->real_bounds, sel_color);
-                border(border_bounds, sel_border_color, border_thickness);
-            }
-            
-            
-            TextureInfo text_img = *datum<TextureInfo>(c, "label");
-            if (text_img.id == -1) {
-                text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, std::ceil(two_line_height * s), 1);
-                *datum<TextureInfo>(c, "label") = text_img;
-                free_text_texture(ico->label_shadow.id);
-                ico->label_shadow = generate_dropshadow_texture(text_img.id, 3 * s, 2.0);
-            }
-            const int text_x = c->real_bounds.x;
-            const int text_y = c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s;
-            if (ico->label_shadow.id != -1) {
-                const int padding = (ico->label_shadow.w - text_img.w) / 2;
-                draw_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.9f);
-            }
-            draw_texture(text_img, text_x, text_y, overview_alpha);
-        }
+        if (stage != (int) STAGE::RENDER_POST_WALLPAPER || *datum<int>(c->parent, "monitor") != rid)
+            return;
+        const auto mb = bounds_monitor(rid);
+        paint_desktop_icon(c, rid, Bounds(0, 0, mb.w * s, mb.h * s), 1.0f);
     };
 
 }
@@ -1448,7 +1479,7 @@ void desktop_icons::start() {
             delete_selected_desktop_icons(c);
     };
     c->after_paint = [](Container* actual_root, Container* c) {
-        if (!screenshotting_wallpaper && overview::is_showing())
+        if (overview::is_showing())
             return;
         
         auto root = get_rendering_root();

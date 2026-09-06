@@ -14,8 +14,10 @@
 #include <unistd.h>
 
 static bool switcher_showing = false;
+static bool switcher_closing = false;
 static bool hold_open = false;
 static unsigned int switcher_generation = 0;
+static unsigned int close_generation = 0;
 static constexpr float active_thumbnail_refresh_ms = 16.0f;
 static constexpr float inactive_thumbnail_refresh_ms = 500.0f;
 static std::unordered_map<int, double> saved_scroll_offsets;
@@ -120,7 +122,7 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
 }
 
 static void scroll_switcher(Container *c, double elapsed) {
-    if (*datum<float>(c, "openess") < .94)
+    if (switcher_closing || *datum<float>(c, "openess") < .94)
         return;
     auto b = switcher_bounds(c);
     auto m = mouse();
@@ -174,9 +176,12 @@ void drag_switcher_actual_open() {
         auto s = scale(monitor);
 
         if (overview::is_showing()) {
-            b.y = (-b.h * (1.0 - openess)) + (new_h * peaking_amount) - (8 * openess);
+            // Follow overview progress in both directions, including gestures
+            // and reversals, while retaining the hover-to-expand behavior.
+            const auto progress = std::clamp(overview::get_openess(), 0.0f, 1.0f);
+            b.y += -b.h - new_h + progress * (2 * new_h + (b.h - 8) * openess);
         } else {
-            b.y = (-b.h * (1.0 - openess)) + ((7 * s) * peaking_amount);
+            b.y += (-b.h * (1.0 - openess)) + ((7 * s) * peaking_amount);
         }
         if (openess != 0.0) {
             b.grow(new_h);
@@ -388,6 +393,9 @@ void drag_switcher_actual_open() {
                 peaking_amount * text_alpha);
         }
 
+        // A pointer left over the switcher must not reverse its exit animation.
+        if (switcher_closing)
+            return;
         if (c->state.mouse_hovering || hold_open) {
             auto openess = datum<float>(c, "openess");
             if (*openess != 1.0 && !is_being_animating_to(openess, 1.0)) {
@@ -514,6 +522,18 @@ void drag_switcher_actual_open() {
 // TODO: technically we have to open one per monitor
 void drag_workspace_switcher::open() {
     if (switcher_showing) {
+        if (switcher_closing) {
+            switcher_closing = false;
+            close_generation++;
+            for (auto c : actual_root->children) {
+                if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
+                    continue;
+                animate(datum<float>(c, "peaking_amount"), 1.0, 200.0, c->lifetime, nullptr, [](float a) {
+                    return pull(snapback, a);
+                });
+            }
+            damage_all();
+        }
         return;
     }
     switcher_showing = true;
@@ -637,25 +657,45 @@ static void actual_drag_workspace_switcher_close() {
 }
 
 void drag_workspace_switcher::close_visually() {
-    return;
+    if (!switcher_showing || switcher_closing || overview::is_showing())
+        return;
+    switcher_closing = true;
+    hold_open = false;
+    const auto generation = ++close_generation;
+    bool found = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+            found = true;
             auto peaking_amount = datum<float>(c, "peaking_amount");
             auto openess = datum<float>(c, "openess");
             animate(openess, 0.0, 200.0, c->lifetime,
                 nullptr, [](float a) {
                     return pull(snapback, a);
                 });
-            animate(peaking_amount, 0.0, 200.0, c->lifetime, nullptr, [](float a) {
+            animate(peaking_amount, 0.0, 200.0, c->lifetime, [generation](bool completed) {
+                if (!completed)
+                    return;
+                // Defer deletion until animation callbacks have finished, and
+                // leave a switcher reopened by a new drag alive.
+                later_immediate([generation](Timer *) {
+                    if (switcher_closing && generation == close_generation)
+                        drag_workspace_switcher::close();
+                });
+            }, [](float a) {
                 return pull(snapback, a);
             });
         }
     }
+    // A drag can end before the deferred opening has created the container.
+    if (!found)
+        close();
 }
 
 void drag_workspace_switcher::close() {
     switcher_generation++;
+    close_generation++;
+    switcher_closing = false;
     hold_open = false;
     actual_drag_workspace_switcher_close();
     return;
@@ -667,6 +707,8 @@ void drag_workspace_switcher::click(int id, int button, int state, float x, floa
 }
 
 void drag_workspace_switcher::on_mouse_move(int x, int y) {
+    if (switcher_closing)
+        return;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {

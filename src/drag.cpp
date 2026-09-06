@@ -170,7 +170,8 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
 
 void drag::end(int cid) {
     later_immediate([](Timer *) {
-        drag_workspace_switcher::close();
+        if (!drag::dragging())
+            drag_workspace_switcher::close_visually();
     });
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
