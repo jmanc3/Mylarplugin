@@ -1404,6 +1404,8 @@ static void on_config_reload() {
     static float offset_x = 0;
     static float offset_y = 0;
     static float offset_click = 75;
+    static bool workspace_gesture = false;
+    static int workspace_gesture_monitor = -1;
     // TODO: offset_click should scale down so that 1200 offset can rotate all windows list
     // only scale if factor > 1
 
@@ -1415,12 +1417,22 @@ static void on_config_reload() {
     make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
         offset_x = 0;
         offset_y = 0;
+        workspace_gesture = overview::is_showing() && !overview::is_closing();
+        workspace_gesture_monitor = hypriso->monitor_from_cursor();
+        if (workspace_gesture) {
+            overview::begin_workspace_gesture(workspace_gesture_monitor);
+            return;
+        }
         //alt_tab::visual_offset(0);
         //alt_tab::show_reticle(true);
         alt_tab::show();
         //alt_tab::move(1);
         //coverflow::open();
     }, [](Bounds s) { 
+        if (workspace_gesture) {
+            overview::update_workspace_gesture(workspace_gesture_monitor, s.x);
+            return;
+        }
         //coverflow::scroll(s.x, s.y);
         
         offset_x += s.x;
@@ -1460,6 +1472,11 @@ static void on_config_reload() {
         
         damage_all();
     }, []() { 
+        if (workspace_gesture) {
+            overview::end_workspace_gesture(workspace_gesture_monitor);
+            workspace_gesture = false;
+            return;
+        }
         //coverflow::close();
         
         alt_tab::close(true);

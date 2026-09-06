@@ -10,6 +10,9 @@ namespace overview {
     void overwrite_openess(float a);
     void begin_gesture(int monitor);
     void end_gesture(long start, long end, float y_offset);
+    void begin_workspace_gesture(int monitor);
+    void update_workspace_gesture(int monitor, double delta_x);
+    void end_workspace_gesture(int monitor);
 
     // When screenshoting a workspace, we need to fake paint the final output because the actual overview has too much state
     // in animating in and out and draggging that we don't want to deal with recreating every time we simply want a screenshot
@@ -20,6 +23,7 @@ namespace overview {
     void should_force_paint(bool state);
 
     bool is_showing();
+    bool is_closing();
 
     float get_openess();
 };

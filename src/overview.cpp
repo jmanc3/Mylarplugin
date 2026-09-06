@@ -119,6 +119,9 @@ struct OverviewMonitor {
     int dragged_workspace = -1;
     double drag_start_x = 0;
     double drag_start_y = 0;
+    bool workspace_gesture = false;
+    double workspace_gesture_velocity = 0;
+    long workspace_gesture_update = 0;
 };
 
 struct OverviewScene {
@@ -136,6 +139,29 @@ static std::unique_ptr<OverviewScene> scene;
 
 static bool same_bounds(const Bounds &a, const Bounds &b) {
     return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
+static std::vector<int> visible_workspace_order(const OverviewMonitor &monitor) {
+    auto order = monitor.order;
+    const auto active = std::find(order.begin(), order.end(), monitor.active);
+    const auto workspace = monitor.workspaces.find(monitor.active);
+    if (active != order.end() && workspace != monitor.workspaces.end() && workspace->second.thumbnails.empty()) {
+        const bool has_workspace_to_right = std::any_of(active + 1, order.end(), [](int wid) {
+            return wid != teaser_workspace;
+        });
+        if (!has_workspace_to_right)
+            std::erase(order, teaser_workspace);
+    }
+    return order;
+}
+
+static double workspace_overscroll_limit() {
+    const double progress = std::clamp(openess, 0.0f, 1.0f);
+    const double card_width = 1.0 - .2 * progress;
+    const double pitch = 1.0 - .16 * progress;
+    // From the centered card, allow the side margin plus 30% of its width
+    // to leave the monitor. All dimensions are fractions of monitor width.
+    return ((1.0 - card_width) * .5 + card_width * .3) / pitch;
 }
 
 static Bounds render_bounds(Bounds b, int monitor) {
@@ -281,7 +307,8 @@ static void update_scene() {
                 workspace.position.reset(position + workspace_shift);
             workspace.retiring = false;
             workspace.position.target = position;
-            moving = workspace.position.advance(dt) || moving;
+            if (!monitor.workspace_gesture)
+                moving = workspace.position.advance(dt) || moving;
             bool dirty = !workspace.initialized || !same_bounds(workspace.area, area) || workspace.layout_type != set->overview_layout_type;
             workspace.stacking.clear();
             for (int i = (int) actual_root->children.size() - 1; i >= 0; i--) {
@@ -340,6 +367,23 @@ static void update_scene() {
                     moving = returning || moving;
                     if (!returning)
                         thumbnail.elevated_order = 0;
+                }
+            }
+        }
+        // Enforce the visibility limit during spring settling too, translating
+        // the whole strip together to preserve the spacing between cards.
+        const auto visible_order = visible_workspace_order(monitor);
+        if (!visible_order.empty()) {
+            const double limit = workspace_overscroll_limit();
+            const double first = monitor.workspaces.at(visible_order.front()).position.value;
+            const double last = monitor.workspaces.at(visible_order.back()).position.value;
+            const double correction = first > limit ? limit - first : last < -limit ? -limit - last : 0.0;
+            if (correction != 0.0) {
+                for (auto wid : monitor.order) {
+                    auto &position = monitor.workspaces.at(wid).position;
+                    position.value += correction;
+                    if (position.velocity * correction < 0.0)
+                        position.velocity = 0.0;
                 }
             }
         }
@@ -434,17 +478,8 @@ static void paint_monitor(int monitor_id) {
         if (!snapshot && !hit.empty())
             monitor.window_options.push_back({cid, wid, hit});
     };
-    auto paint_order = snapshot ? std::vector<int>{rendering_workspace} : monitor.order;
+    auto paint_order = snapshot ? std::vector<int>{rendering_workspace} : visible_workspace_order(monitor);
     if (!snapshot) {
-        const auto active = std::find(monitor.order.begin(), monitor.order.end(), monitor.active);
-        const auto workspace = monitor.workspaces.find(monitor.active);
-        if (active != monitor.order.end() && workspace != monitor.workspaces.end() && workspace->second.thumbnails.empty()) {
-            const bool has_workspace_to_right = std::any_of(active + 1, monitor.order.end(), [](int wid) {
-                return wid != teaser_workspace;
-            });
-            if (!has_workspace_to_right)
-                std::erase(paint_order, teaser_workspace);
-        }
         for (const auto &[wid, workspace] : monitor.workspaces) {
             if (workspace.retiring)
                 paint_order.insert(paint_order.begin(), wid);
@@ -578,6 +613,100 @@ static OverviewMonitor *monitor_state(int monitor) {
         return nullptr;
     auto it = scene->monitors.find(monitor);
     return it == scene->monitors.end() ? nullptr : &it->second;
+}
+
+void overview::begin_workspace_gesture(int monitor) {
+    if (!running || !initialized || is_closing())
+        return;
+    update_scene();
+    auto state = monitor_state(monitor);
+    if (!state)
+        return;
+    state->workspace_gesture = true;
+    state->workspace_gesture_velocity = 0;
+    state->workspace_gesture_update = get_current_time_in_ms();
+    // Pick up an interrupted spring exactly where it is currently drawn.
+    for (auto &[wid, workspace] : state->workspaces)
+        workspace.position.velocity = 0;
+}
+
+void overview::update_workspace_gesture(int monitor, double delta_x) {
+    auto state = monitor_state(monitor);
+    if (!running || !state || !state->workspace_gesture)
+        return;
+    const auto order = visible_workspace_order(*state);
+    if (order.empty())
+        return;
+    // One full swipe spans the visible workspace strip, regardless of its
+    // length or the monitor resolution.
+    constexpr double swipe_distance = 750.0;
+    const double travel = std::max(1.0, double(order.size() - 1));
+    const double first = state->workspaces.at(order.front()).position.value;
+    const double last = state->workspaces.at(order.back()).position.value;
+    const double span = std::max(0.0, last - first);
+    constexpr double resistance = .35;
+    // Undo the resistance before applying each delta so reversing direction
+    // retraces the same motion, including when picking up a settling spring.
+    double position = first;
+    if (position > 0)
+        position += position * position / (2.0 * resistance);
+    else if (position < -span) {
+        const double excess = -span - position;
+        position -= excess * excess / (2.0 * resistance);
+    }
+    position -= delta_x * travel / swipe_distance;
+    const auto rubber_band = [](double excess) {
+        return 2.0 * excess / (std::sqrt(1.0 + 2.0 * excess / resistance) + 1.0);
+    };
+    if (position > 0)
+        position = rubber_band(position);
+    else if (position < -span)
+        position = -span - rubber_band(-span - position);
+    const double limit = workspace_overscroll_limit();
+    position = std::clamp(position, -span - limit, limit);
+    const double offset = position - first;
+    const auto now = get_current_time_in_ms();
+    // Begin and the first update can share a millisecond timestamp.
+    const double dt = std::max(8L, now - state->workspace_gesture_update) / 1000.0;
+    state->workspace_gesture_velocity = offset / dt;
+    state->workspace_gesture_update = now;
+    // Apply scaled movement directly, bypassing the springs until release.
+    for (auto &[wid, workspace] : state->workspaces) {
+        if (!workspace.retiring)
+            workspace.position.value += offset;
+    }
+    request_refresh();
+}
+
+void overview::end_workspace_gesture(int monitor) {
+    auto state = monitor_state(monitor);
+    if (!running || !state || !state->workspace_gesture)
+        return;
+    const auto order = visible_workspace_order(*state);
+    state->workspace_gesture = false;
+    if (order.empty())
+        return;
+    const double velocity = get_current_time_in_ms() - state->workspace_gesture_update > 100
+        ? 0.0 : state->workspace_gesture_velocity;
+    // A short projection lets a flick select its destination, while a held
+    // drag settles on the nearest card. Preserve velocity in the release spring.
+    const auto nearest = std::min_element(order.begin(), order.end(), [&](int a, int b) {
+        return std::abs(state->workspaces.at(a).position.value + velocity * .15)
+            < std::abs(state->workspaces.at(b).position.value + velocity * .15);
+    });
+    // Releasing outside the strip always settles on the corresponding edge.
+    const int selected = state->workspaces.at(order.front()).position.value > 0 ? order.front()
+        : state->workspaces.at(order.back()).position.value < 0 ? order.back() : *nearest;
+    for (auto &[wid, workspace] : state->workspaces) {
+        if (!workspace.retiring)
+            workspace.position.velocity = velocity;
+    }
+    if (selected == teaser_workspace)
+        hypriso->move_to_workspace(reserve_teaser_workspace(monitor), false);
+    else if (selected != state->active)
+        hypriso->move_to_workspace_id(selected);
+    update_scene();
+    request_refresh();
 }
 
 static OverviewThumbnail *dragged_thumbnail(OverviewMonitor &monitor) {
@@ -1000,6 +1129,10 @@ void overview::should_force_paint(bool state) {
 
 bool overview::is_showing() {
     return running;
+}
+
+bool overview::is_closing() {
+    return running && animating && animation_target == 0.0f;
 }
 
 float overview::get_openess() {

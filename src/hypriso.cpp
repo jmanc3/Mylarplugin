@@ -3832,7 +3832,10 @@ std::string HyprIso::title_name(int id) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == id) {
             if (auto w = hyprwindow->w.get()) {
-                return w->metadata().title();
+                auto title = w->metadata().title();
+                std::replace(title.begin(), title.end(), '\n', ' ');
+                std::replace(title.begin(), title.end(), '\r', ' ');
+                return title;
             }
         }
     }
@@ -3848,7 +3851,10 @@ std::string title_name(ThinClient *w) {
     for (auto hyprwindow : hyprwindows) {
         if (hyprwindow->id == w->id) {
             if (auto w = hyprwindow->w.get()) {
-                return w->metadata().title();
+                auto title = w->metadata().title();
+                std::replace(title.begin(), title.end(), '\n', ' ');
+                std::replace(title.begin(), title.end(), '\r', ' ');
+                return title;
             }
         }
     }

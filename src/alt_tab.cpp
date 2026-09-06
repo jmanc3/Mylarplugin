@@ -632,7 +632,7 @@ void alt_tab::close(bool focus) {
                         }
                         int real_active_index = wrap_index(ai, c->children.size());
                         auto cid = *datum<int>(c->children[real_active_index], "cid");
-                        if (overview::is_showing()) {
+                        if (overview::is_showing() && !overview::is_closing()) {
                             close_overview_with_selection(cid);
                         } else {
                             later_immediate([cid](Timer *) {
@@ -957,6 +957,5 @@ bool alt_tab::at_end_row() {
 
     return active_y == (lines.size() - 1);
 }
-
 
 
