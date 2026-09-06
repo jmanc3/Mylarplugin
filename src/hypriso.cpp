@@ -5593,8 +5593,6 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    overview::should_force_paint(true);
-    
     auto pMonitor = m;
     if (!pMonitor)
         return;
@@ -5602,6 +5600,8 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
     if (!startedOn || !w || !m)
         return;
 
+    overview::should_force_paint(true);
+    defer(overview::should_force_paint(false));
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
     CBox monbox = {{0, 0}, pMonitor->m_pixelSize};
@@ -5660,7 +5660,6 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 
     Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
     
-    overview::should_force_paint(false);
 }
 
 void ourRenderWindow(PHLWINDOW pWindow, PHLMONITOR pMonitor, const Time::steady_tp& time, bool decorate, Render::eRenderPassMode mode, bool ignorePosition, bool standalone) {
@@ -6482,14 +6481,20 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
     }
 }
 
-void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float roundingPower, int cornermask) {
+void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float roundingPower, int cornermask, float alpha) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             if (hw->deco_fb && hw->deco_fb->isAllocated()) {
-                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask](AnyPass* pass) {
+                const bool clip = this->clip;
+                const Bounds clipbox = this->clipbox;
+                if (clip && !tocbox(clipbox).overlaps(tocbox(b)))
+                    return;
+                AnyPass::AnyData anydata([id, b, hw, rounding, roundingPower, cornermask, clip, clipbox, alpha](AnyPass* pass) {
+                    if (!hw->deco_fb || !hw->deco_fb->isAllocated())
+                        return;
                     auto tex = hw->deco_fb->getTexture();
                     
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
@@ -6498,6 +6503,7 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     
                     auto box = tocbox(b);
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+                    data.a = alpha;
                     data.round = rounding;
                     data.roundingPower = roundingPower;
                     
@@ -6509,7 +6515,12 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     );
                     
                     set_rounding(cornermask);
+                    const auto previousClip = g_pHyprRenderer->m_renderData.clipBox;
+                    if (clip)
+                        g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
                     Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
+                    if (clip)
+                        g_pHyprRenderer->m_renderData.clipBox = previousClip;
                     set_rounding(0);
                 });
                 g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
