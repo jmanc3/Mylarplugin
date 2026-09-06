@@ -7986,7 +7986,12 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
         if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
             return;
 
-    AnyPass::AnyData anydata([info, x, y, commands, alpha](AnyPass *pass) {
+    const bool clip = hypriso->clip;
+    const auto clipbox = hypriso->clipbox;
+    if (clip && (clipbox.empty() || !tocbox(clipbox).overlaps(CBox(x, y, info.w, info.h))))
+        return;
+
+    AnyPass::AnyData anydata([info, x, y, commands, alpha, clip, clipbox](AnyPass *pass) {
         static SP<Render::IFramebuffer> matteFB = g_pHyprRenderer->createFB();
         static SP<Render::IFramebuffer> alphaFB = g_pHyprRenderer->createFB();
 
@@ -8113,6 +8118,10 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
 
         outbox = CBox(x, y, w, h);
         data.a = alpha;
+        const auto previous_clipbox = g_pHyprRenderer->m_renderData.clipBox;
+        defer(g_pHyprRenderer->m_renderData.clipBox = previous_clipbox);
+        if (clip)
+            g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
         Render::GL::g_pHyprOpenGL->renderTexture(
             alphaFB->getTexture(),
             outbox,

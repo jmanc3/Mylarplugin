@@ -180,7 +180,7 @@ void drag::end(int cid) {
                 continue;
             
             for (auto ch : c->children) {
-                if (bounds_contains(ch->real_bounds, mou.x, mou.y)) {
+                if (ch->handles_pierced ? ch->handles_pierced(ch, mou.x, mou.y) : bounds_contains(ch->real_bounds, mou.x, mou.y)) {
                     auto space = *datum<int>(ch, "workspace");
                     if (space == -1) {
                         // next avaialable

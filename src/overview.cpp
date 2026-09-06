@@ -532,7 +532,7 @@ static void drop_on_workspace(int cid, double x, double y) {
         if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
             continue;
         for (auto ch : c->children) {
-            if (!bounds_contains(ch->real_bounds, x, y))
+            if (!(ch->handles_pierced ? ch->handles_pierced(ch, x, y) : bounds_contains(ch->real_bounds, x, y)))
                 continue;
             const int workspace = *datum<int>(ch, "workspace");
             if (workspace == -1) {

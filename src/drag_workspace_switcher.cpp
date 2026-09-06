@@ -8,12 +8,15 @@
 #include "events.h"
 #include "drag.h"
 
+#include <algorithm>
 #include <fcntl.h>
 #include <unistd.h>
 
 static bool switcher_showing = false;
 static bool hold_open = false;
 static unsigned int switcher_generation = 0;
+static constexpr float active_thumbnail_refresh_ms = 100.0f;
+static constexpr float inactive_thumbnail_refresh_ms = 500.0f;
 
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
@@ -33,19 +36,38 @@ int target_monitor() {
     return hypriso->monitor_from_cursor();
 }
 
-void layout_spaces(Container *actual_root, Container *parent, int monitor) {
-    auto openess = *datum<float>(parent, "openess");
-    auto b = parent->real_bounds;
-    int spacing = 12;
-    if (openess != 0.0) {
+static Bounds switcher_bounds(Container *c) {
+    auto b = c->real_bounds;
+    if (*datum<float>(c, "openess") != 0.0)
         b.shrink(30);
-    }
-    int pen_x = b.x + spacing;
-    int pen_y = b.y + spacing;
+    return b;
+}
+
+static Bounds switcher_render_bounds(Bounds b, int monitor) {
+    auto mb = bounds_monitor(monitor);
+    b.x -= mb.x;
+    b.y -= mb.y;
+    return b.scale(scale(monitor)).round();
+}
+
+static Bounds thumbnail_clip_bounds(Container *c) {
+    auto b = c->real_bounds;
+    b.y += b.h * (1.0 - *datum<float>(c, "slide_in_amount"));
+    return b.intersection(c->real_bounds).intersection(switcher_bounds(c->parent));
+}
+
+void layout_spaces(Container *actual_root, Container *parent, int monitor) {
+    auto b = switcher_bounds(parent);
+    int spacing = 12;
     auto thumb_h = b.h - 44;
     auto monb = bounds_monitor(monitor);
     auto thumb_w = thumb_h * (monb.w / monb.h);
-    auto s = scale(monitor);
+    auto content_w = spacing + parent->children.size() * (thumb_w + spacing);
+    auto max_scroll = datum<double>(parent, "max_scroll");
+    *max_scroll = std::max(0.0, content_w - b.w);
+    parent->scroll_h_real = std::clamp(parent->scroll_h_real, -*max_scroll, 0.0);
+    double pen_x = b.x + spacing + parent->scroll_h_real;
+    double pen_y = b.y + spacing;
     
     for (int i = 0; i < parent->children.size(); i++) {
         auto ch = parent->children[i];
@@ -59,6 +81,34 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
         ch->real_bounds.scale_from_center(1.0 + (.05 * *active_amount));
         ch->real_bounds.scale_from_center(1.0 - (.16 * *pressed_amount));
     }
+}
+
+static void scroll_switcher(Container *c, double elapsed) {
+    if (*datum<float>(c, "openess") < .94)
+        return;
+    auto b = switcher_bounds(c);
+    auto m = mouse();
+    if (!bounds_contains(b, m.x, m.y))
+        return;
+    auto max_scroll = *datum<double>(c, "max_scroll");
+    if (max_scroll <= 0.0)
+        return;
+
+    const double edge = std::min(144.0, b.w * .5);
+    double speed = 0.0;
+    if (m.x < b.x + edge)
+        speed = 360.0 + 600.0 * (b.x + edge - m.x) / edge;
+    else if (m.x > b.right() - edge)
+        speed = -(360.0 + 600.0 * (m.x - (b.right() - edge)) / edge);
+    const auto offset = std::clamp(c->scroll_h_real + speed * elapsed, -max_scroll, 0.0);
+    if (offset == c->scroll_h_real)
+        return;
+    c->scroll_h_real = offset;
+    layout_spaces(actual_root, c, target_monitor());
+    // Refresh the hovered thumbnail even when the pointer has not moved.
+    Event event(m.x, m.y);
+    move_event(c, event);
+    damage_all();
 }
 
 void drag_switcher_actual_open() {
@@ -101,6 +151,10 @@ void drag_switcher_actual_open() {
             return *datum<int>(c, "workspace");
         }, [monitor](Container *parent, int space) {
             auto c = parent->child(FILL_SPACE, FILL_SPACE);
+            c->handles_pierced = [](Container *c, int x, int y) {
+                auto b = thumbnail_clip_bounds(c);
+                return !b.empty() && bounds_contains(b, x, y);
+            };
             *datum<int>(c, "workspace") = space;
             *datum<bool>(c, "was_active") = false;
             *datum<float>(c, "active_amount") = 0.0;
@@ -138,13 +192,13 @@ void drag_switcher_actual_open() {
                     active_amount = *active;
                 }
 
+                auto clip_bounds = switcher_render_bounds(thumbnail_clip_bounds(c), monitor);
+                if (hypriso->clip)
+                    clip_bounds = clip_bounds.intersection(hypriso->clipbox);
+                if (clip_bounds.empty())
+                    return;
                 renderfix
-                float slide_in_amount = *datum<float>(c, "slide_in_amount");
-                auto bb = c->real_bounds;
-                hypriso->clip = true;
-                defer(hypriso->clip = false);
-                hypriso->clipbox = bb;
-                hypriso->clipbox.y += hypriso->clipbox.h * (1.0 - slide_in_amount);
+                clip(clip_bounds, 1.0);
 
                 auto space = *datum<int>(c, "workspace");
                 float pressed_amount = *datum<float>(c, "pressed_amount");
@@ -265,6 +319,12 @@ void drag_switcher_actual_open() {
         }
         renderfix;
         damage_all();    
+        auto clip_bounds = c->real_bounds;
+        if (hypriso->clip)
+            clip_bounds = clip_bounds.intersection(hypriso->clipbox);
+        if (clip_bounds.empty())
+            return;
+        clip(clip_bounds, 1.0);
 
         RGBA col = {.18, .18, .18, .9f * peaking_amount - .1f * openess};
         auto b = c->real_bounds;
@@ -326,6 +386,12 @@ void drag_switcher_actual_open() {
             c->real_bounds.shrink(new_h); 
         }
         renderfix;
+        auto clip_bounds = c->real_bounds;
+        if (hypriso->clip)
+            clip_bounds = clip_bounds.intersection(hypriso->clipbox);
+        if (clip_bounds.empty())
+            return;
+        clip(clip_bounds, 1.0);
 
         {
             auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
@@ -353,7 +419,7 @@ void drag_switcher_actual_open() {
                     hovered = true;
                 }
                 auto b = ch->real_bounds;
-                command.bounds = b.scale(s);
+                command.bounds = switcher_render_bounds(b, monitor);
                 command.bounds.shrink(1.0);
                 command.bounds.round();
                 command.thickness = 1.0;
@@ -375,7 +441,7 @@ void drag_switcher_actual_open() {
                     std::vector<MatteCommands> commands;
                     MatteCommands command;
                     auto b = ch->real_bounds;
-                    command.bounds = b.scale(s);
+                    command.bounds = switcher_render_bounds(b, monitor);
                     command.bounds.round();
                     command.type = 2;
                     command.roundness = 8 * s;
@@ -393,6 +459,16 @@ void drag_switcher_actual_open() {
     };
     c->when_mouse_motion = paint {
         request_damage(root, c);
+    };
+    c->when_fine_scrolled = [](Container *root, Container *c, double scroll_x, double scroll_y, bool came_from_touchpad) {
+        consume_event(root, c);
+        const auto max_scroll = *datum<double>(c, "max_scroll");
+        const auto offset = std::clamp(c->scroll_h_real + (scroll_x + scroll_y) * (came_from_touchpad ? 1.0 : 6.0), -max_scroll, 0.0);
+        if (offset == c->scroll_h_real)
+            return;
+        c->scroll_h_real = offset;
+        layout_spaces(actual_root, c, target_monitor());
+        damage_all();
     };
     damage_all();
 }
@@ -423,10 +499,22 @@ void drag_workspace_switcher::open() {
         drag_switcher_actual_open();
     });
 
-    auto monitor = target_monitor();
-    auto fps = hypriso->fps(monitor);
+    later(16.0f, [generation, previous = get_current_time_in_ms()](Timer *t) mutable {
+        t->keep_running = false;
+        if (!switcher_showing || generation != switcher_generation)
+            return;
+        const auto now = get_current_time_in_ms();
+        const double elapsed = std::clamp((now - previous) / 1000.0, 0.0, .05);
+        previous = now;
+        for (auto c : actual_root->children) {
+            if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
+                t->keep_running = true;
+                scroll_switcher(c, elapsed);
+            }
+        }
+    });
     
-    later(1000.0f / fps, [generation](Timer *t) {
+    later(active_thumbnail_refresh_ms, [generation](Timer *t) {
         if (!switcher_showing || generation != switcher_generation) {
             t->keep_running = false;
             return;
@@ -442,6 +530,7 @@ void drag_workspace_switcher::open() {
         }
         if (!found) {
             t->keep_running = false;
+            return;
         }
         
         auto spaces = hypriso->get_workspace_ids(monitor);
@@ -454,7 +543,7 @@ void drag_workspace_switcher::open() {
         }
         overview::fake_paint(-1);
     });
-    later(1000.0f / 30.0f, [generation](Timer *t) {
+    later(inactive_thumbnail_refresh_ms, [generation](Timer *t) {
         if (!switcher_showing || generation != switcher_generation) {
             t->keep_running = false;
             return;
@@ -470,6 +559,7 @@ void drag_workspace_switcher::open() {
         }
         if (!found) {
             t->keep_running = false;
+            return;
         }
         
         auto spaces = hypriso->get_workspace_ids(monitor);
