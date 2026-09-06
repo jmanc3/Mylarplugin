@@ -9,14 +9,24 @@
 #include "drag.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <fcntl.h>
 #include <unistd.h>
 
 static bool switcher_showing = false;
 static bool hold_open = false;
 static unsigned int switcher_generation = 0;
-static constexpr float active_thumbnail_refresh_ms = 100.0f;
+static constexpr float active_thumbnail_refresh_ms = 16.0f;
 static constexpr float inactive_thumbnail_refresh_ms = 500.0f;
+static std::unordered_map<int, double> saved_scroll_offsets;
+
+struct SwitcherScrollLayout {
+    int monitor = -1;
+    int active_workspace = -1;
+    int active_index = -1;
+    double thumbnail_width = 0.0;
+    double viewport_width = 0.0;
+};
 
 // {"anchors":[{"x":0,"y":1},{"x":0.4,"y":0.4},{"x":1,"y":0}],"controls":[{"x":0.25099658672626207,"y":0.7409722222222223},{"x":0.6439499918619792,"y":0.007916683620876747}]}
 static std::vector<float> slidetopos2 = { 0, 0.017000000000000015, 0.03500000000000003, 0.05400000000000005, 0.07199999999999995, 0.09199999999999997, 0.11099999999999999, 0.132, 0.15200000000000002, 0.17400000000000004, 0.19599999999999995, 0.21899999999999997, 0.242, 0.266, 0.29100000000000004, 0.31699999999999995, 0.344, 0.372, 0.4, 0.43000000000000005, 0.46099999999999997, 0.494, 0.527, 0.563, 0.6, 0.626, 0.651, 0.675, 0.6970000000000001, 0.719, 0.739, 0.758, 0.777, 0.794, 0.8109999999999999, 0.8260000000000001, 0.841, 0.855, 0.868, 0.881, 0.892, 0.903, 0.914, 0.923, 0.9319999999999999, 0.9410000000000001, 0.948, 0.955, 0.962, 0.968, 0.973, 0.978, 0.983, 0.986, 0.99, 0.993, 0.995, 0.997, 0.998, 0.999, 1 };
@@ -65,7 +75,33 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     auto content_w = spacing + parent->children.size() * (thumb_w + spacing);
     auto max_scroll = datum<double>(parent, "max_scroll");
     *max_scroll = std::max(0.0, content_w - b.w);
+    auto previous = datum<SwitcherScrollLayout>(parent, "scroll_layout");
+    const bool restore_scroll = previous->monitor != monitor;
+    if (restore_scroll)
+        parent->scroll_h_real = saved_scroll_offsets[monitor];
     parent->scroll_h_real = std::clamp(parent->scroll_h_real, -*max_scroll, 0.0);
+
+    const auto active_workspace = hypriso->get_active_workspace_id(monitor);
+    int active_index = -1;
+    for (int i = 0; i < parent->children.size(); i++) {
+        if (*datum<int>(parent->children[i], "workspace") == active_workspace) {
+            active_index = i;
+            break;
+        }
+    }
+    // Reveal on reopening or workspace/layout changes, without fighting manual scrolling.
+    if (active_index >= 0 && (restore_scroll || previous->active_workspace != active_workspace ||
+        previous->active_index != active_index || previous->thumbnail_width != thumb_w || previous->viewport_width != b.w)) {
+        const double left = spacing + active_index * (thumb_w + spacing);
+        const double right = left + thumb_w;
+        if (left + parent->scroll_h_real < spacing || thumb_w > b.w - 2 * spacing)
+            parent->scroll_h_real = spacing - left;
+        else if (right + parent->scroll_h_real > b.w - spacing)
+            parent->scroll_h_real = b.w - spacing - right;
+        parent->scroll_h_real = std::clamp(parent->scroll_h_real, -*max_scroll, 0.0);
+    }
+    *previous = {monitor, active_workspace, active_index, thumb_w, b.w};
+    saved_scroll_offsets[monitor] = parent->scroll_h_real;
     double pen_x = b.x + spacing + parent->scroll_h_real;
     double pen_y = b.y + spacing;
     
@@ -393,9 +429,13 @@ void drag_switcher_actual_open() {
             return;
         clip(clip_bounds, 1.0);
 
+        auto mou = mouse();
+        const auto monitor_bounds = bounds_monitor(monitor);
+        mou.x -= monitor_bounds.x;
+        mou.y -= monitor_bounds.y;
+
         {
             auto info = *datum<TextureInfo>(actual_root, "drag_gradient");
-            auto mou = mouse();
             std::vector<MatteCommands> commands;
             MatteCommands command;
             command.bounds = c->real_bounds;
@@ -410,7 +450,6 @@ void drag_switcher_actual_open() {
         }
         {
             auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner");
-            auto mou = mouse();
             std::vector<MatteCommands> commands;
             MatteCommands command;
             bool hovered = false;
@@ -434,7 +473,6 @@ void drag_switcher_actual_open() {
         }
         if (true) {
             auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect");
-            auto mou = mouse();
             for (auto ch : c->children) {
                 float alpha = *datum<float>(ch, "active_amount");
                 if (alpha != 0.0) {

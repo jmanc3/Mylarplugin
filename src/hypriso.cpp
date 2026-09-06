@@ -7982,9 +7982,8 @@ void drawShadowInternal(const CBox& box, int round, float roundingPower, int ran
 }
 
 void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<MatteCommands>& commands, float alpha) {
-    for (const auto &cmd: commands)
-        if (cmd.bounds.w <= 0 || cmd.bounds.h <= 0)
-            return;
+    if (info.id == -1 || info.w <= 0 || info.h <= 0 || commands.empty() || alpha <= 0.0f)
+        return;
 
     const bool clip = hypriso->clip;
     const auto clipbox = hypriso->clipbox;
@@ -7992,6 +7991,16 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
         return;
 
     AnyPass::AnyData anydata([info, x, y, commands, alpha, clip, clipbox](AnyPass *pass) {
+        SP<Render::ITexture> tex;
+        for (auto t : hyprtextures) {
+            if (t->info.id == info.id) {
+                tex = t->texture;
+                break;
+            }
+        }
+        if (!tex || !tex->ok())
+            return;
+
         static SP<Render::IFramebuffer> matteFB = g_pHyprRenderer->createFB();
         static SP<Render::IFramebuffer> alphaFB = g_pHyprRenderer->createFB();
 
@@ -8001,17 +8010,25 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
         if (w == 0 || h == 0)
             return;
 
-        // TODO a matte should be passed in instead because if multiple people use this function the size is bound to be different
-        matteFB->alloc(w, h, DRM_FORMAT_ABGR8888);
-        alphaFB->alloc(w, h, DRM_FORMAT_ABGR8888);
+        const auto saved_render_data = g_pHyprRenderer->m_renderData;
+        defer(g_pHyprRenderer->m_renderData = saved_render_data; saved_render_data.currentFB->bind());
+        if (!matteFB->alloc(w, h, DRM_FORMAT_ABGR8888) || !alphaFB->alloc(w, h, DRM_FORMAT_ABGR8888))
+            return;
 
-        // Save current FB
-        const auto LASTFB = g_pHyprRenderer->m_renderData.currentFB;
+        // Intermediate textures use their own coordinates, without monitor transforms or clipping.
+        auto &render_data = g_pHyprRenderer->m_renderData;
+        render_data.fbSize = Vector2D(w, h);
+        g_pHyprRenderer->setProjectionType(Render::RPT_EXPORT);
+        render_data.damage = CRegion(0, 0, w, h);
+        render_data.transformDamage = false;
+        render_data.renderModif.enabled = false;
+        render_data.clipBox = CBox();
 
         // 1. Render matte
-        matteFB->bind();
+        g_pHyprRenderer->bindFB(matteFB);
+        Render::GL::g_pHyprOpenGL->scissor(nullptr);
         glClearColor(0, 0, 0, 0);
-        // Render::GL::g_pHyprOpenGL->clear(CHyprColor(0, 0, 0, 0)); // transparent
+        glClear(GL_COLOR_BUFFER_BIT);
 
         for (const auto &cmd: commands) {
             CBox box = {
@@ -8091,19 +8108,10 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
             }
         }
 
-        alphaFB->bind();
-
-        CRegion texDamage{g_pHyprRenderer->m_renderData.damage};
-        Render::GL::CHyprOpenGLImpl::STextureRenderData data;
-        data.damage = &texDamage;
-
-        SP<Render::ITexture> tex;
-        for (auto t: hyprtextures) {
-            if (t->info.id == info.id) {
-                tex = t->texture;
-                break;
-            }
-        }
+        g_pHyprRenderer->bindFB(alphaFB);
+        Render::GL::g_pHyprOpenGL->scissor(nullptr);
+        glClearColor(0, 0, 0, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
 
         // 2. Render texture using matte
         CBox outbox = CBox(0, 0, w, h);
@@ -8114,12 +8122,12 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
         );
 
         // Restore previous FB
-        LASTFB->bind();
+        render_data = saved_render_data;
+        saved_render_data.currentFB->bind();
 
         outbox = CBox(x, y, w, h);
+        Render::GL::CHyprOpenGLImpl::STextureRenderData data;
         data.a = alpha;
-        const auto previous_clipbox = g_pHyprRenderer->m_renderData.clipBox;
-        defer(g_pHyprRenderer->m_renderData.clipBox = previous_clipbox);
         if (clip)
             g_pHyprRenderer->m_renderData.clipBox = tocbox(clipbox);
         Render::GL::g_pHyprOpenGL->renderTexture(
