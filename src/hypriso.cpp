@@ -2432,11 +2432,10 @@ std::string get_previous_instance_signature() {
 SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWINDOW w);
 
 void HyprIso::set_animate_to_dock(int id, bool state) {
-    for (auto w : Desktop::windowState()->windows()) {
-        for (auto hw : hyprwindows) {
-            if (hw->id == id) {
-                hw->animate_to_dock = true;
-            }
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            hw->animate_to_dock = state;
+            return;
         }
     }
 }

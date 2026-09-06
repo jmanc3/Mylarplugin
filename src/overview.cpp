@@ -123,6 +123,9 @@ struct OverviewMonitor {
 
 struct OverviewScene {
     std::map<int, OverviewMonitor> monitors;
+    std::map<int, Bounds> desktop_origins;
+    float desktop_origin_weight = 1.0f;
+    bool taking_desktop = false;
     std::map<int, long> window_captures;
     std::map<int, long> wallpaper_captures;
     long last_update = 0;
@@ -412,7 +415,10 @@ static void paint_monitor(int monitor_id) {
     auto paint_thumbnail = [&](int wid, int cid, double translation, const Bounds &clip) {
         auto &thumbnail = monitor.workspaces.at(wid).thumbnails.at(cid);
         auto natural = thumbnail.natural;
-        if (hypriso->is_hidden(cid)) {
+        const auto origin = scene->desktop_origins.find(cid);
+        if (origin != scene->desktop_origins.end()) {
+            natural = lerp(natural, origin->second, scene->desktop_origin_weight);
+        } else if (hypriso->is_hidden(cid)) {
             auto dock_bounds = dock::get_location(hypriso->monitor_name(monitor_id), cid);
             dock_bounds.y += mb.h;
             natural = lerp(dock_bounds, natural, progress);
@@ -771,19 +777,59 @@ static bool initialize_overview(int monitor) {
             hold_overview_open();
         return true;
     }
-    if (show_desktop::is_opened())
-        return false;
-
     // Reserve ownership before deferred rendering setup can run.
     running = true;
     overview_monitor = monitor;
     scene = std::make_unique<OverviewScene>();
+    scene->taking_desktop = show_desktop::is_opened();
+    if (scene->taking_desktop)
+        minimize_gesture_count++;
     const auto generation = ++lifecycle;
     later_immediate([monitor, generation](Timer *) {
         if (!running || generation != lifecycle)
             return;
+q        const bool taking_desktop = scene->taking_desktop;
+        const auto scalar = std::clamp(show_desktop::get_scalar(), 0.0f, 1.0f);
+        if (taking_desktop) {
+            // Cancel desktop rendering and capture timers before taking any
+            // overview screenshots, retaining the compositor's render filter.
+            show_desktop::stop();
+            hypriso->whitelist_on = true;
+            scene->taking_desktop = false;
+        }
         screenshots();
         update_scene();
+        if (taking_desktop) {
+            for (const auto &[mid, state] : scene->monitors) {
+                const auto mb = bounds_monitor(mid);
+                const auto locations = dock::try_get_locations(hypriso->monitor_name(mid));
+                for (const auto &[wid, workspace] : state.workspaces) {
+                    if (wid != hypriso->get_active_workspace_id(mid))
+                        continue;
+                    for (const auto &[cid, thumbnail] : workspace.thumbnails) {
+                        if (hypriso->is_hidden(cid) || is_slept(cid))
+                            continue;
+                        const auto location = locations.find(cid);
+                        // A busy dock falls back to its bottom-center area.
+                        auto origin = location != locations.end() ? location->second : Bounds((mb.w - 100) * .5, 0, 100, 100);
+                        origin.x += mb.x;
+                        origin.y = mb.bottom();
+                        const auto &natural = thumbnail.natural;
+                        const auto aspect = natural.w / std::max(1.0, natural.h);
+                        if (aspect > origin.w / std::max(1.0, origin.h)) {
+                            const auto height = origin.w / aspect;
+                            origin.y += (origin.h - height) * .5;
+                            origin.h = height;
+                        } else {
+                            const auto width = origin.h * aspect;
+                            origin.x += (origin.w - width) * .5;
+                            origin.w = width;
+                        }
+                        scene->desktop_origins[cid] = lerp(natural, origin, scalar);
+                    }
+                }
+            }
+        }
         hypriso->whitelist_on = true;
         initialized = true;
         hold_overview_open();
@@ -812,6 +858,8 @@ void overview_actual_close() {
     openess = 0.0;
     running = false;
     drag_workspace_switcher::close();
+    if (scene && scene->taking_desktop)
+        show_desktop::stop();
     scene.reset();
 
     auto m = actual_root;
@@ -843,8 +891,9 @@ static void animate_overview(float target, float velocity, SpringParams params, 
     animating = true;
     animation_target = target;
     const auto initial_progress = openess;
+    const auto initial_origin_weight = scene->desktop_origin_weight;
     later((1000.0f / hypriso->fps(overview_monitor)) * .8,
-          [generation, initial_progress, target, velocity, params, gesture_release, start = 0L](Timer *t) mutable {
+          [generation, initial_progress, initial_origin_weight, target, velocity, params, gesture_release, start = 0L](Timer *t) mutable {
         t->keep_running = running && generation == animation_generation;
         if (!t->keep_running || !initialized)
             return;
@@ -856,6 +905,11 @@ static void animate_overview(float target, float velocity, SpringParams params, 
             ? (target == 0.0f ? state.value <= .001 : state.value >= .999)
             : (std::abs(state.value - target) <= .001 && std::abs(state.velocity) <= .001);
         openess = finished ? target : static_cast<float>(state.value);
+        // An interrupted entrance must still close onto the desktop.
+        if (target == 0.0f && initial_progress > 0.0f)
+            scene->desktop_origin_weight = initial_origin_weight * std::clamp(openess / initial_progress, 0.0f, 1.0f);
+        if (openess >= 1.0f)
+            scene->desktop_origins.clear();
         if (target == 0.0f && openess < .3f)
             set_input_bypass(true);
         if (finished) {
@@ -921,6 +975,8 @@ void overview::overwrite_openess(float a) {
     animation_generation++;
     animating = false;
     openess = std::clamp(a, 0.0f, 1.0f);
+    if (openess == 1.0f)
+        scene->desktop_origins.clear();
     if (initialized)
         set_input_bypass(false);
     request_refresh();

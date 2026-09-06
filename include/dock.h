@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <map>
 
 struct Bounds;
 
@@ -29,5 +30,6 @@ namespace dock {
     void open_applications();
 
     Bounds get_location(std::string name, int cid);
+    std::map<int, Bounds> try_get_locations(const std::string &name);
     Bounds get_item_location(std::string monitor_name, std::string item_name);
 };

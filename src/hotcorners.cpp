@@ -38,18 +38,7 @@ void do_overview(int monitor_id) {
     static long last_time = 0;
     auto current = get_current_time_in_ms();
     if (current - last_time > 300) {
-        if (show_desktop::is_opened()) {
-            show_desktop::stop_animation();
-            later(10, [monitor_id](Timer *t) {
-                t->keep_running = show_desktop::get_scalar() != 0.0;
-                if (!t->keep_running)
-                    later(10, [monitor_id](Timer *x) {
-                        overview::open(monitor_id);
-                    });
-            });
-        } else {
-            overview::open(monitor_id);
-        }
+        overview::open(monitor_id);
         last_time = current;
     }
 }
@@ -140,4 +129,3 @@ void hotcorners::motion(int id, int x, int y) {
         }
     }
 }
-

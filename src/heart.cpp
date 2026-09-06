@@ -1674,12 +1674,6 @@ void do_snap(SnapPosition pos) {
 void add_hyprctl_dispatchers() {
     hypriso->add_hyprctl_dispatcher("overview_open_or_show_desktop", [](lua_State *) {
         if (!overview::is_showing())
-            if (show_desktop::is_opened()) {
-                show_desktop::stop_animation();
-                return 0;
-            }
-            
-        if (!overview::is_showing())
             overview::open(hypriso->monitor_from_cursor()); 
         return 0;
     });

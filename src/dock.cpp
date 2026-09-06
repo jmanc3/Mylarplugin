@@ -3521,6 +3521,28 @@ Bounds dock::get_item_location(std::string monitor_name, std::string item_name) 
     return {0, 0, 100, 100};
 }
 
+std::map<int, Bounds> dock::try_get_locations(const std::string &name) {
+    std::map<int, Bounds> locations;
+    for (auto d : docks) {
+        if (d->creation_settings.monitor_name != name)
+            continue;
+        // The compositor must not wait for the dock's rendering thread.
+        std::unique_lock<std::mutex> lock(d->app->mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            continue;
+        if (auto icons = container_by_name("icons", d->window->root)) {
+            for (auto p : icons->children) {
+                const auto pin = (Pin *) p->user_data;
+                auto bounds = p->real_bounds;
+                bounds.scale(1.0f / d->window->raw_window->dpi);
+                for (const auto &window : pin->windows)
+                    locations.emplace(window.cid, bounds);
+            }
+        }
+    }
+    return locations;
+}
+
 Bounds dock::get_location(std::string name, int cid) {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
