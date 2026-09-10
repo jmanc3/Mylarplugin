@@ -1916,10 +1916,11 @@ void windowing::main_loop(RawApp *app) {
         }
 
         // Build pollfds based on ctx->polled_fds
+        const auto polled_functions = ctx->polled_fds;
         std::vector<struct pollfd> pfds;
-        pfds.reserve(ctx->polled_fds.size());
+        pfds.reserve(polled_functions.size() + 1);
 
-        for (auto &p : ctx->polled_fds) {
+        for (const auto &p : polled_functions) {
             short ev = POLLIN | POLLERR | POLLHUP | POLLNVAL;
             if (p.fd == wayland_fd && need_flush)
                 ev |= POLLOUT;
@@ -1952,8 +1953,8 @@ void windowing::main_loop(RawApp *app) {
         // The wake pipe is the cross-thread stop notification.  Handle it
         // before dispatching any newly received Wayland events: poll can
         // report both descriptors in the same iteration.
-        for (size_t i = 0; i < ctx->polled_fds.size(); ++i) {
-            if (ctx->polled_fds[i].fd == ctx->wake_pipe[0] &&
+        for (size_t i = 0; i < polled_functions.size(); ++i) {
+            if (polled_functions[i].fd == ctx->wake_pipe[0] &&
                 (pfds[i + 1].revents & POLLIN)) {
                 char buf[64];
                 while (read(ctx->wake_pipe[0], buf, sizeof buf) > 0) {}
@@ -1988,12 +1989,15 @@ void windowing::main_loop(RawApp *app) {
 
         // The Wayland display is owned entirely by the code above.  Dispatch
         // the auxiliary descriptors only after its read transaction is closed.
-        const size_t end = ctx->polled_fds.size();
-        for (size_t i = 0; i < end; i++) {
-            auto &p = ctx->polled_fds[i];
+        // Timer callbacks can remove themselves and register another timer.
+        // Keep callbacks paired with the descriptors that were actually polled.
+        for (size_t i = 0; i < polled_functions.size(); i++) {
+            auto p = polled_functions[i];
             p.revents = pfds[i + 1].revents;
 
-            if (p.revents && p.func)
+            const bool registered = std::any_of(ctx->polled_fds.begin(), ctx->polled_fds.end(),
+                [&](const auto &current) { return current.fd == p.fd; });
+            if (registered && p.revents && p.func)
                 p.func(p);  // call the polled handler
         }
 
