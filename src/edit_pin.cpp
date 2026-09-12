@@ -5,7 +5,7 @@
 
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
-#include "dock.h"
+#include "dock/dock.h"
 #include "events.h"
 
 #include <cairo.h>
@@ -1134,4 +1134,3 @@ void edit_pin::open(std::string stacking_rule, std::string icon, std::string com
     std::thread t(start_edit_pin, stacking_rule, icon, command);
     t.detach();
 }
-

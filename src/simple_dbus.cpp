@@ -16,7 +16,7 @@
 //#include "settings_menu.h"
 //#include "wifi_backend.h"
 #include "dbus_helper.h"
-#include "dock.h"
+#include "dock/dock.h"
 
 #include <chrono>
 #include <cstdint>

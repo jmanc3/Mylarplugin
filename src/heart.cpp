@@ -18,7 +18,7 @@
 #include "alt_tab.h"
 #include "drag.h"
 #include "resizing.h"
-#include "dock.h"
+#include "dock/dock.h"
 #include "snap_preview.h"
 #include "popup.h"
 #include "quick_shortcut_menu.h"

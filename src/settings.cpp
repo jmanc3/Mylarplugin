@@ -7,7 +7,7 @@
 #include "hypriso.h"
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
-#include "dock.h"
+#include "dock/dock.h"
 #include <chrono>
 #include <csetjmp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>

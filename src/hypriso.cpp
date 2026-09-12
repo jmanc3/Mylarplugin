@@ -23,7 +23,7 @@
 #include "hypriso.h"
 #include "overview.h"
 //#include "heart.h"
-//#include "dock.h"
+//#include "dock/dock.h"
 //#include "container.h"
 //#include "first.h"
 #include <pango/pangocairo.h>

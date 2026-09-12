@@ -1,6 +1,6 @@
 #include "overview.h"
 #include "container.h"
-#include "dock.h"
+#include "dock/dock.h"
 #include "drag_workspace_switcher.h"
 #include "first.h"
 #include "heart.h"

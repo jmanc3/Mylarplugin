@@ -1,4 +1,4 @@
-#include "dock.h"
+#include "dock/dock.h"
 
 #include "container.h"
 #include "events.h"

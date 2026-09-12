@@ -2,7 +2,7 @@
 
 #include "container.h"
 #include "hypriso.h"
-#include "dock.h"
+#include "dock/dock.h"
 #include "heart.h"
 #include "overview.h"
 #include "snap_assist.h"

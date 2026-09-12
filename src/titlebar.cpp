@@ -1,7 +1,7 @@
 #include "titlebar.h"
 
 #include "alt_tab.h"
-#include "dock.h"
+#include "dock/dock.h"
 #include "heart.h"
 #include "hypriso.h"
 #include "events.h"
@@ -741,5 +741,4 @@ void titlebar::on_activated(int id) {
         request_damage(actual_root, c);
     }
 }
-
 
