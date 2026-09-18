@@ -970,129 +970,29 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
     };
 }
 
-static void paint_initial_clock_time() {
-    using Clock = std::chrono::steady_clock;
-    if (!hypriso->session_active())
+static void paint_initial_fade_in() {
+    static bool done = false;
+    if (done)
         return;
-    // Start the clock timer only after the monitor's startup zoom has finished.
-    if (hypriso->zoom_progress(current_rendering_monitor()) < 1.F)
-        return;
-
-    static bool first_pass = true;
-    defer(first_pass = false);
-    static const auto start_time = Clock::now();
-
-    static bool finished = false;
-    struct ClockTextures {
-        TextureInfo text;
-        TextureInfo shadow;
-
-        TextureInfo flourish;
-        TextureInfo flourish_shadow;
-    };
-    static std::unordered_map<int, ClockTextures> textures;
-
-    constexpr double delay_ms = 600;
-    constexpr double reveal_ms = 1000;
-    constexpr double hold_ms = 3000;
-    constexpr double fade_ms = 500;
-    constexpr double fade_start_ms = delay_ms + reveal_ms + hold_ms;
-
-    if (finished)
-        return;
-
-    const double elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start_time).count();
-    if (elapsed >= fade_start_ms + fade_ms) {
-        for (const auto& [monitor, cached] : textures) {
-            free_text_texture(cached.text.id);
-            free_text_texture(cached.shadow.id);
-            free_text_texture(cached.flourish.id);
-            free_text_texture(cached.flourish_shadow.id);
-        }
-        textures.clear();
-        finished = true;
-        request_refresh();
-        return;
-    }
-
-    // Keep frames coming even when the desktop is otherwise idle.
-    request_refresh();
-    if (elapsed <= delay_ms)
+    done = hyprland_instance_name() == last_hyprland_instance_name();
+    if (done)
         return;
 
     const int monitor = current_rendering_monitor();
-    const auto s = scale(monitor);
-    const auto monitor_bounds = bounds_monitor(monitor);
-    if (monitor_bounds.w <= 0 || monitor_bounds.h <= 0)
+    rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0 - (dt / time)));
+
+    request_refresh();
+
+    if (!hypriso->session_active())
+        return;
+    if (hypriso->zoom_progress(current_rendering_monitor()) < 1.F)
         return;
 
-    // Each monitor gets its own textures at its scale, retained until the fade ends.
-    auto [entry, inserted] = textures.try_emplace(monitor);
-    auto& cached = entry->second;
-    if (inserted) {
-        const std::time_t now = std::time(nullptr);
-        std::tm local_time{};
-        if (!localtime_r(&now, &local_time))
-            return;
-        char time_text[16];
-        std::snprintf(time_text, sizeof(time_text), "%d:%02d %s",
-                      local_time.tm_hour % 12 == 0 ? 12 : local_time.tm_hour % 12,
-                      local_time.tm_min, local_time.tm_hour < 12 ? "AM" : "PM");
-        cached.text = gen_text_texture(mylar_font, time_text, 140 * s, RGBA(1, 1, 1, 1));
-        cached.shadow = generate_dropshadow_texture(cached.text.id, 10 * s, .43);
+    static long start_time = get_current_time_in_ms();
+    double dt = ((double) (get_current_time_in_ms() - start_time));
+    double time = 1000.0;
 
-        const char* home = std::getenv("HOME");
-        std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/flourish.svg";
-        if (std::filesystem::exists(filepath)) {
-            auto col = RGBA(1, 1, 1, 1);
-            cached.flourish = gen_texture(filepath, 600 * s, &col);
-            cached.flourish_shadow = generate_dropshadow_texture(cached.flourish.id, 10 * s, .43);
-        }
-    }
-    if (cached.text.id == -1)
-        return;
-
-    const double center_x = monitor_bounds.w * s * 0.5;
-    // 80% up from the bottom places the clock near the top edge.
-    const double center_y = monitor_bounds.h * s * 0.1;
-    const Bounds text_bounds(center_x - cached.text.w * 0.5, center_y - cached.text.h * 0.5,
-                             cached.text.w, cached.text.h);
-    const Bounds shadow_bounds(center_x - cached.shadow.w * 0.5, center_y - cached.shadow.h * 0.5,
-                               cached.shadow.w, cached.shadow.h);
-    const auto& reveal_bounds = cached.shadow.id != -1 ? shadow_bounds : text_bounds;
-    const double progress = std::clamp((elapsed - delay_ms) / reveal_ms, 0.0, 1.0);
-    const double reveal = progress * progress * (3.0 - 2.0 * progress);
-    const double clip_width = reveal_bounds.w * reveal;
-    const float alpha = reveal * (1.0 - std::clamp((elapsed - fade_start_ms) / fade_ms, 0.0, 1.0));
-
-    const bool previous_clip = hypriso->clip;
-    const auto previous_clipbox = hypriso->clipbox;
-    hypriso->clip = true;
-    hypriso->clipbox = Bounds(center_x - clip_width * 0.5, reveal_bounds.y, clip_width, reveal_bounds.h);
-
-    if (cached.shadow.id != -1)
-        draw_texture(cached.shadow, shadow_bounds, alpha);
-    draw_texture(cached.text, text_bounds, alpha);
-
-    if (cached.flourish.id != -1) {
-        const double flourish_center_y = text_bounds.y + std::max(text_bounds.h, shadow_bounds.h);
-        const Bounds flourish_bounds(center_x - cached.flourish.w * 0.5,
-                                     flourish_center_y - cached.flourish.h * 0.5,
-                                     cached.flourish.w, cached.flourish.h);
-        const Bounds flourish_shadow_bounds(center_x - cached.flourish_shadow.w * 0.5,
-                                            flourish_center_y - cached.flourish_shadow.h * 0.5,
-                                            cached.flourish_shadow.w, cached.flourish_shadow.h);
-        const auto& flourish_reveal_bounds = cached.flourish_shadow.id != -1 ? flourish_shadow_bounds : flourish_bounds;
-        const double flourish_clip_width = flourish_reveal_bounds.w * reveal;
-        hypriso->clipbox = Bounds(center_x - flourish_clip_width * 0.5, flourish_reveal_bounds.y,
-                                 flourish_clip_width, flourish_reveal_bounds.h);
-        if (cached.flourish_shadow.id != -1)
-            draw_texture(cached.flourish_shadow, flourish_shadow_bounds, alpha);
-        draw_texture(cached.flourish, flourish_bounds, alpha);
-    }
-
-    hypriso->clip = previous_clip;
-    hypriso->clipbox = previous_clipbox;
+    done = dt > time;
 }
 
 static void on_render(int id, int stage) {
@@ -1246,7 +1146,7 @@ static void on_render(int id, int stage) {
             }
         }
 
-        paint_initial_clock_time();
+        paint_initial_fade_in();
     }
 }
 

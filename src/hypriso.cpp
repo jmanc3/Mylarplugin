@@ -9742,3 +9742,13 @@ void set_api(void *api) {
 bool HyprIso::session_active() {
     return g_pCompositor->m_sessionActive;
 }
+
+std::string hyprland_instance_name() {
+    return g_pCompositor->m_instanceSignature;
+}
+
+std::string last_hyprland_instance_name() {
+    return previously_seen_instance_signature;
+}
+
+

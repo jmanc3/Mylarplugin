@@ -652,4 +652,7 @@ bool is_slept(int cid);
 
 void set_api(void *api);
 
+std::string hyprland_instance_name();
+std::string last_hyprland_instance_name();
+
 #endif // hypriso_h_INCLUDED
