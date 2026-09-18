@@ -979,6 +979,8 @@ static void paint_initial_fade_in() {
         return;
 
     const int monitor = current_rendering_monitor();
+    double dt = 0.0;
+    double time = 1000.0;
     rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0 - (dt / time)));
 
     request_refresh();
@@ -989,8 +991,7 @@ static void paint_initial_fade_in() {
         return;
 
     static long start_time = get_current_time_in_ms();
-    double dt = ((double) (get_current_time_in_ms() - start_time));
-    double time = 1000.0;
+    dt = ((double) (get_current_time_in_ms() - start_time));
 
     done = dt > time;
 }
