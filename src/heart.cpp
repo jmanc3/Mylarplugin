@@ -971,6 +971,7 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
 }
 
 static void paint_initial_fade_in() {
+    return;
     static bool done = false;
     if (done)
         return;
@@ -980,7 +981,7 @@ static void paint_initial_fade_in() {
 
     const int monitor = current_rendering_monitor();
     double dt = 0.0;
-    double time = 1000.0;
+    double time = 4000.0;
     rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0 - (dt / time)));
 
     request_refresh();
