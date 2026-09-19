@@ -2571,7 +2571,7 @@ hl.monitor({
 -- Set programs that you use
 local terminal    = "alacritty"
 local fileManager = "dolphin"
-local menu        = "rofi -show run"
+local menu        = "wofi -show run"
 
 
 -------------------
