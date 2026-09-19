@@ -61,6 +61,8 @@ static bool IS_META_PRESSED() {
     return META_PRESSED || force_meta_open;
 }
 
+static float initial_fade_in_scalar = 0.0;
+
 static bool mouse_down = false;
 //static bool and_on_desktop = false;
 
@@ -971,30 +973,44 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
 }
 
 static void paint_initial_fade_in() {
-    return;
     static bool done = false;
     if (done)
         return;
-    done = hyprland_instance_name() == last_hyprland_instance_name();
+    if (hyprland_instance_name() == last_hyprland_instance_name())
+        done = true;
     if (done)
         return;
 
     const int monitor = current_rendering_monitor();
     double dt = 0.0;
-    double time = 4000.0;
-    rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0 - (dt / time)));
+    double time = 600.0;
 
     request_refresh();
 
-    if (!hypriso->session_active())
+    if (!hypriso->session_active()) {
+        rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0));
         return;
-    if (hypriso->zoom_progress(current_rendering_monitor()) < 1.F)
+    }
+    if (hypriso->zoom_progress(current_rendering_monitor()) < 1.F) {
+        rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0));
         return;
+    }
 
     static long start_time = get_current_time_in_ms();
     dt = ((double) (get_current_time_in_ms() - start_time));
+    double delay = 2000.0;
+    if (dt < delay) {
+        dt = 0.0;
+    } else {
+        dt -= delay;
+    }
+    
+    rect(bounds_monitor(monitor).scale(scale(monitor)), RGBA(0, 0, 0, 1.0 - (dt / time)));
 
     done = dt > time;
+    initial_fade_in_scalar = dt / time;
+    if (done)
+        initial_fade_in_scalar = 1.0;
 }
 
 static void on_render(int id, int stage) {
@@ -1030,7 +1046,9 @@ static void on_render(int id, int stage) {
                     b.y = 0;
                     b.scale(scale(current_monitor));
                     auto first_bounds = wallpaper_bounds(first, b);
+                    first_bounds.scale_from_center(1 + .1 * (1.0 - initial_fade_in_scalar));
                     auto second_bounds = wallpaper_bounds(second, b);
+                    second_bounds.scale_from_center(1 + .1 * (1.0 - initial_fade_in_scalar));
                     float trans = 700.0f;
                     
                     if (delta < trans) {
