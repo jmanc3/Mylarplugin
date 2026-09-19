@@ -294,6 +294,22 @@ static void update_scene() {
                 workspace_shift = new_index - old_index;
             }
         }
+        // Reverse teaser materialization when the trailing empty desktop is
+        // removed. Its moving card becomes the peek again, replacing the
+        // hidden teaser instead of painting both during the return animation.
+        const auto previous_last = std::find_if(previous_order.rbegin(), previous_order.rend(), [](int wid) {
+            return wid != teaser_workspace;
+        });
+        if (previous_last != previous_order.rend() &&
+            std::find(monitor.order.begin(), monitor.order.end(), *previous_last) == monitor.order.end()) {
+            auto last = monitor.workspaces.find(*previous_last);
+            if (last != monitor.workspaces.end() && last->second.thumbnails.empty()) {
+                auto teaser = monitor.workspaces.extract(last);
+                teaser.key() = teaser_workspace;
+                monitor.workspaces.erase(teaser_workspace);
+                monitor.workspaces.insert(std::move(teaser));
+            }
+        }
         auto area = bounds_monitor(mid);
         area.scale_from_center(.8);
         area = area.intersection(bounds_reserved_monitor(mid));
