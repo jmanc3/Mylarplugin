@@ -69,26 +69,12 @@ void workspace_indicator::on_change(int cid) {
         
         auto b = Bounds(bounds.x + bounds.w * .5 - w * .5, bounds.y + bounds.h - h * 2, w, h);
         {
-            auto larger = b;
-            larger.x -= 4 * s;
-            larger.w += 8 * s;
-            auto sm = larger;
-            sm.x -= sm.h * .5;
-            sm.w += sm.h;
+            auto sm = b;
             sm.shrink(1.0);
-            larger.round();
             render_drop_shadow(rid, 1, {0, 0, 0, 1.0}, h * .5, 2.0, sm);
 
-            rect(larger, {.14, .14, .14, 1}, 0, 0.0, 2.0, true);
-            auto left = larger;
-            left.w = left.h;
-            left.x -= left.w * .5;
-            rect(left, {.14, .14, .14, 1}, 0, left.h * .5, 2.0, false);
-            
-            auto right = larger;
-            right.w = right.h;
-            right.x += larger.w - right.w * .5;
-            rect(right, {.14, .14, .14, 1}, 0, right.h * .5, 2.0, false);
+            // Each dot occupies an h-by-h cell, including the rounded end caps.
+            rect(b, {.14, .14, .14, 1}, 0, h * .5, 2.0, true);
         }
 
         float dot_w = std::round(4 * s);
