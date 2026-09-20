@@ -571,6 +571,7 @@ void draw_texture(TextureInfo info, Bounds b, float a = 1.0, float clip_w = 0.0)
 
 void setCursorImageUntilUnset(std::string cursor);
 void unsetCursorImage(bool force = false);
+void set_cursor_hidden_for_desktop_fade(bool hidden);
 
 int get_monitor(int client);
 

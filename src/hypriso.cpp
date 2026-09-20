@@ -197,6 +197,7 @@
 #include <hyprland/src/render/pass/BorderPassElement.hpp>
 //#include <hyprland/src/managers/HookSystemManager.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
+#include <hyprland/src/pointer/cursor/CursorManager.hpp>
 #include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
 #include <hyprland/src/render/decorations/DecorationPositioner.hpp>
 #include <hyprland/src/render/decorations/IHyprWindowDecoration.hpp>
@@ -5383,6 +5384,75 @@ void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
            return;
        }
     }
+}
+
+static bool cursor_hidden_for_desktop_fade = false;
+static CFunctionHook* desktop_fade_cursor_mode_hook = nullptr;
+static CFunctionHook* desktop_fade_cursor_animation_hook = nullptr;
+
+static void hook_desktop_fade_cursor_mode(Render::IHyprRenderer* renderer) {
+    if (cursor_hidden_for_desktop_fade) {
+        renderer->setCursorHidden(true);
+        return;
+    }
+
+    using Original = void (*)(Render::IHyprRenderer*);
+    rc<Original>(desktop_fade_cursor_mode_hook->m_original)(renderer);
+}
+
+static void hook_desktop_fade_cursor_animation(Pointer::Cursor::CCursorManager* cursor) {
+    // Animated cursor frames can otherwise reinstall a hidden hardware cursor.
+    if (cursor_hidden_for_desktop_fade)
+        return;
+
+    using Original = void (*)(Pointer::Cursor::CCursorManager*);
+    rc<Original>(desktop_fade_cursor_animation_hook->m_original)(cursor);
+}
+
+static CFunctionHook* create_desktop_fade_cursor_hook(const std::string& name, const std::string& signature, const void* replacement) {
+    const auto methods = HyprlandAPI::findFunctionsByName(globals->api, name);
+    for (const auto& method : methods) {
+        if (method.demangled != signature)
+            continue;
+
+        auto hook = HyprlandAPI::createFunctionHook(globals->api, method.address, replacement);
+        if (hook && hook->hook())
+            return hook;
+
+        if (hook)
+            HyprlandAPI::removeFunctionHook(globals->api, hook);
+        break;
+    }
+
+    notify("Couldn't hook " + signature + " for the desktop fade");
+    return nullptr;
+}
+
+void set_cursor_hidden_for_desktop_fade(bool hidden) {
+    if (cursor_hidden_for_desktop_fade == hidden)
+        return;
+
+    if (hidden && !desktop_fade_cursor_mode_hook) {
+        desktop_fade_cursor_mode_hook = create_desktop_fade_cursor_hook(
+            "ensureCursorRenderingMode", "Render::IHyprRenderer::ensureCursorRenderingMode()", rc<const void*>(&hook_desktop_fade_cursor_mode));
+        if (!desktop_fade_cursor_mode_hook)
+            return;
+
+        desktop_fade_cursor_animation_hook = create_desktop_fade_cursor_hook(
+            "tickAnimatedCursor", "Pointer::Cursor::CCursorManager::tickAnimatedCursor()", rc<const void*>(&hook_desktop_fade_cursor_animation));
+        if (!desktop_fade_cursor_animation_hook) {
+            HyprlandAPI::removeFunctionHook(globals->api, desktop_fade_cursor_mode_hook);
+            desktop_fade_cursor_mode_hook = nullptr;
+            return;
+        }
+    }
+
+    cursor_hidden_for_desktop_fade = hidden;
+    g_pHyprRenderer->ensureCursorRenderingMode();
+
+    // Repaint immediately when starting, finishing, or skipping the fade.
+    for (const auto& monitor : State::monitorState()->monitors())
+        g_pHyprRenderer->damageMonitor(monitor);
 }
 
 void setCursorImageUntilUnset(std::string cursor) {

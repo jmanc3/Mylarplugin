@@ -972,18 +972,34 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
     };
 }
 
+static bool initial_fade_in_done = false;
+static bool initial_fade_in_forced = false;
+static long initial_fade_in_start_time = -1;
+
+static void reset_initial_fade_in() {
+    initial_fade_in_done = false;
+    initial_fade_in_forced = true;
+    initial_fade_in_start_time = -1;
+    initial_fade_in_scalar = 0.0;
+    set_cursor_hidden_for_desktop_fade(true);
+    damage_all();
+}
+
 static void paint_initial_fade_in() {
-    static bool done = false;
-    if (done)
-        return;
-    if (hyprland_instance_name() == last_hyprland_instance_name())
-        done = true;
+    auto& done = initial_fade_in_done;
     if (done)
         return;
 
+    if (!initial_fade_in_forced && hyprland_instance_name() == last_hyprland_instance_name())
+        done = true;
+    if (done) {
+        set_cursor_hidden_for_desktop_fade(false);
+        return;
+    }
+
     const int monitor = current_rendering_monitor();
     double dt = 0.0;
-    double time = 600.0;
+    double time = 400.0;
 
     request_refresh();
 
@@ -996,9 +1012,11 @@ static void paint_initial_fade_in() {
         return;
     }
 
-    static long start_time = get_current_time_in_ms();
-    dt = ((double) (get_current_time_in_ms() - start_time));
+    if (initial_fade_in_start_time == -1)
+        initial_fade_in_start_time = get_current_time_in_ms();
+    dt = ((double) (get_current_time_in_ms() - initial_fade_in_start_time));
     double delay = 2000.0;
+    set_cursor_hidden_for_desktop_fade(dt < delay);
     if (dt < delay) {
         dt = 0.0;
     } else {
@@ -1046,9 +1064,9 @@ static void on_render(int id, int stage) {
                     b.y = 0;
                     b.scale(scale(current_monitor));
                     auto first_bounds = wallpaper_bounds(first, b);
-                    first_bounds.scale_from_center(1 + .1 * (1.0 - initial_fade_in_scalar));
+                    first_bounds.scale_from_center(1 + .4 * (1.0 - initial_fade_in_scalar));
                     auto second_bounds = wallpaper_bounds(second, b);
-                    second_bounds.scale_from_center(1 + .1 * (1.0 - initial_fade_in_scalar));
+                    second_bounds.scale_from_center(1 + .4 * (1.0 - initial_fade_in_scalar));
                     float trans = 700.0f;
                     
                     if (delta < trans) {
@@ -1677,7 +1695,7 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("init", [](lua_State *) {
-        hypriso->login_animation();
+        reset_initial_fade_in();
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("toggle_dock_merge", [](lua_State *) {
@@ -1912,6 +1930,7 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    set_cursor_hidden_for_desktop_fade(!initial_fade_in_done);
     load_restore_infos();
             
     later(100, [](Timer *) {
@@ -2001,6 +2020,7 @@ void heart::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    set_cursor_hidden_for_desktop_fade(false);
     hypriso->on_config_reload = nullptr;
     
     save_restore_infos();
