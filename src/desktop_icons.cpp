@@ -418,7 +418,6 @@ void watch_desktop_folder() {
 struct IcoContainerData : UserData {
     std::string name;
     Container *c;
-    bool was_active_last_frame = false;
     long last_time_pressed = 0;
     bool is_selected = false;
     // Grid slot; (0,0) is top-left, (0,1) is the slot below. (-1,-1) = unset.
@@ -1118,17 +1117,10 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     *datum<bool>(c, "icon_attempted") = false;
 
     c->when_mouse_motion = [](Container* actual_root, Container* c) {
-        auto ico = (IcoContainerData *) c->user_data;
-        bool is_active = c->state.mouse_hovering || c->state.mouse_pressing;
-        auto b = c->real_bounds;
-        b.grow(20);
-        if (is_active) {
-            hypriso->damage_box(b);
-        } else if (ico->was_active_last_frame) {
-            hypriso->damage_box(b);
-        }
-        ico->was_active_last_frame = is_active;
+        damage_icon(c);
     };
+    // Entry does not dispatch motion, so both hover transitions must damage the icon.
+    c->when_mouse_enters_container = c->when_mouse_motion;
     c->when_mouse_leaves_container = c->when_mouse_motion;
     c->when_drag_end_is_click = false;
     c->when_drag_start = [](Container* actual_root, Container* c) {
@@ -1178,8 +1170,6 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         snap_icons_to_grid(c->parent, dragged);
         for (auto *icon : dragged) {
             begin_icon_settle(icon);
-            auto *ico = (IcoContainerData *)icon->user_data;
-            ico->was_active_last_frame = icon->state.mouse_hovering || icon->state.mouse_pressing;
         }
         save_icon_positions(c->parent);
     };
