@@ -2460,7 +2460,9 @@ void HyprIso::screenshot_min(int id) {
                 if (hw->w == w && hw->w->m_monitor) {
                     if (!hw->min_fb)
                         hw->min_fb = g_pHyprRenderer->createFB();
-                    screenshot_window_with_decos(hw->min_fb, hw->w);
+                    const auto snapshotExtents = screenshot_window_with_decos(hw->min_fb, hw->w);
+                    auto snapshotBounds = w->getWindowMainSurfaceBox();
+                    snapshotBounds.addExtents(snapshotExtents);
                     glActiveTexture(GL_TEXTURE0);
                     auto tex = hw->min_fb->getTexture();
                     tex->bind();
@@ -2468,11 +2470,11 @@ void HyprIso::screenshot_min(int id) {
                     tex->unbind();
                     
                     hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
-                    hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+                    hw->w_min_size = tobounds(snapshotBounds);
                     hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
                     hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
                     hw->w_min_size.scale(w->m_monitor->m_scale);
-                    hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+                    hw->w_min_raw = tobounds(snapshotBounds);
                     hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
                     hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
                 }
@@ -2497,7 +2499,9 @@ void hook_onSetHidden(void* thisptr, bool state) {
                 // set to hide
                 if (!hw->min_fb)
                     hw->min_fb = g_pHyprRenderer->createFB();
-                screenshot_window_with_decos(hw->min_fb, hw->w);
+                const auto snapshotExtents = screenshot_window_with_decos(hw->min_fb, hw->w);
+                auto snapshotBounds = w->getWindowMainSurfaceBox();
+                snapshotBounds.addExtents(snapshotExtents);
                 glActiveTexture(GL_TEXTURE0);
                 auto tex = hw->min_fb->getTexture();
                 tex->bind();
@@ -2505,11 +2509,11 @@ void hook_onSetHidden(void* thisptr, bool state) {
                 tex->unbind();
  
                 hw->w_min_mon = {0, 0, hw->w->m_monitor->m_pixelSize.x, hw->w->m_monitor->m_pixelSize.y};
-                hw->w_min_size = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_size = tobounds(snapshotBounds);
                 hw->w_min_size.x -= hw->w->m_monitor->m_position.x;
                 hw->w_min_size.y -= hw->w->m_monitor->m_position.y;
                 hw->w_min_size.scale(w->m_monitor->m_scale);
-                hw->w_min_raw = tobounds(w->getFullWindowBoundingBox());
+                hw->w_min_raw = tobounds(snapshotBounds);
                 hw->w_min_raw.x -= hw->w->m_monitor->m_position.x;
                 hw->w_min_raw.y -= hw->w->m_monitor->m_position.y;
             } else {
@@ -6856,34 +6860,15 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     auto tex = hw->min_fb->getTexture();
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
-                    const auto snapshotExtents = hw->w->getFullWindowExtents();
-                    const auto realPosition =
-                        hw->w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT) +
-                        ((hw->w->m_state & Desktop::View::WINDOW_STATE_PINNED)
-                            ? Vector2D{}
-                            : hw->w->m_workspace->m_renderOffset->value());
+                    // The snapshot is anchored at (0, 0) in a monitor-sized
+                    // framebuffer. Fit only its occupied region into the dock.
+                    Bounds bounds = hw->w_min_size;
+                    bounds.w = std::min(bounds.w, tex->m_size.x);
+                    bounds.h = std::min(bounds.h, tex->m_size.y);
+                    if (bounds.w <= 0 || bounds.h <= 0)
+                        return;
 
-                    const auto scale = hw->w->m_monitor->m_scale;
-
-                    Bounds bounds = {
-                        realPosition.x - snapshotExtents.topLeft.x,
-                        realPosition.y - snapshotExtents.topLeft.y,
-                        tex->m_size.x / scale,
-                        tex->m_size.y / scale,
-                    };
-
-                    if (hypriso->is_snapped(hw->id)) {
-                        bounds.x = realPosition.x;
-                        bounds.y = realPosition.y;
-                        
-                        if (hypriso->has_decorations(hw->id)) {
-                            bounds.y -= titlebar_h;
-                        }
-                    }
-
-                    bounds.scale(scale);
-                    // Calculate the aspect-correct box that fits inside b.
-                    const float textureAspect = (float)tex->m_size.x / (float)tex->m_size.y;
+                    const float textureAspect = bounds.w / bounds.h;
                     const float targetAspect = b.w / b.h;
                     Bounds aspectBox = b;
 
@@ -6906,7 +6891,12 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
                     box.round();
 
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = false;
+                    data.allowCustomUV = true;
+                    data.primarySurfaceUVTopLeft = Vector2D(0, 0);
+                    data.primarySurfaceUVBottomRight = Vector2D(
+                        bounds.w / tex->m_size.x,
+                        bounds.h / tex->m_size.y
+                    );
                     data.round = 0.0;
                     data.a = easeInExpo(scalar);
                     data.roundingPower = 2.0;
