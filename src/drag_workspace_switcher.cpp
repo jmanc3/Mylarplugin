@@ -370,13 +370,12 @@ void drag_switcher_actual_open() {
         RGBA col = {.18, .18, .18, .9f * peaking_amount - .1f * openess};
         auto b = c->real_bounds;
         //render_drop_shadow(monitor, 1.0, {0, 0, 0, .37f * peaking_amount}, 8 * s, 2.0, b);
-        if (openess == 0.0) {
-            rect(b, col, 3, 8 * s * (1 - openess), 2.0, true, 1.0); 
-        } else {
-            rect(b, col, 0, 8 * s * openess, 2.0, true, 1.0); 
-        }
-        b.shrink(1.0); 
-        border(b, {.3, .3, .3, 1 * peaking_amount}, 1.0f, 3, 8 * s, 2.0, false); 
+        const auto corner_mask = openess == 0.0 ? 3 : 0;
+        const auto rounding = std::round(8 * s * (openess == 0.0 ? 1.0f : openess));
+        rect(b, col, corner_mask, rounding, 2.0, true, 1.0);
+        // The border expands its input bounds by its monitor-scaled thickness.
+        b.shrink(std::round(s));
+        border(b, {.3, .3, .3, 1 * peaking_amount}, 1.0f, corner_mask, rounding, 2.0, false);
 
         {
             float text_alpha = openess;
@@ -447,11 +446,13 @@ void drag_switcher_actual_open() {
             std::vector<MatteCommands> commands;
             MatteCommands command;
             command.bounds = c->real_bounds;
-            command.bounds.shrink(1.0);
+            command.bounds.shrink(std::round(s));
             command.bounds.round();
             command.thickness = 1.0;
             command.type = 1;
-            command.roundness = 8 * s;
+            // Matte borders add their thickness to the supplied corner radius.
+            const auto rounding = std::round(8 * s * (openess == 0.0 ? 1.0f : openess));
+            command.roundness = std::max(0.0f, rounding - std::round(s));
             commands.push_back(command);
             
             draw_texture_matted(info, std::round(mou.x * s - info.w * .5), std::round(mou.y * s - info.h * .5), commands);
