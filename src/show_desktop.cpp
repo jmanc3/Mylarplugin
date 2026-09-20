@@ -12,9 +12,14 @@
 static bool is_open = false;
 static bool opening = false;
 static unsigned int lifecycle = 0;
+static int closing_gesture_count = -1;
 
 bool show_desktop::is_opened() {
     return is_open || opening;
+}
+
+bool show_desktop::is_closing() {
+    return is_opened() && closing_gesture_count == minimize_gesture_count;
 }
 
 void show_desktop::start() {
@@ -145,6 +150,8 @@ void show_desktop::render() {
 int minimize_gesture_count = 0;
 
 static void actual_spring_anim(long end, float initialVelocity, float scalar_at_start, float target, int start_count) {
+    // Gesture takeover invalidates the closing state along with its animation.
+    closing_gesture_count = target == 0.0f ? start_count : -1;
     later((1000.0f / hypriso->fps(current_rendering_monitor())) * .8, [end, initialVelocity, scalar_at_start, target, start_count](Timer *t) {
         t->keep_running = true;
         if (minimize_gesture_count != start_count || !show_desktop::is_opened()) {

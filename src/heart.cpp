@@ -1309,8 +1309,12 @@ static void minimize_overview_combined_gesture() {
 
     const auto activate = []() {
         if (gesture.owner == desktop_gesture::Owner::Overview) {
+            gesture.initial_progress = std::clamp(overview::get_openess(), 0.0f, 1.0f);
             overview::begin_gesture(monitor);
         } else if (gesture.owner == desktop_gesture::Owner::ShowDesktop) {
+            // Release overview ownership before starting the minimize gesture.
+            overview::instant_close();
+            gesture.initial_progress = std::clamp(show_desktop::get_scalar(), 0.0f, 1.0f);
             minimize_gesture_count++;
             show_desktop::start();
         }
@@ -1318,7 +1322,10 @@ static void minimize_overview_combined_gesture() {
 
     // down stroke results in higher y, vice versa
     make_gesture(3, 6, 0, 1.0, false, [activate](Bounds) {
-        gesture.begin(overview::is_showing(), show_desktop::is_opened(), overview::get_openess(), show_desktop::get_scalar());
+        // A closing view is returning to normal; let the new swipe choose its view.
+        const bool overview_open = overview::is_showing() && !overview::is_closing();
+        const bool desktop_open = show_desktop::is_opened() && !show_desktop::is_closing();
+        gesture.begin(overview_open, desktop_open, overview::get_openess(), show_desktop::get_scalar());
         start = get_current_time_in_ms();
         monitor = hypriso->monitor_from_cursor();
         activate();

@@ -4,6 +4,7 @@ extern int minimize_gesture_count;
 
 namespace show_desktop {
     bool is_opened();
+    bool is_closing();
     
     void start();
     void stop();
