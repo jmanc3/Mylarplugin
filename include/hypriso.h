@@ -78,6 +78,7 @@ struct ConfigSettings {
     bool meter_animations = false;
     bool prefer_pipewire_audio_backend = false;
     bool show_docks = true;
+    bool dock_current_workspace_only = true;
     bool draw_wallpaper = true;
     bool hotcorners = true;
     bool desktop_icons = true;

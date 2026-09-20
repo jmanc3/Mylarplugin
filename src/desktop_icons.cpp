@@ -1316,7 +1316,7 @@ static void create_root_popup() {
         PopOption pop;
         pop.text = "Configure Display Settings...";   
         pop.on_clicked = []() {
-            settings::start();
+            settings::start("Display");
         };
         root.push_back(pop);
     }

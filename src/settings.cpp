@@ -26,6 +26,7 @@
 
 static RawApp *settings_app = nullptr;
 static MylarWindow *settings_mylar = nullptr;
+static std::string requested_page;
 
 struct SettingsTheme {
     RGBA background;
@@ -410,6 +411,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(int, "repeat_delay", &settings->repeat_delay);
     bind(int, "repeat_rate", &settings->repeat_rate);
     bind(bool, "show_docks", &settings->show_docks);
+    bind(bool, "dock_current_workspace_only", &settings->dock_current_workspace_only);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "desktop_icons", &settings->desktop_icons);
@@ -1107,6 +1109,18 @@ static void fill_dock_settings(Container *root, Container *c) {
             dock::stop();
         }
     }, "\ue75b");
+
+    make_vert_space(padded_right, 4);
+
+    make_bool(padded_right, "Only show windows on the current workspace",
+        "Turn off to show windows from all workspaces and monitors",
+        set->dock_current_workspace_only, [](bool value) {
+            main_thread([value]() {
+                set->dock_current_workspace_only = value;
+                dock::update_workspaces();
+                settings::load_save_settings(true, set);
+            });
+        }, "\ue75b");
 }
 
 static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
@@ -2179,6 +2193,7 @@ static void fill_mouse_settings(Container *root, Container *c) {
 
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
+    c->name = label;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         c->wanted_bounds.h = 40 * mylar->raw_window->dpi;
@@ -2243,6 +2258,20 @@ void fill_root(Container *root) {
         cairo_fill(cr);
     };
     auto left_right = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+    // Handle external navigation on the settings thread before laying out the page.
+    left_right->pre_layout = [](Container *root, Container *, const Bounds &) {
+        std::string page;
+        page.swap(requested_page);
+        if (!page.empty()) {
+            if (auto tab = container_by_name(page, root)) {
+                if (tab->when_clicked) {
+                    if (auto right = container_by_name("settings_right", root))
+                        ((RightData *) right->user_data)->scroll = 0;
+                    tab->when_clicked(root, tab);
+                }
+            }
+        }
+    };
     
     auto left = left_right->child(::vbox, 300, FILL_SPACE);
     left->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -2302,11 +2331,18 @@ void actual_start() {
     windowing::main_loop(settings_app);
 
     settings_app = nullptr;
+    settings_mylar = nullptr;
 };
 
-void settings::start() {
-    if (settings_app)
+void settings::start(std::string page) {
+    if (!page.empty()) {
+        requested_page = page;
+    }
+    if (settings_app) {
+        if (settings_mylar)
+            windowing::redraw(settings_mylar->raw_window);
         return;
+    }
     std::thread t(actual_start);
     t.detach();
 }

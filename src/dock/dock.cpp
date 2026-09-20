@@ -229,6 +229,8 @@ static std::vector<Dock *> docks;
 
 // Read compositor state on the main thread, before the dock thread groups windows.
 static bool window_on_dock_workspace(Dock *dock, int cid) {
+    if (!set->dock_current_workspace_only)
+        return true;
     const int monitor = get_monitor(cid);
     if (monitor == -1)
         return false;
