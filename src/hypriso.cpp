@@ -5455,6 +5455,14 @@ void set_cursor_hidden_for_desktop_fade(bool hidden) {
         g_pHyprRenderer->damageMonitor(monitor);
 }
 
+void center_cursor_on_monitor(int monitor) {
+    const auto bounds = bounds_monitor(monitor);
+    if (bounds.w <= 0 || bounds.h <= 0)
+        return;
+
+    Pointer::mgr()->warpTo({bounds.x + bounds.w * 0.5, bounds.y + bounds.h * 0.5});
+}
+
 void setCursorImageUntilUnset(std::string cursor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

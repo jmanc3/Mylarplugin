@@ -974,11 +974,13 @@ static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor
 
 static bool initial_fade_in_done = false;
 static bool initial_fade_in_forced = false;
+static bool initial_fade_in_cursor_centered = false;
 static long initial_fade_in_start_time = -1;
 
 static void reset_initial_fade_in() {
     initial_fade_in_done = false;
     initial_fade_in_forced = true;
+    initial_fade_in_cursor_centered = false;
     initial_fade_in_start_time = -1;
     initial_fade_in_scalar = 0.0;
     set_cursor_hidden_for_desktop_fade(true);
@@ -999,7 +1001,7 @@ static void paint_initial_fade_in() {
 
     const int monitor = current_rendering_monitor();
     double dt = 0.0;
-    double time = 400.0;
+    double time = 550.0;
 
     request_refresh();
 
@@ -1016,6 +1018,10 @@ static void paint_initial_fade_in() {
         initial_fade_in_start_time = get_current_time_in_ms();
     dt = ((double) (get_current_time_in_ms() - initial_fade_in_start_time));
     double delay = 2000.0;
+    if (dt >= delay && !initial_fade_in_cursor_centered) {
+        center_cursor_on_monitor(hypriso->monitor_from_cursor());
+        initial_fade_in_cursor_centered = true;
+    }
     set_cursor_hidden_for_desktop_fade(dt < delay);
     if (dt < delay) {
         dt = 0.0;
@@ -1064,9 +1070,12 @@ static void on_render(int id, int stage) {
                     b.y = 0;
                     b.scale(scale(current_monitor));
                     auto first_bounds = wallpaper_bounds(first, b);
-                    first_bounds.scale_from_center(1 + .4 * (1.0 - initial_fade_in_scalar));
+                    // {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.08437150831111269,"y":0.011981451924641935}]}
+                    static std::vector<float> curve = { 0.000, 0.139, 0.228, 0.298, 0.355, 0.404, 0.448, 0.486, 0.521, 0.553, 0.582, 0.609, 0.634, 0.657, 0.678, 0.698, 0.717, 0.735, 0.752, 0.767, 0.782, 0.796, 0.810, 0.822, 0.834, 0.845, 0.856, 0.866, 0.875, 0.884, 0.893, 0.901, 0.909, 0.916, 0.923, 0.929, 0.935, 0.941, 0.946, 0.951, 0.956, 0.961, 0.965, 0.969, 0.972, 0.976, 0.979, 0.982, 0.984, 0.987, 0.989, 0.991, 0.993, 0.994, 0.996, 0.997, 0.998, 0.999, 0.999, 1.000, 1.000 };
+                    auto scalar = pull(curve, initial_fade_in_scalar);
+                    first_bounds.scale_from_center(1 + .4 * (1.0 - scalar));
                     auto second_bounds = wallpaper_bounds(second, b);
-                    second_bounds.scale_from_center(1 + .4 * (1.0 - initial_fade_in_scalar));
+                    second_bounds.scale_from_center(1 + .4 * (1.0 - scalar));
                     float trans = 700.0f;
                     
                     if (delta < trans) {
