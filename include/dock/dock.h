@@ -10,6 +10,7 @@ namespace dock {
     void stop(std::string monitor_name = "");
 
     void redraw();
+    void update_workspaces();
 
     void add_window(int cid);
     void remove_window(int cid);

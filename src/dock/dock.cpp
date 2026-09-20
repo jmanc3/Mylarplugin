@@ -84,6 +84,7 @@ static bool scripts_loaded = false;
 class Window {
 public:
     int cid; // unique id
+    bool on_workspace = false;
    
     std::string window_icon;
     std::string command;
@@ -101,6 +102,7 @@ public:
 
     Window(const Window& w) {
         cid = w.cid;
+        on_workspace = w.on_workspace;
         window_icon = w.window_icon;
         command = w.command;
         title = w.title;
@@ -224,6 +226,17 @@ struct Dock : UserData {
 };
 
 static std::vector<Dock *> docks;
+
+// Read compositor state on the main thread, before the dock thread groups windows.
+static bool window_on_dock_workspace(Dock *dock, int cid) {
+    const int monitor = get_monitor(cid);
+    if (monitor == -1)
+        return false;
+    if (hypriso->monitor_name(monitor) != dock->creation_settings.monitor_name)
+        return false;
+    const int workspace = hypriso->get_active_workspace_id(monitor);
+    return workspace != -1 && hypriso->get_active_workspace_id_client(cid) == workspace;
+}
 
 struct CachedFont {
     std::string name;
@@ -1200,17 +1213,17 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
         }
     }
  
-    // remove windows that no longer exist, and remove pin itself if it would be left empty (unless it's pinned, and last one if !merge_windows)
+    // Remove closed windows and windows outside this dock's active workspace.
     for (int pin_index = icons->children.size() - 1; pin_index >= 0; pin_index--) {
         auto pin_container = icons->children[pin_index];
         auto pin = (Pin *) pin_container->user_data;
         
-        // remove those windows in pin that no longer exist
+        // Keep other workspaces in the collection so they return when switching back.
         for (int window_index = pin->windows.size() -1; window_index >= 0; window_index--) {
             auto window = pin->windows[window_index];
             bool window_still_exists = false;
             for (auto existing_window : dock->collection->list) {
-                if (existing_window->cid == window.cid) {
+                if (existing_window->cid == window.cid && existing_window->on_workspace) {
                     window_still_exists = true;
                 }
             }
@@ -1263,6 +1276,8 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
 
     // based on list, add to groups already existing (and merge true), or create the pin container
     for (auto window : dock->collection->list) {
+        if (!window->on_workspace)
+            continue;
         bool window_needs_to_be_added = true;
         for (auto pin_container : icons->children) {
             auto pin = (Pin *) pin_container->user_data;
@@ -2514,6 +2529,8 @@ static void start_loading_scripts() {
 }
 
 void dock::start(std::string monitor_name) {    
+    if (monitor_name.empty())
+        monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
     if (monitor_name == "FALLBACK")
         return;
     current_alignment = get_dock_alignment();
@@ -2638,6 +2655,7 @@ void dock::add_window(int cid) {
 
         Window *window = new Window;
         window->cid = cid;
+        window->on_workspace = window_on_dock_workspace(d, cid);
         window->stack_rule = stack_rule;
         window->title = hypriso->title_name(cid);
         window->window_icon = icon;
@@ -2701,6 +2719,18 @@ void dock::on_activated(int cid) {
 void dock::redraw() {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
+        windowing::redraw(d->window->raw_window);
+    }
+}
+
+// Called on the main thread after workspace and monitor assignments settle.
+void dock::update_workspaces() {
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        for (auto window : d->collection->list)
+            window->on_workspace = window_on_dock_workspace(d, window->cid);
+        for (auto window : d->collection->to_be_added)
+            window->on_workspace = window_on_dock_workspace(d, window->cid);
         windowing::redraw(d->window->raw_window);
     }
 }

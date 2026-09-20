@@ -301,6 +301,7 @@ struct HyprIso {
     void end(); 
     
     std::function<void(int id)> on_workspace_change = nullptr;
+    std::function<void()> on_workspace_windows_change = nullptr;
     
     std::function<bool(int id, float x, float y)> on_mouse_move = nullptr;
 

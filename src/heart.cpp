@@ -1754,6 +1754,7 @@ void on_title_change(int cid) {
 }
 
 void on_workspace_change(int cid) {
+    dock::update_workspaces();
     snap_assist::close();
     //overview::close();
     for (auto c : actual_root->children) {
@@ -1962,6 +1963,10 @@ void heart::begin() {
             hypriso->on_config_generated = on_config_generated;
             hypriso->on_requests_max_or_min = on_requests_max_or_min;
             hypriso->on_workspace_change = on_workspace_change;
+            hypriso->on_workspace_windows_change = []() {
+                // A window's monitor is updated after the workspace move event.
+                main_thread(dock::update_workspaces);
+            };
 
         	hypriso->create_callbacks();
         	hypriso->create_hooks();

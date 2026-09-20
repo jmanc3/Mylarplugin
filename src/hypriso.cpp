@@ -1990,6 +1990,15 @@ void HyprIso::create_callbacks() {
         }
     });
 
+    static auto windowWorkspaceChanged = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW, PHLWORKSPACE) {
+        if (hypriso->on_workspace_windows_change)
+            hypriso->on_workspace_windows_change();
+    });
+    static auto workspaceMonitorChanged = Event::bus()->m_events.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) {
+        if (hypriso->on_workspace_windows_change)
+            hypriso->on_workspace_windows_change();
+    });
+
     static auto windowChanged = Event::bus()->m_events.window.active.listen([this](PHLWINDOW p, Desktop::eFocusReason reason) {
         if (hypriso->on_activated) {
             for (auto h : hyprwindows) {
@@ -9750,5 +9759,4 @@ std::string hyprland_instance_name() {
 std::string last_hyprland_instance_name() {
     return previously_seen_instance_signature;
 }
-
 
