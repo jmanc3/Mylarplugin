@@ -13,6 +13,7 @@
 #include <sstream>
 #define private public
 #define protected public
+#include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/view/types/GeometricMovableAnimated.hpp>
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #undef private
@@ -61,6 +62,9 @@
 #include <hyprland/src/state/MonitorState.hpp>
 
 #include <hyprland/src/desktop/state/GlobalWindowController.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/window/WindowGroupMembership.hpp>
+#include <hyprland/src/ipc/s2/S2.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
 
 #include <hyprland/src/render/Shader.hpp>
@@ -166,6 +170,7 @@
 #include <hyprland/src/render/OpenGL.hpp>
 //#include <hyprland/src/desktop/view/Window.hpp>
 #include <hyprland/src/layout/LayoutManager.hpp>
+#include <hyprland/src/layout/target/WindowTarget.hpp>
 #include <hyprland/src/layout/space/Space.hpp>
 #include <hyprland/src/errorOverlay/Overlay.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
@@ -196,7 +201,6 @@
 #include <hyprland/src/render/decorations/DecorationPositioner.hpp>
 #include <hyprland/src/render/decorations/IHyprWindowDecoration.hpp>
 #include <hyprland/src/render/Framebuffer.hpp>
-#include <hyprland/src/desktop/state/FocusState.hpp>
 
 #include <hyprutils/utils/ScopeGuard.hpp>
 
@@ -3245,6 +3249,281 @@ static void hook_mouse_down_kill() {
     notify("Couldn't hook processMouseDownKill");
 }
 
+// Keep these replacements in sync with the corresponding Hyprland functions.
+// Focus raises fullscreen/floating windows, and the fullscreen pass respects their stacking order.
+static CFunctionHook* g_pRawWindowFocusHook                   = nullptr;
+static CFunctionHook* g_pRenderWorkspaceWindowsFullscreenHook = nullptr;
+
+static void hook_rawWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW pWindow, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
+    static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
+    static auto PSPECIALFALLTHROUGH = CConfigValue<Config::INTEGER>("input:special_fallthrough");
+
+    if (pWindow == thisptr->m_focusWindow && surface == thisptr->m_focusSurface && thisptr->m_focusSurface)
+        return;
+
+    if (!pWindow || !pWindow->priorityFocus()) {
+        if (g_pSessionLockManager->isSessionLocked()) {
+            Log::logger->log(Log::DEBUG, "Refusing a keyboard focus to a window because of a sessionlock");
+            return;
+        }
+
+        if (!g_pInputManager->m_exclusiveKeyboardLSes.empty()) {
+            Log::logger->log(Log::DEBUG, "Refusing a keyboard focus to a window because of an exclusive ls");
+            return;
+        }
+    }
+
+    if (pWindow && pWindow->backend().isX11()) {
+        const auto TRAITS = pWindow->backend().traits();
+        if (TRAITS.overrideRedirect && !TRAITS.wantsFocus)
+            return;
+    }
+
+    // m_target on purpose, this avoids the group
+    if (pWindow)
+        g_layoutManager->bringTargetToTop(pWindow->windowTarget());
+
+    if (!pWindow || !Desktop::View::validMapped(pWindow)) {
+
+        if (thisptr->m_focusWindow.expired() && !pWindow)
+            return;
+
+        const auto PLASTWINDOW = thisptr->m_focusWindow.lock();
+        thisptr->m_focusWindow.reset();
+
+        if (PLASTWINDOW && PLASTWINDOW->mapped()) {
+            PLASTWINDOW->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_FOCUS);
+            PLASTWINDOW->presentation().refreshValues();
+
+            g_pXWaylandManager->activateWindow(PLASTWINDOW, false);
+        }
+
+        g_pSeatManager->setKeyboardFocus(nullptr);
+
+        IPC::Socket2::sock()->postEvent({
+            "activewindow",
+            ",",
+        });
+        IPC::Socket2::sock()->postEvent({
+            "activewindowv2",
+            "",
+        });
+
+        Event::bus()->m_events.window.active.emit(nullptr, reason);
+
+        thisptr->m_focusSurface.reset();
+
+        g_pInputManager->recheckIdleInhibitorStatus();
+        return;
+    }
+
+    if (pWindow->m_ruleApplicator->noFocus().valueOrDefault()) {
+        Log::logger->log(Log::DEBUG, "Ignoring focus to nofocus window!");
+        return;
+    }
+
+    if (thisptr->m_focusWindow.lock() == pWindow && g_pSeatManager->m_state.keyboardFocus == surface && g_pSeatManager->m_state.keyboardFocus)
+        return;
+
+    if (pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED)
+        pWindow->m_workspace = thisptr->m_focusMonitor->m_activeWorkspace;
+
+    const auto PMONITOR = pWindow->m_monitor.lock();
+
+    if (!pWindow->m_workspace || !pWindow->m_workspace->isVisible()) {
+        const auto PWORKSPACE = pWindow->m_workspace;
+        // This is to fix incorrect feedback on the focus history.
+        PWORKSPACE->m_lastFocusedWindow = pWindow;
+        if (PWORKSPACE->m_isSpecialWorkspace)
+            thisptr->m_focusMonitor->changeWorkspace(PWORKSPACE, false, true); // if special ws, open on current monitor
+        else if (PMONITOR)
+            PMONITOR->changeWorkspace(PWORKSPACE, false, true);
+        // changeworkspace already calls focusWindow
+        return;
+    }
+
+    if (PMONITOR && !(pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED))
+        thisptr->rawMonitorFocus(PMONITOR);
+
+    const auto PLASTWINDOW                   = thisptr->m_focusWindow.lock();
+    thisptr->m_focusWindow                   = pWindow;
+    pWindow->m_workspace->m_lastFocusedWindow = pWindow;
+
+    /* If special fallthrough is enabled, this behavior will be disabled, as I have no better idea of nicely tracking which
+       window focuses are "via keybinds" and which ones aren't. */
+    if (PMONITOR && PMONITOR->m_activeSpecialWorkspace && PMONITOR->m_activeSpecialWorkspace != pWindow->m_workspace && !(pWindow->m_state & Desktop::View::WINDOW_STATE_PINNED) &&
+        !*PSPECIALFALLTHROUGH)
+        PMONITOR->setSpecialWorkspace(nullptr);
+
+    // we need to make the PLASTWINDOW not equal to m_pLastWindow so that RENDERDATA is correct for an unfocused window
+    if (PLASTWINDOW && PLASTWINDOW->mapped()) {
+        PLASTWINDOW->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_FOCUS);
+        PLASTWINDOW->presentation().refreshValues();
+
+        if (!pWindow->backend().isX11() || !pWindow->backend().traits().overrideRedirect)
+            g_pXWaylandManager->activateWindow(PLASTWINDOW, false);
+    }
+
+    const auto PWINDOWSURFACE = surface ? surface : pWindow->wlSurface()->resource();
+    thisptr->rawSurfaceFocus(PWINDOWSURFACE, pWindow);
+
+    g_pXWaylandManager->activateWindow(pWindow, true); // sets the m_pLastWindow
+
+    if (Fullscreen::controller()->isFullscreen(pWindow) || (pWindow->isFloating() && Fullscreen::controller()->hasFullscreen(pWindow->m_workspace)))
+        Desktop::windowState()->raise(pWindow);
+
+    pWindow->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_FOCUS);
+    pWindow->presentation().onFocusAnimUpdate();
+    pWindow->presentation().refreshValues();
+
+    if (pWindow->m_hints & Desktop::View::WINDOW_HINT_URGENT)
+        pWindow->m_hints &= ~Desktop::View::WINDOW_HINT_URGENT;
+
+    // Send an event
+    IPC::Socket2::sock()->postEvent({
+        .event = "activewindow",
+        .data  = std::format("{},{}", pWindow->metadata().appID(), pWindow->metadata().title()),
+    });
+    IPC::Socket2::sock()->postEvent({
+        .event = "activewindowv2",
+        .data  = std::format("{:x}", rc<uintptr_t>(pWindow.get())),
+    });
+
+    Event::bus()->m_events.window.active.emit(pWindow, reason);
+
+    g_pInputManager->recheckIdleInhibitorStatus();
+
+    if (*PFOLLOWMOUSE == 0)
+        g_pInputManager->sendMotionEventsToFocused();
+
+    if (pWindow->grouping().group())
+        pWindow->deactivateGroupMembers();
+}
+
+static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
+
+    // pre-filter renderable windows once for the tiled + floating passes
+    std::vector<PHLWINDOW> windows;
+    windows.reserve(Desktop::windowState()->windows().size());
+    for (auto const& w : Desktop::windowState()->windows()) {
+        if (!thisptr->shouldRenderWindow(w, pMonitor))
+            continue;
+
+        if (w->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * w->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) == 0.f)
+            continue;
+
+        if (Fullscreen::controller()->isFullscreen(w))
+            continue;
+
+        windows.emplace_back(w);
+    }
+
+    // tiled windows that are fading out
+    for (auto const& w : windows) {
+        if (w->isFloating())
+            continue;
+
+        if (pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+            continue;
+
+        thisptr->renderWindow(w, pMonitor, time, true, Render::RENDER_PASS_ALL);
+    }
+    thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_TILED, pWorkspace);
+
+    // and floating ones too
+    for (auto const& w : windows) {
+        if (!w->isFloating())
+            continue;
+
+        if (w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+            continue;
+
+        if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
+            continue; // special on another are rendered as a part of the base pass
+
+        if (w->m_workspace == pWorkspace && w->shouldRenderOverFullscreen() && w->mapped())
+            continue; // rendered together with fullscreen windows in stacking order
+
+        if (w->isFadingOutUnderFullscreen())
+            continue; // render these over fullscreen so the fade-out is visible
+
+        thisptr->renderWindow(w, pMonitor, time, true, Render::RENDER_PASS_ALL);
+    }
+    thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_FLOATING, pWorkspace);
+
+    // Fullscreen windows and eligible floating windows share the regular stacking order.
+    for (auto const& w : Desktop::windowState()->windows()) {
+        if (Fullscreen::controller()->isFullscreen(w)) {
+            const auto PWORKSPACE = w->m_workspace;
+
+            if (PWORKSPACE != pWorkspace) {
+                if (!(PWORKSPACE && (PWORKSPACE->m_renderOffset->isBeingAnimated() || PWORKSPACE->m_alpha->isBeingAnimated() || PWORKSPACE->m_forceRendering)))
+                    continue;
+
+                if (w->m_monitor != pMonitor)
+                    continue;
+            }
+
+            if (w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+                continue;
+
+            if (thisptr->shouldRenderWindow(w, pMonitor))
+                thisptr->renderWindow(w, pMonitor, time, Fullscreen::controller()->getFullscreenModes(pWorkspace).internal != Fullscreen::FSMODE_FULLSCREEN, Render::RENDER_PASS_ALL);
+
+            continue;
+        }
+
+        if (w->m_workspace != pWorkspace || !w->isFloating() || !w->shouldRenderOverFullscreen() || !w->mapped())
+            continue;
+
+        const bool mismatchedSpecialWorkspace = w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace();
+
+        if (mismatchedSpecialWorkspace)
+            continue;
+
+        const bool specialWorkspaceOnDifferentMonitor = pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor;
+
+        if (specialWorkspaceOnDifferentMonitor)
+            continue; // special on another are rendered as a part of the base pass
+
+        thisptr->renderWindow(w, pMonitor, time, true, Render::RENDER_PASS_ALL);
+    }
+    thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_OVER_FULLSCREEN, pWorkspace);
+}
+
+static void hook_fullscreen_focus() {
+    const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "rawWindowFocus");
+    for (const auto& m : METHODS) {
+        if (m.demangled.find("Desktop::CFocusState::rawWindowFocus(") == std::string::npos)
+            continue;
+
+        g_pRawWindowFocusHook = HyprlandAPI::createFunctionHook(globals->api, m.address, rc<void*>(&hook_rawWindowFocus));
+        if (g_pRawWindowFocusHook && g_pRawWindowFocusHook->hook())
+            return;
+
+        break;
+    }
+
+    notify("Couldn't hook rawWindowFocus");
+}
+
+static void hook_fullscreen_rendering() {
+    const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWorkspaceWindowsFullscreen");
+    for (const auto& m : METHODS) {
+        if (m.demangled.find("Render::IHyprRenderer::renderWorkspaceWindowsFullscreen(") == std::string::npos)
+            continue;
+
+        g_pRenderWorkspaceWindowsFullscreenHook = HyprlandAPI::createFunctionHook(globals->api, m.address, rc<void*>(&hook_renderWorkspaceWindowsFullscreen));
+        if (g_pRenderWorkspaceWindowsFullscreenHook && g_pRenderWorkspaceWindowsFullscreenHook->hook())
+            return;
+
+        break;
+    }
+
+    notify("Couldn't hook renderWorkspaceWindowsFullscreen");
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
   ZoneScoped;
@@ -3270,6 +3549,8 @@ void HyprIso::create_hooks() {
     hook_default_config();
     hook_vec_to_win();
     hook_mouse_down_kill();
+    hook_fullscreen_focus();
+    hook_fullscreen_rendering();
     //create_custom_shaders();
 }
 
