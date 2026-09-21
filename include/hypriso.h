@@ -462,6 +462,7 @@ struct HyprIso {
     void move_to_workspace(int id, int workspace, bool follow = true);
     void move_to_workspace(int workspace, bool follow = true);
     void move_to_workspace_id(int workspace_id);
+    void finish_workspace_animations();
 
     bool is_pinned(int id);
     void pin(int id, bool state);

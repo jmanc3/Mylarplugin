@@ -1304,8 +1304,13 @@ static void on_drag_or_resize_cancel_requested() {
 
 static void minimize_overview_combined_gesture() {
     static desktop_gesture::State gesture;
+    static desktop_gesture::VerticalStroke vertical_stroke;
     static long start = 0;
     static int monitor = -1;
+    static bool workspace_gesture_started = false;
+    static double horizontal_offset = 0;
+    static double horizontal_applied = 0;
+    static bool horizontal_active = false;
 
     const auto activate = []() {
         if (gesture.owner == desktop_gesture::Owner::Overview) {
@@ -1327,28 +1332,55 @@ static void minimize_overview_combined_gesture() {
         const bool desktop_open = show_desktop::is_opened() && !show_desktop::is_closing();
         gesture.begin(overview_open, desktop_open, overview::get_openess(), show_desktop::get_scalar());
         start = get_current_time_in_ms();
+        vertical_stroke = {};
         monitor = hypriso->monitor_from_cursor();
+        workspace_gesture_started = false;
+        horizontal_offset = 0;
+        horizontal_applied = 0;
+        horizontal_active = false;
         activate();
         // Hyprland delivers the begin event's movement again to update.
         request_refresh();
     }, [activate](Bounds s) {
+        horizontal_offset += s.x;
+        vertical_stroke.update(s.y, get_current_time_in_ms());
         const auto previous_owner = gesture.owner;
         gesture.update(s.y);
         if (gesture.owner != previous_owner)
             activate();
 
-        if (gesture.owner == desktop_gesture::Owner::Overview && overview::is_showing())
+        if (gesture.owner == desktop_gesture::Owner::Overview && overview::is_showing()) {
             overview::overwrite_openess(gesture.progress());
-        else if (gesture.owner == desktop_gesture::Owner::ShowDesktop && show_desktop::is_opened())
+            // Keep sideways noise in the accumulated input, but reveal it gradually
+            // only after a deliberate horizontal movement. Once engaged, track freely.
+            constexpr double horizontal_dead_zone = 30.0;
+            constexpr double horizontal_full_motion = 75.0;
+            const double distance = std::abs(horizontal_offset);
+            if (distance >= horizontal_full_motion)
+                horizontal_active = true;
+            const double blend = horizontal_active ? 1.0 : std::clamp(
+                (distance - horizontal_dead_zone) / (horizontal_full_motion - horizontal_dead_zone), 0.0, 1.0);
+            const double visible_offset = horizontal_offset * blend * blend * (3.0 - 2.0 * blend);
+            // Overview's scene is initialized after the opening gesture starts.
+            if (!workspace_gesture_started && visible_offset != 0)
+                workspace_gesture_started = overview::begin_workspace_gesture(monitor);
+            if (workspace_gesture_started) {
+                overview::update_workspace_gesture(monitor, visible_offset - horizontal_applied);
+                horizontal_applied = visible_offset;
+            }
+        } else if (gesture.owner == desktop_gesture::Owner::ShowDesktop && show_desktop::is_opened())
             show_desktop::set_scalar(gesture.progress());
         request_refresh();
     }, []() {
         const auto end = get_current_time_in_ms();
-        if (gesture.owner == desktop_gesture::Owner::Overview)
-            overview::end_gesture(start, end, gesture.y_offset);
-        else if (gesture.owner == desktop_gesture::Owner::ShowDesktop && show_desktop::is_opened())
+        if (gesture.owner == desktop_gesture::Owner::Overview) {
+            if (workspace_gesture_started)
+                overview::end_workspace_gesture(monitor);
+            overview::end_gesture(vertical_stroke.start, end, vertical_stroke.displacement());
+        } else if (gesture.owner == desktop_gesture::Owner::ShowDesktop && show_desktop::is_opened())
             show_desktop::minimize_animate_out(start, end, gesture.y_offset, show_desktop::get_scalar());
         gesture = {};
+        workspace_gesture_started = false;
         request_refresh();
     });
 }
@@ -1363,6 +1395,7 @@ static void on_config_reload() {
     static float offset_y = 0;
     static float offset_click = 75;
     static bool workspace_gesture = false;
+    static bool workspace_gesture_started = false;
     static int workspace_gesture_monitor = -1;
     // TODO: offset_click should scale down so that 1200 offset can rotate all windows list
     // only scale if factor > 1
@@ -1377,8 +1410,9 @@ static void on_config_reload() {
         offset_y = 0;
         workspace_gesture = overview::is_showing() && !overview::is_closing();
         workspace_gesture_monitor = hypriso->monitor_from_cursor();
+        workspace_gesture_started = false;
         if (workspace_gesture) {
-            overview::begin_workspace_gesture(workspace_gesture_monitor);
+            workspace_gesture_started = overview::begin_workspace_gesture(workspace_gesture_monitor);
             return;
         }
         //alt_tab::visual_offset(0);
@@ -1388,7 +1422,10 @@ static void on_config_reload() {
         //coverflow::open();
     }, [](Bounds s) { 
         if (workspace_gesture) {
-            overview::update_workspace_gesture(workspace_gesture_monitor, s.x);
+            if (!workspace_gesture_started)
+                workspace_gesture_started = overview::begin_workspace_gesture(workspace_gesture_monitor);
+            if (workspace_gesture_started)
+                overview::update_workspace_gesture(workspace_gesture_monitor, s.x);
             return;
         }
         //coverflow::scroll(s.x, s.y);
@@ -1431,8 +1468,10 @@ static void on_config_reload() {
         damage_all();
     }, []() { 
         if (workspace_gesture) {
-            overview::end_workspace_gesture(workspace_gesture_monitor);
+            if (workspace_gesture_started)
+                overview::end_workspace_gesture(workspace_gesture_monitor);
             workspace_gesture = false;
+            workspace_gesture_started = false;
             return;
         }
         //coverflow::close();

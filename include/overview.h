@@ -10,7 +10,7 @@ namespace overview {
     void overwrite_openess(float a);
     void begin_gesture(int monitor);
     void end_gesture(long start, long end, float y_offset);
-    void begin_workspace_gesture(int monitor);
+    bool begin_workspace_gesture(int monitor);
     void update_workspace_gesture(int monitor, double delta_x);
     void end_workspace_gesture(int monitor);
 

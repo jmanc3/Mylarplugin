@@ -8,6 +8,7 @@ namespace desktop_gesture {
     constexpr float activation_offset = 2.0f * sensitivity;
     constexpr float maximum_offset = 250.0f * sensitivity;
     constexpr float maximum_delta = 22.0f;
+    constexpr float intent_offset = 12.0f * sensitivity;
 
     enum class Owner { None, Overview, ShowDesktop };
 
@@ -33,6 +34,39 @@ namespace desktop_gesture {
             const float travel = std::max(std::abs(y_offset) - activation_offset, 0.0f) / (maximum_offset - activation_offset);
             const float direction = owner == Owner::Overview ? -1.0f : 1.0f;
             return std::clamp(initial_progress + direction * std::copysign(travel, y_offset), 0.0f, 1.0f);
+        }
+    };
+
+    // Follow the latest deliberate vertical stroke, ignoring small reversals.
+    struct VerticalStroke {
+        float offset = 0.0f;
+        float origin = 0.0f;
+        float extreme = 0.0f;
+        int direction = 0;
+        long start = 0;
+        long extreme_time = 0;
+
+        void update(float delta_y, long now) {
+            if (extreme_time == 0)
+                start = extreme_time = now;
+            offset += std::clamp(delta_y, -maximum_delta, maximum_delta) * sensitivity;
+            if (direction == 0) {
+                if (std::abs(offset) < intent_offset)
+                    return;
+                direction = offset > 0.0f ? 1 : -1;
+            } else if ((extreme - offset) * direction >= intent_offset) {
+                origin = extreme;
+                start = extreme_time;
+                direction = -direction;
+            }
+            if ((offset - extreme) * direction >= 0.0f) {
+                extreme = offset;
+                extreme_time = now;
+            }
+        }
+
+        float displacement() const {
+            return direction == 0 ? 0.0f : offset - origin;
         }
     };
 

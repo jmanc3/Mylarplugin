@@ -632,19 +632,20 @@ static OverviewMonitor *monitor_state(int monitor) {
     return it == scene->monitors.end() ? nullptr : &it->second;
 }
 
-void overview::begin_workspace_gesture(int monitor) {
+bool overview::begin_workspace_gesture(int monitor) {
     if (!running || !initialized || is_closing())
-        return;
+        return false;
     update_scene();
     auto state = monitor_state(monitor);
     if (!state)
-        return;
+        return false;
     state->workspace_gesture = true;
     state->workspace_gesture_velocity = 0;
     state->workspace_gesture_update = get_current_time_in_ms();
     // Pick up an interrupted spring exactly where it is currently drawn.
     for (auto &[wid, workspace] : state->workspaces)
         workspace.position.velocity = 0;
+    return true;
 }
 
 void overview::update_workspace_gesture(int monitor, double delta_x) {
@@ -1025,6 +1026,9 @@ void overview_actual_close() {
         }
     }
     if (was_initialized) {
+        // A workspace swipe can finish on the same event that closes overview.
+        // Settle both incoming and outgoing workspaces before revealing live windows.
+        hypriso->finish_workspace_animations();
         hypriso->whitelist_on = false;
         hypriso->input_bypass_whitelist = false;
         hypriso->simulateMouseMovement();
@@ -1033,10 +1037,23 @@ void overview_actual_close() {
     request_refresh();
 }
 
+static bool workspace_positions_settled() {
+    if (!scene)
+        return true;
+    for (const auto &[mid, monitor] : scene->monitors) {
+        for (const auto &[wid, workspace] : monitor.workspaces) {
+            if (!workspace.retiring &&
+                (workspace.position.value != workspace.position.target || workspace.position.velocity != 0))
+                return false;
+        }
+    }
+    return true;
+}
+
 static void animate_overview(float target, float velocity, SpringParams params, bool gesture_release = false) {
     const auto generation = ++animation_generation;
     animating = false;
-    if (openess == target) {
+    if (openess == target && (target != 0.0f || workspace_positions_settled())) {
         if (target == 0.0f)
             overview_actual_close();
         return;
@@ -1066,7 +1083,9 @@ static void animate_overview(float target, float velocity, SpringParams params, 
             scene->desktop_origins.clear();
         if (target == 0.0f && openess < .3f)
             set_input_bypass(true);
-        if (finished) {
+        // Zero openness only finishes the vertical motion. Keep rendering the
+        // workspace springs until the selected desktop reaches its final position.
+        if (finished && (target != 0.0f || workspace_positions_settled())) {
             animating = false;
             t->keep_running = false;
             if (target == 0.0f)
@@ -1137,11 +1156,17 @@ void overview::end_gesture(long start, long end, float y_offset) {
     if (!running)
         return;
     if (openess < .01f) {
-        overview_actual_close();
-    } else if (openess > .99f) {
+        animate_overview(0.0f, 0.0f, {.3, 1.0}, true);
+    } else if (openess > .99f && y_offset < desktop_gesture::intent_offset) {
         overwrite_openess(1.0f);
     } else {
-        const auto release = desktop_gesture::release(start, end, -y_offset, openess);
+        auto release = desktop_gesture::release(start, end, -y_offset, openess);
+        // The final deliberate stroke decides the destination, even after an
+        // upward opening stroke and a long horizontal workspace swipe.
+        if (std::abs(y_offset) >= desktop_gesture::intent_offset) {
+            release.target = y_offset > 0.0f ? 0.0f : 1.0f;
+            release.velocity = std::copysign(std::abs(release.velocity), release.target - openess);
+        }
         animate_overview(release.target, release.velocity, {.3, 1.0}, true);
     }
 }

@@ -7122,6 +7122,18 @@ void HyprIso::move_to_workspace_id(int workspace) {
     }
 }
 
+void HyprIso::finish_workspace_animations() {
+    for (auto s : hyprspaces) {
+        const auto workspace = s->w.lock();
+        if (!workspace)
+            continue;
+        if (workspace->m_renderOffset->isBeingAnimated())
+            workspace->m_renderOffset->warp();
+        if (workspace->m_alpha->isBeingAnimated())
+            workspace->m_alpha->warp();
+    }
+}
+
 int HyprIso::space_id_to_raw(int space_id) {
     for (auto s : hyprspaces) {
         if (s->id == space_id) {

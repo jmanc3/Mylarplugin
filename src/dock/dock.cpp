@@ -215,6 +215,8 @@ struct Dock : UserData {
     MylarWindow *wifi = nullptr;
     
     MylarWindow *bluetooth = nullptr;
+    
+    MylarWindow *tiling = nullptr;
 
     MylarWindow *projection = nullptr;
 
@@ -1849,6 +1851,32 @@ Container *make_self_sizing_label(Container *root, std::string text, int size, s
 #include "dock_wifi.inl"
 #include "dock_battery.inl"
 #include "dock_brightness.inl"
+
+// -------------------------------------
+// TILING
+// -------------------------------------
+ 
+static void fill_tiling_container(Dock *dock) {
+    auto root = dock->tiling->root;
+    root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->tiling->raw_window->cr;
+        set_argb(cr, {1, 1, 1, 1});
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->tiling->raw_window->dpi, 1.0);
+        cairo_fill(cr);
+        set_argb(cr, border_color);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->tiling->raw_window->dpi, 1.0);
+        cairo_stroke(cr);
+    };
+
+    
+}
+
+// -------------------------------------
+// TILING
+// -------------------------------------
+
+
 static void fill_root(Container *root) {
     root->when_paint = paint_root_func;
     root->type = ::hbox;
@@ -2063,8 +2091,33 @@ static void fill_root(Container *root) {
             }
         };
     }
+    
+    if (true) {
+        auto tiling = simple_dock_item(root, ICON("\uECA5"));
+        tiling->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
 
-    if (false) {
+            RawWindowSettings settings = make_icon_anchored_popup_settings(
+                c, dpi, volume_popup_w, volume_popup_w * 1.6);
+
+            dock->tiling = open_mylar_popup(mylar, settings);
+            if (!dock->tiling)
+                return;
+            dock->tiling->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->tiling = nullptr;
+            };
+            dock->tiling->root->user_data = dock;
+            dock->tiling->root->wanted_bounds.w = FILL_SPACE;
+            dock->tiling->root->wanted_bounds.h = FILL_SPACE;
+            fill_tiling_container(dock);
+            windowing::redraw(dock->tiling->raw_window);
+        };        
+    }
+    
+    if (true) {
         auto bluetooth = simple_dock_item(root, ICON("\uE702"));
     }
 
