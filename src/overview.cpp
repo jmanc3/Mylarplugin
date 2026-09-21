@@ -706,11 +706,14 @@ void overview::end_workspace_gesture(int monitor) {
         return;
     const double velocity = get_current_time_in_ms() - state->workspace_gesture_update > 100
         ? 0.0 : state->workspace_gesture_velocity;
-    // A short projection lets a flick select its destination, while a held
-    // drag settles on the nearest card. Preserve velocity in the release spring.
+    // Bias selection toward the swipe so a held drag switches at 20% of a
+    // workspace instead of halfway. Keep the flick projection and release velocity.
+    constexpr double switch_threshold = .2;
+    const double projected_offset = state->workspaces.at(state->active).position.value + velocity * .15;
+    const double selection_bias = std::copysign(.5 - switch_threshold, projected_offset);
     const auto nearest = std::min_element(order.begin(), order.end(), [&](int a, int b) {
-        return std::abs(state->workspaces.at(a).position.value + velocity * .15)
-            < std::abs(state->workspaces.at(b).position.value + velocity * .15);
+        return std::abs(state->workspaces.at(a).position.value + velocity * .15 + selection_bias)
+            < std::abs(state->workspaces.at(b).position.value + velocity * .15 + selection_bias);
     });
     // Releasing outside the strip always settles on the corresponding edge.
     const int selected = state->workspaces.at(order.front()).position.value > 0 ? order.front()
