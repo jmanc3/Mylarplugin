@@ -1086,8 +1086,41 @@ void overview::open(int monitor) {
 void overview::close(bool focus) {
     if (!running || (animating && animation_target == 0.0f))
         return;
+    int dragged = -1;
+    if (scene) {
+        for (auto &[mid, monitor] : scene->monitors) {
+            // Released thumbnails must return to desktop stacking when closing;
+            // only the active drag is selected and kept above other windows.
+            for (auto &[wid, workspace] : monitor.workspaces) {
+                for (auto &[cid, thumbnail] : workspace.thumbnails) {
+                    if (!focus || cid != monitor.dragged)
+                        thumbnail.elevated_order = 0;
+                }
+            }
+            if (monitor.dragged == -1)
+                continue;
+            if (get_cid_container(monitor.dragged))
+                dragged = monitor.dragged;
+            // Release in place without dropping onto the workspace under the
+            // pointer. The return springs carry the thumbnail home as we close.
+            if (auto thumbnail = dragged_thumbnail(monitor)) {
+                thumbnail->drag_x.target = 0;
+                thumbnail->drag_y.target = 0;
+            }
+            monitor.dragged = -1;
+            monitor.dragged_workspace = -1;
+            for (auto c : actual_root->children) {
+                if (c->custom_type == (int) TYPE::OVERVIEW && *datum<int>(c, "overview_monitor") == mid)
+                    c->state.reset();
+            }
+        }
+    }
     if (initialized)
         set_input_bypass(true);
+    if (focus && dragged != -1) {
+        hypriso->bring_to_front(dragged, true);
+        hypriso->set_hidden(dragged, false, false);
+    }
     animate_overview(0.0f, 0.0f, {overview_open_time_ms / 2000.0, 1.0});
 }
 
