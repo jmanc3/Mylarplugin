@@ -1999,7 +1999,7 @@ static void fill_tiling_container(Dock *dock) {
         c->wanted_pad = Bounds(16 * dpi, 12 * dpi, 16 * dpi, 12 * dpi);
         c->spacing = 6 * dpi;
     };
-    tiling_toggle(parent, "Automatically tile windows", [](const STilingMenuState& state) { return state.is_tiling; },
+    tiling_toggle(parent, "Automatically tile windows (Alt + Space)", [](const STilingMenuState& state) { return state.is_tiling; },
         [](const std::string& monitor) {
             main_thread([monitor]() {
                 const int space = tiling_workspace(monitor);
