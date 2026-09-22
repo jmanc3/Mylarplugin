@@ -96,7 +96,7 @@ struct ConfigSettings {
 
     bool is_tiling = false;
     // Scope of explicit toggle changes; new workspaces use their own default.
-    bool tile_all_workspaces = true;
+    bool tile_all_workspaces = false;
     bool new_workspace_is_tiling = false;
     bool active_window_border_hint = true;
     std::vector<SWorkspaceTiling> workspace_tiling;
