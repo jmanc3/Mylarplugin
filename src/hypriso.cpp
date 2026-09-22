@@ -3944,9 +3944,10 @@ static void on_toggle_floating(Layout::CSpace* space, SP<Layout::ITarget> target
 
     using Original = void (*)(Layout::CSpace*, SP<Layout::ITarget>);
     rc<Original>(toggle_floating_hook->m_original)(space, target);
-    if (restore && target->floating() && target->space().get() == space) {
+    if (remember && target->floating() && target->space().get() == space) {
         // Keep Hyprland's restored size and update the floating layout's geometry too.
-        g_layoutManager->setTargetGeom(CBox{*restore, target->position().size()}, target);
+        const auto size = target->position().size();
+        g_layoutManager->setTargetGeom(CBox{restore.value_or(space->workArea(true).middle() - size / 2.F), size}, target);
     }
 }
 

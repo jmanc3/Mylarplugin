@@ -1710,7 +1710,7 @@ void update_restore_info_for(int id, bool use_final_bounds) {
                     cb.x / cm.w,
                     cb.y / cm.h,
                     cb.w / cm.w,
-                    (cb.h + (hypriso->has_decorations(id) ? titlebar_h : 0)) / cm.h,
+                    (cb.h + titlebar_h) / cm.h,
                 };
             }
             info.remembered_snap_type = snapped ? *datum<int>(c, "snap_type") : (int) SnapPosition::NONE;
