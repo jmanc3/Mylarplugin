@@ -480,12 +480,13 @@ struct HyprIso {
     int get_active_workspace(int monitor);
     int get_active_workspace_id(int monitor);
     int get_active_workspace_id_client(int client);
-    int get_workspace(int client);
+    int get_client_workspace(int client);
+    int get_client_workspace_id(int client);
 
     float zoom_progress(int monitor);
 
-    bool is_space_tiling(int space);
-    void set_space_tiling(int space, bool state);
+    bool is_space_tiling_id(int space);
+    void set_space_tiling_id(int space, bool state);
 
     void add_float_rule();
     void overwrite_defaults();

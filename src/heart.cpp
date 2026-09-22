@@ -283,8 +283,8 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
 
 void toggle_layout() {
     auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
-    auto tiling = hypriso->is_space_tiling(s);
-    hypriso->set_space_tiling(s, !tiling);
+    auto tiling = hypriso->is_space_tiling_id(s);
+    hypriso->set_space_tiling_id(s, !tiling);
     std::vector<int> order = get_window_stacking_order();
     for (auto o : order) {
         if (hypriso->get_active_workspace_id_client(o) == s) {
@@ -647,11 +647,14 @@ void apply_restore_info(int id) {
             if (fix)
                 b.y += (titlebar_h * s) * .5;
 
-            if (info.remember_size)
-                hypriso->move_resize(id, b.x, b.y, b.w, b.h);
-
             if (info.remember_workspace)
                 hypriso->move_to_workspace(id, info.remembered_workspace);
+
+            if (info.remember_size) {
+                if (!hypriso->is_space_tiling_id(hypriso->get_client_workspace(id))) {
+                    hypriso->move_resize(id, b.x, b.y, b.w, b.h);
+                }
+            }
         }
     }
 }
@@ -680,7 +683,7 @@ static void on_window_open(int id) {
         c->handles_pierced = [](Container* c, int x, int y) {
             auto cid = *datum<int>(c, "cid");
             bool inside = bounds_contains(c->real_bounds, x, y);
-            bool on_workspace = (hypriso->get_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor())); 
+            bool on_workspace = (hypriso->get_client_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()));
             return inside && on_workspace;
         };
         c->when_mouse_down = paint {
@@ -726,8 +729,8 @@ static void on_window_open(int id) {
     if (hypriso->has_decorations(id)) {
         later(50, [id](Timer *) {
             auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
-            auto tiling = hypriso->is_space_tiling(s);
-            hypriso->set_float_state(id, !tiling);
+            auto tiling = hypriso->is_space_tiling_id(s);
+            //hypriso->set_float_state(id, !tiling);
             apply_restore_info(id);
         });
     }
@@ -1639,7 +1642,7 @@ void update_restore_info_for(int id) {
         info.remember_workspace = old.remember_workspace;
         info.remember_size = old.remember_size;
         info.remove_titlebar = old.remove_titlebar;
-        info.remembered_workspace = hypriso->get_workspace(id);
+        info.remembered_workspace = hypriso->get_client_workspace(id);
         restore_infos[hypriso->class_name(id)] = info;
         save_restore_infos(); // I believe it's okay to call this here because it only happens on resize end, and drag end
     }
@@ -2174,7 +2177,7 @@ void heart::layout_containers() {
 
     for (auto c : actual_root->children) {
         auto cid = *datum<int>(c, "cid");
-        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->resizable(cid) && hypriso->get_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(cid);
+        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->resizable(cid) && hypriso->get_client_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(cid);
         if (hypriso->whitelist_on) {
             bool found = false;
             for (auto wid : hypriso->render_whitelist) {
@@ -2233,7 +2236,7 @@ void heart::layout_containers() {
         }
         if (c->custom_type == (int) TYPE::CLIENT_RESIZE) {
             auto id = *datum<int>(c, "cid");
-            bool exists = hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id) && hypriso->get_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(id);
+            bool exists = hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id) && hypriso->get_client_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(id);
             if (hypriso->whitelist_on) {
                 bool found = false;
                 for (auto wid : hypriso->render_whitelist) {

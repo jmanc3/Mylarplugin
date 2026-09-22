@@ -311,8 +311,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
                 auto cid = data->cid;
-                auto parent_space = hypriso->get_workspace(parent_data->cid);
-                auto our_space = hypriso->get_workspace(data->cid);
+                auto parent_space = hypriso->get_client_workspace(parent_data->cid);
+                auto our_space = hypriso->get_client_workspace(data->cid);
                 auto ratioscalar = .53;
                 if (parent_data->pos != SnapPosition::LEFT && parent_data->pos != SnapPosition::RIGHT) {
                     ratioscalar *= 1.15;
@@ -669,11 +669,11 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     
 
     auto parent_data = (HelperData *) c->user_data;
-    auto parent_space = hypriso->get_workspace(parent_data->cid);
+    auto parent_space = hypriso->get_client_workspace(parent_data->cid);
     for (int i = 0; i < c->children.size(); i++) {
         auto ch = c->children[i];
         auto data = (SnapThumb *) ch->user_data;
-        auto our_space = hypriso->get_workspace(data->cid);
+        auto our_space = hypriso->get_client_workspace(data->cid);
  
         bool start_at_final_position = our_space != parent_space || hypriso->is_hidden(data->cid);
         

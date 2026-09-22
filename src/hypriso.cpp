@@ -4343,7 +4343,7 @@ int HyprIso::get_active_workspace_id_client(int client) {
     return -1;
 }
 
-bool HyprIso::is_space_tiling(int space) {
+bool HyprIso::is_space_tiling_id(int space) {
     for (auto &hs : hyprspaces) {
         if (hs->id == space) {
             return hs->is_tiling;
@@ -4352,7 +4352,7 @@ bool HyprIso::is_space_tiling(int space) {
     return false;
 }
 
-void HyprIso::set_space_tiling(int space, bool state) {
+void HyprIso::set_space_tiling_id(int space, bool state) {
     for (auto &hs : hyprspaces) {
         if (hs->id == space) {
             hs->is_tiling = state;
@@ -4420,7 +4420,7 @@ void HyprIso::fake_fullscreen(int id, bool state) {
 }
 
 
-int HyprIso::get_workspace(int client) {
+int HyprIso::get_client_workspace(int client) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -4434,6 +4434,19 @@ int HyprIso::get_workspace(int client) {
     return -1;
 }
 
+int HyprIso::get_client_workspace_id(int client) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hw : hyprwindows) {
+        if (hw->id == client) {
+            if (hw->w->m_workspace.get()) {
+                return hw->id;
+            }
+        }
+    }
+    return -1;
+}
 
 std::vector<int> get_window_stacking_order() {
 #ifdef TRACY_ENABLE
