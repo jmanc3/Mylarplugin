@@ -15,8 +15,11 @@
 #define private public
 #define protected public
 #include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/state/ViewHitTester.hpp>
+#include <hyprland/src/desktop/state/WindowFadeout.hpp>
 #include <hyprland/src/desktop/view/types/GeometricMovableAnimated.hpp>
 #include <hyprutils/animation/AnimatedVariable.hpp>
+#include <hyprutils/utils/ScopeGuard.hpp>
 #undef private
 #undef protected
 
@@ -258,8 +261,6 @@ void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
 void* pRenderMonitor = nullptr;
 void* pRenderWorkspace = nullptr;
-void* pRenderWorkspaceWindows = nullptr;
-void* pRenderWorkspaceWindowsFullscreen = nullptr;
 typedef void (*tRenderWindow)(void *, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool decorate, Render::eRenderPassMode, bool ignorePosition, bool standalone);
 typedef void (*tRenderMonitor)(void *, PHLMONITOR pMonitor, bool commit);
 typedef void (*tRenderWorkspace)(void *, PHLMONITOR, PHLWORKSPACE, const Time::steady_tp &, const CBox &geom);
@@ -684,7 +685,6 @@ PHLWINDOW get_window_from_mouse() {
 }
 
 void on_open_monitor(PHLMONITOR m);
-void interleave_floating_and_tiled_windows();
 
 // TODO: need to see how performance intensive this is
 void HyprIso::overwrite_animation_speed(float speed) {
@@ -3028,7 +3028,9 @@ for _, direction in ipairs({ "left", "right", "up", "down" }) do
 end
 hl.bind("SUPER + G", hl.dsp.window.float({ action = "toggle" }))
 
-   
+hl.config({ input = { float_switch_override_focus = false } })
+
+
 )END";
 
 // #ifndef NDEBUG
@@ -3229,13 +3231,214 @@ bool win_disabled(PHLWINDOW w) {
     return false;
 }
 
+static PHLWINDOW interleavedWindowAt(const Desktop::CViewHitTester* thisptr, const Vector2D& pos, uint16_t properties, PHLWINDOW ignoreWindow) {
+    using namespace Desktop;
+    using namespace Desktop::View;
+    const auto PMONITOR = State::monitorState()->query().vec(pos).run();
+    if (!PMONITOR)
+        return nullptr;
+
+    static auto PRESIZEONBORDER       = CConfigValue<Config::INTEGER>("general:resize_on_border");
+    static auto PBORDERSIZE           = CConfigValue<Config::INTEGER>("general:border_size");
+    static auto PBORDERGRABEXTEND     = CConfigValue<Config::INTEGER>("general:extend_border_grab_area");
+    static auto PSPECIALFALLTHRU      = CConfigValue<Config::INTEGER>("input:special_fallthrough");
+    static auto PMODALPARENTBLOCKING  = CConfigValue<Config::INTEGER>("general:modal_parent_blocking");
+    static auto PFOLLOWMOUSESHRINK    = CConfigValue<Config::INTEGER>("input:follow_mouse_shrink");
+    const auto  BORDER_GRAB_AREA      = *PRESIZEONBORDER ? *PBORDERSIZE + *PBORDERGRABEXTEND : 0;
+    const bool  ONLY_PRIORITY         = properties & FOCUS_PRIORITY;
+    const bool  DO_FOLLOW_MOUSE_CHECK = properties & FOLLOW_MOUSE_CHECK;
+    const auto  HITBOX_SHRINK         = DO_FOLLOW_MOUSE_CHECK ? *PFOLLOWMOUSESHRINK : 0;
+    const auto  LASTFOCUSED           = focusState()->window();
+    const auto& WINDOWS               = thisptr->m_tracker.windows();
+
+    const auto  isShadowedByModal = [](PHLWINDOW w) -> bool { return *PMODALPARENTBLOCKING && !w->backend().isX11() && w->backend().traits().hasModalChild; };
+
+    // Pinned windows stay above the regular window stack.
+    if (properties & ALLOW_FLOATING) {
+        for (auto const& w : WINDOWS | std::views::reverse) {
+            if (ONLY_PRIORITY && !w->priorityFocus())
+                continue;
+
+            if (w->isFloating() && w->mapped() && w->acceptsInput() && !w->shouldntFocus() && (w->m_state & WINDOW_STATE_PINNED) &&
+                !w->m_ruleApplicator->noFocus().valueOrDefault() && w != ignoreWindow && !isShadowedByModal(w)) {
+                const auto BB  = w->getWindowBoxUnified(properties);
+                CBox       box = BB.copy().expand(!w->backend().traits().overrideRedirect ? BORDER_GRAB_AREA : 0);
+                if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
+                    box = box.copy().expand(-HITBOX_SHRINK);
+                if (box.containsPoint(pos))
+                    return w;
+
+                if (!w->backend().isX11()) {
+                    if (w->hasPopupAt(pos))
+                        return w;
+                }
+            }
+        }
+    }
+
+    auto windowForWorkspace = [&](bool special) -> PHLWINDOW {
+        const WORKSPACEID WSPID      = special ? PMONITOR->activeSpecialWorkspaceID() : PMONITOR->activeWorkspaceID();
+        const auto        PWORKSPACE = State::workspaceState()->query().id(WSPID).run();
+
+        auto              floatingAt = [&](PHLWINDOW w, bool aboveFullscreen) -> PHLWINDOW {
+            const auto PWINDOWMONITOR = w->m_monitor.lock();
+
+            // to avoid focusing windows behind special workspaces from other monitors
+            if (!*PSPECIALFALLTHRU && PWINDOWMONITOR && PWINDOWMONITOR->m_activeSpecialWorkspace && w->m_workspace != PWINDOWMONITOR->m_activeSpecialWorkspace) {
+                const auto BB = w->getWindowBoxUnified(properties);
+                if (BB.x >= PWINDOWMONITOR->m_position.x && BB.y >= PWINDOWMONITOR->m_position.y && BB.x + BB.width <= PWINDOWMONITOR->m_position.x + PWINDOWMONITOR->m_size.x &&
+                    BB.y + BB.height <= PWINDOWMONITOR->m_position.y + PWINDOWMONITOR->m_size.y)
+                    return nullptr;
+            }
+
+            if (w->isFloating() && w->mapped() && w->m_workspace->isVisible() && w->acceptsInput() && !(w->m_state & WINDOW_STATE_PINNED) &&
+                !w->m_ruleApplicator->noFocus().valueOrDefault() && w != ignoreWindow && (!aboveFullscreen || w->isAllowedOverFullscreen()) && !isShadowedByModal(w)) {
+                // OR windows should add focus to parent
+                if (w->shouldntFocus() && !w->backend().traits().overrideRedirect)
+                    return nullptr;
+
+                const auto BB  = w->getWindowBoxUnified(properties);
+                CBox       box = BB.copy().expand(!w->backend().traits().overrideRedirect ? BORDER_GRAB_AREA : 0);
+                if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
+                    box = box.copy().expand(-HITBOX_SHRINK);
+                if (box.containsPoint(pos)) {
+                    if (w->backend().isX11()) {
+                        const auto TRAITS = w->backend().traits();
+                        if (TRAITS.overrideRedirect && !TRAITS.wantsFocus) {
+                            // Override Redirect
+                            return focusState()->window(); // we kinda trick everything here.
+                            // TODO: this is wrong, we should focus the parent, but idk how to get it considering it's nullptr in most cases.
+                        }
+                    }
+
+                    return w;
+                }
+
+                if (!w->backend().isX11()) {
+                    if (w->hasPopupAt(pos))
+                        return w;
+                }
+            }
+            return nullptr;
+        };
+
+        auto tiledAt = [&](PHLWINDOW w) -> PHLWINDOW {
+            if (special != w->onSpecialWorkspace() || w->workspaceID() != WSPID || !w->mapped() || !w->acceptsInput() || w->shouldntFocus() ||
+                w->m_ruleApplicator->noFocus().valueOrDefault() || w == ignoreWindow || isShadowedByModal(w))
+                return nullptr;
+
+            if (!w->backend().isX11() && w->hasPopupAt(pos))
+                return w;
+
+            CBox box = (properties & USE_PROP_TILED) ? w->getWindowBoxUnified(properties) : w->layoutBox();
+            if ((properties & INPUT_EXTENTS) && BORDER_GRAB_AREA > 0 && !w->backend().traits().overrideRedirect) {
+                const auto WORKAREA                    = PWORKSPACE->m_space->workArea();
+                auto       isWindowCloseToWorkAreaEdge = [&](const Math::eDirection dir) -> bool {
+                    constexpr double STICK_THRESHOLD = 2.0; // This constant is taken from isAdjacent in CWindowQuery::inDirection
+                    double           aEdge           = -1;
+                    double           bEdge           = -1;
+
+                    switch (dir) {
+                        case Math::DIRECTION_LEFT:
+                            aEdge = WORKAREA.x;
+                            bEdge = box.x;
+                            break;
+                        case Math::DIRECTION_RIGHT:
+                            aEdge = WORKAREA.x + WORKAREA.width;
+                            bEdge = box.x + box.width;
+                            break;
+                        case Math::DIRECTION_UP:
+                            aEdge = WORKAREA.y;
+                            bEdge = box.y;
+                            break;
+                        case Math::DIRECTION_DOWN:
+                            aEdge = WORKAREA.y + WORKAREA.height;
+                            bEdge = box.y + box.height;
+                            break;
+                        default: break;
+                    }
+                    const double delta = aEdge - bEdge;
+                    return std::abs(delta) < STICK_THRESHOLD;
+                };
+
+                if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_LEFT)) {
+                    box.x -= BORDER_GRAB_AREA;
+                    box.width += BORDER_GRAB_AREA;
+                }
+
+                if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_RIGHT))
+                    box.width += BORDER_GRAB_AREA;
+
+                if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_UP)) {
+                    box.y -= BORDER_GRAB_AREA;
+                    box.height += BORDER_GRAB_AREA;
+                }
+
+                if (isWindowCloseToWorkAreaEdge(Math::eDirection::DIRECTION_DOWN))
+                    box.height += BORDER_GRAB_AREA;
+            }
+            if (HITBOX_SHRINK > 0 && w != LASTFOCUSED)
+                box = box.copy().expand(-HITBOX_SHRINK);
+            if (box.containsPoint(pos))
+                return w;
+            return nullptr;
+        };
+
+        const bool FULLSCREEN_PRIORITY =
+            Fullscreen::controller()->hasFullscreen(PWORKSPACE) && !(properties & SKIP_FULLSCREEN_PRIORITY) && !ONLY_PRIORITY && !(properties & FLOATING_ONLY);
+
+        const auto FS_WINDOW = FULLSCREEN_PRIORITY ? Fullscreen::controller()->getFullscreenWindow(PWORKSPACE) : nullptr;
+
+        // Match the renderer's bottom-to-top list in reverse, including each owner's popups.
+        for (auto const& w : WINDOWS | std::views::reverse) {
+            if (!w->m_workspace || (ONLY_PRIORITY && !w->priorityFocus()))
+                continue;
+
+            if (w == FS_WINDOW) {
+                if (!Fullscreen::controller()->isFullscreen(w, Fullscreen::FSMODE_MAXIMIZED) || w->getWindowBoxUnified(properties).containsPoint(pos))
+                    return w;
+
+                return nullptr;
+            }
+
+            if (w->isFloating()) {
+                if (FULLSCREEN_PRIORITY && !(properties & ALLOW_FLOATING))
+                    continue;
+
+                if (special && !w->onSpecialWorkspace())
+                    continue;
+
+                if (const auto FOUND = floatingAt(w, FULLSCREEN_PRIORITY); FOUND)
+                    return FOUND;
+            } else if (!FULLSCREEN_PRIORITY && !(properties & FLOATING_ONLY)) {
+                if (const auto FOUND = tiledAt(w); FOUND)
+                    return FOUND;
+            }
+        }
+
+        return nullptr;
+    };
+
+    // special workspace
+    if (PMONITOR->m_activeSpecialWorkspace && !*PSPECIALFALLTHRU)
+        return windowForWorkspace(true);
+
+    if (PMONITOR->m_activeSpecialWorkspace) {
+        const auto PWINDOW = windowForWorkspace(true);
+
+        if (PWINDOW)
+            return PWINDOW;
+    }
+
+    return windowForWorkspace(false);
+}
+
 inline CFunctionHook* g_pOnVecToWin = nullptr;
-typedef PHLWINDOW (*origVecToWin)(Desktop::CViewHitTester *, const Vector2D& pos, uint16_t properties, PHLWINDOW pIgnoreWindow);
 PHLWINDOW hook_onVecToWin(void* thisptr, const Vector2D& pos, uint16_t properties, PHLWINDOW pIgnoreWindow) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto win = (*(origVecToWin)g_pOnVecToWin->m_original)((Desktop::CViewHitTester *) thisptr, pos, properties, pIgnoreWindow);
+    auto win = interleavedWindowAt(static_cast<Desktop::CViewHitTester*>(thisptr), pos, properties, pIgnoreWindow);
     if (!hypriso->input_bypass_whitelist)
         if (hypriso->whitelist_on || win_disabled(win))
             return nullptr;
@@ -3338,7 +3541,7 @@ static void hook_mouse_down_kill() {
 }
 
 // Keep these replacements in sync with the corresponding Hyprland functions.
-// Focus raises fullscreen/floating windows, and the fullscreen pass respects their stacking order.
+// Focus, rendering and hit testing share a bottom-to-top stack for tiled and floating windows.
 static CFunctionHook* g_pRawWindowFocusHook                   = nullptr;
 static CFunctionHook* g_pRenderWorkspaceWindowsFullscreenHook = nullptr;
 
@@ -3457,8 +3660,7 @@ static void hook_rawWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW pWindow
 
     g_pXWaylandManager->activateWindow(pWindow, true); // sets the m_pLastWindow
 
-    if (Fullscreen::controller()->isFullscreen(pWindow) || (pWindow->isFloating() && Fullscreen::controller()->hasFullscreen(pWindow->m_workspace)))
-        Desktop::windowState()->raise(pWindow);
+    Desktop::windowState()->raise(pWindow);
 
     pWindow->m_ruleApplicator->propertiesChanged(Desktop::Rule::RULE_PROP_FOCUS);
     pWindow->presentation().onFocusAnimUpdate();
@@ -3488,56 +3690,55 @@ static void hook_rawWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW pWindow
         pWindow->deactivateGroupMembers();
 }
 
+// Workspace passes can nest while rendering snapshots. Restore both the renderer and
+// its blur state when returning to the enclosing pass.
+static Render::IHyprRenderer* interleavedBlurRenderer = nullptr;
+static bool interleavedAboveFloating = false;
+
 static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
+    using namespace Desktop::View;
+    using namespace Render;
+    const auto PREVIOUS_RENDERER = interleavedBlurRenderer;
+    const bool WAS_ABOVE_FLOATING = interleavedAboveFloating;
+    Hyprutils::Utils::CScopeGuard restoreBlurState([PREVIOUS_RENDERER, WAS_ABOVE_FLOATING] {
+        interleavedBlurRenderer = PREVIOUS_RENDERER;
+        interleavedAboveFloating = WAS_ABOVE_FLOATING;
+    });
+    interleavedBlurRenderer = thisptr;
+    interleavedAboveFloating = false;
+
     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
 
-    // pre-filter renderable windows once for the tiled + floating passes
-    std::vector<PHLWINDOW> windows;
-    windows.reserve(Desktop::windowState()->windows().size());
+    // Windows fading beneath fullscreen retain their regular stacking order.
     for (auto const& w : Desktop::windowState()->windows()) {
         if (!thisptr->shouldRenderWindow(w, pMonitor))
             continue;
 
-        if (w->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FADE) * w->presentation().alphaValue(Desktop::View::WINDOW_ALPHA_FULLSCREEN) == 0.f)
+        if (w->presentation().alphaValue(WINDOW_ALPHA_FADE) * w->presentation().alphaValue(WINDOW_ALPHA_FULLSCREEN) == 0.f)
             continue;
 
         if (Fullscreen::controller()->isFullscreen(w))
             continue;
 
-        windows.emplace_back(w);
-    }
+        if (w->isFloating()) {
+            if (w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+                continue;
 
-    // tiled windows that are fading out
-    for (auto const& w : windows) {
-        if (w->isFloating())
+            if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
+                continue;
+
+            if (w->m_workspace == pWorkspace && w->shouldRenderOverFullscreen() && w->mapped())
+                continue; // rendered together with fullscreen windows in stacking order
+
+            if (w->isFadingOutUnderFullscreen())
+                continue;
+        } else if (pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
             continue;
 
-        if (pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
-            continue;
-
-        thisptr->renderWindow(w, pMonitor, time, true, Render::RENDER_PASS_ALL);
+        thisptr->renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
+        interleavedAboveFloating = interleavedAboveFloating || w->isFloating();
     }
     thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_TILED, pWorkspace);
-
-    // and floating ones too
-    for (auto const& w : windows) {
-        if (!w->isFloating())
-            continue;
-
-        if (w->m_monitor == pWorkspace->m_monitor && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
-            continue;
-
-        if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
-            continue; // special on another are rendered as a part of the base pass
-
-        if (w->m_workspace == pWorkspace && w->shouldRenderOverFullscreen() && w->mapped())
-            continue; // rendered together with fullscreen windows in stacking order
-
-        if (w->isFadingOutUnderFullscreen())
-            continue; // render these over fullscreen so the fade-out is visible
-
-        thisptr->renderWindow(w, pMonitor, time, true, Render::RENDER_PASS_ALL);
-    }
     thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_FLOATING, pWorkspace);
 
     // Fullscreen windows and eligible floating windows share the regular stacking order.
@@ -3557,7 +3758,7 @@ static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr
                 continue;
 
             if (thisptr->shouldRenderWindow(w, pMonitor))
-                thisptr->renderWindow(w, pMonitor, time, Fullscreen::controller()->getFullscreenModes(pWorkspace).internal != Fullscreen::FSMODE_FULLSCREEN, Render::RENDER_PASS_ALL);
+                thisptr->renderWindow(w, pMonitor, time, Fullscreen::controller()->getFullscreenModes(pWorkspace).internal != Fullscreen::FSMODE_FULLSCREEN, RENDER_PASS_ALL);
 
             continue;
         }
@@ -3575,9 +3776,112 @@ static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr
         if (specialWorkspaceOnDifferentMonitor)
             continue; // special on another are rendered as a part of the base pass
 
-        thisptr->renderWindow(w, pMonitor, time, true, Render::RENDER_PASS_ALL);
+        thisptr->renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
+        interleavedAboveFloating = interleavedAboveFloating || w->isFloating();
     }
     thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_OVER_FULLSCREEN, pWorkspace);
+}
+
+static void hook_renderWorkspaceWindows(Render::IHyprRenderer* thisptr, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
+    using namespace Desktop::View;
+    using namespace Render;
+    const auto PREVIOUS_RENDERER = interleavedBlurRenderer;
+    const bool WAS_ABOVE_FLOATING = interleavedAboveFloating;
+    Hyprutils::Utils::CScopeGuard restoreBlurState([PREVIOUS_RENDERER, WAS_ABOVE_FLOATING] {
+        interleavedBlurRenderer = PREVIOUS_RENDERER;
+        interleavedAboveFloating = WAS_ABOVE_FLOATING;
+    });
+    interleavedBlurRenderer = thisptr;
+    interleavedAboveFloating = false;
+
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
+
+    // The window list is ordered bottom to top, regardless of layout mode.
+    for (auto const& w : Desktop::windowState()->windows()) {
+        if (w->isHidden() || !w->mapped() || (w->m_state & WINDOW_STATE_PINNED))
+            continue;
+
+        if (!thisptr->shouldRenderWindow(w, pMonitor))
+            continue;
+
+        // some things may force us to ignore the special/not special disparity
+        const bool IGNORE_SPECIAL_CHECK = w->presentation().movingFromMonitor() && (w->m_workspace && !w->m_workspace->isVisible());
+
+        if (!IGNORE_SPECIAL_CHECK && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
+            continue;
+
+        if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
+            continue; // special on another are rendered as a part of the base pass
+
+        // Keep popups directly above their owner, below windows higher in the stack.
+        thisptr->renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
+        interleavedAboveFloating = interleavedAboveFloating || w->isFloating();
+    }
+    thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_TILED, pWorkspace);
+    thisptr->renderFadeouts(pMonitor, Desktop::FADEOUT_PLANE_WINDOW_FLOATING, pWorkspace);
+}
+
+static CFunctionHook* g_pRenderWorkspaceWindowsHook = nullptr;
+static CFunctionHook* g_pInterleavedBlurHook = nullptr;
+static CFunctionHook* g_pWindowFadeoutCreateHook = nullptr;
+
+static bool hook_shouldUseNewBlurOptimizations(Render::IHyprRenderer* thisptr, PHLLS pLayer, PHLWINDOW pWindow) {
+    static auto PBLURNEWOPTIMIZE = CConfigValue<Config::INTEGER>("decoration:blur:new_optimizations");
+    static auto PBLURXRAY        = CConfigValue<Config::INTEGER>("decoration:blur:xray");
+
+    if (!thisptr->getBlurTexture(thisptr->m_renderData.pMonitor))
+        return false;
+
+    if (thisptr->blurProviderRequiresLiveBlur())
+        return false;
+
+    if (pWindow && pWindow->m_ruleApplicator->xray().hasValue() && !pWindow->m_ruleApplicator->xray().valueOrDefault())
+        return false;
+
+    if (pLayer && pLayer->m_ruleApplicator->xray().valueOrDefault() == 0)
+        return false;
+
+    if ((*PBLURNEWOPTIMIZE && pWindow && !pWindow->isFloating() && !pWindow->onSpecialWorkspace() && !(interleavedBlurRenderer == thisptr && interleavedAboveFloating)) || *PBLURXRAY)
+        return true;
+
+    if ((pLayer && pLayer->m_ruleApplicator->xray().valueOrDefault() == 1) || (pWindow && pWindow->m_ruleApplicator->xray().valueOrDefault()))
+        return true;
+
+    return false;
+}
+
+static SP<Desktop::CWindowFadeout> hook_windowFadeoutCreate(PHLWINDOW window, SP<Render::IFramebuffer> snapshot, float sourceAlpha) {
+    using Original = SP<Desktop::CWindowFadeout> (*)(PHLWINDOW, SP<Render::IFramebuffer>, float);
+    auto fadeout = rc<Original>(g_pWindowFadeoutCreateHook->m_original)(window, snapshot, sourceAlpha);
+    if (fadeout && fadeout->m_plane == Desktop::FADEOUT_PLANE_WINDOW_TILED)
+        fadeout->m_plane = Desktop::FADEOUT_PLANE_WINDOW_FLOATING;
+    return fadeout;
+}
+
+static CFunctionHook* create_interleaved_stacking_hook(const std::string& name, const std::string& signature, const void* replacement) {
+    const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, name);
+    for (const auto& method : METHODS) {
+        if (method.demangled.find(signature) == std::string::npos)
+            continue;
+
+        auto hook = HyprlandAPI::createFunctionHook(globals->api, method.address, replacement);
+        if (hook && hook->hook())
+            return hook;
+        if (hook)
+            HyprlandAPI::removeFunctionHook(globals->api, hook);
+        break;
+    }
+    notify("Couldn't hook " + signature + " for interleaved window stacking");
+    return nullptr;
+}
+
+static void hook_interleaved_rendering() {
+    g_pRenderWorkspaceWindowsHook = create_interleaved_stacking_hook(
+        "renderWorkspaceWindows", "Render::IHyprRenderer::renderWorkspaceWindows(", rc<const void*>(&hook_renderWorkspaceWindows));
+    g_pInterleavedBlurHook = create_interleaved_stacking_hook(
+        "shouldUseNewBlurOptimizations", "Render::IHyprRenderer::shouldUseNewBlurOptimizations(", rc<const void*>(&hook_shouldUseNewBlurOptimizations));
+    g_pWindowFadeoutCreateHook = create_interleaved_stacking_hook(
+        "create", "Desktop::CWindowFadeout::create(", rc<const void*>(&hook_windowFadeoutCreate));
 }
 
 static void hook_fullscreen_focus() {
@@ -3610,6 +3914,55 @@ static void hook_fullscreen_rendering() {
     }
 
     notify("Couldn't hook renderWorkspaceWindowsFullscreen");
+}
+
+static CFunctionHook* toggle_floating_hook = nullptr;
+
+static void on_toggle_floating(Layout::CSpace* space, SP<Layout::ITarget> target) {
+    struct SavedPosition {
+        WP<Layout::ITarget> target;
+        WP<Layout::CSpace> space;
+        Vector2D offset;
+    };
+    static std::vector<SavedPosition> positions;
+    std::erase_if(positions, [](const auto& saved) { return saved.target.expired() || saved.space.expired(); });
+
+    // Dragging temporarily floats tiles, including while dragEnd clears its target.
+    const bool remember = target && g_layoutManager->dragController()->mode() == MBIND_INVALID;
+    std::optional<Vector2D> restore;
+    if (remember) {
+        const auto saved = std::ranges::find_if(positions, [&](const auto& entry) { return entry.target == target; });
+        if (target->floating()) {
+            const SavedPosition position{target, target->space(), target->position().pos() - space->workArea(true).pos()};
+            if (saved == positions.end())
+                positions.push_back(position);
+            else
+                *saved = position;
+        } else if (saved != positions.end() && saved->space == target->space())
+            restore = space->workArea(true).pos() + saved->offset;
+    }
+
+    using Original = void (*)(Layout::CSpace*, SP<Layout::ITarget>);
+    rc<Original>(toggle_floating_hook->m_original)(space, target);
+    if (restore && target->floating() && target->space().get() == space) {
+        // Keep Hyprland's restored size and update the floating layout's geometry too.
+        g_layoutManager->setTargetGeom(CBox{*restore, target->position().size()}, target);
+    }
+}
+
+static void hook_floating_position_restore() {
+    for (const auto& method : HyprlandAPI::findFunctionsByName(globals->api, "toggleTargetFloating")) {
+        if (!method.demangled.starts_with("Layout::CSpace::toggleTargetFloating("))
+            continue;
+        toggle_floating_hook = HyprlandAPI::createFunctionHook(globals->api, method.address, rc<void*>(&on_toggle_floating));
+        if (toggle_floating_hook && toggle_floating_hook->hook())
+            return;
+        if (toggle_floating_hook)
+            HyprlandAPI::removeFunctionHook(globals->api, toggle_floating_hook);
+        toggle_floating_hook = nullptr;
+        break;
+    }
+    notify("Couldn't hook floating-mode changes; previous floating positions will not be restored");
 }
 
 static CFunctionHook* native_drag_end_hook = nullptr;
@@ -3696,7 +4049,6 @@ void HyprIso::create_hooks() {
     overwrite_min();
     hook_render_functions();
     overwrite_defaults();
-    interleave_floating_and_tiled_windows();
     hook_maximize_minimize();
     hook_dock_change();
     hook_monitor_arrange();
@@ -3710,6 +4062,8 @@ void HyprIso::create_hooks() {
     hook_mouse_down_kill();
     hook_fullscreen_focus();
     hook_fullscreen_rendering();
+    hook_interleaved_rendering();
+    hook_floating_position_restore();
     hook_native_drag_end();
     hook_native_drag_begin();
     //create_custom_shaders();
@@ -8186,166 +8540,6 @@ void mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vec
 }
 */
 
-void renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//     PHLWINDOW lastWindow;
-//
-//     Event::bus()->m_events.render.stage.emit(RENDER_PRE_WINDOWS);
-//
-//     std::vector<PHLWINDOWREF> windows, fadingOut, pinned;
-//     windows.reserve(Desktop::windowState()->windows().size());
-//
-//     // collect renderable windows
-//     for (auto const& w : Desktop::windowState()->windows()) {
-//         if (w->isHidden() || (!w->m_isMapped && !w->m_fadingOut))
-//             continue;
-//         if (!g_pHyprRenderer->shouldRenderWindow(w, pMonitor))
-//             continue;
-//
-//         windows.emplace_back(w);
-//     }
-//
-//     // categorize + interleave
-//     for (auto& wref : windows) {
-//         auto w = wref.lock();
-//         if (!w)
-//             continue;
-//
-//         // pinned go to separate pass (still above everything)
-//         if (w->m_pinned) {
-//             pinned.emplace_back(w);
-//             continue;
-//         }
-//
-//         // some things may force us to ignore the special/not special disparity
-//         const bool IGNORE_SPECIAL_CHECK = w->m_monitorMovedFrom != -1 &&
-//                                           (w->m_workspace && !w->m_workspace->isVisible());
-//
-//         if (!IGNORE_SPECIAL_CHECK && pWorkspace->m_isSpecialWorkspace != w->onSpecialWorkspace())
-//             continue;
-//
-//         if (pWorkspace->m_isSpecialWorkspace && w->m_monitor != pWorkspace->m_monitor)
-//             continue; // special on another monitor drawn elsewhere
-//
-//         // last window drawn after others
-//         if (w == Desktop::focusState()->window()) {
-//             lastWindow = w;
-//             continue;
-//         }
-//
-//         if (w->m_fadingOut) {
-//             fadingOut.emplace_back(w);
-//             continue;
-//         }
-//
-//         // main pass (interleaved tiled/floating)
-//         g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_MAIN);
-//
-//         // popup directly after main
-//         g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_POPUP);
-//     }
-//
-//     // render last focused window after the rest
-//     if (lastWindow) {
-//         g_pHyprRenderer->renderWindow(lastWindow, pMonitor, time, true, RENDER_PASS_MAIN);
-//         g_pHyprRenderer->renderWindow(lastWindow, pMonitor, time, true, RENDER_PASS_POPUP);
-//     }
-//
-//     // fading out (tiled or floating) — after main windows
-//     for (auto& wref : fadingOut) {
-//         auto w = wref.lock();
-//         if (w)
-//             g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_MAIN);
-//     }
-//
-//     // pinned last, above everything
-//     for (auto& wref : pinned) {
-//         auto w = wref.lock();
-//         if (w)
-//             g_pHyprRenderer->renderWindow(w, pMonitor, time, true, RENDER_PASS_ALL);
-//     }
-}
-
-// for interleaving tiled and floating windows
-//void CInputManager::mouseMoveUnified(uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos) {
-//PHLWINDOW CCompositor::vectorToWindowUnified(const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow) {
-//void CHyprRenderer::renderWorkspaceWindows(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
-
-// inline CFunctionHook* g_pOnRenderWorkspaceWindows = nullptr;
-// typedef void (*origRenderWorkspaceWindows)(CHyprRenderer *, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time);
-// void hook_onRenderWorkspaceWindows(void* thisptr,  PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time) {
-// #ifdef TRACY_ENABLE
-//     ZoneScoped;
-// #endif
-//
-//     //auto chr = (CHyprRenderer *) thisptr;
-//     //(*(origRenderWorkspaceWindows)g_pOnRenderWorkspaceWindows->m_original)(chr, pMonitor, pWorkspace, time);
-//     renderWorkspaceWindows(pMonitor, pWorkspace, time);
-// }
-
-inline CFunctionHook* g_pOnVectorToWindowUnified = nullptr;
-typedef PHLWINDOW (*origVectorToWindowUnified)(CCompositor *, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow);
-PHLWINDOW hook_onVectorToWindowUnified(void* thisptr, const Vector2D& pos, uint8_t properties, PHLWINDOW pIgnoreWindow) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    return (*(origVectorToWindowUnified)g_pOnVectorToWindowUnified->m_original)((CCompositor *) thisptr, pos, properties, pIgnoreWindow);
-    //return vectorToWindowUnified(pos, properties, pIgnoreWindow);
-}
-
-inline CFunctionHook* g_pOnMouseMoveUnified = nullptr;
-typedef void (*origMouseMoveUnifiedd)(CInputManager *, uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos);
-void hook_onMouseMoveUnified(void* thisptr, uint32_t time, bool refocus, bool mouse, std::optional<Vector2D> overridePos) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-
-    (*(origMouseMoveUnifiedd)g_pOnMouseMoveUnified->m_original)((CInputManager *) thisptr, time, refocus, mouse, overridePos);
-    //mouseMoveUnified(time, refocus, mouse, overridePos);
-}
-
-void interleave_floating_and_tiled_windows() {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWorkspaceWindows");
-        for (auto m : METHODS) {
-            if (m.demangled.find("CHyprRenderer::renderWorkspaceWindows(") != std::string::npos) {
-                pRenderWorkspaceWindows = m.address;
-                //g_pOnRenderWorkspaceWindows = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onRenderWorkspaceWindows);
-                //g_pOnRenderWorkspaceWindows->hook();
-            }
-        }
-    }
-    return;
-    {
-        static auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "renderWorkspaceWindowsFullscreen");
-        pRenderWorkspaceWindowsFullscreen = METHODS[0].address;
-    }    
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "vectorToWindowUnified");
-        for (auto m : METHODS) {
-            if (m.signature.find("CCompositor") != std::string::npos) {
-                g_pOnVectorToWindowUnified = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onVectorToWindowUnified);
-                g_pOnVectorToWindowUnified->hook();
-            }
-        }
-    }
-    {
-        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "mouseMoveUnified");
-        for (auto m : METHODS) {
-            if (m.signature.find("CInputManager") != std::string::npos) {
-                g_pOnMouseMoveUnified = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onMouseMoveUnified);
-                g_pOnMouseMoveUnified->hook();
-            }
-        }
-    }
-
-    
-}
 
 static PHLWINDOWREF prev;
 
@@ -10362,4 +10556,3 @@ std::string hyprland_instance_name() {
 std::string last_hyprland_instance_name() {
     return previously_seen_instance_signature;
 }
-

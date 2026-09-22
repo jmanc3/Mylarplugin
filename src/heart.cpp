@@ -947,10 +947,20 @@ static void on_activated(int id) {
         return;
     
     auto info = ((ClientInfo *)c->user_data);
-    if (!info->grouped_with.empty()) {
-        later_immediate([info](Timer *) {
+    auto grouped_with = info->grouped_with;
+    if (!hypriso->is_floating(id)) {
+        grouped_with.clear();
+        const auto workspace = hypriso->get_client_workspace_id(id);
+        for (auto g : get_window_stacking_order()) {
+            if (!hypriso->is_floating(g) && hypriso->get_client_workspace_id(g) == workspace &&
+                hypriso->is_mapped(g) && !hypriso->is_hidden(g))
+                grouped_with.push_back(g);
+        }
+    }
+    if (!grouped_with.empty()) {
+        later_immediate([grouped_with](Timer *) {
             leave = true;
-            for (auto g : info->grouped_with) {
+            for (auto g : grouped_with) {
                 hypriso->bring_to_front(g, false);
             }
             leave = false;
