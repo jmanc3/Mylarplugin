@@ -7,6 +7,7 @@ namespace drag_workspace_switcher {
     void open();
     void close();
     void close_visually();
+    bool drop_window(int cid);
     
     void force_hold_open(bool state);
     void set_overwrite_monitor(int rid);

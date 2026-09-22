@@ -244,6 +244,8 @@ HyprIso *hypriso = new HyprIso;
 static int unique_id = 0;
 
 static bool next_check = false;
+static int native_tiled_drag_id = -1;
+static bool native_tiled_drag_released = false;
 static std::string previously_seen_instance_signature = "";
 ConfigSettings *set = new ConfigSettings;
 
@@ -1916,23 +1918,33 @@ void HyprIso::create_callbacks() {
     });
     
     static auto mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
+        if (g_layoutManager->dragController()->target()) {
+            if (native_tiled_drag_id != -1 && hypriso->on_tiled_drag_motion)
+                hypriso->on_tiled_drag_motion();
+            return;
+        }
         auto consume = false;
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
             auto m     = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run();
             consume    = hypriso->on_mouse_move(0, mouse.x * m->m_scale, mouse.y * m->m_scale);
         }
-        info.cancelled = consume;
+        // A titlebar or resize edge can start a native interaction in this callback.
+        info.cancelled = consume && !g_layoutManager->dragController()->target();
     });
 
     static auto mouseButton = Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo &info) {
+        const bool native_drag = !!g_layoutManager->dragController()->target();
+        if (native_tiled_drag_id != -1)
+            native_tiled_drag_released = e.state == WL_POINTER_BUTTON_STATE_RELEASED;
         auto consume = false;
         if (hypriso->on_mouse_press) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
             auto s     = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run()->m_scale;
             consume    = hypriso->on_mouse_press(e.mouse, e.button, e.state, mouse.x * s, mouse.y * s);
         }
-        info.cancelled = consume;
+        // Still release Mylar's pressed containers, but let Hyprland finish its drag.
+        info.cancelled = consume && !native_drag && !g_layoutManager->dragController()->target();
     });
 
     static auto mouseAxis = Event::bus()->m_events.input.mouse.axis.listen([this](IPointer::SAxisEvent axisevent, Event::SCallbackInfo &info) {
@@ -2695,9 +2707,6 @@ hl.env("HYPRCURSOR_THEME", "rose-pine-hyprcursor")
 -- Refer to https://wiki.hypr.land/Configuring/Basics/Variables/
 hl.config({
     general = {
-        gaps_in  = 15,
-        gaps_out = 25,
-
         border_size = 1,
 
         col = {
@@ -3052,6 +3061,10 @@ hl.bind("SUPER + G", hl.dsp.window.float({ action = "toggle" }))
     base += "hl.config({ general = { col = { active_border = ";
     base += set->active_window_border_hint ? "\"rgba(a9a9a9aa)\"" : "\"rgba(595959aa)\"";
     base += " } } })\n\n";
+
+    const int window_gap = std::clamp(set->tiling_window_gap, 0, 32);
+    base += "hl.config({ general = { gaps_in = " + std::to_string(window_gap)
+        + ", gaps_out = " + std::to_string(window_gap) + " } })\n\n";
 
     for (auto hm : set->monitors) {
         base += hm.lua_config;
@@ -3599,6 +3612,77 @@ static void hook_fullscreen_rendering() {
     notify("Couldn't hook renderWorkspaceWindowsFullscreen");
 }
 
+static CFunctionHook* native_drag_end_hook = nullptr;
+static CFunctionHook* native_drag_begin_hook = nullptr;
+
+static void on_native_drag_begin(Layout::Supplementary::CDragStateController* controller, SP<Layout::ITarget> target,
+                                 eMouseBindMode mode, std::optional<Layout::eRectCorner> edge, bool exclusiveDeviceGrab) {
+    // Capture tiling before Hyprland temporarily floats the window for dragging.
+    const bool tiled_move = target && !target->floating() && mode == MBIND_MOVE;
+    using Original = void (*)(Layout::Supplementary::CDragStateController*, SP<Layout::ITarget>, eMouseBindMode, std::optional<Layout::eRectCorner>, bool);
+    rc<Original>(native_drag_begin_hook->m_original)(controller, target, mode, edge, exclusiveDeviceGrab);
+    if (!tiled_move || controller->target() != target || !validMapped(target->window()))
+        return;
+    native_tiled_drag_id = get_wid(target->window());
+    native_tiled_drag_released = false;
+    if (native_tiled_drag_id != -1 && hypriso->on_tiled_drag_started)
+        hypriso->on_tiled_drag_started();
+}
+
+static bool on_native_drag_end(Layout::Supplementary::CDragStateController* controller) {
+    const auto target = controller->target();
+    const auto mode = controller->mode();
+    const bool resizing = mode == MBIND_RESIZE || mode == MBIND_RESIZE_FORCE_RATIO || mode == MBIND_RESIZE_BLOCK_RATIO;
+    const auto window = target ? target->window() : nullptr;
+    const int tiled_drag_id = native_tiled_drag_id;
+    const bool dropped = native_tiled_drag_released && controller->dragThresholdReached();
+    native_tiled_drag_id = -1;
+    native_tiled_drag_released = false;
+    using Original = bool (*)(Layout::Supplementary::CDragStateController*);
+    const bool ended = rc<Original>(native_drag_end_hook->m_original)(controller);
+    if (tiled_drag_id != -1 && hypriso->on_tiled_drag_ended)
+        hypriso->on_tiled_drag_ended(tiled_drag_id, ended && dropped && validMapped(window));
+    if (ended && resizing && validMapped(window) && hypriso->on_resize_ended) {
+        const int id = get_wid(window);
+        if (id != -1)
+            hypriso->on_resize_ended(id);
+    }
+    return ended;
+}
+
+static void hook_native_drag_end() {
+    for (const auto& method : HyprlandAPI::findFunctionsByName(globals->api, "dragEnd")) {
+        if (method.demangled != "Layout::Supplementary::CDragStateController::dragEnd()")
+            continue;
+        native_drag_end_hook = HyprlandAPI::createFunctionHook(globals->api, method.address, rc<void*>(&on_native_drag_end));
+        if (native_drag_end_hook && native_drag_end_hook->hook())
+            return;
+        if (native_drag_end_hook)
+            HyprlandAPI::removeFunctionHook(globals->api, native_drag_end_hook);
+        native_drag_end_hook = nullptr;
+        break;
+    }
+    notify("Couldn't hook native resize completion; resized window sizes will not be remembered");
+}
+
+static void hook_native_drag_begin() {
+    // Opening the switcher also requires a working completion hook to close it.
+    if (!native_drag_end_hook)
+        return;
+    for (const auto& method : HyprlandAPI::findFunctionsByName(globals->api, "dragBegin")) {
+        if (!method.demangled.starts_with("Layout::Supplementary::CDragStateController::dragBegin("))
+            continue;
+        native_drag_begin_hook = HyprlandAPI::createFunctionHook(globals->api, method.address, rc<void*>(&on_native_drag_begin));
+        if (native_drag_begin_hook && native_drag_begin_hook->hook())
+            return;
+        if (native_drag_begin_hook)
+            HyprlandAPI::removeFunctionHook(globals->api, native_drag_begin_hook);
+        native_drag_begin_hook = nullptr;
+        break;
+    }
+    notify("Couldn't hook native tiled dragging; the drag workspace switcher will be unavailable for tiled windows");
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
   ZoneScoped;
@@ -3626,6 +3710,8 @@ void HyprIso::create_hooks() {
     hook_mouse_down_kill();
     hook_fullscreen_focus();
     hook_fullscreen_rendering();
+    hook_native_drag_end();
+    hook_native_drag_begin();
     //create_custom_shaders();
 }
 
@@ -8976,13 +9062,35 @@ void hook_popup_creation_and_destruction() {
 }
 
 void HyprIso::do_default_drag(int cid) {
-    // next_check = true;
-    // g_pKeybindManager->changeMouseBindMode(MBIND_MOVE);
+    for (auto hw : hyprwindows) {
+        if (hw->id != cid || !validMapped(hw->w))
+            continue;
+        if (const auto target = hw->w->layoutTarget(); target && target->space())
+            g_layoutManager->beginDragTarget(target, MBIND_MOVE);
+        return;
+    }
 }
 
-void HyprIso::do_default_resize(int cid) {
-    // next_check = true;
-    // g_pKeybindManager->changeMouseBindMode(MBIND_RESIZE);
+void HyprIso::do_default_resize(int cid, RESIZE_TYPE type) {
+    std::optional<Layout::eRectCorner> edge;
+    switch (type) {
+        case RESIZE_TYPE::TOP: edge = Layout::CORNER_TOP; break;
+        case RESIZE_TYPE::BOTTOM: edge = Layout::CORNER_BOTTOM; break;
+        case RESIZE_TYPE::LEFT: edge = Layout::CORNER_LEFT; break;
+        case RESIZE_TYPE::RIGHT: edge = Layout::CORNER_RIGHT; break;
+        case RESIZE_TYPE::TOP_LEFT: edge = Layout::CORNER_TOPLEFT; break;
+        case RESIZE_TYPE::TOP_RIGHT: edge = Layout::CORNER_TOPRIGHT; break;
+        case RESIZE_TYPE::BOTTOM_LEFT: edge = Layout::CORNER_BOTTOMLEFT; break;
+        case RESIZE_TYPE::BOTTOM_RIGHT: edge = Layout::CORNER_BOTTOMRIGHT; break;
+        default: break;
+    }
+    for (auto hw : hyprwindows) {
+        if (hw->id != cid || !validMapped(hw->w) || is_fullscreen(cid))
+            continue;
+        if (const auto target = hw->w->layoutTarget(); target && target->space())
+            g_layoutManager->beginDragTarget(target, MBIND_RESIZE, edge);
+        return;
+    }
 }
 
 bool HyprIso::is_floating(int cid) {

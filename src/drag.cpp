@@ -18,6 +18,10 @@ struct DraggingData {
 DraggingData *data = nullptr;
 
 void drag::begin(int cid) {
+    if (!hypriso->is_floating(cid)) {
+        hypriso->do_default_drag(cid);
+        return;
+    }
     drag_workspace_switcher::open();
     //notify(fz("wants no decorations {}", hypriso->requested_client_side_decorations(cid)));
     data = new DraggingData;
@@ -158,6 +162,7 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
         hypriso->should_round(cid, false); 
     }
     hypriso->damage_entire(snap_mon);
+    update_restore_info_for(cid, true);
 
     // This is so that windows that are being moved get unhovered my mouse
     later(new int(0), 10, [](Timer *t) {
@@ -180,46 +185,8 @@ void drag::end(int cid) {
         if (!drag::dragging())
             drag_workspace_switcher::close_visually();
     });
-    for (auto c : actual_root->children) {
-        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
-            auto mou = mouse();
-            auto openess = *datum<float>(c, "openess");
-            if (openess < .94)
-                continue;
-            
-            for (auto ch : c->children) {
-                if (ch->handles_pierced ? ch->handles_pierced(ch, mou.x, mou.y) : bounds_contains(ch->real_bounds, mou.x, mou.y)) {
-                    auto space = *datum<int>(ch, "workspace");
-                    if (space == -1) {
-                        // next avaialable
-                        auto spaces = hypriso->get_workspaces(hypriso->monitor_from_cursor());
-                        int next = 1;
-                        if (!spaces.empty())
-                            next = spaces[spaces.size() - 1] + 1;
-                        later_immediate([cid, next](Timer *) {
-                            auto mon = hypriso->monitor_from_cursor();
-                            auto before = hypriso->get_active_workspace_id(mon);
-                            hypriso->move_to_workspace(cid, next, false);
-                            hypriso->bring_to_front(cid);
-                            hypriso->screenshot_space(mon, before);
-                            hypriso->screenshot_space(mon, hypriso->get_active_workspace_id(mon));
-                        });
-                    } else {
-                        later_immediate([cid, space](Timer *) {
-                            auto mon = hypriso->monitor_from_cursor();
-                            auto before = hypriso->get_active_workspace_id(mon);
-                            hypriso->move_to_workspace(cid, hypriso->space_id_to_raw(space), false);
-                            hypriso->bring_to_front(cid);
-                            hypriso->screenshot_space(mon, before);
-                            hypriso->screenshot_space(mon, space);
-                        });
-                    }
-                    break;
-                }
-            }
-        }    
-    }
-    
+    drag_workspace_switcher::drop_window(cid);
+
     delete data;
     data = nullptr;
 

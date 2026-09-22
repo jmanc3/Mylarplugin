@@ -422,6 +422,8 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "tile_all_workspaces", &settings->tile_all_workspaces);
     bind(bool, "new_workspace_is_tiling", &settings->new_workspace_is_tiling);
     bind(bool, "active_window_border_hint", &settings->active_window_border_hint);
+    bind(int, "tiling_window_gap", &settings->tiling_window_gap);
+    settings->tiling_window_gap = std::clamp(settings->tiling_window_gap, 0, 32);
 
     if (save) {
         for (const auto& workspace : settings->workspace_tiling)

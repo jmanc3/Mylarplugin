@@ -312,6 +312,8 @@ struct WindowRestoreLocation {
     bool remove_titlebar = false;
     
     bool remember_size = false;
+    bool remember_maximized = true;
+    int remembered_snap_type = (int) SnapPosition::NONE;
     bool remember_workspace = false;
     int remembered_workspace = -1;
 
@@ -336,7 +338,7 @@ Bounds snap_position_to_bounds(int mon, SnapPosition pos);
 SnapPosition mouse_to_snap_position(int mon, int x, int y);
 bool double_clicked(Container *c, std::string needle);
 void consume_everything(Container *c);
-void update_restore_info_for(int id);
+void update_restore_info_for(int id, bool use_final_bounds = false);
 void launch_command(std::string command);
 void add_to_snap_group(int id, int other, const std::vector<int> &grouped);
 bool groupable(SnapPosition position, const std::vector<int> ids);

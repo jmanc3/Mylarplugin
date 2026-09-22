@@ -56,6 +56,13 @@ void update_cursor(int type) {
 }
 
 void resizing::begin(int cid, int type) {
+    if (type == (int) RESIZE_TYPE::NONE || hypriso->is_fullscreen(cid))
+        return;
+    if (!hypriso->is_floating(cid)) {
+        update_cursor((int) RESIZE_TYPE::NONE);
+        hypriso->do_default_resize(cid, (RESIZE_TYPE) type);
+        return;
+    }
     update_cursor(type);
     window_resizing = cid;
     is_resizing = true;
@@ -598,7 +605,7 @@ int get_current_resize_type(Container *c) {
         bottom = true;
 
     // get rid of those options that shouldn't happen if snapped
-    if (snapped) {
+    if (snapped && hypriso->is_floating(cid)) {
         switch (snap_type) {
             case (int) SnapPosition::TOP_LEFT: {
                 left = false;
@@ -720,6 +727,12 @@ void create_resize_container_for_window(int id) {
         auto b = c->real_bounds;
         b.shrink(resize_edge_size());
         auto cid = *datum<int>(c, "cid");
+        if (hypriso->is_fullscreen(cid))
+            return false;
+        // Tiled clients (including Firefox's CSD) can disable their own resize
+        // handles. Keep an inner edge reachable even when there is no gap.
+        if (!hypriso->is_floating(cid))
+            b.shrink(std::min(3.0f, resize_edge_size()));
         // no resizing when snapped (for now)
         if (auto container = get_cid_container(cid)) {
             if (*datum<bool>(container, "snapped")) {

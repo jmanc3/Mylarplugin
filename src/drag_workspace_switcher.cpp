@@ -707,6 +707,43 @@ void drag_workspace_switcher::click(int id, int button, int state, float x, floa
     
 }
 
+bool drag_workspace_switcher::drop_window(int cid) {
+    if (!switcher_showing || switcher_closing || !hypriso->is_mapped(cid))
+        return false;
+    const auto mou = mouse();
+    const int monitor = target_monitor();
+    if (monitor == -1)
+        return false;
+    for (auto c : actual_root->children) {
+        if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER || *datum<float>(c, "openess") < .94)
+            continue;
+        for (auto ch : c->children) {
+            if (!(ch->handles_pierced ? ch->handles_pierced(ch, mou.x, mou.y) : bounds_contains(ch->real_bounds, mou.x, mou.y)))
+                continue;
+            const int space = *datum<int>(ch, "workspace");
+            int destination;
+            if (space == -1) {
+                const auto spaces = hypriso->get_workspaces(monitor);
+                destination = spaces.empty() ? 1 : spaces.back() + 1;
+            } else
+                destination = hypriso->space_id_to_raw(space);
+            // Finish the compositor's drag before moving the window; otherwise
+            // its final retiling can undo the workspace drop.
+            later_immediate([cid, monitor, destination](Timer *) {
+                if (!hypriso->is_mapped(cid))
+                    return;
+                const auto before = hypriso->get_active_workspace_id(monitor);
+                hypriso->move_to_workspace(cid, destination, false);
+                hypriso->bring_to_front(cid);
+                hypriso->screenshot_space(monitor, before);
+                hypriso->screenshot_space(monitor, hypriso->get_client_workspace_id(cid));
+            });
+            return true;
+        }
+    }
+    return false;
+}
+
 void drag_workspace_switcher::on_mouse_move(int x, int y) {
     if (switcher_closing)
         return;

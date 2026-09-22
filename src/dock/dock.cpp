@@ -203,6 +203,7 @@ struct STilingMenuState {
     bool all_workspaces = true;
     bool new_workspace_is_tiling = false;
     bool border_hint = true;
+    int window_gap = 8;
 };
 
 struct Dock : UserData {
@@ -1880,6 +1881,7 @@ static void update_tiling_menu(Dock *dock) {
         .all_workspaces = set->tile_all_workspaces,
         .new_workspace_is_tiling = set->new_workspace_is_tiling,
         .border_hint = set->active_window_border_hint,
+        .window_gap = set->tiling_window_gap,
     };
     if (dock->tiling)
         windowing::redraw(dock->tiling->raw_window);
@@ -2027,6 +2029,38 @@ static void fill_tiling_container(Dock *dock) {
                 hypriso->set_new_workspace_tiling(tiled);
             });
         });
+
+    auto gap_label = tiling_row(parent, 28);
+    gap_label->when_paint = [](Container *root, Container *c) {
+        const auto dock = static_cast<Dock *>(root->user_data);
+        paint_tiling_text(dock, c, "Window gap while tiling");
+        paint_tiling_text(dock, c, std::to_string(dock->tiling_settings.window_gap), true);
+    };
+    const auto change_gap = [dock](Container *, float value) {
+        const int gap = std::clamp((int) std::round(value * 32.0f), 0, 32);
+        if (dock->tiling_settings.window_gap == gap)
+            return;
+        dock->tiling_settings.window_gap = gap;
+        windowing::redraw(dock->tiling->raw_window);
+        main_thread([gap]() {
+            if (set->tiling_window_gap == gap)
+                return;
+            set->tiling_window_gap = gap;
+            hypriso->apply_tiling_settings();
+        });
+    };
+    auto gap_slider = make_self_sizing_slider(parent,
+        [](Container *) { return "0"; },
+        [](Container *) { return "32"; },
+        change_gap,
+        [dock](Container *) { return dock->tiling_settings.window_gap / 32.0f; },
+        [](Dock *dock) { return dock->tiling; });
+    gap_slider->children[1]->when_fine_scrolled = [change_gap](Container *root, Container *c, double, double scroll_y, bool) {
+        if (scroll_y == 0)
+            return;
+        const auto dock = static_cast<Dock *>(root->user_data);
+        change_gap(c, (dock->tiling_settings.window_gap + (scroll_y > 0 ? 1 : -1)) / 32.0f);
+    };
 
     tiling_row(parent, 4);
     tiling_shortcut(parent, "Navigate windows", "Super + arrows");
@@ -2272,7 +2306,7 @@ static void fill_root(Container *root) {
             auto dpi = mylar->raw_window->dpi;
 
             RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, 420, 466);
+                c, dpi, 420, 538);
 
             dock->tiling = open_mylar_popup(mylar, settings);
             if (!dock->tiling)

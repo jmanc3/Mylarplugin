@@ -241,6 +241,19 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
     {
         PopOption pop;
         auto info = &restore_infos[hypriso->class_name(cid)];
+        if (info->remember_maximized)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        pop.text = "Remember maximized";
+        pop.on_clicked = [cid]() {
+            auto info = &restore_infos[hypriso->class_name(cid)];
+            info->remember_maximized = !info->remember_maximized;
+            update_restore_info_for(cid);
+        };
+        root.push_back(pop);
+    }
+    {
+        PopOption pop;
+        auto info = &restore_infos[hypriso->class_name(cid)];
         if (info->remember_workspace)
             pop.icon_left = ":Papirus:checkbox-checked-symbolic";
         pop.text = "Remember workspace";
@@ -583,9 +596,10 @@ void create_titlebar(Container *root, Container *parent) {
         if (hypriso->is_fullscreen(cid))  
             return;
         if (auto c = get_cid_container(cid)) {
-            *datum<bool>(client, "drag_from_titlebar") = true;
+            *datum<bool>(client, "drag_from_titlebar") = hypriso->is_floating(cid);
         }
-        hypriso->send_false_click();
+        if (hypriso->is_floating(cid))
+            hypriso->send_false_click();
         drag::begin(cid);
         root->consumed_event = false;
         hypriso->bring_to_front(cid);

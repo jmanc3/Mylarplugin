@@ -626,7 +626,7 @@ void paint_snap_preview(Container *actual_root, Container *c) {
 
     if (active_id == cid && stage == (int)STAGE::RENDER_PRE_WINDOW) {
         renderfix 
-        if (*datum<bool>(c, "snapped") && (*datum<int>(c, "snap_type") != (int)SnapPosition::MAX)) {
+        if (hypriso->is_floating(cid) && *datum<bool>(c, "snapped") && (*datum<int>(c, "snap_type") != (int)SnapPosition::MAX)) {
             auto b = c->real_bounds;
             b.shrink(1);
             auto a = *datum<float>(c, "titlebar_alpha");
@@ -638,6 +638,8 @@ void paint_snap_preview(Container *actual_root, Container *c) {
 
 void fit_on_screen(int cid)  {
     if (!hypriso->is_floating(cid))
+        return;
+    if (auto c = get_cid_container(cid); c && *datum<bool>(c, "snapped"))
         return;
     int mon = get_monitor(cid);
     auto reserved = bounds_reserved_monitor(mon);
@@ -681,12 +683,21 @@ void apply_restore_info(int id) {
             if (info.remember_workspace)
                 hypriso->move_to_workspace(id, info.remembered_workspace);
 
+            if (!hypriso->is_floating(id))
+                continue;
+            auto c = get_cid_container(id);
+            // Opening a decorated window can apply restore rules twice.
+            if (c && *datum<bool>(c, "snapped"))
+                continue;
             if (info.remember_size) {
-                if (hypriso->is_floating(id)) {
+                if (info.box.w > 0 && info.box.h > 0) {
                     const auto b = restored_window_bounds(id, info);
                     hypriso->move_resize(id, b.x, b.y, b.w, b.h);
                 }
             }
+            if (info.remember_maximized && info.remembered_snap_type != (int) SnapPosition::NONE)
+                drag::snap_window(get_monitor(id), id, info.remembered_snap_type);
+            return;
         }
     }
 }
@@ -1236,6 +1247,10 @@ static void on_drag_start_requested(int id) {
 }
 
 static void on_resize_start_requested(int id, RESIZE_TYPE type) {
+    if (!hypriso->is_floating(id)) {
+        resizing::begin(id, (int) type);
+        return;
+    }
     auto cid = id;
     bool snapped = false;
     int snap_type = (int) SnapPosition::NONE;
@@ -1571,6 +1586,8 @@ void load_restore_infos() {
         bool fake_fullscreen = false;
         bool remove_titlebar = false;
         bool remember_size = false;
+        bool remember_maximized = true;
+        int remembered_snap_type = (int) SnapPosition::NONE;
         bool remember_workspace = false;
         int remembered_workspace = -1;
 
@@ -1581,6 +1598,8 @@ void load_restore_infos() {
                 file_version = 2;
             if (line.starts_with("#version 3"))
                 file_version = 3;
+            if (line.starts_with("#version 4"))
+                file_version = 4;
             if (file_version != 0)
                 continue;
         }
@@ -1601,9 +1620,15 @@ void load_restore_infos() {
                 remember_workspace = false;
             }
         }
-        if (file_version == 3) {
+        if (file_version == 3 || file_version == 4) {
             if (!(iss >> class_name >> info.x >> info.y >> info.w >> info.h >> keep_above >> fake_fullscreen >> remove_titlebar >> remember_size >> remember_workspace >> remembered_workspace))
                 continue; // bad line — skip
+        }
+        if (file_version == 4) {
+            if (!(iss >> remember_maximized >> remembered_snap_type))
+                continue;
+            if (remembered_snap_type < (int) SnapPosition::NONE || remembered_snap_type > (int) SnapPosition::BOTTOM_LEFT)
+                remembered_snap_type = (int) SnapPosition::NONE;
         }
 
         WindowRestoreLocation restore;
@@ -1612,6 +1637,8 @@ void load_restore_infos() {
         restore.fake_fullscreen = fake_fullscreen;
         restore.remove_titlebar = remove_titlebar;
         restore.remember_size = remember_size;
+        restore.remember_maximized = remember_maximized;
+        restore.remembered_snap_type = remembered_snap_type;
         restore.remember_workspace = remember_workspace;
         restore.remembered_workspace = remembered_workspace;
         restore_infos[class_name] = restore;
@@ -1637,11 +1664,11 @@ void save_restore_infos() {
     if (!out) {
         throw std::runtime_error("Failed to write file: " + tmp_filepath.string());
     }
-    out << "#version 3" << "\n";
+    out << "#version 4" << "\n";
     for (auto [class_name, info] : restore_infos) {
         // class_name std::string
         // info.box.x info.box.y info.box.w info.box.h
-        out << class_name << " " << info.box.x << " " << info.box.y << " " << info.box.w << " " << info.box.h << " " << info.keep_above << " " << info.fake_fullscreen << " " << info.remove_titlebar << " " << info.remember_size << " " << info.remember_workspace << " " << info.remembered_workspace << "\n";
+        out << class_name << " " << info.box.x << " " << info.box.y << " " << info.box.w << " " << info.box.h << " " << info.keep_above << " " << info.fake_fullscreen << " " << info.remove_titlebar << " " << info.remember_size << " " << info.remember_workspace << " " << info.remembered_workspace << " " << info.remember_maximized << " " << info.remembered_snap_type << "\n";
     }
     //out << contents;
     if (!out.good()) {
@@ -1656,25 +1683,28 @@ void save_restore_infos() {
     }
 }
 
-void update_restore_info_for(int id) {
-    WindowRestoreLocation info;
+void update_restore_info_for(int id, bool use_final_bounds) {
     int mid = get_monitor(id);
     if (mid != -1) {
-        Bounds cb = bounds_client(id);
-        Bounds cm = bounds_monitor(mid);
-        auto s = scale(mid);
-        info.box = {
-            cb.x / cm.w,
-            cb.y / cm.h,
-            cb.w / cm.w,
-            (cb.h + titlebar_h) / cm.h,
-        };
-        auto old = restore_infos[hypriso->class_name(id)];
-        if (!hypriso->is_floating(id))
-            info.box = old.box;
-        info.remember_workspace = old.remember_workspace;
-        info.remember_size = old.remember_size;
-        info.remove_titlebar = old.remove_titlebar;
+        auto info = restore_infos[hypriso->class_name(id)];
+        // Native tiling resizes must preserve the previous floating box and snap state.
+        if (hypriso->is_floating(id)) {
+            Bounds cb = use_final_bounds ? bounds_client_final(id) : bounds_client(id);
+            const Bounds cm = bounds_monitor(mid);
+            auto c = get_cid_container(id);
+            const bool snapped = c && *datum<bool>(c, "snapped");
+            if (snapped)
+                cb = *datum<Bounds>(c, "pre_snap_bounds");
+            if (cm.w > 0 && cm.h > 0 && cb.w > 0 && cb.h > 0) {
+                info.box = {
+                    cb.x / cm.w,
+                    cb.y / cm.h,
+                    cb.w / cm.w,
+                    (cb.h + (hypriso->has_decorations(id) ? titlebar_h : 0)) / cm.h,
+                };
+            }
+            info.remembered_snap_type = snapped ? *datum<int>(c, "snap_type") : (int) SnapPosition::NONE;
+        }
         info.remembered_workspace = hypriso->get_client_workspace(id);
         restore_infos[hypriso->class_name(id)] = info;
         save_restore_infos(); // I believe it's okay to call this here because it only happens on resize end, and drag end
@@ -1711,6 +1741,7 @@ void do_snap(SnapPosition pos) {
                         }
                         
                         drag::merge_client_into_existant_groups(cid, false);
+                        update_restore_info_for(cid, true);
                     }
                 } else {
                     drag::snap_window(get_monitor(cid), cid, (int) pos);
@@ -2067,6 +2098,18 @@ void heart::begin() {
             hypriso->on_monitor_closed = on_monitor_closed;
             hypriso->on_drag_start_requested = on_drag_start_requested;
             hypriso->on_resize_start_requested = on_resize_start_requested;
+            hypriso->on_resize_ended = [](int id) { update_restore_info_for(id, true); };
+            hypriso->on_tiled_drag_started = []() { drag_workspace_switcher::open(); };
+            hypriso->on_tiled_drag_motion = []() {
+                heart::layout_containers();
+                const auto m = mouse();
+                drag_workspace_switcher::on_mouse_move(m.x, m.y);
+            };
+            hypriso->on_tiled_drag_ended = [](int id, bool dropped) {
+                if (dropped)
+                    drag_workspace_switcher::drop_window(id);
+                drag_workspace_switcher::close_visually();
+            };
             hypriso->on_drag_or_resize_cancel_requested = on_drag_or_resize_cancel_requested;
             hypriso->on_config_reload = on_config_reload;
             hypriso->on_activated = on_activated;
@@ -2115,6 +2158,10 @@ void heart::end() {
 #endif
     set_cursor_hidden_for_desktop_fade(false);
     hypriso->on_config_reload = nullptr;
+    hypriso->on_resize_ended = nullptr;
+    hypriso->on_tiled_drag_started = nullptr;
+    hypriso->on_tiled_drag_motion = nullptr;
+    hypriso->on_tiled_drag_ended = nullptr;
     hypriso->on_workspace_tiling_change = nullptr;
     hypriso->on_window_workspace_change = nullptr;
     

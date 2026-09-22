@@ -99,6 +99,7 @@ struct ConfigSettings {
     bool tile_all_workspaces = false;
     bool new_workspace_is_tiling = false;
     bool active_window_border_hint = true;
+    int tiling_window_gap = 8;
     std::vector<SWorkspaceTiling> workspace_tiling;
 
     std::vector<MylarMonitorRule> monitor_rules;
@@ -357,6 +358,10 @@ struct HyprIso {
 
     std::function<void(int id)> on_drag_start_requested = nullptr;
     std::function<void(int id, RESIZE_TYPE type)> on_resize_start_requested = nullptr;
+    std::function<void(int id)> on_resize_ended = nullptr;
+    std::function<void()> on_tiled_drag_started = nullptr;
+    std::function<void()> on_tiled_drag_motion = nullptr;
+    std::function<void(int id, bool dropped)> on_tiled_drag_ended = nullptr;
     std::function<void()> on_drag_or_resize_cancel_requested = nullptr;
 
     std::function<void()> on_config_reload = nullptr;
@@ -521,7 +526,7 @@ struct HyprIso {
     void login_animation();
     
     void do_default_drag(int cid);
-    void do_default_resize(int cid);
+    void do_default_resize(int cid, RESIZE_TYPE type = RESIZE_TYPE::NONE);
     bool is_floating(int cid);
 
     bool clip = false;
