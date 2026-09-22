@@ -1302,7 +1302,13 @@ static void on_drag_or_resize_cancel_requested() {
     }
 }
 
-static void minimize_overview_combined_gesture() {
+struct CombinedDesktopGesture {
+    std::function<void(bool)> begin;
+    std::function<void(Bounds)> update;
+    std::function<void()> end;
+};
+
+static CombinedDesktopGesture minimize_overview_combined_gesture() {
     static desktop_gesture::State gesture;
     static desktop_gesture::VerticalStroke vertical_stroke;
     static long start = 0;
@@ -1325,8 +1331,8 @@ static void minimize_overview_combined_gesture() {
         }
     };
 
-    // down stroke results in higher y, vice versa
-    make_gesture(3, 6, 0, 1.0, false, [activate](Bounds) {
+    // Both starting directions share ownership, progress, and release handling.
+    return {[activate](bool horizontal) {
         // A closing view is returning to normal; let the new swipe choose its view.
         const bool overview_open = overview::is_showing() && !overview::is_closing();
         const bool desktop_open = show_desktop::is_opened() && !show_desktop::is_closing();
@@ -1337,7 +1343,7 @@ static void minimize_overview_combined_gesture() {
         workspace_gesture_started = false;
         horizontal_offset = 0;
         horizontal_applied = 0;
-        horizontal_active = false;
+        horizontal_active = horizontal && overview_open;
         activate();
         // Hyprland delivers the begin event's movement again to update.
         request_refresh();
@@ -1382,7 +1388,7 @@ static void minimize_overview_combined_gesture() {
         gesture = {};
         workspace_gesture_started = false;
         request_refresh();
-    });
+    }};
 }
 
 static void on_config_reload() {
@@ -1394,25 +1400,24 @@ static void on_config_reload() {
     static float offset_x = 0;
     static float offset_y = 0;
     static float offset_click = 75;
-    static bool workspace_gesture = false;
-    static bool workspace_gesture_started = false;
-    static int workspace_gesture_monitor = -1;
+    static bool overview_gesture = false;
     // TODO: offset_click should scale down so that 1200 offset can rotate all windows list
     // only scale if factor > 1
 
     // alt tab gesture
     gestures_reset();
 
-    minimize_overview_combined_gesture();
+    const auto combined = minimize_overview_combined_gesture();
+    make_gesture(3, 6, 0, 1.0, false, [combined](Bounds) {
+        combined.begin(false);
+    }, combined.update, combined.end);
 
-    make_gesture(3, 7, 0, 1.0, false, [](Bounds s) { 
+    make_gesture(3, 7, 0, 1.0, false, [combined](Bounds s) {
         offset_x = 0;
         offset_y = 0;
-        workspace_gesture = overview::is_showing() && !overview::is_closing();
-        workspace_gesture_monitor = hypriso->monitor_from_cursor();
-        workspace_gesture_started = false;
-        if (workspace_gesture) {
-            workspace_gesture_started = overview::begin_workspace_gesture(workspace_gesture_monitor);
+        overview_gesture = overview::is_showing() && !overview::is_closing();
+        if (overview_gesture) {
+            combined.begin(true);
             return;
         }
         //alt_tab::visual_offset(0);
@@ -1420,12 +1425,9 @@ static void on_config_reload() {
         alt_tab::show();
         //alt_tab::move(1);
         //coverflow::open();
-    }, [](Bounds s) { 
-        if (workspace_gesture) {
-            if (!workspace_gesture_started)
-                workspace_gesture_started = overview::begin_workspace_gesture(workspace_gesture_monitor);
-            if (workspace_gesture_started)
-                overview::update_workspace_gesture(workspace_gesture_monitor, s.x);
+    }, [combined](Bounds s) {
+        if (overview_gesture) {
+            combined.update(s);
             return;
         }
         //coverflow::scroll(s.x, s.y);
@@ -1466,12 +1468,10 @@ static void on_config_reload() {
         //alt_tab::visual_offset(offset / offset_click);
         
         damage_all();
-    }, []() { 
-        if (workspace_gesture) {
-            if (workspace_gesture_started)
-                overview::end_workspace_gesture(workspace_gesture_monitor);
-            workspace_gesture = false;
-            workspace_gesture_started = false;
+    }, [combined]() {
+        if (overview_gesture) {
+            combined.end();
+            overview_gesture = false;
             return;
         }
         //coverflow::close();
