@@ -281,41 +281,89 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
     return consumed;
 }
 
+static Bounds restored_window_bounds(int id, const WindowRestoreLocation& info) {
+    const auto monitor = get_monitor(id);
+    const auto s = scale(monitor);
+    const auto reserved = bounds_reserved_monitor(monitor);
+    auto b = bounds_client(id);
+    b.w = std::min(reserved.w * info.box.w, std::max(1.0, reserved.w - 60 * s));
+    b.h = std::min(reserved.h * info.box.h, std::max(1.0, reserved.h - 60 * s));
+    b.x = reserved.x + (reserved.w - b.w) * .5;
+    b.y = reserved.y + (reserved.h - b.h) * .5;
+    if (reserved.h * info.box.h >= reserved.h - 60 * s)
+        b.y += titlebar_h * s * .5;
+    return b;
+}
+
+static void apply_window_tiling(int id, bool state, bool restore_position) {
+    if (!hypriso->alt_tabbable(id) || hypriso->is_floating(id) == !state)
+        return;
+
+    auto c = get_cid_container(id);
+    if (state) {
+        if (c)
+            *datum<Bounds>(c, "pre_mode_change_position") = bounds_client(id);
+        hypriso->set_float_state(id, false);
+        hypriso->should_round(id, true);
+        return;
+    }
+
+    hypriso->set_float_state(id, true);
+    if (c && *datum<bool>(c, "snapped"))
+        hypriso->should_round(id, false);
+    const auto previous = c ? *datum<Bounds>(c, "pre_mode_change_position") : Bounds{};
+    if (restore_position) {
+        if (previous.w <= 0 || previous.h <= 0)
+            return;
+        const auto now = bounds_client(id);
+        hypriso->move_resize(id, now, true);
+        hypriso->move_resize(id, previous, false);
+        return;
+    }
+
+    const auto name = hypriso->class_name(id);
+    const auto saved = restore_infos.find(name);
+    const auto parent = hypriso->parent(id);
+    if (saved == restore_infos.end() || (parent != -1 && hypriso->class_name(parent) == name))
+        return;
+    auto size = restored_window_bounds(id, saved->second);
+    if (size.w <= 5 || size.h <= 5)
+        return;
+
+    // Restore size around the destination position, never the old workspace or
+    // monitor coordinates. Clamp only when the destination cannot fit the size.
+    const auto monitor = get_monitor(id);
+    const auto reserved = bounds_reserved_monitor(monitor);
+    if (monitor == -1 || reserved.w <= 0 || reserved.h <= 0)
+        return;
+    const auto extents = extents_client(id);
+    const auto now = bounds_client_final(id);
+    size.w = std::min(size.w, std::max(1.0, reserved.w - extents.left - extents.right));
+    size.h = std::min(size.h, std::max(1.0, reserved.h - extents.top - extents.bottom));
+    size.x = std::clamp(now.x + (now.w - size.w) * .5, reserved.x + extents.left,
+                        std::max(reserved.x + extents.left, reserved.x + reserved.w - size.w - extents.right));
+    size.y = std::clamp(now.y + (now.h - size.h) * .5, reserved.y + extents.top,
+                        std::max(reserved.y + extents.top, reserved.y + reserved.h - size.h - extents.bottom));
+    hypriso->move_resize(id, size, false);
+}
+
+static void apply_workspace_tiling(int s, bool state) {
+    for (auto id : get_window_stacking_order()) {
+        if (hypriso->get_active_workspace_id_client(id) != s)
+            continue;
+        apply_window_tiling(id, state, true);
+    }
+}
+
+static void on_window_workspace_change(int id) {
+    const int space = hypriso->get_client_workspace_id(id);
+    if (space != -1)
+        apply_window_tiling(id, hypriso->is_space_tiling_id(space), false);
+}
+
 void toggle_layout() {
-    auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
-    auto tiling = hypriso->is_space_tiling_id(s);
-    hypriso->set_space_tiling_id(s, !tiling);
-    std::vector<int> order = get_window_stacking_order();
-    for (auto o : order) {
-        if (hypriso->get_active_workspace_id_client(o) == s) {
-            if (hypriso->alt_tabbable(o)) {
-                if (tiling) {
-                    // change to float if not already
-                    if (!hypriso->is_floating(o)) {
-                        hypriso->set_float_state(o, true);
-
-                        //apply_restore_info(o);
-                        if (auto c = get_cid_container(o)) {
-                            if (*datum<bool>(c, "snapped"))
-                                hypriso->should_round(o, false);
-
-                            auto p = *datum<Bounds>(c, "pre_mode_change_position");
-                            auto now = bounds_client(o);
-                            hypriso->move_resize(o, now.x, now.y, now.w, now.h, true);
-                            hypriso->move_resize(o, p.x, p.y, p.w, p.h, false);
-                        }
-                    }
-                } else {
-                    // change to tiling if not already
-                    if (auto c = get_cid_container(o)) {
-                        *datum<Bounds>(c, "pre_mode_change_position") = bounds_client(o);
-                    }
-                    hypriso->set_float_state(o, false);
-                    hypriso->should_round(o, true);
-                }
-            }
-        }
-    } 
+    const auto space = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
+    hypriso->set_space_tiling_id(space, !hypriso->is_space_tiling_id(space));
 }
 
 static bool on_key_press(int id, int key, int state, bool update_mods) {
@@ -589,6 +637,8 @@ void paint_snap_preview(Container *actual_root, Container *c) {
 }
 
 void fit_on_screen(int cid)  {
+    if (!hypriso->is_floating(cid))
+        return;
     int mon = get_monitor(cid);
     auto reserved = bounds_reserved_monitor(mon);
     auto bounds = bounds_client(cid);
@@ -612,7 +662,6 @@ void fit_on_screen(int cid)  {
 
 void apply_restore_info(int id) {
     //auto tc = c_from_id(id);
-    auto monitor = get_monitor(id);
     auto cname = hypriso->class_name(id);
     for (auto [class_n, info] : restore_infos) {
         if (cname == class_n) {
@@ -629,29 +678,12 @@ void apply_restore_info(int id) {
                 }
             }
             
-            auto b = bounds_client(id);
-            auto s = scale(monitor);
-            auto b2 = bounds_reserved_monitor(monitor);
-            b.w = b2.w * info.box.w;
-            b.h = b2.h * info.box.h;
-            if (b.w >= b2.w - 60 * s) {
-                b.w = b2.w - 60 * s;
-            }
-            bool fix = false;
-            if (b.h >= b2.h - 60 * s) {
-                b.h = b2.h - 60 * s;
-                fix = true;
-            }
-            b.x = b2.x + b2.w * .5 - b.w * .5;
-            b.y = b2.y + b2.h * .5 - b.h * .5;
-            if (fix)
-                b.y += (titlebar_h * s) * .5;
-
             if (info.remember_workspace)
                 hypriso->move_to_workspace(id, info.remembered_workspace);
 
             if (info.remember_size) {
-                if (!hypriso->is_space_tiling_id(hypriso->get_client_workspace(id))) {
+                if (hypriso->is_floating(id)) {
+                    const auto b = restored_window_bounds(id, info);
                     hypriso->move_resize(id, b.x, b.y, b.w, b.h);
                 }
             }
@@ -714,6 +746,8 @@ static void on_window_open(int id) {
     
     later_immediate([id](Timer *) {
         apply_restore_info(id);
+        // Restore rules can move a newly opened window to another workspace.
+        on_window_workspace_change(id);
         fit_on_screen(id);
     });
     later(100, [id](Timer *) {
@@ -728,9 +762,6 @@ static void on_window_open(int id) {
 
     if (hypriso->has_decorations(id)) {
         later(50, [id](Timer *) {
-            auto s = hypriso->get_active_workspace_id(hypriso->monitor_from_cursor());
-            auto tiling = hypriso->is_space_tiling_id(s);
-            //hypriso->set_float_state(id, !tiling);
             apply_restore_info(id);
         });
     }
@@ -1639,6 +1670,8 @@ void update_restore_info_for(int id) {
             (cb.h + titlebar_h) / cm.h,
         };
         auto old = restore_infos[hypriso->class_name(id)];
+        if (!hypriso->is_floating(id))
+            info.box = old.box;
         info.remember_workspace = old.remember_workspace;
         info.remember_size = old.remember_size;
         info.remove_titlebar = old.remove_titlebar;
@@ -2040,6 +2073,8 @@ void heart::begin() {
             hypriso->on_config_generated = on_config_generated;
             hypriso->on_requests_max_or_min = on_requests_max_or_min;
             hypriso->on_workspace_change = on_workspace_change;
+            hypriso->on_workspace_tiling_change = apply_workspace_tiling;
+            hypriso->on_window_workspace_change = on_window_workspace_change;
             hypriso->on_workspace_windows_change = []() {
                 // A window's monitor is updated after the workspace move event.
                 main_thread(dock::update_workspaces);
@@ -2080,6 +2115,8 @@ void heart::end() {
 #endif
     set_cursor_hidden_for_desktop_fade(false);
     hypriso->on_config_reload = nullptr;
+    hypriso->on_workspace_tiling_change = nullptr;
+    hypriso->on_window_workspace_change = nullptr;
     
     save_restore_infos();
     

@@ -11,6 +11,7 @@
 
 #include <any>
 #include <sstream>
+#include <unordered_set>
 #define private public
 #define protected public
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -22,6 +23,7 @@
 
 #include <cstring>
 #include "hypriso.h"
+#include "settings.h"
 #include "overview.h"
 //#include "heart.h"
 //#include "dock/dock.h"
@@ -527,7 +529,7 @@ struct HyprLayer {
 static std::vector<HyprLayer *> hyprlayers;
 
 struct HyprWorkspaces {
-    int id;
+    int id = -1;
     PHLWORKSPACEREF w;
     SP<Render::IFramebuffer> buffer = nullptr;
 
@@ -535,6 +537,19 @@ struct HyprWorkspaces {
 };
 
 static std::vector<HyprWorkspaces *> hyprspaces;
+
+static bool workspace_tiling_state(const std::string& workspace) {
+    const auto saved = std::ranges::find(set->workspace_tiling, workspace, &SWorkspaceTiling::workspace);
+    return saved == set->workspace_tiling.end() ? set->new_workspace_is_tiling : saved->is_tiling;
+}
+
+static void remember_workspace_tiling(const std::string& workspace, bool state) {
+    const auto saved = std::ranges::find(set->workspace_tiling, workspace, &SWorkspaceTiling::workspace);
+    if (saved == set->workspace_tiling.end())
+        set->workspace_tiling.push_back({workspace, state,});
+    else
+        saved->is_tiling = state;
+}
 
 struct Texture {
     SP<Render::ITexture> texture;
@@ -689,7 +704,10 @@ int get_wid(PHLWINDOW w) {
 }
 
 static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
-    if (!PWINDOW)
+    if (!PWINDOW || PWINDOW->isFloating() == should_float)
+        return;
+    const auto target = PWINDOW->layoutTarget();
+    if (!target || !target->space())
         return;
 
     // remove drag status
@@ -697,11 +715,8 @@ static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
         g_layoutManager->endDragTarget();
         //CKeybindManager::changeMouseBindMode(MBIND_INVALID);
 
-    auto target = PWINDOW->layoutTarget();
-    target->space()->m_algorithm->setFloating(target, should_float, true);
-    //Layout::CAlgorithm::setFloating(target, should_float, true);
-    //target->space()->toggleTargetFloating(target);
-    //g_layoutManager->changeFloatingMode(PWINDOW->layoutTarget());
+    // Preserve fullscreen state and emit the compositor's floating-mode event.
+    g_layoutManager->changeFloatingMode(target);
 
     if (PWINDOW->m_workspace) {
         PWINDOW->m_workspace->updateWindows();
@@ -1952,16 +1967,28 @@ void HyprIso::create_callbacks() {
         hs->w = e;
         hs->id = unique_id++;
         hs->buffer = g_pHyprRenderer->createFB();
+        hs->is_tiling = workspace_tiling_state(e->getConfigName());
+        if (std::ranges::find(set->workspace_tiling, e->getConfigName(), &SWorkspaceTiling::workspace) == set->workspace_tiling.end())
+            remember_workspace_tiling(e->getConfigName(), hs->is_tiling);
         hyprspaces.push_back(hs);
+        if (hs->is_tiling && on_workspace_tiling_change)
+            on_workspace_tiling_change(hs->id, true);
     }
+    settings::load_save_settings(true, set);
 
     static auto createWorkspace = Event::bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF sref) {
         auto s = sref.lock();
+        if (!s)
+            return;
         auto hs = new HyprWorkspaces;
         hs->w = s;
         hs->id = unique_id++;
         hs->buffer = g_pHyprRenderer->createFB();
+        hs->is_tiling = workspace_tiling_state(s->getConfigName());
+        if (std::ranges::find(set->workspace_tiling, s->getConfigName(), &SWorkspaceTiling::workspace) == set->workspace_tiling.end())
+            remember_workspace_tiling(s->getConfigName(), hs->is_tiling);
         hyprspaces.push_back(hs);
+        settings::load_save_settings(true, set);
     });
 
     static auto destroyedWorkspace = Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF sref) {
@@ -1995,7 +2022,21 @@ void HyprIso::create_callbacks() {
         }
     });
 
-    static auto windowWorkspaceChanged = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW, PHLWORKSPACE) {
+    static auto windowWorkspaceChanged = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW w, PHLWORKSPACE workspace) {
+        // The event precedes monitor assignment and layout target attachment.
+        // Do not retain a closed window or apply an obsolete intermediate move.
+        main_thread([window_ref = PHLWINDOWREF(w), workspace_ref = PHLWORKSPACEREF(workspace)]() {
+            const auto window = window_ref.lock();
+            const auto destination = workspace_ref.lock();
+            if (!window || !window->mapped() || !destination || window->m_workspace != destination)
+                return;
+            const auto target = window->layoutTarget();
+            if (!target || target->space() != destination->m_space)
+                return;
+            const int id = get_wid(window);
+            if (id != -1 && hypriso->on_window_workspace_change)
+                hypriso->on_window_workspace_change(id);
+        });
         if (hypriso->on_workspace_windows_change)
             hypriso->on_workspace_windows_change();
     });
@@ -2541,6 +2582,20 @@ void hook_hidden_state_change() {
     }
 }
 
+static std::string lua_string(const std::string& value) {
+    std::string result = "\"";
+    for (const unsigned char c : value) {
+        if (c == '\\' || c == '"') {
+            result += '\\';
+            result += c;
+        } else if (c < 32 || c == 127)
+            result += std::format("\\{:03d}", c);
+        else
+            result += c;
+    }
+    return result + "\"";
+}
+
 static std::string default_conf() {
 std::string prefix = R"END(
 -- THIS FILE IS AUTOGENERATED, DO NOT MODIFY
@@ -2942,14 +2997,6 @@ hl.window_rule({
 --    }
 --})
 
-hl.window_rule({
-	name = "float-default",
-	match = {
-    	class = ".*"
-	},
-	float = true
-})
-
 hl.layer_rule({
     blur = true,
 
@@ -2964,6 +3011,13 @@ hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
 hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
 hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
 hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
+
+-- Shortcuts shown in the tiling menu. Keep the existing Alt bindings too.
+for _, direction in ipairs({ "left", "right", "up", "down" }) do
+    hl.bind("SUPER + " .. direction, hl.dsp.focus({ direction = direction }))
+    hl.bind("SHIFT + SUPER + " .. direction, hl.dsp.window.move({ direction = direction }))
+end
+hl.bind("SUPER + G", hl.dsp.window.float({ action = "toggle" }))
 
    
 )END";
@@ -2982,6 +3036,22 @@ hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
     
 //     base += debug_mon;
 // #endif
+
+    // The fallback covers workspaces that have not been created yet.
+    const bool default_tiling = set->new_workspace_is_tiling;
+    base += "hl.window_rule({ name = \"float-default\", match = { class = \".*\" }, float = ";
+    base += default_tiling ? "false" : "true";
+    base += " })\n\n";
+    for (const auto& workspace : set->workspace_tiling) {
+        const bool tiling = workspace.is_tiling;
+        base += "hl.window_rule({\n    name = " + lua_string("float-" + workspace.workspace)
+            + ",\n    match = { workspace = " + lua_string(workspace.workspace)
+            + " },\n    float = " + (tiling ? "false" : "true") + ",\n})\n\n";
+    }
+
+    base += "hl.config({ general = { col = { active_border = ";
+    base += set->active_window_border_hint ? "\"rgba(a9a9a9aa)\"" : "\"rgba(595959aa)\"";
+    base += " } } })\n\n";
 
     for (auto hm : set->monitors) {
         base += hm.lua_config;
@@ -4302,11 +4372,10 @@ int HyprIso::get_active_workspace(int monitor) {
     ZoneScoped;
 #endif
     for (auto hm : hyprmonitors) {
-        if (hm->id == monitor) {
-            if (hm->m->m_activeWorkspace.get()) {
-                return hm->m->m_activeWorkspace->m_id;
-            }
-        }
+        if (hm->id != monitor || !hm->m)
+            continue;
+        const auto workspace = hm->m->m_activeWorkspace;
+        return workspace ? workspace->m_id : -1;
     }
     return -1;
 }
@@ -4316,13 +4385,15 @@ int HyprIso::get_active_workspace_id(int monitor) {
     ZoneScoped;
 #endif
     for (auto hm : hyprmonitors) {
-        if (hm->id == monitor) {
-            for (auto s : hyprspaces) {
-                if (s->w == hm->m->m_activeWorkspace) {
-                    return s->id;
-                }
-            }
-        }
+        if (hm->id != monitor || !hm->m)
+            continue;
+        const auto workspace = hm->m->m_activeWorkspace;
+        if (!workspace)
+            return -1;
+        for (auto s : hyprspaces)
+            if (s->w && s->w == workspace)
+                return s->id;
+        return -1;
     }
     return -1;
 }
@@ -4331,21 +4402,12 @@ int HyprIso::get_active_workspace_id_client(int client) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto hw : hyprwindows) {
-        if (hw->id == client) {
-            for (auto s : hyprspaces) {
-                if (s->w == hw->w->m_workspace) {
-                    return s->id;
-                }
-            }
-        }
-    }
-    return -1;
+    return get_client_workspace_id(client);
 }
 
 bool HyprIso::is_space_tiling_id(int space) {
     for (auto &hs : hyprspaces) {
-        if (hs->id == space) {
+        if (hs->id == space && hs->w) {
             return hs->is_tiling;
         }
     }
@@ -4353,11 +4415,62 @@ bool HyprIso::is_space_tiling_id(int space) {
 }
 
 void HyprIso::set_space_tiling_id(int space, bool state) {
-    for (auto &hs : hyprspaces) {
-        if (hs->id == space) {
-            hs->is_tiling = state;
-        }
+    for (auto hs : hyprspaces) {
+        if (hs->id != space || !hs->w)
+            continue;
+        if (set->tile_all_workspaces) {
+            set->is_tiling = state;
+            for (auto& workspace : set->workspace_tiling)
+                workspace.is_tiling = state;
+            for (auto workspace : hyprspaces) {
+                if (!workspace->w)
+                    continue;
+                remember_workspace_tiling(workspace->w->getConfigName(), state);
+            }
+        } else
+            remember_workspace_tiling(hs->w->getConfigName(), state);
+        apply_tiling_settings();
+        return;
     }
+}
+
+void HyprIso::set_new_workspace_tiling(bool state) {
+    if (set->new_workspace_is_tiling == state)
+        return;
+
+    std::unordered_set<std::string> occupied;
+    for (const auto& window : Desktop::windowState()->windows()) {
+        // Hidden, minimized and inactive grouped windows still count as open.
+        if (window->mapped() && window->m_workspace)
+            occupied.insert(window->m_workspace->getConfigName());
+    }
+    set->new_workspace_is_tiling = state;
+    // Empty and currently absent workspaces inherit the new default. Preserve
+    // explicit modes only where windows are currently open.
+    std::erase_if(set->workspace_tiling, [&occupied](const SWorkspaceTiling& workspace) {
+        return !occupied.contains(workspace.workspace);
+    });
+    apply_tiling_settings();
+}
+
+void HyprIso::apply_tiling_settings() {
+    std::vector<std::pair<int, bool>> changes;
+    for (auto hs : hyprspaces) {
+        if (!hs->w)
+            continue;
+        const bool state = workspace_tiling_state(hs->w->getConfigName());
+        if (hs->is_tiling == state)
+            continue;
+        hs->is_tiling = state;
+        changes.emplace_back(hs->id, state);
+    }
+    // Publish all modes before changing windows; callbacks can emit workspace
+    // events and must not invalidate an iteration over the workspace registry.
+    for (const auto& [id, state] : changes)
+        if (on_workspace_tiling_change)
+            on_workspace_tiling_change(id, state);
+    settings::load_save_settings(true, set);
+    reload();
 }
 
 void HyprIso::pin(int id, bool state) {
@@ -4425,11 +4538,8 @@ int HyprIso::get_client_workspace(int client) {
     ZoneScoped;
 #endif
     for (auto hw : hyprwindows) {
-        if (hw->id == client) {
-            if (hw->w->m_workspace.get()) {
-                return hw->w->m_workspace->m_id;
-            }
-        }
+        if (hw->id == client && hw->w && hw->w->m_workspace)
+            return hw->w->m_workspace->m_id;
     }
     return -1;
 }
@@ -4439,11 +4549,12 @@ int HyprIso::get_client_workspace_id(int client) {
     ZoneScoped;
 #endif
     for (auto hw : hyprwindows) {
-        if (hw->id == client) {
-            if (hw->w->m_workspace.get()) {
-                return hw->id;
-            }
-        }
+        if (hw->id != client || !hw->w || !hw->w->m_workspace)
+            continue;
+        for (auto space : hyprspaces)
+            if (space->w && space->w == hw->w->m_workspace)
+                return space->id;
+        return -1;
     }
     return -1;
 }
@@ -4482,14 +4593,17 @@ void HyprIso::move(int id, int x, int y) {
     }
 }
 
-void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
+void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool follow_monitor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
     for (auto c : hyprwindows) {
         if (c->id == id) {
-            if (!c->w->m_monitor)
+            if (!c->w || !c->w->m_monitor || !c->w->m_workspace)
                 continue;
+            const auto target = c->w->layoutTarget();
+            if (!target || !target->space())
+                return;
             auto scaling_factor = c->w->m_monitor->m_scale;
 
             {
@@ -4520,26 +4634,27 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant) {
                 #endif
                 //c->w->updateWindowDecos();
             }
-            auto target = c->w->layoutTarget();
             //target->rememberFloatingSize({w, h});
             //target->setPositionGlobal(CBox(x, y, w, h));
             target->space()->setTargetGeom(CBox(x, y, w, h), target);
 
-            Vector2D middle = target->position().middle();
-            const auto PMONITOR = State::monitorState()->query().vec(middle).run();
-            if (PMONITOR && PMONITOR->m_activeWorkspace && target->floating() /* If we're resaizing a tiled target, don't do this */) {
-                const auto WS = PMONITOR->m_activeSpecialWorkspace ? PMONITOR->m_activeSpecialWorkspace : PMONITOR->m_activeWorkspace;
-                target->assignToSpace(WS->m_space);
+            if (follow_monitor && target->floating()) {
+                const auto monitor = State::monitorState()->query().vec(target->position().middle()).run();
+                if (monitor && monitor != c->w->m_monitor) {
+                    const auto workspace = monitor->m_activeSpecialWorkspace ? monitor->m_activeSpecialWorkspace : monitor->m_activeWorkspace;
+                    if (workspace && workspace->m_space)
+                        target->assignToSpace(workspace->m_space);
+                }
             }
             target->damageEntire();
         }
     }
 }
-void HyprIso::move_resize(int id, Bounds b, bool instant) {
+void HyprIso::move_resize(int id, Bounds b, bool instant, bool follow_monitor) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    move_resize(id, b.x, b.y, b.w, b.h, instant);
+    move_resize(id, b.x, b.y, b.w, b.h, instant, follow_monitor);
 }
 
 
@@ -7120,7 +7235,10 @@ void HyprIso::move_to_workspace(int workspace, bool follow) {
 #endif
     // Desktop::focusState()->monitor()->changeWorkspace(std::to_string(workspace));
     // g_pKeybindManager->changeworkspace(std::to_string(workspace));
-    Config::Actions::changeWorkspace(std::to_string(workspace));
+    const auto destination = State::workspaceState()->query().id(workspace).run();
+    if (!destination && workspace <= 0)
+        return;
+    Config::Actions::changeWorkspace(destination ? destination->getConfigName() : std::to_string(workspace));
 }
 
 void HyprIso::move_to_workspace_id(int workspace) {
@@ -7128,9 +7246,9 @@ void HyprIso::move_to_workspace_id(int workspace) {
     ZoneScoped;
 #endif
     for (auto s : hyprspaces) {
-        if (s->id == workspace) {
-            Config::Actions::changeWorkspace(std::to_string(s->w->m_id));
-            // g_pKeybindManager->changeworkspace(std::to_string(s->w->m_id));
+        if (s->id == workspace && s->w) {
+            Config::Actions::changeWorkspace(s->w->getConfigName());
+            return;
         }
     }
 }
@@ -7149,20 +7267,20 @@ void HyprIso::finish_workspace_animations() {
 
 int HyprIso::space_id_to_raw(int space_id) {
     for (auto s : hyprspaces) {
-        if (s->id == space_id) {
+        if (s->id == space_id && s->w) {
             return s->w->m_id;
         }
     }
-    return 0;
+    return -1;
 }
 
 int HyprIso::space_raw_to_id(int space_raw) {
     for (auto s : hyprspaces) {
-        if (s->w->m_id == space_raw) {
+        if (s->w && s->w->m_id == space_raw) {
             return s->id;
         }
     }
-    return 0;
+    return -1;
 }
 
 void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
@@ -7180,12 +7298,17 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
         }
     }
 
-    if (!PWINDOW)
+    if (!PWINDOW || !PWINDOW->m_workspace)
         return;
 
-    if (follow) {
-        std::string args = std::to_string(workspace);
+    // Negative native IDs identify named/special workspaces. Passing their
+    // numeric spelling to the dispatcher would interpret them as relative moves.
+    const auto destination = State::workspaceState()->query().id(workspace).run();
+    if (!destination && workspace <= 0)
+        return;
+    const auto args = destination ? destination->getConfigName() : std::to_string(workspace);
 
+    if (follow) {
         const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
         if (WORKSPACEID == WORKSPACE_INVALID) {
             Log::logger->log(Log::DEBUG, "Invalid workspace in moveActiveToWorkspace");
@@ -7230,8 +7353,6 @@ void HyprIso::move_to_workspace(int id, int workspace, bool follow) {
         Desktop::focusState()->fullWindowFocus(PWINDOW, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
         PWINDOW->warpCursor();
     } else {
-        std::string args = std::to_string(workspace);
-
         const auto& [WORKSPACEID, workspaceName, isAutoID] = getWorkspaceIDNameFromString(args);
         if (WORKSPACEID == WORKSPACE_INVALID) {
             Log::logger->log(Log::ERR, "Error in moveActiveToWorkspaceSilent, invalid value");

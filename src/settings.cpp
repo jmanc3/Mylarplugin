@@ -15,6 +15,8 @@
 #include <gtk/gtk.h>
 #include <thread>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <filesystem>
 #include <pango/pango-font.h>
 #include <cairo.h>
@@ -361,7 +363,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     if (save) {
         out.open(filepath, std::ios::trunc);
         if (!out) return;
-        out << "#version 1\n\n";
+        out << "#version " << settings->version << "\n\n";
     } else {
         std::ifstream in(filepath);
         if (!in) return;
@@ -387,10 +389,6 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
                 file_version = std::strtol(line.c_str() + i, nullptr, 10);
             break;
         }
-    }
-
-    if (!save && settings->version != file_version) {
-        // ...
     }
 
     #define bind(type, name, ptr) \
@@ -420,6 +418,42 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "desktop_sort_ascending", &settings->desktop_sort_ascending);
     bind(std::string, "desktop_folder", &settings->desktop_folder);
     bind(std::string, "overview_layout_type", &settings->overview_layout_type);
+    bind(bool, "is_tiling", &settings->is_tiling);
+    bind(bool, "tile_all_workspaces", &settings->tile_all_workspaces);
+    bind(bool, "new_workspace_is_tiling", &settings->new_workspace_is_tiling);
+    bind(bool, "active_window_border_hint", &settings->active_window_border_hint);
+
+    if (save) {
+        for (const auto& workspace : settings->workspace_tiling)
+            out << "workspace_tiling = " << std::quoted(workspace.workspace) << " " << workspace.is_tiling << "\n";
+    } else {
+        settings->workspace_tiling.clear();
+        for (const auto& line : lines) {
+            std::istringstream entry(line);
+            std::string key;
+            char separator = '\0';
+            SWorkspaceTiling workspace;
+            int state = 0;
+            if (!(entry >> key >> separator) || key != "workspace_tiling" || separator != '=')
+                continue;
+            if (!(entry >> std::quoted(workspace.workspace) >> state) || workspace.workspace.empty() || (state != 0 && state != 1))
+                continue;
+            entry >> std::ws;
+            if (!entry.eof())
+                continue;
+            workspace.is_tiling = state == 1;
+            auto existing = std::ranges::find(settings->workspace_tiling, workspace.workspace, &SWorkspaceTiling::workspace);
+            if (existing != settings->workspace_tiling.end())
+                *existing = workspace;
+            else
+                settings->workspace_tiling.push_back(workspace);
+        }
+        // Version 1 used a global override instead of storing effective modes.
+        // Preserve those modes while allowing new workspaces their own default.
+        if (file_version < 2 && settings->tile_all_workspaces)
+            for (auto& workspace : settings->workspace_tiling)
+                workspace.is_tiling = settings->is_tiling;
+    }
     
     #undef bind
 }

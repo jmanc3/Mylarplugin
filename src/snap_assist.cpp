@@ -192,7 +192,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     {
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
-        auto our_workspace = hypriso->get_active_workspace(monitor);
+        auto our_workspace = hypriso->get_active_workspace_id(monitor);
         std::stable_sort(order.begin(), order.end(),
             [our_workspace](int a, int b) {
                 const bool a_on = hypriso->get_active_workspace_id_client(a) == our_workspace;

@@ -65,8 +65,14 @@ struct MylarMonitor {
     std::string lua_config;
 };
 
+struct SWorkspaceTiling {
+    // Hyprland config selector, never the plugin's session-local unique_id.
+    std::string workspace;
+    bool is_tiling = false;
+};
+
 struct ConfigSettings {
-    int version = 1;
+    int version = 2;
     std::string touchpad_acceleration_curve = "Custom";
     std::string primary_mouse_button = "Left";
     float cursor_speed = .5;
@@ -87,6 +93,13 @@ struct ConfigSettings {
     bool desktop_sort_ascending = true;
     std::string desktop_folder = "~/Desktop";
     std::string overview_layout_type = "Grid";
+
+    bool is_tiling = false;
+    // Scope of explicit toggle changes; new workspaces use their own default.
+    bool tile_all_workspaces = true;
+    bool new_workspace_is_tiling = false;
+    bool active_window_border_hint = true;
+    std::vector<SWorkspaceTiling> workspace_tiling;
 
     std::vector<MylarMonitorRule> monitor_rules;
     std::vector<MylarMonitor> monitors;
@@ -375,8 +388,10 @@ struct HyprIso {
     void set_corner_rendering_mask_for_window(int id, int mask);
     
     void move(int id, int x, int y);
-    void move_resize(int id, int x, int y, int w, int h, bool instant = true);
-    void move_resize(int id, Bounds b, bool instant = true);
+    // Geometry changes preserve workspace ownership. Only interactive drags
+    // opt into following the destination monitor's active workspace.
+    void move_resize(int id, int x, int y, int w, int h, bool instant = true, bool follow_monitor = false);
+    void move_resize(int id, Bounds b, bool instant = true, bool follow_monitor = false);
 
     float fps(int monitor_id);
     
@@ -457,6 +472,7 @@ struct HyprIso {
 
     void show_desktop();
     void hide_desktop();
+    // Conversion failure returns -1, never a valid plugin handle.
     int space_id_to_raw(int space_id);
     int space_raw_to_id(int space_raw);
     void move_to_workspace(int id, int workspace, bool follow = true);
@@ -477,16 +493,24 @@ struct HyprIso {
     std::vector<int> get_workspace_ids(int monitor);
     std::vector<int> get_workspaces(int monitor);
     
+    // Without _id: raw Hyprland workspace number. With _id: plugin handle.
+    // Active-workspace queries refer to the normal workspace. Missing = -1.
     int get_active_workspace(int monitor);
     int get_active_workspace_id(int monitor);
+    // Compatibility alias for get_client_workspace_id; not the active workspace.
     int get_active_workspace_id_client(int client);
     int get_client_workspace(int client);
     int get_client_workspace_id(int client);
 
     float zoom_progress(int monitor);
 
+    // These take plugin workspace handles, never raw workspace numbers.
     bool is_space_tiling_id(int space);
     void set_space_tiling_id(int space, bool state);
+    void apply_tiling_settings();
+    void set_new_workspace_tiling(bool state);
+    std::function<void(int space, bool state)> on_workspace_tiling_change = nullptr;
+    std::function<void(int id)> on_window_workspace_change = nullptr;
 
     void add_float_rule();
     void overwrite_defaults();

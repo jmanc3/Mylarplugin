@@ -94,7 +94,7 @@ void drag::motion(int cid) {
     auto new_bounds = data->bounds_start;
     new_bounds.x += diff_x;
     new_bounds.y += diff_y;
-    hypriso->move_resize(cid, new_bounds);
+    hypriso->move_resize(cid, new_bounds, true, true);
     { // damage 
         Bounds b = bounds_full_client(cid);
         static Bounds p = b;
@@ -119,6 +119,13 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
     
     if (!(*snapped) && pos == (int) SnapPosition::NONE) // no need to unsnap
         return;
+
+    if (get_monitor(cid) != snap_mon) {
+        const auto workspace = hypriso->get_active_workspace(snap_mon);
+        if (workspace == -1)
+            return;
+        hypriso->move_to_workspace(cid, workspace, false);
+    }
 
     if (*snapped) {
         // perform unsnap
