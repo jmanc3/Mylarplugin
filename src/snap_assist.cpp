@@ -6,10 +6,12 @@
 #include "titlebar.h"
 #include "icons.h"
 #include "layout_thumbnails.h"
+#include "overview.h"
 
 #include <algorithm>
 
 static bool skip_close = false;
+static unsigned int lifecycle = 0;
 
 struct HelperData : UserData {
     bool showing = false;
@@ -271,7 +273,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto other_cdata = (ClientInfo *) get_cid_container(parent_data->cid)->user_data;
                 add_to_snap_group(data->cid, parent_data->cid, other_cdata->grouped_with);
 
-                later_immediate([parent_data, close_cid](Timer *) {
+                later_immediate([parent_data, close_cid, generation = lifecycle](Timer *) {
+                    if (generation != lifecycle)
+                        return;
                     skip_close = false;
                     auto came_from = SnapPosition::NONE;
                     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
@@ -619,7 +623,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             close->when_clicked = [cid_copy](Container *root, Container *c) {
                 close_window(cid_copy);
                 auto close_cid = cid_copy;
-                later(10, [close_cid](Timer *) { 
+                later(10, [close_cid, generation = lifecycle](Timer *) {
+                    if (generation != lifecycle)
+                        return;
                     remove_all_of_cid(close_cid);
                     possibly_close_if_none_left(); 
                 });
@@ -930,12 +936,19 @@ void actual_open(int monitor, int cid) {
 }
 
 void snap_assist::open(int monitor, int cid) {
-    later_immediate([monitor, cid](Timer *) {
+    if (overview::is_showing())
+        return;
+    const auto generation = lifecycle;
+    later_immediate([monitor, cid, generation](Timer *) {
+        if (generation != lifecycle || overview::is_showing())
+            return;
         hypriso->screenshot_all(); 
         actual_open(monitor, cid);
     });
-    later(1000.0f / (hypriso->fps(monitor) * .33), [](Timer *t) {
-        t->keep_running = true;
+    later(1000.0f / (hypriso->fps(monitor) * .33), [generation](Timer *t) {
+        t->keep_running = generation == lifecycle && !overview::is_showing();
+        if (!t->keep_running)
+            return;
 
         bool found = false;
         for (int i = actual_root->children.size() - 1; i >= 0; i--) {
@@ -951,6 +964,8 @@ void snap_assist::open(int monitor, int cid) {
 }
 
 static void actual_close() {
+    lifecycle++;
+    skip_close = false;
     hypriso->input_bypass_whitelist = false;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
@@ -968,6 +983,14 @@ static void actual_close() {
     for (auto m : actual_monitors)
         hypriso->damage_entire(*datum<int>(m, "cid"));
     hypriso->simulateMouseMovement();
+}
+
+void snap_assist::instant_close() {
+    // Invalidate queued work even if the last helper has already disappeared.
+    lifecycle++;
+    skip_close = false;
+    if (is_showing())
+        actual_close();
 }
 
 void snap_assist::close(bool force) {
@@ -989,12 +1012,15 @@ void snap_assist::close(bool force) {
            helper_data->should_slide = false;
            if (!already_started_closing) {
                already_started_closing = true;
-               spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime, [](bool normal_end) {
-                   if (normal_end) {
-                       later_immediate([](Timer *) { actual_close(); });
+               spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime, [generation = lifecycle](bool normal_end) {
+                   if (normal_end && generation == lifecycle) {
+                       later_immediate([generation](Timer *) {
+                           if (generation == lifecycle)
+                               actual_close();
+                       });
                    }
-               }, [](float x) {
-                   if (x < .4) {
+               }, [generation = lifecycle](float x) {
+                   if (generation == lifecycle && x < .4) {
                        bool sim = !hypriso->input_bypass_whitelist;
                        hypriso->input_bypass_whitelist = true;
                        if (sim)

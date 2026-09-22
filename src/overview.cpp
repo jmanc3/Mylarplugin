@@ -10,6 +10,7 @@
 #include "desktop_gesture.h"
 #include "desktop_icons.h"
 #include "show_desktop.h"
+#include "snap_assist.h"
 #include "spring.h"
 
 #include <linux/input-event-codes.h>
@@ -946,6 +947,8 @@ static bool initialize_overview(int monitor) {
     later_immediate([monitor, generation](Timer *) {
         if (!running || generation != lifecycle)
             return;
+        // Finish snap assist before taking ownership of its shared render filter.
+        snap_assist::instant_close();
         const bool taking_desktop = scene->taking_desktop;
         const auto scalar = std::clamp(show_desktop::get_scalar(), 0.0f, 1.0f);
         if (taking_desktop) {
@@ -988,6 +991,7 @@ static bool initialize_overview(int monitor) {
                 }
             }
         }
+        hypriso->render_whitelist.clear();
         hypriso->whitelist_on = true;
         initialized = true;
         hold_overview_open();
