@@ -145,9 +145,9 @@ void drag_workspace_switcher::update_drag() {
             // not resize the dragged window a second time.
             p.fit_width = c->children.front()->wanted_bounds.w * .82;
             p.fit_height = c->children.front()->wanted_bounds.h * .82;
-            // The padded hover area keeps the switcher open, but the gap
-            // above its visible panel must still restore the full-size drag.
-            hovered = bounds_contains(switcher_bounds(c), m.x, m.y);
+            // Overview uses the padded hover area. Regular drags grow back
+            // in the gap above the visible panel so they can maximize.
+            hovered = bounds_contains(p.from_overview ? c->real_bounds : switcher_bounds(c), m.x, m.y);
             break;
         }
     }
