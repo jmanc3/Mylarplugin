@@ -1170,30 +1170,8 @@ static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_PRE_CURSOR) {
         drag_workspace_switcher::paint_drag(current_monitor, true);
     }
-
-
-    if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
-        //log(fz("{}", current_monitor));
-        //log(fz("{} {}", hypriso->whitelist_on, hypriso->render_whitelist.size()));
-        //auto monbg = bounds_monitor(current_monitor);
-        //rect(Bounds(monbg.x, monbg.y, 300, 300).scale(scale(current_monitor)), {1, 0, 1, 1}, 0, 15.0f, 2.0, true);
-        
-        auto snap_edge_animation = *datum<float>(actual_root, "snap_edge_animation");
-        if (snap_edge_animation != 0.0 && snap_edge_animation != 1.0) {
-           int mon = *datum<int>(actual_root, "snap_edge_animation_mon");
-           if (mon == current_monitor) {
-               auto seax = *datum<float>(actual_root, "snap_edge_animation_x");
-               auto seay = *datum<float>(actual_root, "snap_edge_animation_y");
-               auto s = scale(mon);
-               hypriso->damage_box(Bounds(seax - 80 * s, seay - 80 * s, 160 * s, 160 * s));
-
-               auto scalar = snap_edge_animation;
-               float a = 1.0 - scalar;
-               RGBA col = {1.0f, 1.0f, 1.0f, 0.1f};
-               draw_colored_circ(seax * s, seay * s, 70 * s  * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
-           }
-        }
-
+    
+    if (stage == (int) STAGE::RENDER_POST_WINDOWS) {
         if (!overview::is_showing()) {
             auto current_time = get_current_time_in_ms();
             for (auto zed : slept_windows) {
@@ -1239,6 +1217,7 @@ static void on_render(int id, int stage) {
                         float scalar = ((float) delta) / ((float) minimize_anim_time);
 
                         auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+                        bounds.w = bounds.h;
                         auto monitor_b = bounds_monitor(mon_id);
                         bounds.y = monitor_b.h;
                         bounds.scale(scale(mon_id));
@@ -1248,6 +1227,29 @@ static void on_render(int id, int stage) {
                     }
                 }
             }
+        }
+    }
+
+    if (stage == (int) STAGE::RENDER_LAST_MOMENT) {
+        //log(fz("{}", current_monitor));
+        //log(fz("{} {}", hypriso->whitelist_on, hypriso->render_whitelist.size()));
+        //auto monbg = bounds_monitor(current_monitor);
+        //rect(Bounds(monbg.x, monbg.y, 300, 300).scale(scale(current_monitor)), {1, 0, 1, 1}, 0, 15.0f, 2.0, true);
+        
+        auto snap_edge_animation = *datum<float>(actual_root, "snap_edge_animation");
+        if (snap_edge_animation != 0.0 && snap_edge_animation != 1.0) {
+           int mon = *datum<int>(actual_root, "snap_edge_animation_mon");
+           if (mon == current_monitor) {
+               auto seax = *datum<float>(actual_root, "snap_edge_animation_x");
+               auto seay = *datum<float>(actual_root, "snap_edge_animation_y");
+               auto s = scale(mon);
+               hypriso->damage_box(Bounds(seax - 80 * s, seay - 80 * s, 160 * s, 160 * s));
+
+               auto scalar = snap_edge_animation;
+               float a = 1.0 - scalar;
+               RGBA col = {1.0f, 1.0f, 1.0f, 0.1f};
+               draw_colored_circ(seax * s, seay * s, 70 * s  * scalar, {(float) col.r * a, (float) col.g * a, (float) col.b * a, (float) col.a * a}, .4 + .6 * scalar, 1.0);
+           }
         }
 
         paint_initial_fade_in();
