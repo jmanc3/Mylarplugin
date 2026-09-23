@@ -7493,69 +7493,119 @@ double easeInExpo(double x) {
     return x == 1.0 ? 1.0 : 1.0 - std::pow(2, -10 * x);
 }
 
+static double lamp_smoothstep(double value) {
+    value = std::clamp(value, 0.0, 1.0);
+    return value * value * (3.0 - 2.0 * value);
+}
+
+static void draw_magic_lamp(SP<Render::ITexture> texture, const Bounds& source, const Bounds& target, float progress) {
+    auto& renderData = g_pHyprRenderer->m_renderData;
+    if (renderData.damage.empty() || progress >= 1.0f)
+        return;
+
+    // First pull the lower edge into a curved neck, then feed the rest of
+    // the window through it. Both phases depend only on gesture progress,
+    // so reversing direction retraces exactly the same shape.
+    const double pinch = lamp_smoothstep(progress / 0.55);
+    const double pull = lamp_smoothstep((progress - 0.25) / 0.75);
+    const double top = std::lerp(source.y, target.y, pull);
+    const double bottom = std::lerp(source.y + source.h, target.y + target.h, pinch);
+
+    const double left = std::min(source.x, target.x);
+    const double right = std::max(source.x + source.w, target.x + target.w);
+    const double canvasTop = std::min(source.y, target.y);
+    const double canvasBottom = std::max(source.y + source.h, target.y + target.h);
+    const CBox canvas = {left, canvasTop, right - left, canvasBottom - canvasTop};
+
+    // A fine grid keeps the curved edges smooth and avoids stretching each
+    // whole scanline across just two large, visibly sheared triangles.
+    constexpr int rows = 64;
+    constexpr int columns = 8;
+    std::array<std::array<SMeshRenderVertex, columns + 1>, rows + 1> grid = {};
+    for (int row = 0; row <= rows; ++row) {
+        const double v = sc<double>(row) / rows;
+        const double bend = pinch * lamp_smoothstep(std::lerp(pull, 1.0, v));
+        const double rowLeft = std::lerp(source.x, target.x, bend);
+        const double rowWidth = std::lerp(source.w, target.w, bend);
+        const double y = std::lerp(top, bottom, v);
+        for (int column = 0; column <= columns; ++column) {
+            const double u = sc<double>(column) / columns;
+            grid[row][column] = {
+                .x = sc<float>((rowLeft + u * rowWidth - canvas.x) / canvas.w),
+                .y = sc<float>((y - canvas.y) / canvas.h),
+                .u = sc<float>(u * source.w / texture->m_size.x),
+                .v = sc<float>(v * source.h / texture->m_size.y),
+            };
+        }
+    }
+
+    std::vector<SMeshRenderVertex> vertices;
+    vertices.reserve(rows * columns * 6);
+    for (int row = 0; row < rows; ++row) {
+        for (int column = 0; column < columns; ++column) {
+            vertices.insert(vertices.end(), {
+                grid[row][column], grid[row + 1][column], grid[row][column + 1],
+                grid[row][column + 1], grid[row + 1][column], grid[row + 1][column + 1],
+            });
+        }
+    }
+
+    Render::GL::CHyprOpenGLImpl::STextureRenderData data;
+    data.damage = &renderData.damage;
+    data.allowCustomUV = true;
+    // Keep the window solid while it bends; fade only the final tail.
+    data.a = sc<float>(1.0 - lamp_smoothstep((progress - 0.90) / 0.10));
+    texture->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+    Render::GL::g_pHyprOpenGL->renderTextureMesh(texture, canvas, vertices, data);
+    // Unlike renderTexture(), the mesh entry point leaves its damage scissor set.
+    Render::GL::g_pHyprOpenGL->scissor(nullptr);
+}
+
 void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (!std::isfinite(scalar) || b.w <= 0 || b.h <= 0)
+        return;
+
     for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (hw->min_fb && hw->min_fb->isAllocated()) {
-                if (!hw->animate_to_dock)
-                    return;
+        if (hw->id != id)
+            continue;
+        if (!hw->w || !hw->animate_to_dock || !hw->min_fb || !hw->min_fb->isAllocated())
+            return;
 
-                AnyPass::AnyData anydata([id, b, hw, scalar](AnyPass* pass) {
-                    auto tex = hw->min_fb->getTexture();
-                    tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
+        // Hidden windows minimize as scalar increases; visible windows (also
+        // used by show-desktop) restore as it increases. Clamp spring overshoot.
+        const float progress = std::clamp(hw->w->m_hidden ? scalar : 1.0f - scalar, 0.0f, 1.0f);
+        if (progress >= 1.0f)
+            return;
 
-                    // The snapshot is anchored at (0, 0) in a monitor-sized
-                    // framebuffer. Fit only its occupied region into the dock.
-                    Bounds bounds = hw->w_min_size;
-                    bounds.w = std::min(bounds.w, tex->m_size.x);
-                    bounds.h = std::min(bounds.h, tex->m_size.y);
-                    if (bounds.w <= 0 || bounds.h <= 0)
-                        return;
+        auto texture = hw->min_fb->getTexture();
+        if (!texture || !texture->ok() || texture->m_size.x <= 0 || texture->m_size.y <= 0)
+            return;
 
-                    const float textureAspect = bounds.w / bounds.h;
-                    const float targetAspect = b.w / b.h;
-                    Bounds aspectBox = b;
+        // The snapshot occupies only the top-left portion of a monitor-sized
+        // framebuffer. Preserve that UV crop, including window decorations.
+        Bounds source = hw->w_min_size;
+        source.w = std::min(source.w, texture->m_size.x);
+        source.h = std::min(source.h, texture->m_size.y);
+        if (source.w <= 0 || source.h <= 0)
+            return;
 
-                    if (textureAspect > targetAspect) {
-                        // Texture is wider: fit to width.
-                        aspectBox.h = b.w / textureAspect;
-                        aspectBox.y += (b.h - aspectBox.h) / 2.0;
-                    } else {
-                        // Texture is taller: fit to height.
-                        aspectBox.w = b.h * textureAspect;
-                        aspectBox.x += (b.w - aspectBox.w) / 2.0;
-                    }
+        const double fit = std::min(b.w / source.w, b.h / source.h);
+        const Bounds target = {
+            b.x + (b.w - source.w * fit) / 2.0,
+            b.y + (b.h - source.h * fit) / 2.0,
+            source.w * fit,
+            source.h * fit,
+        };
 
-                    auto lerped = lerp(bounds, aspectBox, scalar);
-
-                    if (!hw->w->m_hidden)
-                        lerped = lerp(aspectBox, bounds, scalar);
-
-                    auto box = tocbox(lerped);
-                    box.round();
-
-                    Render::GL::CHyprOpenGLImpl::STextureRenderData data;
-                    data.allowCustomUV = true;
-                    data.primarySurfaceUVTopLeft = Vector2D(0, 0);
-                    data.primarySurfaceUVBottomRight = Vector2D(
-                        bounds.w / tex->m_size.x,
-                        bounds.h / tex->m_size.y
-                    );
-                    data.round = 0.0;
-                    data.a = easeInExpo(scalar);
-                    data.roundingPower = 2.0;
-
-                    Render::GL::g_pHyprOpenGL->renderTexture(tex, box, data);
-                });
-
-                g_pHyprRenderer->m_renderPass.add(
-                    makeUnique<AnyPass>(std::move(anydata))
-                );
-            }
-        }
+        // Retain the texture, not the raw window wrapper, until the pass runs.
+        AnyPass::AnyData anydata([texture, source, target, progress](AnyPass*) {
+            draw_magic_lamp(texture, source, target, progress);
+        });
+        g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
+        return;
     }
 }
 
