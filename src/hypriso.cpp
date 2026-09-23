@@ -2736,7 +2736,7 @@ hl.config({
         -- Please see https://wiki.hypr.land/Configuring/Advanced-and-Cool/Tearing/ before you turn this on
         allow_tearing = false,
 
-        layout = "dwindle",
+        layout = "master",
     },
 
     decoration = {
@@ -2824,6 +2824,9 @@ hl.config({
 hl.config({
     master = {
         new_status = "master",
+        mfact = 0.55,
+        new_on_top = false,
+        orientation = "left",
     },
 })
 
@@ -2912,11 +2915,11 @@ hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))
 local closeWindowBind = hl.bind(mainMod .. " + C", hl.dsp.window.close())
 -- closeWindowBind:set_enabled(false)
 hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("command -v hyprshutdown >/dev/null 2>&1 && hyprshutdown || hyprctl dispatch 'hl.dsp.exit()'"))
-hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))
+-- hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))
 hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }))
 --hl.bind(mainMod .. " + P", hl.dsp.exec_cmd(menu))
 -- hl.bind(mainMod .. " + P", hl.dsp.window.pseudo())
-hl.bind(mainMod .. " + J", hl.dsp.layout("togglesplit"))    -- dwindle only
+-- hl.bind(mainMod .. " + J", hl.dsp.layout("togglesplit"))    -- dwindle only
 
 -- Move focus with mainMod + arrow keys
 hl.bind(mainMod .. " + left",  hl.dsp.focus({ direction = "left" }))
@@ -3032,10 +3035,10 @@ hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
 
 hl.bind("SUPER_L + D", hl.plugin.mylar.toggle_desktop_show)
 
-hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
-hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
-hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
-hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
+--hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
+--hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
+--hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
+--hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
 
 -- Shortcuts shown in the tiling menu. Keep the existing Alt bindings too.
 for _, direction in ipairs({ "left", "right", "up", "down" }) do
@@ -3047,7 +3050,21 @@ hl.bind("SUPER + G", hl.dsp.window.float({ action = "toggle" }))
 hl.config({ input = { float_switch_override_focus = false } })
 
 
+local MOD = "SUPER"
+
+hl.bind(MOD .. " + J", hl.dsp.layout("cyclenext"))
+
+hl.bind(MOD .. " + K", hl.dsp.layout("cycleprev"))
+
+hl.bind(MOD .. " + Return", hl.dsp.layout("swapwithmaster auto"))
+
+hl.bind(MOD .. " + H", hl.dsp.layout("mfact -0.05"))
+
+hl.bind(MOD .. " + L", hl.dsp.layout("mfact +0.05"))
+
+
 )END";
+
 
 // #ifndef NDEBUG
 //     std::string debug_mon = R"END(
