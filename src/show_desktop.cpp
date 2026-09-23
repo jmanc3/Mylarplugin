@@ -135,6 +135,7 @@ void show_desktop::render() {
             continue;
  
         auto bounds = dock::get_location(hypriso->monitor_name(mon_id), cid);
+        bounds.w = bounds.h;
         auto monitor_b = bounds_monitor(mon_id);
         bounds.y = monitor_b.h;
         bounds.scale(scale(mon_id));
