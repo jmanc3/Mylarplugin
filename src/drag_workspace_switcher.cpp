@@ -22,6 +22,24 @@ static constexpr float active_thumbnail_refresh_ms = 16.0f;
 static constexpr float inactive_thumbnail_refresh_ms = 500.0f;
 static std::unordered_map<int, double> saved_scroll_offsets;
 
+static constexpr double drag_transition_ms = 120.0;
+static constexpr long drag_hover_delay_ms = 150;
+static unsigned int drag_generation = 0;
+static struct {
+    int cid = -1;
+    bool from_overview = false;
+    bool ready = false;
+    Bounds source;
+    float alpha = 1.0f;
+    float amount = 0.0f;
+    float from = 0.0f;
+    float target = 0.0f;
+    long started = 0;
+    long hover_started = -1;
+    double fit_width = 0;
+    double fit_height = 0;
+} dragged_preview;
+
 struct SwitcherScrollLayout {
     int monitor = -1;
     int active_workspace = -1;
@@ -60,6 +78,146 @@ static Bounds switcher_render_bounds(Bounds b, int monitor) {
     b.x -= mb.x;
     b.y -= mb.y;
     return b.scale(scale(monitor)).round();
+}
+
+void drag_workspace_switcher::begin_drag(int cid, bool from_overview) {
+    dragged_preview = {};
+    dragged_preview.cid = cid;
+    dragged_preview.from_overview = from_overview;
+    dragged_preview.ready = from_overview;
+    const auto generation = ++drag_generation;
+    if (!from_overview) {
+        // Capture outside a render pass, including decorations, while the real
+        // window continues to move normally underneath the preview.
+        later(1.0f, [generation](Timer *t) {
+            t->keep_running = false;
+            if (generation != drag_generation)
+                return;
+            if (!hypriso->is_mapped(dragged_preview.cid)) {
+                end_drag(dragged_preview.cid);
+                return;
+            }
+            if (!dragged_preview.ready || dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f)
+                dragged_preview.ready = hypriso->screenshot_deco(dragged_preview.cid);
+            t->delay = 16;
+            t->keep_running = true;
+            damage_all();
+        });
+    }
+    damage_all();
+}
+
+void drag_workspace_switcher::end_drag(int cid) {
+    if (dragged_preview.cid != cid)
+        return;
+    ++drag_generation;
+    dragged_preview = {};
+    damage_all();
+}
+
+void drag_workspace_switcher::update_drag() {
+    if (dragged_preview.cid == -1 || hypriso->rendering_snapshot())
+        return;
+    if (!hypriso->is_mapped(dragged_preview.cid)) {
+        end_drag(dragged_preview.cid);
+        return;
+    }
+    auto &p = dragged_preview;
+    if (!p.from_overview) {
+        p.source = bounds_client(p.cid);
+        const auto extents = extents_client(p.cid);
+        p.source.x -= extents.left;
+        p.source.y -= extents.top;
+        p.source.w += extents.left + extents.right;
+        p.source.h += extents.top + extents.bottom;
+    }
+    const auto now = get_current_time_in_ms();
+    const auto elapsed = std::clamp((now - p.started) / drag_transition_ms, 0.0, 1.0);
+    const auto eased = elapsed * elapsed * (3.0 - 2.0 * elapsed);
+    p.amount = p.from + (p.target - p.from) * eased;
+    bool hovered = false;
+    if (switcher_showing && !switcher_closing && p.ready) {
+        const auto m = mouse();
+        for (auto c : actual_root->children) {
+            if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER || c->children.empty())
+                continue;
+            // Use the unscaled target size so its hover/press animation does
+            // not resize the dragged window a second time.
+            p.fit_width = c->children.front()->wanted_bounds.w * .82;
+            p.fit_height = c->children.front()->wanted_bounds.h * .82;
+            // The padded hover area keeps the switcher open, but the gap
+            // above its visible panel must still restore the full-size drag.
+            hovered = bounds_contains(switcher_bounds(c), m.x, m.y);
+            break;
+        }
+    }
+    if (!hovered)
+        p.hover_started = -1;
+    else if (p.hover_started == -1)
+        p.hover_started = now;
+    // Passing through on the way to maximize must not start shrinking.
+    // Leaving cancels the pending delay and starts growing immediately.
+    const bool waiting = hovered && now - p.hover_started < drag_hover_delay_ms;
+    const float target = hovered && !waiting ? 1.0f : 0.0f;
+    if (target != p.target) {
+        p.from = p.amount;
+        p.target = target;
+        p.started = now;
+    }
+    if (waiting || p.amount != p.target || p.amount > 0.0f)
+        damage_all();
+}
+
+static Bounds dragged_bounds() {
+    const auto &p = dragged_preview;
+    auto b = p.source;
+    if (b.w <= 0 || b.h <= 0 || p.fit_width <= 0 || p.fit_height <= 0)
+        return b;
+    const auto fit = std::min({1.0, p.fit_width / b.w, p.fit_height / b.h});
+    const auto factor = 1.0 + (fit - 1.0) * p.amount;
+    const auto m = mouse();
+    const auto anchor_x = std::clamp((m.x - b.x) / b.w, 0.0, 1.0);
+    const auto anchor_y = std::clamp((m.y - b.y) / b.h, 0.0, 1.0);
+    b.x += b.w * (1.0 - factor) * anchor_x;
+    b.y += b.h * (1.0 - factor) * anchor_y;
+    b.w *= factor;
+    b.h *= factor;
+    return b;
+}
+
+void drag_workspace_switcher::transform_thumbnail(int cid, Bounds &bounds, float &alpha) {
+    if (cid != dragged_preview.cid || !dragged_preview.from_overview || hypriso->rendering_snapshot())
+        return;
+    dragged_preview.source = bounds;
+    dragged_preview.alpha = alpha;
+    bounds = dragged_bounds();
+    alpha *= 1.0f - dragged_preview.amount;
+}
+
+bool drag_workspace_switcher::replaces_window(int cid) {
+    return cid == dragged_preview.cid && !dragged_preview.from_overview && dragged_preview.ready &&
+        dragged_preview.amount > 0.0f && !hypriso->rendering_snapshot();
+}
+
+bool drag_workspace_switcher::omit_from_workspace_snapshot(int cid) {
+    return cid != -1 && cid == dragged_preview.cid && dragged_preview.ready &&
+        (dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f);
+}
+
+void drag_workspace_switcher::paint_drag(int monitor, bool above_switcher) {
+    const auto &p = dragged_preview;
+    if (p.cid == -1 || !p.ready || p.amount <= 0.0f || hypriso->rendering_snapshot())
+        return;
+    const float alpha = p.alpha * (above_switcher ? p.amount : 1.0f - p.amount);
+    if (alpha <= 0.0f)
+        return;
+    const auto old_clip = hypriso->clip;
+    const auto old_clipbox = hypriso->clipbox;
+    defer(hypriso->clip = old_clip; hypriso->clipbox = old_clipbox);
+    // The raised copy must not inherit the switcher's clipping rectangle.
+    hypriso->clip = true;
+    hypriso->clipbox = switcher_render_bounds(bounds_monitor(monitor), monitor);
+    hypriso->draw_deco_thumbnail(p.cid, switcher_render_bounds(dragged_bounds(), monitor), 0, 2.0f, 0, alpha);
 }
 
 static Bounds thumbnail_clip_bounds(Container *c) {
@@ -573,7 +731,7 @@ void drag_workspace_switcher::open() {
         }
     });
     
-    later(active_thumbnail_refresh_ms, [generation](Timer *t) {
+    later(active_thumbnail_refresh_ms, [generation, previous_dragged_workspace = -1](Timer *t) mutable {
         if (!switcher_showing || generation != switcher_generation) {
             t->keep_running = false;
             return;
@@ -594,12 +752,16 @@ void drag_workspace_switcher::open() {
         
         auto spaces = hypriso->get_workspace_ids(monitor);
         int active_id = hypriso->get_active_workspace_id(monitor);
+        const int dragged_workspace = dragged_preview.cid == -1 ? -1 : hypriso->get_client_workspace_id(dragged_preview.cid);
         for (auto s : spaces) {
-            if (s == active_id) {
+            // Refresh the source even for an overview drag from an inactive
+            // workspace, and restore its screenshot immediately after release.
+            if (s == active_id || s == dragged_workspace || s == previous_dragged_workspace) {
                 overview::fake_paint(s);
                 hypriso->screenshot_space(monitor, s);
             }
         }
+        previous_dragged_workspace = dragged_workspace;
         overview::fake_paint(-1);
     });
     later(inactive_thumbnail_refresh_ms, [generation](Timer *t) {
@@ -694,6 +856,7 @@ void drag_workspace_switcher::close_visually() {
 }
 
 void drag_workspace_switcher::close() {
+    end_drag(dragged_preview.cid);
     switcher_generation++;
     close_generation++;
     switcher_closing = false;
@@ -759,6 +922,7 @@ void drag_workspace_switcher::on_mouse_move(int x, int y) {
             move_event(c, event);
         }
     }
+    update_drag();
 }
 
 void drag_workspace_switcher::force_hold_open(bool state) {

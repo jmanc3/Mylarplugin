@@ -1095,6 +1095,7 @@ static void paint_initial_fade_in() {
 static void on_render(int id, int stage) {
     if (stage == (int) STAGE::RENDER_BEGIN) {
         heart::layout_containers();
+        drag_workspace_switcher::update_drag();
         for (auto c : actual_root->children) {
             if (c->custom_type == (int) TYPE::CLIENT) {
                 auto cid = *datum<int>(c, "cid");
@@ -1167,6 +1168,7 @@ static void on_render(int id, int stage) {
         show_desktop::render();
     }
     if (stage == (int) STAGE::RENDER_PRE_CURSOR) {
+        drag_workspace_switcher::paint_drag(current_monitor, true);
     }
 
 
@@ -2109,7 +2111,10 @@ void heart::begin() {
             hypriso->on_drag_start_requested = on_drag_start_requested;
             hypriso->on_resize_start_requested = on_resize_start_requested;
             hypriso->on_resize_ended = [](int id) { update_restore_info_for(id, true); };
-            hypriso->on_tiled_drag_started = []() { drag_workspace_switcher::open(); };
+            hypriso->on_tiled_drag_started = [](int id) {
+                drag_workspace_switcher::open();
+                drag_workspace_switcher::begin_drag(id);
+            };
             hypriso->on_tiled_drag_motion = []() {
                 heart::layout_containers();
                 const auto m = mouse();
@@ -2118,6 +2123,7 @@ void heart::begin() {
             hypriso->on_tiled_drag_ended = [](int id, bool dropped) {
                 if (dropped)
                     drag_workspace_switcher::drop_window(id);
+                drag_workspace_switcher::end_drag(id);
                 drag_workspace_switcher::close_visually();
             };
             hypriso->on_drag_or_resize_cancel_requested = on_drag_or_resize_cancel_requested;

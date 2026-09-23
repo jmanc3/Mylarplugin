@@ -359,7 +359,7 @@ struct HyprIso {
     std::function<void(int id)> on_drag_start_requested = nullptr;
     std::function<void(int id, RESIZE_TYPE type)> on_resize_start_requested = nullptr;
     std::function<void(int id)> on_resize_ended = nullptr;
-    std::function<void()> on_tiled_drag_started = nullptr;
+    std::function<void(int id)> on_tiled_drag_started = nullptr;
     std::function<void()> on_tiled_drag_motion = nullptr;
     std::function<void(int id, bool dropped)> on_tiled_drag_ended = nullptr;
     std::function<void()> on_drag_or_resize_cancel_requested = nullptr;
@@ -443,7 +443,8 @@ struct HyprIso {
 
     void screenshot_all();
     void screenshot(int id);
-    void screenshot_deco(int id);
+    bool screenshot_deco(int id);
+    bool rendering_snapshot();
     void set_animate_to_dock(int id, bool state);
     void screenshot_min(int id);
     void screenshot_space(int mon, int id);

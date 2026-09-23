@@ -86,6 +86,7 @@ void drag::begin(int cid) {
         data->bounds_start = bounds_client(cid);
     }
     drag::motion(cid);
+    drag_workspace_switcher::begin_drag(cid);
     hypriso->damage_entire(get_monitor(cid));
 }
 
@@ -186,6 +187,7 @@ void drag::end(int cid) {
             drag_workspace_switcher::close_visually();
     });
     drag_workspace_switcher::drop_window(cid);
+    drag_workspace_switcher::end_drag(cid);
 
     delete data;
     data = nullptr;

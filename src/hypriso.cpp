@@ -28,6 +28,7 @@
 #include "hypriso.h"
 #include "settings.h"
 #include "overview.h"
+#include "drag_workspace_switcher.h"
 //#include "heart.h"
 //#include "dock/dock.h"
 //#include "container.h"
@@ -249,6 +250,7 @@ static int unique_id = 0;
 static bool next_check = false;
 static int native_tiled_drag_id = -1;
 static bool native_tiled_drag_released = false;
+static bool capturing_workspace = false;
 static std::string previously_seen_instance_signature = "";
 ConfigSettings *set = new ConfigSettings;
 
@@ -1430,6 +1432,8 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (capturing_workspace && !standalone && drag_workspace_switcher::omit_from_workspace_snapshot(get_wid(pWindow)))
+        return;
     if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
         for (auto hw : hyprwindows) {
             if (hw->w == pWindow) {
@@ -1455,6 +1459,18 @@ void hook_RenderWindow(void* thisptr, PHLWINDOW pWindow, PHLMONITOR pMonitor, co
                 }
             }
         }
+    }
+
+    if (!standalone && drag_workspace_switcher::replaces_window(get_wid(pWindow))) {
+        if (mode != Render::RENDER_PASS_POPUP) {
+            for (auto m : hyprmonitors) {
+                if (m->m == pMonitor) {
+                    drag_workspace_switcher::paint_drag(m->id, false);
+                    break;
+                }
+            }
+        }
+        return;
     }
 
     int initial_value = 0;
@@ -3980,7 +3996,7 @@ static void on_native_drag_begin(Layout::Supplementary::CDragStateController* co
     native_tiled_drag_id = get_wid(target->window());
     native_tiled_drag_released = false;
     if (native_tiled_drag_id != -1 && hypriso->on_tiled_drag_started)
-        hypriso->on_tiled_drag_started();
+        hypriso->on_tiled_drag_started(native_tiled_drag_id);
 }
 
 static bool on_native_drag_end(Layout::Supplementary::CDragStateController* controller) {
@@ -6548,6 +6564,9 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 
     overview::should_force_paint(true);
     defer(overview::should_force_paint(false));
+    const auto previous_capture = capturing_workspace;
+    capturing_workspace = true;
+    defer(capturing_workspace = previous_capture);
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
     CBox monbox = {{0, 0}, pMonitor->m_pixelSize};
@@ -7336,7 +7355,11 @@ void HyprIso::screenshot_space(int mon, int id) {
     }
 }
 
-void HyprIso::screenshot_deco(int id) {
+bool HyprIso::rendering_snapshot() {
+    return capturing_workspace || g_pHyprRenderer->m_bRenderingSnapshot;
+}
+
+bool HyprIso::screenshot_deco(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -7351,10 +7374,12 @@ void HyprIso::screenshot_deco(int id) {
                     glActiveTexture(GL_TEXTURE0);
                     tex->bind();
                     glGenerateMipmap(GL_TEXTURE_2D);
+                    return true;
                 }
             }
         }
     }
+    return false;
 }
 
 Bounds HyprIso::thumbnail_size_deco(int id) {

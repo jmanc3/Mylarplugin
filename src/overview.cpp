@@ -430,6 +430,7 @@ static void update_scene() {
         if (monitor.dragged != -1) {
             auto space = monitor.workspaces.find(monitor.dragged_workspace);
             if (space == monitor.workspaces.end() || !space->second.thumbnails.contains(monitor.dragged)) {
+                drag_workspace_switcher::end_drag(monitor.dragged);
                 monitor.dragged = -1;
                 monitor.dragged_workspace = -1;
             }
@@ -475,6 +476,8 @@ static void paint_monitor(int monitor_id) {
     // 84%, leaving a gap and a visible slice of each neighboring workspace.
     const double pitch = mb.w * (1.0 - .16 * progress);
     auto paint_thumbnail = [&](int wid, int cid, double translation, const Bounds &clip) {
+        if (snapshot && drag_workspace_switcher::omit_from_workspace_snapshot(cid))
+            return;
         auto &thumbnail = monitor.workspaces.at(wid).thumbnails.at(cid);
         auto natural = thumbnail.natural;
         const auto origin = scene->desktop_origins.find(cid);
@@ -490,8 +493,11 @@ static void paint_monitor(int monitor_id) {
             : lerp(natural, thumbnail.slot.bounds(), progress);
         b.x += translation + (snapshot ? 0 : thumbnail.drag_x.value);
         b.y += snapshot ? 0 : thumbnail.drag_y.value;
+        float alpha = snapshot ? 1.0f : thumbnail.opacity;
+        if (!snapshot && cid == monitor.dragged)
+            drag_workspace_switcher::transform_thumbnail(cid, b, alpha);
         hypriso->clipbox = render_bounds(clip, monitor_id);
-        hypriso->draw_deco_thumbnail(cid, render_bounds(b, monitor_id), 0, 2.0f, 0, snapshot ? 1.0f : thumbnail.opacity);
+        hypriso->draw_deco_thumbnail(cid, render_bounds(b, monitor_id), 0, 2.0f, 0, alpha);
         const auto hit = b.intersection(clip);
         if (!snapshot && !hit.empty())
             monitor.window_options.push_back({cid, wid, hit});
@@ -771,6 +777,7 @@ void create_overview_for_monitor(int monitor) {
                 thumbnail->drag_y.value = root->mouse_current_y - state->drag_start_y;
                 thumbnail->drag_x.velocity = 0;
                 thumbnail->drag_y.velocity = 0;
+                drag_workspace_switcher::begin_drag(state->dragged, true);
             }
             break;
         }
@@ -794,6 +801,7 @@ void create_overview_for_monitor(int monitor) {
             thumbnail->drag_y.target = 0;
             drop_on_workspace(state->dragged, root->mouse_current_x, root->mouse_current_y);
         }
+        drag_workspace_switcher::end_drag(state->dragged);
         state->dragged = -1;
         state->dragged_workspace = -1;
         request_refresh();
@@ -1133,6 +1141,7 @@ void overview::close(bool focus) {
                 thumbnail->drag_x.target = 0;
                 thumbnail->drag_y.target = 0;
             }
+            drag_workspace_switcher::end_drag(monitor.dragged);
             monitor.dragged = -1;
             monitor.dragged_workspace = -1;
             for (auto c : actual_root->children) {
