@@ -157,7 +157,7 @@ void drag_workspace_switcher::update_drag() {
         p.hover_started = now;
     // Passing through on the way to maximize must not start shrinking.
     // Leaving cancels the pending delay and starts growing immediately.
-    const bool waiting = hovered && now - p.hover_started < drag_hover_delay_ms;
+    const bool waiting = hovered && !p.from_overview && now - p.hover_started < drag_hover_delay_ms;
     const float target = hovered && !waiting ? 1.0f : 0.0f;
     if (target != p.target) {
         p.from = p.amount;
