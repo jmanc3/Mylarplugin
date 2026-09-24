@@ -1689,7 +1689,7 @@ static void change_display_options(MonitorOption *m) {
 
     std::vector<std::string> scales = {"Automatic"};
     int count = 10;
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i <= count; i++) {
         int add = i * count;
         int amount = 100 + add;
         scales.push_back(fz("{}%", amount));
