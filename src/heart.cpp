@@ -1996,6 +1996,16 @@ void on_audio_change() {
     dock::change_in_audio();
 }
 
+static constexpr float dock_popup_shadow_size = 12.0f;
+
+static void damage_popup_shadow(const Bounds &bounds) {
+    if (bounds.w <= 0 || bounds.h <= 0)
+        return;
+    auto damage = bounds;
+    damage.grow(dock_popup_shadow_size + 2);
+    hypriso->damage_box(damage);
+}
+
 void on_popup_closed(int id) {
     auto m = actual_root; 
 
@@ -2003,6 +2013,8 @@ void on_popup_closed(int id) {
         if (m->children[i]->custom_type == (int) TYPE::POPUP) {
             auto cid = *datum<int>(m->children[i], "cid");
             if (cid == id) {
+                if (*datum<bool>(m->children[i], "dock_popup"))
+                    damage_popup_shadow(m->children[i]->real_bounds);
                 delete m->children[i];
                 m->children.erase(m->children.begin() + i);
             }
@@ -2015,8 +2027,32 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
         auto m = actual_root; 
         auto c = m->child(FILL_SPACE, FILL_SPACE);
         c->custom_type = (int) TYPE::POPUP;
+        *datum<bool>(c, "dock_popup") = !owner_is_window && is_dock_layer(parent_id);
         c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-            c->real_bounds = bounds_popup(*datum<int>(c, "cid"));
+            auto bounds = bounds_popup(*datum<int>(c, "cid"));
+            auto previous = c->real_bounds;
+            if (*datum<bool>(c, "dock_popup") &&
+                (bounds.x != previous.x || bounds.y != previous.y || bounds.w != previous.w || bounds.h != previous.h)) {
+                damage_popup_shadow(previous);
+                damage_popup_shadow(bounds);
+            }
+            c->real_bounds = bounds;
+        };
+        c->when_paint = [](Container *actual_root, Container *c) {
+            if (!*datum<bool>(c, "dock_popup") || c->real_bounds.w <= 0 || c->real_bounds.h <= 0)
+                return;
+            auto root = get_rendering_root();
+            if (!root)
+                return;
+            auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+            if (stage != (int) STAGE::RENDER_POST_WINDOWS)
+                return;
+
+            // Layer popups are drawn after this stage. Match their outer Cairo silhouette.
+            renderfix
+            const auto radius = std::min(std::round(dock::popup_corner_radius * s),
+                                         std::floor(std::min(c->real_bounds.w, c->real_bounds.h) * .5));
+            render_drop_shadow(rid, 1.0, {0, 0, 0, 0.2}, radius, 2.0, c->real_bounds, dock_popup_shadow_size * s);
         };
         *datum<int>(c, "cid") = id; 
         *datum<int>(c, "parent_cid") = parent_id; 

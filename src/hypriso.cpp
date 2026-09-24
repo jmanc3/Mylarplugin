@@ -8743,6 +8743,16 @@ Bounds bounds_layer(int wid) {
     return {0, 0, 0, 0};
 }
 
+bool is_dock_layer(int id) {
+    for (auto hl : hyprlayers) {
+        if (hl->id == id) {
+            if (auto layer = hl->l.get())
+                return layer->m_namespace == "Dock" && layer->getPID() == getpid();
+        }
+    }
+    return false;
+}
+
 Bounds real_bounds_client(int wid) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -9033,10 +9043,7 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
     AnyPass::AnyData anydata([pMonitor, a, b, ROUNDINGBASE, ROUNDINGPOWER, fullBox, range, sharp, clip, clipbox](AnyPass* pass) {
         set_rounding(0);
         CHyprColor m_realShadowColor = CHyprColor(b.r, b.g, b.b, b.a);
-        if (Desktop::windowState()->windows().empty())
-            return;
-        PHLWINDOW fake_window = Desktop::windowState()->windows()[0]; // there is a faulty assert that exists that would otherwise be hit without a fake window target
-        static auto PSHADOWSIZE = range;
+        const auto PSHADOWSIZE = range;
         const auto ROUNDING = ROUNDINGBASE;
         auto allBox = fullBox;
         allBox.expand(PSHADOWSIZE);
@@ -9046,8 +9053,6 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
             return; // don't draw invisible shadows
 
         Render::GL::g_pHyprOpenGL->scissor(nullptr);
-        auto before_window = g_pHyprRenderer->m_renderData.currentWindow;
-        g_pHyprRenderer->m_renderData.currentWindow = fake_window;
 
         // we'll take the liberty of using this as it should not be used rn
         static auto alphaFB = g_pHyprRenderer->createFB();
@@ -9096,8 +9101,6 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
         // g_pHyprRenderer->popMonitorTransformEnabled();
 
         g_pHyprRenderer->m_renderData.damage = saveDamage;
-
-        g_pHyprRenderer->m_renderData.currentWindow = before_window;
     });
     g_pHyprRenderer->m_renderPass.add(makeUnique<AnyPass>(std::move(anydata)));
 }
@@ -9113,16 +9116,9 @@ void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, flo
         return;
     //CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
     CHyprColor colorb = CHyprColor(0.0, 0.0, 0.0, 0.1 * b.a);
-    static auto PSHADOWSIZE = 3 * scale(current_rendering_monitor());
+    const auto PSHADOWSIZE = size > 0 ? size : 3 * scale(mon);
 
     drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), PSHADOWSIZE, false);
-    /*
-    if (size != 0) {
-        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), size, false);
-    } else {
-        drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), PSHADOWSIZE, false);
-    }
-    */
 }
 
 

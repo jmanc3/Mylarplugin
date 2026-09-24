@@ -574,6 +574,7 @@ Bounds bounds_popup(int id);
 Bounds bounds_client(int id);
 Bounds bounds_client_final(int id);
 Bounds bounds_layer(int id);
+bool is_dock_layer(int id);
 Bounds real_bounds_client(int id);
 Bounds bounds_full_client(int id);
 

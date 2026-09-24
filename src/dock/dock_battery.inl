@@ -352,14 +352,7 @@ static void fill_battery_container(Dock *dock) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->battery->raw_window->cr;
         auto dpi = dock->battery->raw_window->dpi;
-        set_argb(cr, {.98, .985, 1, 1});
-        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dpi, 1.0);
-        cairo_fill(cr);
-        set_argb(cr, {.80, .84, .89, 1});
-        cairo_set_line_width(cr, dpi);
-        drawRoundedRect(cr, c->real_bounds.x + dpi / 2, c->real_bounds.y + dpi / 2,
-            c->real_bounds.w - dpi, c->real_bounds.h - dpi, 10 * dpi, 1.0);
-        cairo_stroke(cr);
+        paint_popup_background(cr, c->real_bounds, dpi);
     };
     auto content = root->child(::vbox, FILL_SPACE, FILL_SPACE);
     content->pre_layout = [](Container *root, Container *c, const Bounds &) {

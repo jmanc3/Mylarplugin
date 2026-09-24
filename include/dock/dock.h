@@ -6,6 +6,8 @@
 struct Bounds;
 
 namespace dock {
+    inline constexpr double popup_corner_radius = 10.0;
+
     void start(std::string monitor_name = "");
     void stop(std::string monitor_name = "");
 
