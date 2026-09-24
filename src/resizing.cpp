@@ -269,30 +269,13 @@ void resize_client(int cid, int resize_type) {
     size.h += change_h;
     bool y_clipped = false;
     bool x_clipped = false;
-    if (size.w < 100) {
-        size.w    = 100;
-        x_clipped = true;
-    }
-    if (size.h < 50) {
-        size.h    = 50;
-        y_clipped = true;
-    }
     auto min = hypriso->min_size(cid);
-
-    auto mini = 200;
-
-    min.x = 10;
-    min.y = 10;
-    min.w = 10;
-    min.h = 10;
-    if (min.w < mini) {
-        min.w = mini;
-    }
-    
-    if (hypriso->is_x11(cid)) {
-        //min.x /= s;
-        //min.y /= s;
-    }
+    const bool resize_left = resize_type == (int) RESIZE_TYPE::LEFT ||
+        resize_type == (int) RESIZE_TYPE::TOP_LEFT ||
+        resize_type == (int) RESIZE_TYPE::BOTTOM_LEFT;
+    const bool resize_top = resize_type == (int) RESIZE_TYPE::TOP ||
+        resize_type == (int) RESIZE_TYPE::TOP_LEFT ||
+        resize_type == (int) RESIZE_TYPE::TOP_RIGHT;
     if (size.w < min.w) {
         size.w    = min.w;
         x_clipped = true;
@@ -303,17 +286,8 @@ void resize_client(int cid, int resize_type) {
     }
 
     auto pos = initial_win_box;
-    auto real = bounds_client(cid);
-    if (x_clipped) {
-        pos.x = real.x;
-    } else {
-        pos.x += change_x;
-    }
-    if (y_clipped) {
-        pos.y = real.y;
-    } else {
-        pos.y += change_y;
-    }
+    pos.x = x_clipped && resize_left ? initial_win_box.x + initial_win_box.w - size.w : initial_win_box.x + change_x;
+    pos.y = y_clipped && resize_top ? initial_win_box.y + initial_win_box.h - size.h : initial_win_box.y + change_y;
     auto fb = Bounds(pos.x, pos.y, size.w, size.h);
     hypriso->move_resize(cid, fb.x, fb.y, fb.w, fb.h);
     for (auto m : actual_monitors) {
@@ -779,4 +753,3 @@ void resizing::on_window_open(int id) {
 void resizing::on_window_closed(int id) {
     remove_resize_container_for_window(id);
 }
-

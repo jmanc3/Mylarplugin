@@ -6246,12 +6246,14 @@ Bounds HyprIso::min_size(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            //auto s = hw->w->requestedMinSize();
-            //return {s.x, s.y, s.x, s.y};
-            return {20, 20, 20, 20};
+            if (auto w = hw->w.get()) {
+                if (const auto size = w->minSize())
+                    return {0, 0, size->x, size->y};
+            }
+            break;
         }
     }
-    return {20, 20, 20, 20};
+    return {0, 0, 1, 1};
 }
 
 void HyprIso::remove_decorations(int id) {
