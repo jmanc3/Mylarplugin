@@ -223,6 +223,13 @@ struct Dock : UserData {
     MylarWindow *brightness = nullptr;
 
     MylarWindow *battery = nullptr;
+    MylarWindow *date_menu = nullptr;
+
+    int date_view_month = 0;
+    int date_view_year = 0;
+    int selected_date_day = 0;
+    int selected_date_month = 0;
+    int selected_date_year = 0;
 
     MylarWindow *wifi = nullptr;
     
@@ -2059,6 +2066,221 @@ static void fill_tiling_container(Dock *dock) {
 // TILING
 // -------------------------------------
 
+struct DockDateCell : UserData {
+    int day = 1;
+    int month = 0;
+    int year = 0;
+};
+
+static void update_dock_calendar(Dock *dock) {
+    if (!dock || !dock->date_menu)
+        return;
+    auto *calendar = container_by_name("date_calendar", dock->date_menu->root);
+    if (!calendar)
+        return;
+
+    std::tm first{};
+    first.tm_year = dock->date_view_year - 1900;
+    first.tm_mon = dock->date_view_month;
+    first.tm_mday = 1;
+    std::mktime(&first);
+    const int leading_days = first.tm_wday;
+
+    for (int i = 0; i < 42; ++i) {
+        auto *cell = calendar->children[i / 7]->children[i % 7];
+        auto *data = static_cast<DockDateCell *>(cell->user_data);
+        const int date_number = i - leading_days + 1;
+        std::tm date{};
+        date.tm_year = dock->date_view_year - 1900;
+        date.tm_mon = dock->date_view_month;
+        date.tm_mday = date_number;
+        std::mktime(&date);
+        data->day = date.tm_mday;
+        data->month = date.tm_mon;
+        data->year = date.tm_year + 1900;
+    }
+    windowing::redraw(dock->date_menu->raw_window);
+}
+
+static void fill_date_menu(Dock *dock) {
+    auto root = dock->date_menu->root;
+    const auto dpi = dock->date_menu->raw_window->dpi;
+    root->type = ::vbox;
+    root->when_paint = [](Container *root, Container *c) {
+        auto dock = static_cast<Dock *>(root->user_data);
+        paint_popup_background(dock->date_menu->raw_window->cr, c->real_bounds, dock->date_menu->raw_window->dpi);
+    };
+    auto content = root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    content->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dock = static_cast<Dock *>(root->user_data);
+        const auto dpi = dock->date_menu->raw_window->dpi;
+        c->wanted_pad = Bounds(20 * dpi, 16 * dpi, 20 * dpi, 16 * dpi);
+    };
+    auto row = [content, dpi](double height) {
+        auto c = content->child(FILL_SPACE, height * dpi);
+        c->pre_layout = [height](Container *root, Container *c, const Bounds &) {
+            auto dock = static_cast<Dock *>(root->user_data);
+            c->wanted_bounds.h = height * dock->date_menu->raw_window->dpi;
+        };
+        return c;
+    };
+
+    auto title = row(88);
+    title->when_paint = [](Container *root, Container *c) {
+        auto dock = static_cast<Dock *>(root->user_data);
+        auto cr = dock->date_menu->raw_window->cr;
+        const auto dpi = dock->date_menu->raw_window->dpi;
+        const auto now = std::time(nullptr);
+        std::tm local{};
+        localtime_r(&now, &local);
+        char time_text[32], date_text[96];
+        std::strftime(time_text, sizeof(time_text), "%I:%M %p", &local);
+        std::string clock_text = time_text;
+        if (!clock_text.empty() && clock_text[0] == '0')
+            clock_text.erase(0, 1);
+        std::strftime(date_text, sizeof(date_text), "%A, %B %d, %Y", &local);
+        draw_text(cr, c->real_bounds.x, c->real_bounds.y + 2 * dpi, clock_text, 27 * dpi, true,
+            mylar_font, -1, -1, {.14, .18, .24, 1});
+        draw_text(cr, c->real_bounds.x, c->real_bounds.y + 47 * dpi, date_text, 11 * dpi, true,
+            mylar_font, -1, -1, {.43, .48, .55, 1});
+        set_argb(cr, border_color);
+        cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.bottom() - dpi, c->real_bounds.w, dpi);
+        cairo_fill(cr);
+    };
+
+    auto navigation = row(38);
+    navigation->type = ::hbox;
+    auto month = navigation->child(FILL_SPACE, FILL_SPACE);
+    month->when_paint = [](Container *root, Container *c) {
+        auto dock = static_cast<Dock *>(root->user_data);
+        static const char *months[] = {"January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"};
+        const auto label = std::format("{} {}", months[dock->date_view_month], dock->date_view_year);
+        auto dpi = dock->date_menu->raw_window->dpi;
+        auto bounds = draw_text(dock->date_menu->raw_window->cr, 0, 0, label, 13 * dpi, false);
+        draw_text(dock->date_menu->raw_window->cr, c->real_bounds.x,
+            c->real_bounds.y + (c->real_bounds.h - bounds.h) / 2, label, 13 * dpi, true,
+            mylar_font, -1, -1, {.14, .18, .24, 1});
+    };
+    auto arrow = [navigation, dock, dpi](const char *glyph, int direction) {
+        auto button = navigation->child(36 * dpi, FILL_SPACE);
+        button->when_paint = [glyph](Container *root, Container *c) {
+            auto dock = static_cast<Dock *>(root->user_data);
+            auto cr = dock->date_menu->raw_window->cr;
+            const auto dpi = dock->date_menu->raw_window->dpi;
+            if (c->state.mouse_hovering || c->state.mouse_pressing) {
+                set_argb(cr, c->state.mouse_pressing ? RGBA(.72, .83, .95, 1) : RGBA(.83, .90, .98, 1));
+                cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+                cairo_fill(cr);
+            }
+            auto b = draw_text(cr, 0, 0, glyph, 12 * dpi, false, "Segoe Fluent Icons");
+            draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
+                c->real_bounds.y + (c->real_bounds.h - b.h) / 2, glyph, 12 * dpi, true,
+                "Segoe Fluent Icons", -1, -1, {.14, .18, .24, 1});
+        };
+        button->when_clicked = [direction](Container *root, Container *) {
+            auto dock = static_cast<Dock *>(root->user_data);
+            dock->date_view_month += direction;
+            if (dock->date_view_month < 0) {
+                dock->date_view_month = 11;
+                --dock->date_view_year;
+            } else if (dock->date_view_month > 11) {
+                dock->date_view_month = 0;
+                ++dock->date_view_year;
+            }
+            update_dock_calendar(dock);
+        };
+    };
+    arrow("\uE971", -1);
+    arrow("\uE972", 1);
+
+    auto weekdays = row(28);
+    weekdays->type = ::hbox;
+    static const char *weekday_names[] = {"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"};
+    for (const auto *name : weekday_names) {
+        auto day = weekdays->child(FILL_SPACE, FILL_SPACE);
+        day->when_paint = [name](Container *root, Container *c) {
+            auto dock = static_cast<Dock *>(root->user_data);
+            auto cr = dock->date_menu->raw_window->cr;
+            auto dpi = dock->date_menu->raw_window->dpi;
+            auto b = draw_text(cr, 0, 0, name, 10 * dpi, false);
+            draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
+                c->real_bounds.y + (c->real_bounds.h - b.h) / 2, name, 10 * dpi, true,
+                mylar_font, -1, -1, {.43, .48, .55, 1});
+        };
+    }
+
+    auto calendar = content->child(::vbox, FILL_SPACE, FILL_SPACE);
+    calendar->name = "date_calendar";
+    calendar->spacing = 2 * dpi;
+    for (int week = 0; week < 6; ++week) {
+        auto week_row = calendar->child(::hbox, FILL_SPACE, FILL_SPACE);
+        week_row->spacing = 2 * dpi;
+        for (int weekday = 0; weekday < 7; ++weekday) {
+            auto cell = week_row->child(FILL_SPACE, FILL_SPACE);
+            cell->when_paint = [](Container *root, Container *c) {
+                auto dock = static_cast<Dock *>(root->user_data);
+                auto data = static_cast<DockDateCell *>(c->user_data);
+                auto cr = dock->date_menu->raw_window->cr;
+                const auto dpi = dock->date_menu->raw_window->dpi;
+                const auto now = std::time(nullptr);
+                std::tm today{};
+                localtime_r(&now, &today);
+                const bool is_today = data->year == today.tm_year + 1900 && data->month == today.tm_mon && data->day == today.tm_mday;
+                const bool in_month = data->year == dock->date_view_year && data->month == dock->date_view_month;
+                const bool is_selected = data->year == dock->selected_date_year && data->month == dock->selected_date_month && data->day == dock->selected_date_day;
+                if (is_today) {
+                    set_argb(cr, accent);
+                    cairo_rectangle(cr, c->real_bounds.x + dpi, c->real_bounds.y + dpi,
+                        c->real_bounds.w - 2 * dpi, c->real_bounds.h - 2 * dpi);
+                    cairo_fill(cr);
+                } else if (c->state.mouse_pressing || c->state.mouse_hovering) {
+                    set_argb(cr, c->state.mouse_pressing ? RGBA(.72, .83, .95, 1) : RGBA(.83, .90, .98, 1));
+                    cairo_rectangle(cr, c->real_bounds.x + dpi, c->real_bounds.y + dpi,
+                        c->real_bounds.w - 2 * dpi, c->real_bounds.h - 2 * dpi);
+                    cairo_fill(cr);
+                }
+                if (is_selected && !is_today) {
+                    set_argb(cr, accent);
+                    cairo_set_line_width(cr, dpi);
+                    cairo_rectangle(cr, c->real_bounds.x + dpi, c->real_bounds.y + dpi,
+                        c->real_bounds.w - 2 * dpi, c->real_bounds.h - 2 * dpi);
+                    cairo_stroke(cr);
+                }
+                const auto text = std::to_string(data->day);
+                auto b = draw_text(cr, 0, 0, text, 11 * dpi, false);
+                RGBA color = in_month ? RGBA(.14, .18, .24, 1) : RGBA(.53, .57, .62, 1);
+                if (is_today)
+                    color = {1, 1, 1, 1};
+                draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
+                    c->real_bounds.y + (c->real_bounds.h - b.h) / 2, text, 11 * dpi, true,
+                    mylar_font, -1, -1, color);
+            };
+            cell->when_clicked = [](Container *root, Container *c) {
+                auto dock = static_cast<Dock *>(root->user_data);
+                auto data = static_cast<DockDateCell *>(c->user_data);
+                dock->date_view_month = data->month;
+                dock->date_view_year = data->year;
+                dock->selected_date_day = data->day;
+                dock->selected_date_month = data->month;
+                dock->selected_date_year = data->year;
+                update_dock_calendar(dock);
+            };
+            cell->user_data = new DockDateCell;
+        }
+    }
+
+    const auto now = std::time(nullptr);
+    std::tm today{};
+    localtime_r(&now, &today);
+    dock->date_view_month = today.tm_mon;
+    dock->date_view_year = today.tm_year + 1900;
+    dock->selected_date_day = today.tm_mday;
+    dock->selected_date_month = today.tm_mon;
+    dock->selected_date_year = today.tm_year + 1900;
+    update_dock_calendar(dock);
+}
+
 
 static void fill_root(Container *root) {
     root->when_paint = paint_root_func;
@@ -2539,18 +2761,35 @@ static void fill_root(Container *root) {
             auto bounds = draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi, false);
             c->wanted_bounds.w = bounds.w + 20;
         };
-        date->when_clicked = paint {
-            main_thread([]() {
-                std::vector<PopOption> root;
-                PopOption pop;
-                pop.text = "Settings";
-                pop.on_clicked = []() {
-                    settings::start();
-                };
-                root.push_back(pop);
-                auto m = mouse();
-                popup::open(root, m.x, m.y);
-            });
+        date->when_clicked = [](Container *root, Container *c) {
+            auto dock = static_cast<Dock *>(root->user_data);
+            if (dock->date_menu)
+                return;
+            const auto dpi = dock->window->raw_window->dpi;
+            auto settings = make_icon_anchored_popup_settings(c, dpi, 360, 470);
+            dock->date_menu = open_mylar_popup(dock->window, settings);
+            if (!dock->date_menu)
+                return;
+            dock->date_menu->root->user_data = dock;
+            dock->date_menu->root->skip_delete = true;
+            dock->date_menu->root->wanted_bounds.w = FILL_SPACE;
+            dock->date_menu->root->wanted_bounds.h = FILL_SPACE;
+            dock->date_menu->root->on_closed = [](Container *root) {
+                auto dock = static_cast<Dock *>(root->user_data);
+                dock->date_menu = nullptr;
+            };
+            auto window = dock->date_menu;
+            auto on_close = window->raw_window->on_close;
+            window->raw_window->on_close = [dock, window, on_close](RawWindow *raw) {
+                if (on_close)
+                    on_close(raw);
+                if (dock->window->popup_window == window)
+                    dock->window->popup_window = nullptr;
+                delete window->root;
+                delete window;
+            };
+            fill_date_menu(dock);
+            windowing::redraw(dock->date_menu->raw_window);
         };
     }
 
