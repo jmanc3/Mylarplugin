@@ -409,6 +409,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(int, "repeat_delay", &settings->repeat_delay);
     bind(int, "repeat_rate", &settings->repeat_rate);
     bind(bool, "show_docks", &settings->show_docks);
+    bind(bool, "battery_history_enabled", &settings->battery_history_enabled);
     bind(bool, "dock_current_workspace_only", &settings->dock_current_workspace_only);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "dark_theme", &settings->dark_theme);

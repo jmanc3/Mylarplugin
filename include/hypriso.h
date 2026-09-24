@@ -84,6 +84,7 @@ struct ConfigSettings {
     bool meter_animations = false;
     bool prefer_pipewire_audio_backend = false;
     bool show_docks = true;
+    bool battery_history_enabled = true;
     bool dock_current_workspace_only = true;
     bool draw_wallpaper = true;
     bool dark_theme = true;

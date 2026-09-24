@@ -19,6 +19,9 @@
 #include "dock/dock.h"
 
 #include <chrono>
+#include <cmath>
+#include <gio/gio.h>
+#include <memory>
 #include <cstdint>
 #include <dbus/dbus.h>
 #include <defer.h>
@@ -3455,4 +3458,219 @@ void StatusNotifierHostRegistered() {
     dbus_message_set_destination(dmsg, NULL);
     dbus_connection_send(dbus_connection_session, dmsg, NULL);
     dbus_connection_flush(dbus_connection_session);
+}
+
+// Battery queries run on the dock's worker, independently of the signal connection.
+namespace {
+using BatteryVariant = std::unique_ptr<GVariant, decltype(&g_variant_unref)>;
+
+struct BatteryBus {
+    GDBusConnection *connection = nullptr;
+    BatteryBus() {
+        auto address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SYSTEM, nullptr, nullptr);
+        if (address) {
+            connection = g_dbus_connection_new_for_address_sync(address,
+                GDBusConnectionFlags(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
+                                     G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION),
+                nullptr, nullptr, nullptr);
+            g_free(address);
+        }
+    }
+    ~BatteryBus() {
+        if (connection) {
+            g_dbus_connection_close_sync(connection, nullptr, nullptr);
+            g_object_unref(connection);
+        }
+    }
+};
+
+static BatteryVariant battery_call(BatteryBus &bus, const char *service, const char *path,
+                                  const char *interface, const char *method,
+                                  GVariant *args, const GVariantType *type, std::string *error = nullptr) {
+    // Consume the floating argument even when the bus is unavailable.
+    BatteryVariant parameters(args ? g_variant_ref_sink(args) : nullptr, g_variant_unref);
+    if (!bus.connection) {
+        if (error) *error = "Cannot connect to the system power service.";
+        return {nullptr, g_variant_unref};
+    }
+    GError *failure = nullptr;
+    auto reply = g_dbus_connection_call_sync(bus.connection, service, path, interface, method,
+        parameters.get(), type, G_DBUS_CALL_FLAGS_NO_AUTO_START, 2000, nullptr, &failure);
+    if (failure) {
+        if (error) {
+            if (g_error_matches(failure, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED) ||
+                std::string(failure->message).find("uthoriz") != std::string::npos)
+                *error = "Permission denied. Check your system's power-management permissions.";
+            else
+                *error = "The power service could not apply the change. Please try again.";
+        }
+        g_error_free(failure);
+    }
+    return {reply, g_variant_unref};
+}
+
+static bool battery_service_running(BatteryBus &bus, const char *service) {
+    auto reply = battery_call(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+        "org.freedesktop.DBus", "NameHasOwner", g_variant_new("(s)", service), G_VARIANT_TYPE("(b)"));
+    gboolean running = false;
+    if (reply) g_variant_get(reply.get(), "(b)", &running);
+    return running;
+}
+
+static BatteryVariant battery_properties(BatteryBus &bus, const char *service, const char *path,
+                                         const char *interface) {
+    auto reply = battery_call(bus, service, path, "org.freedesktop.DBus.Properties", "GetAll",
+        g_variant_new("(s)", interface), G_VARIANT_TYPE("(a{sv})"));
+    return {reply ? g_variant_get_child_value(reply.get(), 0) : nullptr, g_variant_unref};
+}
+
+static BatteryStatus read_battery(BatteryBus &bus) {
+    BatteryStatus result;
+    constexpr auto service = "org.freedesktop.UPower";
+    constexpr auto interface = "org.freedesktop.UPower.Device";
+    bool all_protected = true;
+    bool all_supported = true;
+    bool enumeration_complete = true;
+    if (battery_service_running(bus, service)) {
+        auto reply = battery_call(bus, service, "/org/freedesktop/UPower", service,
+            "EnumerateDevices", nullptr, G_VARIANT_TYPE("(ao)"));
+        enumeration_complete = bool(reply);
+        if (reply) {
+            BatteryVariant paths(g_variant_get_child_value(reply.get(), 0), g_variant_unref);
+            GVariantIter iter;
+            g_variant_iter_init(&iter, paths.get());
+            const char *path;
+            while (g_variant_iter_next(&iter, "&o", &path)) {
+                auto properties = battery_properties(bus, service, path, interface);
+                if (!properties) {
+                    enumeration_complete = false;
+                    continue;
+                }
+                guint type = 0;
+                gboolean supply = false, present = false, supported = false, enabled = false;
+                g_variant_lookup(properties.get(), "Type", "u", &type);
+                g_variant_lookup(properties.get(), "PowerSupply", "b", &supply);
+                g_variant_lookup(properties.get(), "IsPresent", "b", &present);
+                // Exclude mice, keyboards and UPS devices, including their batteries.
+                if (type != 2 || !supply || !present) continue;
+                result.present = true;
+                result.battery_paths.emplace_back(path);
+                g_variant_lookup(properties.get(), "ChargeThresholdSupported", "b", &supported);
+                g_variant_lookup(properties.get(), "ChargeThresholdEnabled", "b", &enabled);
+                all_supported &= supported;
+                all_protected &= enabled;
+            }
+        }
+        if (result.present) {
+            // DisplayDevice aggregates multiple internal batteries, weighted by energy.
+            auto properties = battery_properties(bus, service,
+                "/org/freedesktop/UPower/devices/DisplayDevice", interface);
+            if (properties) {
+                guint type = 0;
+                gboolean present = false;
+                g_variant_lookup(properties.get(), "Type", "u", &type);
+                g_variant_lookup(properties.get(), "IsPresent", "b", &present);
+                bool percentage_known = g_variant_lookup(properties.get(), "Percentage", "d", &result.percentage);
+                result.valid = present && type == 2 && percentage_known &&
+                    std::isfinite(result.percentage) && result.percentage >= 0 && result.percentage <= 100;
+                g_variant_lookup(properties.get(), "Energy", "d", &result.energy);
+                g_variant_lookup(properties.get(), "EnergyFull", "d", &result.energy_full);
+                g_variant_lookup(properties.get(), "EnergyRate", "d", &result.energy_rate);
+                gint64 remaining = 0;
+                g_variant_lookup(properties.get(), "TimeToEmpty", "x", &remaining);
+                result.time_to_empty = remaining;
+                g_variant_lookup(properties.get(), "State", "u", &result.state);
+            }
+            result.reading_reason = result.valid ? "" : "Battery readings are temporarily unavailable.";
+        } else {
+            result.reading_reason = "Waiting for an internal battery reading…";
+        }
+    } else {
+        result.reading_reason = "UPower is not running. Start it to read battery information.";
+    }
+
+    result.protector_enabled = result.present && enumeration_complete && all_protected;
+    if (battery_service_running(bus, "org.freedesktop.UPower.PowerProfiles")) {
+        result.profile_service = "org.freedesktop.UPower.PowerProfiles";
+        result.profile_path = "/org/freedesktop/UPower/PowerProfiles";
+    } else if (battery_service_running(bus, "net.hadess.PowerProfiles")) {
+        result.profile_service = "net.hadess.PowerProfiles";
+        result.profile_path = "/net/hadess/PowerProfiles";
+    }
+    if (result.profile_service.empty()) {
+        result.saver_reason = "Start power-profiles-daemon to use battery saver.";
+        result.protector_reason = "Start power-profiles-daemon to use battery protection.";
+        return result;
+    }
+    auto profiles = battery_properties(bus, result.profile_service.c_str(), result.profile_path.c_str(),
+                                      result.profile_service.c_str());
+    bool saver = false, balanced = false;
+    if (profiles) {
+        const char *active = nullptr;
+        bool active_known = g_variant_lookup(profiles.get(), "ActiveProfile", "&s", &active);
+        result.battery_saver = active_known && std::string(active) == "power-saver";
+        BatteryVariant available(g_variant_lookup_value(profiles.get(), "Profiles", G_VARIANT_TYPE("aa{sv}")), g_variant_unref);
+        if (available && active_known) {
+            for (gsize i = 0; i < g_variant_n_children(available.get()); ++i) {
+                BatteryVariant profile(g_variant_get_child_value(available.get(), i), g_variant_unref);
+                const char *name = nullptr;
+                if (g_variant_lookup(profile.get(), "Profile", "&s", &name)) {
+                    saver |= std::string(name) == "power-saver";
+                    balanced |= std::string(name) == "balanced";
+                }
+            }
+        }
+    }
+    result.saver_available = saver && balanced;
+    result.saver_reason = result.saver_available ? "Reduce power use to extend battery life." :
+        "The power service does not expose battery saver and balanced profiles.";
+    result.protector_available = result.present && enumeration_complete && all_supported;
+    if (!result.present || !enumeration_complete)
+        result.protector_reason = "UPower battery information is unavailable.";
+    else if (!all_supported)
+        result.protector_reason = "This laptop or UPower version does not support charge limits.";
+    else
+        result.protector_reason = "Use your laptop's charge limits to help preserve battery health.";
+    return result;
+}
+} // namespace
+
+BatteryStatus dbus_read_battery() {
+    BatteryBus bus;
+    return read_battery(bus);
+}
+
+bool dbus_set_battery_saver(bool enabled, std::string &error) {
+    BatteryBus bus;
+    auto status = read_battery(bus);
+    if (!status.saver_available) {
+        error = status.saver_reason;
+        return false;
+    }
+    auto reply = battery_call(bus, status.profile_service.c_str(), status.profile_path.c_str(),
+        "org.freedesktop.DBus.Properties", "Set",
+        g_variant_new("(ssv)", status.profile_service.c_str(), "ActiveProfile",
+                      g_variant_new_string(enabled ? "power-saver" : "balanced")),
+        G_VARIANT_TYPE("()"), &error);
+    return bool(reply);
+}
+
+bool dbus_set_battery_protector(bool enabled, std::string &error) {
+    BatteryBus bus;
+    auto status = read_battery(bus);
+    if (!status.protector_available) {
+        error = status.protector_reason;
+        return false;
+    }
+    for (const auto &path : status.battery_paths) {
+        auto reply = battery_call(bus, "org.freedesktop.UPower", path.c_str(),
+            "org.freedesktop.UPower.Device", "EnableChargeThreshold", g_variant_new("(b)", enabled),
+            G_VARIANT_TYPE("()"), &error);
+        if (!reply) {
+            // A subsequent read reports the actual state, including partial multi-battery changes.
+            error += " Check the charge limit on each battery.";
+            return false;
+        }
+    }
+    return true;
 }

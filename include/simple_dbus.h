@@ -95,6 +95,32 @@ extern bool bluetooth_running;
 
 extern bool network_manager_running;
 
+struct BatteryStatus {
+    bool present = false;
+    bool valid = false;
+    double percentage = -1;
+    double energy = 0;
+    double energy_full = 0;
+    double energy_rate = 0;
+    long long time_to_empty = 0;
+    unsigned state = 0;
+    bool battery_saver = false;
+    bool saver_available = false;
+    bool protector_enabled = false;
+    bool protector_available = false;
+    std::string reading_reason = "Waiting for battery information…";
+    std::string saver_reason;
+    std::string protector_reason;
+    std::string profile_service;
+    std::string profile_path;
+    std::vector<std::string> battery_paths;
+};
+
+// Blocking calls with bounded D-Bus timeouts; invoke from a worker thread.
+BatteryStatus dbus_read_battery();
+bool dbus_set_battery_saver(bool enabled, std::string &error);
+bool dbus_set_battery_protector(bool enabled, std::string &error);
+
 void network_manager_request_scan(std::string device_path);
 
 DBusMessage *get_property(std::string bus_name, std::string path, std::string iface, std::string property_name);

@@ -16,13 +16,17 @@
 #include "audio.h"
 #include "components.h"
 #include "settings.h"
+#include "simple_dbus.h"
 
 #include "process.hpp"
 #include "show_desktop.h"
 #include <algorithm>
 #include <cairo.h>
 
+#include <atomic>
 #include <chrono>
+#include <ctime>
+#include <iomanip>
 #include <cmath>
 #include <condition_variable>
 #include <dirent.h>
@@ -303,12 +307,10 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
     return settings;
 }
 
-static float battery_level = 100;
-static bool charging = true;
 static float volume_level = 100;
 static bool is_master_muted = false;
 static float brightness_level = 100;
-static bool finished = false;
+static std::atomic<bool> finished = false;
 static bool nightlight_on = false;
 
 struct VolumeRow {
@@ -350,10 +352,6 @@ static void resize_volume_popup_for_rows(Dock *dock, size_t row_count) {
         return;
     windowing::set_popup_size(dock->volume->raw_window, volume_popup_w, volume_popup_height_for_rows(row_count));
 }
-
-struct BatteryData : UserData {
-    float brightness_level = 100;
-};
 
 struct BrightnessData : UserData {
     float value = 50;
@@ -627,57 +625,6 @@ static float get_brightness() {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     return (current / max) * 100;
-}
-
-static bool battery_charging() {
-    bool value = false;
-    auto process = std::make_shared<TinyProcessLib::Process>("upower -i /org/freedesktop/UPower/devices/DisplayDevice | grep state", "", [&value](const char *bytes, size_t n) {
-        std::string text(bytes, n);
-        if (text.find("discharging") == std::string::npos) {
-            value = true;
-        } else {
-            value = false;
-        }
-    });
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return value;
-}
-
-static float get_battery_level() {
-    int value = 50;
-    auto process = std::make_shared<TinyProcessLib::Process>("upower -i /org/freedesktop/UPower/devices/DisplayDevice | grep percentage | rg --only-matching '[0-9]*' | xargs", "", [&value](const char *bytes, size_t n) {
-        std::string text(bytes, n);
-        try {
-            value = std::atoi(text.c_str());
-        } catch (...) {
-
-        }
-    });
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return value;
-}
-
-static bool watching_battery = false;
-
-static void watch_battery_level() {
-    if (watching_battery)
-        return;
-    watching_battery = true;
-    auto process = std::make_shared<TinyProcessLib::Process>("upower --monitor", "", [](const char *bytes, size_t n) {
-        battery_level = get_battery_level();
-        charging = battery_charging();
-        for (auto d : docks)
-            windowing::redraw(d->window->raw_window);
-    });
-    std::thread t([process]() {
-        while (!finished) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        watching_battery = false;
-        process->kill();
-    });
-    t.detach();
-    dock_threads.push_back(std::move(t));
 }
 
 static long last_time_volume_adjusted = 0;
@@ -2506,24 +2453,24 @@ static void fill_root(Container *root) {
         };
     }
 
-    {
+    if (has_internal_battery()) {
+        watch_battery_level();
         auto battery = simple_dock_item(root, []() {
-            static std::string regular[] = {"\uEBA0", "\uEBA1", "\uEBA2", "\uEBA3", "\uEBA4", "\uEBA5", "\uEBA6", "\uEBA7", "\uEBA8", "\uEBA9", "\uEBAA" };
-            static std::string charging[] = { "\uEBAB", "\uEBAC", "\uEBAD", "\uEBAE", "\uEBAF", "\uEBB0", "\uEBB1", "\uEBB2", "\uEBB3", "\uEBB4", "\uEBB5" };
-            int capacity_index = std::floor(((double) (battery_level)) / 10.0);
-            return regular[capacity_index];
+            static std::string regular[] = {"\uEBA0", "\uEBA1", "\uEBA2", "\uEBA3", "\uEBA4", "\uEBA5", "\uEBA6", "\uEBA7", "\uEBA8", "\uEBA9", "\uEBAA"};
+            static std::string plugged[] = {"\uEBAB", "\uEBAC", "\uEBAD", "\uEBAE", "\uEBAF", "\uEBB0", "\uEBB1", "\uEBB2", "\uEBB3", "\uEBB4", "\uEBB5"};
+            auto status = battery_status_snapshot();
+            int index = status.valid ? std::clamp(int(status.percentage / 10), 0, 10) : 0;
+            return status.valid && (status.state == 1 || status.state == 4 || status.state == 5) ? plugged[index] : regular[index];
         }, []() {
-            std::string charging_text = charging ? "+" : "-";
-            return std::format("{}{}%", charging_text, (int) std::round(battery_level));
+            auto status = battery_status_snapshot();
+            if (!status.valid) return std::string("—");
+            return std::format("{}{}%", status.state == 1 ? "+" : "", (int) std::round(status.percentage));
         });
         battery->when_clicked = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
-
-            RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, volume_popup_w, volume_popup_w * .7);
-
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 420, 550);
             dock->battery = open_mylar_popup(mylar, settings);
             if (!dock->battery)
                 return;
@@ -2535,17 +2482,9 @@ static void fill_root(Container *root) {
             dock->battery->root->wanted_bounds.w = FILL_SPACE;
             dock->battery->root->wanted_bounds.h = FILL_SPACE;
             fill_battery_container(dock);
+            request_battery_refresh();
             windowing::redraw(dock->battery->raw_window);
         };
-        
-        auto battery_data = new BatteryData;
-        std::thread t([]() {
-            battery_level = get_battery_level();
-        });
-        t.detach();
-        charging = battery_charging();
-        watch_battery_level();
-        battery->user_data = battery_data;
     }
 
     {
@@ -2764,8 +2703,10 @@ void dock_start(std::string monitor_name) {
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
     windowing::main_loop(dock->app);
-    if (docks.size() == 1)
+    if (docks.size() == 1) {
         finished = true;
+        battery_wakeup.notify_all();
+    }
     if (finished) {
         if (auto icons = container_by_name("icons", dock->window->root))
             write_saved_pins_to_file(icons);
@@ -2814,7 +2755,11 @@ void dock::start(std::string monitor_name) {
 void dock::stop(std::string monitor_name) {
     if (monitor_name.empty()) {
         finished = true;
-        
+        battery_wakeup.notify_all();
+
+        if (battery_thread.joinable())
+            battery_thread.join();
+
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
             windowing::close_window(d->window->raw_window);
@@ -3128,7 +3073,15 @@ void dock::change_in_audio() {
 }
 
 void dock::change_in_battery() {
-    
+    main_thread([]() {
+        if (finished) return;
+        for (auto d : docks) {
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+            windowing::redraw(d->window->raw_window);
+            if (d->battery)
+                windowing::redraw(d->battery->raw_window);
+        }
+    });
 }
 
 #include "dock_projection.inl"
