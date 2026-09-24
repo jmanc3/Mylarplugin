@@ -9155,10 +9155,20 @@ void HyprIso::send_false_click() {
 }
 
 uint32_t HyprIso::keycode_to_keysym(int keycode) {
-    //const xkb_keysym_t keysym = xkb_state_key_get_one_sym(nullptr, keycode);
-    //const xkb_keysym_t internalKeysym = xkb_state_key_get_one_sym(pKeyboard->m_xkbState, KEYCODE);
+    if (!g_pInputManager)
+        return XKB_KEY_NoSymbol;
 
-   return 0;
+    const auto xkb_keycode = static_cast<xkb_keycode_t>(keycode + 8);
+    for (const auto &keyboard : g_pInputManager->m_keyboards) {
+        if (!keyboard || !keyboard->m_xkbState)
+            continue;
+
+        const auto keysym = xkb_state_key_get_one_sym(keyboard->m_xkbState, xkb_keycode);
+        if (keysym != XKB_KEY_NoSymbol)
+            return keysym;
+    }
+
+    return XKB_KEY_NoSymbol;
 }
 
 void HyprIso::simulateMouseMovement() {
