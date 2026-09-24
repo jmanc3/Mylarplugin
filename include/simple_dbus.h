@@ -73,6 +73,7 @@ struct BluetoothRequest {
     
     BluetoothRequest(DBusConnection *connection, DBusMessage *message, const std::string &type) {
         this->connection = connection;
+        if (connection) dbus_connection_ref(connection);
         this->message = message;
         this->type = type;
         if (this->message)
@@ -80,6 +81,7 @@ struct BluetoothRequest {
     }
     
     ~BluetoothRequest() {
+        if (connection) dbus_connection_unref(connection);
         if (this->message)
             dbus_message_unref(message);
     }
@@ -186,6 +188,10 @@ void dbus_computer_restart();
 
 void dbus_open_in_folder(std::string path);
 
+// Call Bluetooth setup and operations on the compositor main thread.
+bool dbus_bluetooth_agent_ready();
+extern void (*on_bluetooth_request)(BluetoothRequest *);
+
 void register_agent_if_needed();
 
 void unregister_agent_if_needed();
@@ -201,6 +207,7 @@ enum struct BluetoothInterfaceType {
 };
 
 struct BluetoothInterface {
+    virtual ~BluetoothInterface() = default;
     std::string object_path;
     std::string mac_address;
     std::string name;
@@ -214,6 +221,7 @@ struct BluetoothCallbackInfo {
                           void (*function)(BluetoothCallbackInfo *));
     
     std::string mac_address;
+    std::string object_path;
     std::string command;
     std::string message;
     void (*function)(BluetoothCallbackInfo *) = nullptr;
@@ -251,6 +259,7 @@ struct Device : BluetoothInterface {
 
 struct Adapter : BluetoothInterface {
     bool powered = false;
+    bool discovering = false;
     
     Adapter(std::string string) {
         object_path = std::move(string);

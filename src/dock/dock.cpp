@@ -227,6 +227,9 @@ struct Dock : UserData {
     MylarWindow *wifi = nullptr;
     
     MylarWindow *bluetooth = nullptr;
+    std::string bluetooth_input;
+    std::string bluetooth_prompt;
+    unsigned long bluetooth_revision = 0;
     
     MylarWindow *tiling = nullptr;
     STilingMenuState tiling_settings;
@@ -2300,6 +2303,17 @@ static void fill_root(Container *root) {
     
     if (true) {
         auto bluetooth = simple_dock_item(root, ICON("\uE702"));
+        bluetooth->name = "bluetooth";
+        bluetooth->exists = bluetooth_available.load();
+        bluetooth->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto settings = make_icon_anchored_popup_settings(c, dock->window->raw_window->dpi, 376, 448);
+            dock->bluetooth = open_mylar_popup(dock->window, settings);
+            if (!dock->bluetooth) return;
+            dock->bluetooth->root->user_data = dock;
+            fill_bluetooth_container(dock);
+            windowing::redraw(dock->bluetooth->raw_window);
+        };
     }
 
     {
@@ -2724,6 +2738,7 @@ void dock_start(std::string monitor_name) {
         load_saved_pins_from_file(icons); 
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
+    bluetooth_watch_dock(dock);
     windowing::main_loop(dock->app);
     if (docks.size() == 1) {
         finished = true;
@@ -2761,7 +2776,10 @@ void dock::start(std::string monitor_name) {
     current_alignment = get_dock_alignment();
 
     finished = false;
-    
+    on_any_bluetooth_property_changed = bluetooth_refresh;
+    on_bluetooth_request = bluetooth_receive_request;
+    bluetooth_available = bluetooth_running;
+
     std::thread t(dock_start, monitor_name);
     t.detach();
     dock_threads.push_back(std::move(t));
@@ -2777,6 +2795,10 @@ void dock::start(std::string monitor_name) {
 void dock::stop(std::string monitor_name) {
     if (monitor_name.empty()) {
         finished = true;
+        bluetooth_menu_count = 0;
+        bluetooth_clear_request(true);
+        on_bluetooth_request = nullptr;
+        on_any_bluetooth_property_changed = nullptr;
         battery_wakeup.notify_all();
 
         if (battery_thread.joinable())

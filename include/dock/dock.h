@@ -25,6 +25,7 @@ namespace dock {
 
     void change_in_audio();
     void change_in_battery();
+    void change_in_bluetooth();
 
     void edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command);
 

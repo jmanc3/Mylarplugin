@@ -18,6 +18,7 @@
 #include "dbus_helper.h"
 #include "dock/dock.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <gio/gio.h>
@@ -66,6 +67,40 @@ static bool gnome_brightness_running = false;
 bool network_manager_running = false;
 bool binded_network_manager = false;
 
+static bool registered_network_manager_filter = false;
+static bool registered_upower_filter = false;
+static std::vector<DBusPendingCall *> pending_calls;
+
+static DBusHandlerResult network_manager_device_signal_filter(DBusConnection *, DBusMessage *, void *);
+static DBusHandlerResult upower_device_signal_filter(DBusConnection *, DBusMessage *, void *);
+
+// Keep a reference until completion so unload can cancel every plugin callback.
+// Like dispatch, this list is only accessed on the compositor main thread.
+static dbus_bool_t send_with_tracked_reply(DBusConnection *connection, DBusMessage *message,
+                                          DBusPendingCall **pending, int timeout) {
+    if (!connection || !dbus_connection_send_with_reply(connection, message, pending, timeout) || !*pending)
+        return FALSE;
+    pending_calls.push_back(dbus_pending_call_ref(*pending));
+    return TRUE;
+}
+
+static void release_completed_calls() {
+    std::erase_if(pending_calls, [](DBusPendingCall *pending) {
+        if (!dbus_pending_call_get_completed(pending)) return false;
+        dbus_pending_call_unref(pending);
+        return true;
+    });
+}
+
+static void cancel_pending_calls() {
+    auto calls = std::move(pending_calls);
+    pending_calls.clear();
+    for (auto pending : calls) {
+        dbus_pending_call_cancel(pending);
+        dbus_pending_call_unref(pending);
+    }
+}
+
 void network_manager_service_started();
 
 void network_manager_service_ended();
@@ -81,11 +116,24 @@ void StatusNotifierHostRegistered();
 static std::vector<NotificationInfo *> notifications;
 
 void bluetooth_service_ended() {
-
+    main_thread([]() {
+        if (!dbus_connection_system) return;
+        bluetooth_running = false;
+        // The old daemon has already dropped our registration.
+        registered_with_bluez = false;
+        unregister_agent_if_needed();
+        dock::change_in_bluetooth();
+    });
 }
 
 void bluetooth_service_started() {
-
+    main_thread([]() {
+        if (!dbus_connection_system || bluetooth_running) return;
+        bluetooth_running = true;
+        register_agent_if_needed();
+        update_devices();
+        dock::change_in_bluetooth();
+    });
 }
 
 void battery_display_device_state_changed() {
@@ -108,8 +156,20 @@ void show_notification(NotificationInfo *n) {
     notify(std::format("{} {} {}", n->app_name, n->body, n->summary));
 }
 
-void bluetooth_wants_response_from_user(BluetoothRequest *br) {
+void (*on_bluetooth_request)(BluetoothRequest *) = nullptr;
 
+void bluetooth_wants_response_from_user(BluetoothRequest *br) {
+    if (on_bluetooth_request) {
+        on_bluetooth_request(br);
+        return;
+    }
+    if (br->message) {
+        auto reply = br->type == "Cancelled" ? dbus_message_new_method_return(br->message) :
+            dbus_message_new_error(br->message, "org.bluez.Error.Canceled", "Bluetooth menu is closed");
+        dbus_connection_send(br->connection, reply, nullptr);
+        dbus_message_unref(reply);
+    }
+    delete br;
 }
 
 static bool audio_running = false;
@@ -146,7 +206,6 @@ void remove_service(const std::string &service) {
             }
             if (running_dbus_services[i] == "org.bluez") {
                 bluetooth_service_ended();
-                bluetooth_running = false;
             }
             if (running_dbus_services[i] == "org.freedesktop.UPower")
                 upower_service_ended();
@@ -166,6 +225,7 @@ void create_status_notifier_host();
 static bool dbus_kde_max_brightness();
 
 void parse_and_add_or_update_interface(DBusMessageIter iter2);
+static bool bluetooth_parse_properties(BluetoothInterface *interface, DBusMessageIter properties);
 
 static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
                                         DBusMessage *message, void *user_data) {
@@ -184,6 +244,16 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
             return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
         }
         
+        if (std::string(name) == "org.bluez") {
+            if (dbus_connection == dbus_connection_system) {
+                if (*old_owner) bluetooth_service_ended();
+                if (*new_owner) bluetooth_service_started();
+                std::erase(running_dbus_services, std::string(name));
+                if (*new_owner) running_dbus_services.emplace_back(name);
+            }
+            return DBUS_HANDLER_RESULT_HANDLED;
+        }
+
         if (strcmp(old_owner, "") == 0) {
             running_dbus_services.emplace_back(name);
             if (std::string(name) == "local.org_kde_powerdevil")
@@ -193,10 +263,6 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
             if (std::string(name) == "org.freedesktop.NetworkManager") {
                 network_manager_running = true;
                 network_manager_service_started();
-            }
-            if (std::string(name) == "org.bluez") {
-                bluetooth_service_started();
-                bluetooth_running = true;
             }
             if (std::string(name) == "org.freedesktop.UPower")
                 upower_service_started();
@@ -224,9 +290,8 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
             network_manager_running = true;
             network_manager_service_started();
         }
-        if (std::string(name) == "org.bluez") {
+        if (dbus_connection == dbus_connection_system && std::string(name) == "org.bluez") {
             bluetooth_service_started();
-            bluetooth_running = true;
         }
         if (std::string(name) == "org.freedesktop.UPower")
             upower_service_started();
@@ -307,21 +372,24 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
                 char *object_path;
                 dbus_message_iter_get_basic(&args, &object_path);
                 
-                for (int i = 0; i < bluetooth_interfaces.size(); i++) {
+                bool remove_object = false;
+                DBusMessageIter removed;
+                dbus_message_iter_next(&args);
+                if (dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_ARRAY) {
+                    dbus_message_iter_recurse(&args, &removed);
+                    while (dbus_message_iter_get_arg_type(&removed) == DBUS_TYPE_STRING) {
+                        const char *name;
+                        dbus_message_iter_get_basic(&removed, &name);
+                        remove_object |= std::string(name) == "org.bluez.Device1" || std::string(name) == "org.bluez.Adapter1";
+                        if (std::string(name) == "org.bluez.Battery1")
+                            for (auto interface : bluetooth_interfaces)
+                                if (interface->object_path == object_path && interface->type == BluetoothInterfaceType::Device)
+                                    static_cast<Device *>(interface)->percentage.clear();
+                        dbus_message_iter_next(&removed);
+                    }
+                }
+                for (int i = 0; remove_object && i < bluetooth_interfaces.size(); i++) {
                     if (bluetooth_interfaces[i]->object_path == object_path) {
-                        DBusError error;
-                        dbus_error_init(&error);
-                        dbus_bus_remove_match(dbus_connection,
-                                              ("type='signal',"
-                                               "sender='org.bluez',"
-                                               "interface='org.freedesktop.DBus.Properties',"
-                                               "member='PropertiesChanged',"
-                                               "path='" + std::string(object_path) + "'").c_str(),
-                                              &error);
-                        if (dbus_error_is_set(&error)) {
-                            fprintf(stderr, "Error removing match for %s: %s\n", object_path, error.message);
-                        }
-                        
                         if (bluetooth_interfaces[i]->type == BluetoothInterfaceType::Device) {
                             delete (Device *) bluetooth_interfaces[i];
                         } else if (bluetooth_interfaces[i]->type == BluetoothInterfaceType::Adapter) {
@@ -352,82 +420,13 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
         for (auto *interface: bluetooth_interfaces) {
             if (dbus_message_has_path(message, interface->object_path.c_str())) {
                 DBusMessageIter args;
-                dbus_message_iter_init(message, &args);
-                
-                if (dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_STRING) {
+                bool changed = false;
+                if (dbus_message_iter_init(message, &args) && dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_STRING) {
                     dbus_message_iter_next(&args);
-                    
-                    while (dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_ARRAY) {
-                        DBusMessageIter array;
-                        dbus_message_iter_recurse(&args, &array);
-                        
-                        while (dbus_message_iter_get_arg_type(&array) == DBUS_TYPE_DICT_ENTRY) {
-                            DBusMessageIter dict;
-                            dbus_message_iter_recurse(&array, &dict);
-                            
-                            char *key = nullptr;
-                            if (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_STRING)
-                                dbus_message_iter_get_basic(&dict, &key);
-                            dbus_message_iter_next(&dict);
-                            
-                            if (dbus_message_iter_get_arg_type(&dict) == DBUS_TYPE_VARIANT) {
-                                DBusMessageIter variant;
-                                dbus_message_iter_recurse(&dict, &variant);
-                                
-                                if (strcmp(key, "Address") == 0) {
-                                    char *iter7s;
-                                    dbus_message_iter_get_basic(&variant, &iter7s);
-                                    interface->mac_address = iter7s;
-                                } else if (strcmp(key, "Name") == 0) {
-                                    char *iter7s;
-                                    dbus_message_iter_get_basic(&variant, &iter7s);
-                                    interface->name = iter7s;
-                                } else if (strcmp(key, "Alias") == 0) {
-                                    char *iter7s;
-                                    dbus_message_iter_get_basic(&variant, &iter7s);
-                                    interface->alias = iter7s;
-                                } else if (interface->type == BluetoothInterfaceType::Adapter) {
-                                    if (strcmp(key, "Powered") == 0) {
-                                        bool iter7b;
-                                        dbus_message_iter_get_basic(&variant, &iter7b);
-                                        ((Adapter *) interface)->powered = iter7b;
-                                    }
-                                } else if (interface->type == BluetoothInterfaceType::Device) {
-                                    if (strcmp(key, "Icon") == 0) {
-                                        char *iter7s;
-                                        dbus_message_iter_get_basic(&variant, &iter7s);
-                                        ((Device *) interface)->icon = iter7s;
-                                    } else if (strcmp(key, "Adapter") == 0) {
-                                        char *iter7s;
-                                        dbus_message_iter_get_basic(&variant, &iter7s);
-                                        ((Device *) interface)->adapter = iter7s;
-                                    } else if (strcmp(key, "Paired") == 0) {
-                                        bool iter7b;
-                                        dbus_message_iter_get_basic(&variant, &iter7b);
-                                        ((Device *) interface)->paired = iter7b;
-                                    } else if (strcmp(key, "Connected") == 0) {
-                                        bool iter7b;
-                                        dbus_message_iter_get_basic(&variant, &iter7b);
-                                        ((Device *) interface)->connected = iter7b;
-                                    } else if (strcmp(key, "Bonded") == 0) {
-                                        bool iter7b;
-                                        dbus_message_iter_get_basic(&variant, &iter7b);
-                                        ((Device *) interface)->bonded = iter7b;
-                                    } else if (strcmp(key, "Trusted") == 0) {
-                                        bool iter7b;
-                                        dbus_message_iter_get_basic(&variant, &iter7b);
-                                        ((Device *) interface)->trusted = iter7b;
-                                    }
-                                }
-                            }
-                            
-                            dbus_message_iter_next(&array);
-                        }
-                        dbus_message_iter_next(&args);
-                    }
+                    changed = bluetooth_parse_properties(interface, args);
                 }
-    
-                if (on_any_bluetooth_property_changed) {
+
+                if (changed && on_any_bluetooth_property_changed) {
                     on_any_bluetooth_property_changed();
                 }
     
@@ -460,7 +459,11 @@ static void dbus_reply_to_list_names_request(DBusPendingCall *call, void *data) 
     
     // Add all the names to the running services
     //
-    for (char *name = *args; name; name = *++args) {
+    defer(dbus_free_string_array(args));
+    for (int i = 0; i < len; ++i) {
+        const char *name = args[i];
+        if (std::find(running_dbus_services.begin(), running_dbus_services.end(), name) != running_dbus_services.end())
+            continue;
         running_dbus_services.emplace_back(name);
         if (std::string(name) == "local.org_kde_powerdevil")
             dbus_kde_max_brightness();
@@ -470,60 +473,33 @@ static void dbus_reply_to_list_names_request(DBusPendingCall *call, void *data) 
             network_manager_running = true;
             network_manager_service_started();
         }
-        if (std::string(name) == "org.bluez") {
+        if (dbus_connection == dbus_connection_system && std::string(name) == "org.bluez") {
             bluetooth_service_started();
-            bluetooth_running = true;
         }
         if (std::string(name) == "org.freedesktop.UPower")
             upower_service_started();
     }
     
-    // Register some signals that we are interested in hearing about "NameOwnerChanged", "NameAcquired", "NameLost"
-    //
-    if (!dbus_connection) return;
-    
-    dbus_bus_add_match(dbus_connection,
-                       "type='signal',"
-                       "sender='org.freedesktop.DBus',"
-                       "interface='org.freedesktop.DBus',"
-                       "member='NameOwnerChanged'",
-                       &error);
-    if (dbus_error_is_set(&error)) {
-        fprintf(stderr, "Couldn't watch signal NameOwnerChanged because: %s\n%s\n",
-                error.name, error.message);
+}
+
+static void watch_dbus_services(DBusConnection *connection) {
+    dbus_connection_add_filter(connection, signal_handler, nullptr, nullptr);
+    for (const char *member : {"NameOwnerChanged", "NameAcquired", "NameLost"}) {
+        dbus_bus_add_match(connection,
+            ("type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='" +
+                std::string(member) + "'").c_str(), nullptr);
     }
-    dbus_bus_add_match(dbus_connection,
-                       "type='signal',"
-                       "sender='org.freedesktop.DBus',"
-                       "interface='org.freedesktop.DBus',"
-                       "member='NameAcquired'",
-                       &error);
-    if (dbus_error_is_set(&error)) {
-        fprintf(stderr, "Couldn't watch signal NameAcquired because: %s\n%s\n",
-                error.name, error.message);
-    }
-    dbus_bus_add_match(dbus_connection,
-                       "type='signal',"
-                       "sender='org.freedesktop.DBus',"
-                       "interface='org.freedesktop.DBus',"
-                       "member='NameLost'",
-                       &error);
-    if (dbus_error_is_set(&error)) {
-        fprintf(stderr, "Couldn't watch signal NameLost because: %s\n%s\n",
-                error.name, error.message);
-    }
-    if (dbus_connection == dbus_connection_system) {
-        dbus_bus_add_match(dbus_connection_system,
-                           ("type='signal',"
-                            "sender='org.freedesktop.UPower',"
-                            "interface='org.freedesktop.DBus.Properties',"
-                            "member='PropertiesChanged',"
-                            "path='" + std::string("/org/freedesktop/UPower/devices/DisplayDevice") + "'").c_str(),
-                           &error);
-    }
-    if (!dbus_connection_add_filter(dbus_connection, signal_handler, nullptr, nullptr)) {
-        fprintf(stderr, "Not enough memory to add connection filter\n");
-        return;
+    if (connection == dbus_connection_system) {
+        dbus_bus_add_match(connection,
+            "type='signal',sender='org.bluez',interface='org.freedesktop.DBus.Properties',"
+            "member='PropertiesChanged',path_namespace='/org/bluez'", nullptr);
+        for (const char *member : {"InterfacesAdded", "InterfacesRemoved"})
+            dbus_bus_add_match(connection,
+                ("type='signal',sender='org.bluez',interface='org.freedesktop.DBus.ObjectManager',member='" +
+                    std::string(member) + "'").c_str(), nullptr);
+        dbus_bus_add_match(connection,
+            "type='signal',sender='org.freedesktop.UPower',interface='org.freedesktop.DBus.Properties',"
+            "member='PropertiesChanged',path='/org/freedesktop/UPower/devices/DisplayDevice'", nullptr);
     }
 }
 
@@ -535,10 +511,10 @@ static void request_name_of_every_service_running(DBusConnection *dbus_connectio
     defer(dbus_message_unref(dbus_msg));
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
+    defer(if (pending) dbus_pending_call_unref(pending));
     
-    if (!dbus_connection_send_with_reply(dbus_connection, dbus_msg, &pending,
-                                         DBUS_TIMEOUT_USE_DEFAULT)) {
+    if (!send_with_tracked_reply(dbus_connection, dbus_msg, &pending,
+                                         DBUS_TIMEOUT_USE_DEFAULT) || !pending) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
         return;
@@ -595,9 +571,9 @@ bool dbus_kde_show_desktop_grid() {
     }
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
+    defer(if (pending) dbus_pending_call_unref(pending));
     
-    if (!dbus_connection_send_with_reply(dbus_connection_session, dbus_msg, &pending,
+    if (!send_with_tracked_reply(dbus_connection_session, dbus_msg, &pending,
                                          DBUS_TIMEOUT_USE_DEFAULT)) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
@@ -625,9 +601,9 @@ bool dbus_kde_show_desktop() {
     }
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
+    defer(if (pending) dbus_pending_call_unref(pending));
     
-    if (!dbus_connection_send_with_reply(dbus_connection_session, dbus_msg, &pending,
+    if (!send_with_tracked_reply(dbus_connection_session, dbus_msg, &pending,
                                          DBUS_TIMEOUT_USE_DEFAULT)) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
@@ -666,9 +642,9 @@ bool dbus_gnome_show_overview() {
     }
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
+    defer(if (pending) dbus_pending_call_unref(pending));
     
-    if (!dbus_connection_send_with_reply(dbus_connection_session, dbus_msg, &pending,
+    if (!send_with_tracked_reply(dbus_connection_session, dbus_msg, &pending,
                                          DBUS_TIMEOUT_USE_DEFAULT)) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
@@ -708,9 +684,9 @@ static bool dbus_kde_max_brightness() {
     defer(dbus_message_unref(dbus_msg));
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
+    defer(if (pending) dbus_pending_call_unref(pending));
     
-    if (!dbus_connection_send_with_reply(dbus_connection_session, dbus_msg, &pending,
+    if (!send_with_tracked_reply(dbus_connection_session, dbus_msg, &pending,
                                          DBUS_TIMEOUT_USE_DEFAULT)) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
@@ -805,9 +781,9 @@ bool dbus_kde_set_brightness(double percentage) {
     }
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
+    defer(if (pending) dbus_pending_call_unref(pending));
     
-    if (!dbus_connection_send_with_reply(dbus_connection_session, dbus_msg, &pending,
+    if (!send_with_tracked_reply(dbus_connection_session, dbus_msg, &pending,
                                          DBUS_TIMEOUT_USE_DEFAULT)) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
@@ -1277,14 +1253,32 @@ void notification_action_invoked_signal(App *app, NotificationInfo *ni, Notifica
 
 
 void dbus_poll_wakeup(PF *pf) {
-    if (!pf->data)
+    auto connection = static_cast<DBusConnection *>(pf->data);
+    if (!connection || (connection != dbus_connection_system && connection != dbus_connection_session)) return;
+    if (!dbus_connection_get_is_connected(connection)) {
+        if (connection == dbus_connection_system && bluetooth_running) bluetooth_service_ended();
         return;
-    auto dbus_connection = (DBusConnection *) pf->data;
-    DBusDispatchStatus status;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(2);
+    int dispatched = 0;
     do {
-        dbus_connection_read_write_dispatch(dbus_connection, 0);
-        status = dbus_connection_get_dispatch_status(dbus_connection);
-    } while (status == DBUS_DISPATCH_DATA_REMAINS);
+        dbus_connection_read_write_dispatch(connection, 0);
+    } while (++dispatched < 32 && std::chrono::steady_clock::now() < deadline &&
+        dbus_connection_get_dispatch_status(connection) == DBUS_DISPATCH_DATA_REMAINS);
+    release_completed_calls();
+    if (dbus_connection_get_dispatch_status(connection) == DBUS_DISPATCH_DATA_REMAINS) {
+        static bool queued[2] = {};
+        int bus = connection == dbus_connection_system ? 0 : 1;
+        if (!queued[bus]) {
+            queued[bus] = true;
+            later(1, [bus](Timer *) {
+                queued[bus] = false;
+                PF pending;
+                pending.data = bus == 0 ? dbus_connection_system : dbus_connection_session;
+                dbus_poll_wakeup(&pending);
+            });
+        }
+    }
 }
 
 void dbus_start(DBusBusType dbusType) {
@@ -1292,9 +1286,11 @@ void dbus_start(DBusBusType dbusType) {
     //
     DBusError error = DBUS_ERROR_INIT;
     defer(dbus_error_free(&error));
-    return;
+    if (dbusType == DBUS_BUS_SYSTEM ? dbus_connection_system != nullptr : dbus_connection_session != nullptr)
+        return;
     
-    auto *dbus_connection = dbus_bus_get(dbusType, &error);
+    // Shared bus connections can outlive dlclose and retain callbacks into this plugin.
+    auto *dbus_connection = dbus_bus_get_private(dbusType, &error);
     if (dbus_error_is_set(&error)) {
         fprintf(stderr, "DBus Error: %s\n%s\n", error.name, error.message);
         dbus_connection = nullptr;
@@ -1302,12 +1298,14 @@ void dbus_start(DBusBusType dbusType) {
     }
     
     if (!dbus_connection) return;
+    dbus_connection_set_exit_on_disconnect(dbus_connection, false);
     
     // Weave the DBus file descriptor into our main event loop
     //
     int file_descriptor = -1;
     if (dbus_connection_get_unix_fd(dbus_connection, &file_descriptor) != TRUE) {
         fprintf(stderr, "%s\n", "Couldn't get the file descriptor for the DBus Connection");
+        dbus_connection_close(dbus_connection);
         dbus_connection_unref(dbus_connection);
         dbus_connection = nullptr;
         return;
@@ -1322,7 +1320,17 @@ void dbus_start(DBusBusType dbusType) {
     if (poll_descriptor(file_descriptor, dbus_poll_wakeup, dbus_connection, "dbus")) {
         // Get the names of all the services running
         //
+        watch_dbus_services(dbus_connection);
         request_name_of_every_service_running(dbus_connection);
+        // Pending calls also need dispatch when there is no readable fd activity.
+        later(50, [dbusType](Timer *timer) {
+            auto connection = dbusType == DBUS_BUS_SYSTEM ? dbus_connection_system : dbus_connection_session;
+            if (!connection) return;
+            timer->keep_running = true;
+            PF pf;
+            pf.data = connection;
+            dbus_poll_wakeup(&pf);
+        });
         
         if (dbusType == DBUS_BUS_SESSION) {
             // Try to become the owner of the org.freedesktop.Notification name
@@ -1344,6 +1352,11 @@ void dbus_start(DBusBusType dbusType) {
         PF pf;
         pf.data = dbus_connection;
         dbus_poll_wakeup(&pf);
+    } else {
+        if (dbusType == DBUS_BUS_SYSTEM) dbus_connection_system = nullptr;
+        else dbus_connection_session = nullptr;
+        dbus_connection_close(dbus_connection);
+        dbus_connection_unref(dbus_connection);
     }
 }
 
@@ -1361,6 +1374,26 @@ void dbus_end() {
     notifications.clear();
     notifications.shrink_to_fit();
     
+    unregister_agent_if_needed();
+    bluetooth_running = false;
+    cancel_pending_calls();
+    if (dbus_connection_system) {
+        dbus_connection_remove_filter(dbus_connection_system, signal_handler, nullptr);
+        if (registered_network_manager_filter)
+            dbus_connection_remove_filter(dbus_connection_system, network_manager_device_signal_filter, nullptr);
+        if (registered_upower_filter)
+            dbus_connection_remove_filter(dbus_connection_system, upower_device_signal_filter, nullptr);
+    }
+    registered_network_manager_filter = false;
+    registered_upower_filter = false;
+    binded_network_manager = false;
+    network_manager_running = false;
+    if (dbus_connection_session) {
+        dbus_connection_remove_filter(dbus_connection_session, signal_handler, nullptr);
+        if (registered_object_path)
+            dbus_connection_unregister_object_path(dbus_connection_session, "/org/freedesktop/Notifications");
+    }
+
     //displaying_notifications.clear();
     //displaying_notifications.shrink_to_fit();
     
@@ -1371,7 +1404,7 @@ void dbus_end() {
 
         registered_object_path = false;
 
-        //dbus_connection_close(dbus_connection);
+        dbus_connection_close(dbus_connection);
         dbus_connection_unref(dbus_connection);
     }
     dbus_connection_session = nullptr;
@@ -2269,7 +2302,8 @@ void network_manager_service_started() {
                 error.name, error.message);
     }
     
-    dbus_connection_add_filter(dbus_connection_system, network_manager_device_signal_filter, NULL, NULL);
+    if (!registered_network_manager_filter)
+        registered_network_manager_filter = dbus_connection_add_filter(dbus_connection_system, network_manager_device_signal_filter, nullptr, nullptr);
     
     network_manager_service_get_all_devices();
 }
@@ -2304,6 +2338,10 @@ void unregister_agent_with_bluez() {
     defer(dbus_message_unref(reply));
 }
 
+bool dbus_bluetooth_agent_ready() {
+    return registered_with_bluez;
+}
+
 bool become_default_bluetooth_agent() {
     if (dbus_connection_system == nullptr) return false;
     if (!registered_with_bluez) return false;
@@ -2332,6 +2370,11 @@ bool become_default_bluetooth_agent() {
 
 DBusHandlerResult bluetooth_agent_message(DBusConnection *conn, DBusMessage *message, void *user_data) {
     if (dbus_message_is_method_call(message, "org.bluez.Agent1", "Release")) {
+        registered_with_bluez = false;
+        bluetooth_wants_response_from_user(new BluetoothRequest(conn, nullptr, "Cancelled"));
+        auto reply = dbus_message_new_method_return(message);
+        dbus_connection_send(conn, reply, nullptr);
+        dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(message, "org.bluez.Agent1", "RequestPinCode")) {
         DBusMessageIter args;
@@ -2460,10 +2503,12 @@ DBusHandlerResult bluetooth_agent_message(DBusConnection *conn, DBusMessage *mes
         
         return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(message, "org.bluez.Agent1", "AuthorizeService")) {
-        DBusMessage *reply = dbus_message_new_method_return(message);
-        dbus_connection_send(conn, reply, nullptr);
-        dbus_connection_flush(conn);
-        dbus_message_unref(reply);
+        const char *device_path, *uuid;
+        if (!dbus_message_get_args(message, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path,
+            DBUS_TYPE_STRING, &uuid, DBUS_TYPE_INVALID)) return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+        auto request = new BluetoothRequest(conn, message, "AuthorizeService");
+        request->object_path = device_path;
+        bluetooth_wants_response_from_user(request);
         return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(message, "org.bluez.Agent1", "Cancel")) {
         auto br = new BluetoothRequest(conn, message, "Cancelled");
@@ -2478,13 +2523,13 @@ DBusHandlerResult bluetooth_agent_message(DBusConnection *conn, DBusMessage *mes
 
 void register_agent_if_needed() {
     if (dbus_connection_system == nullptr) return;
-    if (registered_bluetooth_agent) return;
+    if (registered_with_bluez) return;
     
     static const DBusObjectPathVTable agent_vtable = {
             .message_function = &bluetooth_agent_message,
     };
     
-    if (!dbus_connection_register_object_path(dbus_connection_system, "/winbar/bluetooth", &agent_vtable, nullptr)) {
+    if (!registered_bluetooth_agent && !dbus_connection_register_object_path(dbus_connection_system, "/winbar/bluetooth", &agent_vtable, nullptr)) {
         fprintf(stdout, "%s\n",
                 "Error registering object path /winbar/bluetooth on NameAcquired signal");
         return;
@@ -2517,206 +2562,108 @@ void register_agent_if_needed() {
     }
     registered_with_bluez = true;
     
-    become_default_bluetooth_agent();
-    
-    // add dbus_bus_add_match InterfaceAdded, InterfaceRemoved
-    dbus_bus_add_match(dbus_connection_system,
-                       "type='signal',"
-                       "sender='org.bluez',"
-                       "interface='org.freedesktop.DBus.ObjectManager',"
-                       "member='InterfacesAdded'",
-                       &error);
-    if (dbus_error_is_set(&error)) {
-        fprintf(stderr, "Couldn't watch signal InterfacesAdded because: %s\n%s\n",
-                error.name, error.message);
-    }
-    dbus_bus_add_match(dbus_connection_system,
-                       "type='signal',"
-                       "sender='org.bluez',"
-                       "interface='org.freedesktop.DBus.ObjectManager',"
-                       "member='InterfacesRemoved'",
-                       &error);
-    if (dbus_error_is_set(&error)) {
-        fprintf(stderr, "Couldn't watch signal InterfacesRemoved because: %s\n%s\n",
-                error.name, error.message);
-    }
-    
     update_devices();
 }
 
 void unregister_agent_if_needed() {
-    if (dbus_connection_system == nullptr) return;
+    if (!dbus_connection_system) return;
     if (registered_bluetooth_agent) {
         dbus_connection_unregister_object_path(dbus_connection_system, "/winbar/bluetooth");
         registered_bluetooth_agent = false;
-        if (registered_with_bluez) {
-            // UnregisterAgent
-            unregister_agent_with_bluez();
-            
-            // remove interfaces
-            for (auto &interface: bluetooth_interfaces) {
-                DBusError error;
-                dbus_error_init(&error);
-                dbus_bus_remove_match(dbus_connection_system,
-                                      ("type='signal',"
-                                       "sender='org.bluez',"
-                                       "interface='org.freedesktop.DBus.Properties',"
-                                       "member='PropertiesChanged',"
-                                       "path='" + std::string(interface->object_path) + "'").c_str(),
-                                      &error);
-                delete interface;
-            }
-            bluetooth_interfaces.clear();
-        }
     }
+    if (registered_with_bluez) unregister_agent_with_bluez();
+    registered_with_bluez = false;
+    for (auto interface : bluetooth_interfaces) {
+        delete interface;
+    }
+    bluetooth_interfaces.clear();
 }
 
 void update_upower_battery();
 
-void parse_and_add_or_update_interface(DBusMessageIter iter2) {
-    char *object_path;
-    if (dbus_message_iter_get_arg_type(&iter2) == DBUS_TYPE_OBJECT_PATH) {
-        dbus_message_iter_get_basic(&iter2, &object_path);
-    }
-    
-    dbus_message_iter_next(&iter2);
-    
-    while (dbus_message_iter_get_arg_type(&iter2) == DBUS_TYPE_ARRAY) {
-        DBusMessageIter iter3;
-        dbus_message_iter_recurse(&iter2, &iter3);
-        
-        while (dbus_message_iter_get_arg_type(&iter3) == DBUS_TYPE_DICT_ENTRY) {
-            DBusMessageIter iter4;
-            dbus_message_iter_recurse(&iter3, &iter4);
-            
-            char *iter4s;
-            bool is_adapter = false;
-            bool is_device = false;
-            if (dbus_message_iter_get_arg_type(&iter4) == DBUS_TYPE_STRING) {
-                dbus_message_iter_get_basic(&iter4, &iter4s);
-                is_adapter = strcmp(iter4s, "org.bluez.Adapter1") == 0;
-                is_device = strcmp(iter4s, "org.bluez.Device1") == 0;
-                
-                if (!is_device && !is_adapter) {
-                    dbus_message_iter_next(&iter3);
-                    continue;
-                }
-            }
-            
-            // if interface already added, just modify values, otherwise create a new interface
-            BluetoothInterface *interface = nullptr;
-            for (auto i: bluetooth_interfaces)
-                if (i->object_path == object_path)
-                    interface = i;
-            
-            if (interface == nullptr) {
-                if (is_adapter) {
-                    interface = new Adapter(object_path);
-                } else if (is_device) {
-                    interface = new Device(object_path);
-                }
-                
-                // Watch the PropertiesChanged signal
-                DBusError error;
-                dbus_error_init(&error);
-                dbus_bus_add_match(dbus_connection_system,
-                                   ("type='signal',"
-                                    "sender='org.bluez',"
-                                    "interface='org.freedesktop.DBus.Properties',"
-                                    "member='PropertiesChanged',"
-                                    "path='" + std::string(object_path) + "'").c_str(),
-                                   &error);
-                if (dbus_error_is_set(&error)) {
-                    fprintf(stderr, "Couldn't watch signal PropertiesChanged because: %s\n%s\n",
-                            error.name, error.message);
-                }
-    
-                bluetooth_interfaces.push_back(interface);
-    
-                for (const auto &service: running_dbus_services) {
-                    if (service == "org.freedesktop.UPower") {
-                        update_upower_battery();
-                    }
-                }
-            }
-            
-            dbus_message_iter_next(&iter4);
-            
-            while (dbus_message_iter_get_arg_type(&iter4) == DBUS_TYPE_ARRAY) {
-                DBusMessageIter iter5;
-                dbus_message_iter_recurse(&iter4, &iter5);
-                
-                while (dbus_message_iter_get_arg_type(&iter5) == DBUS_TYPE_DICT_ENTRY) {
-                    DBusMessageIter iter6;
-                    dbus_message_iter_recurse(&iter5, &iter6);
-                    
-                    char *iter6s;
-                    if (dbus_message_iter_get_arg_type(&iter6) == DBUS_TYPE_STRING) {
-                        dbus_message_iter_get_basic(&iter6, &iter6s);
-                    }
-                    dbus_message_iter_next(&iter6);
-                    
-                    if (dbus_message_iter_get_arg_type(&iter6) == DBUS_TYPE_VARIANT) {
-                        DBusMessageIter iter7;
-                        dbus_message_iter_recurse(&iter6, &iter7);
-                        
-                        if (strcmp(iter6s, "Address") == 0) {
-                            char *iter7s;
-                            dbus_message_iter_get_basic(&iter7, &iter7s);
-                            interface->mac_address = iter7s;
-                        } else if (strcmp(iter6s, "Name") == 0) {
-                            char *iter7s;
-                            dbus_message_iter_get_basic(&iter7, &iter7s);
-                            interface->name = iter7s;
-                        } else if (strcmp(iter6s, "Alias") == 0) {
-                            char *iter7s;
-                            dbus_message_iter_get_basic(&iter7, &iter7s);
-                            interface->alias = iter7s;
-                        } else if (interface->type == BluetoothInterfaceType::Adapter) {
-                            if (strcmp(iter6s, "Powered") == 0) {
-                                bool iter7b;
-                                dbus_message_iter_get_basic(&iter7, &iter7b);
-                                ((Adapter *) interface)->powered = iter7b;
-                            }
-                        } else if (interface->type == BluetoothInterfaceType::Device) {
-                            if (strcmp(iter6s, "Icon") == 0) {
-                                char *iter7s;
-                                dbus_message_iter_get_basic(&iter7, &iter7s);
-                                ((Device *) interface)->icon = iter7s;
-                            } else if (strcmp(iter6s, "Adapter") == 0) {
-                                char *iter7s;
-                                dbus_message_iter_get_basic(&iter7, &iter7s);
-                                ((Device *) interface)->adapter = iter7s;
-                            } else if (strcmp(iter6s, "Paired") == 0) {
-                                bool iter7b;
-                                dbus_message_iter_get_basic(&iter7, &iter7b);
-                                ((Device *) interface)->paired = iter7b;
-                            } else if (strcmp(iter6s, "Connected") == 0) {
-                                bool iter7b;
-                                dbus_message_iter_get_basic(&iter7, &iter7b);
-                                ((Device *) interface)->connected = iter7b;
-                            } else if (strcmp(iter6s, "Bonded") == 0) {
-                                bool iter7b;
-                                dbus_message_iter_get_basic(&iter7, &iter7b);
-                                ((Device *) interface)->bonded = iter7b;
-                            } else if (strcmp(iter6s, "Trusted") == 0) {
-                                bool iter7b;
-                                dbus_message_iter_get_basic(&iter7, &iter7b);
-                                ((Device *) interface)->trusted = iter7b;
-                            }
-                        }
-                        
-                        dbus_message_iter_next(&iter6);
-                    } else if (dbus_message_iter_get_arg_type(&iter6) == DBUS_TYPE_ARRAY) {
-                        // do nothing for now
-                    }
-                    dbus_message_iter_next(&iter5);
-                }
-                dbus_message_iter_next(&iter4);
-            }
-            dbus_message_iter_next(&iter3);
+static bool bluetooth_parse_properties(BluetoothInterface *interface, DBusMessageIter properties) {
+    if (dbus_message_iter_get_arg_type(&properties) != DBUS_TYPE_ARRAY) return false;
+    bool changed = false;
+    auto assign = [&changed](auto &target, const auto &value) {
+        if (target != value) {
+            target = value;
+            changed = true;
         }
-        dbus_message_iter_next(&iter2);
+    };
+    DBusMessageIter entries;
+    dbus_message_iter_recurse(&properties, &entries);
+    while (dbus_message_iter_get_arg_type(&entries) == DBUS_TYPE_DICT_ENTRY) {
+        DBusMessageIter entry, value;
+        dbus_message_iter_recurse(&entries, &entry);
+        const char *key = nullptr;
+        if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_STRING) break;
+        dbus_message_iter_get_basic(&entry, &key);
+        dbus_message_iter_next(&entry);
+        if (dbus_message_iter_get_arg_type(&entry) != DBUS_TYPE_VARIANT) break;
+        dbus_message_iter_recurse(&entry, &value);
+        const std::string property(key);
+        const int type = dbus_message_iter_get_arg_type(&value);
+        auto device = dynamic_cast<Device *>(interface);
+        auto adapter = dynamic_cast<Adapter *>(interface);
+        if (type == DBUS_TYPE_STRING || type == DBUS_TYPE_OBJECT_PATH) {
+            const char *text;
+            dbus_message_iter_get_basic(&value, &text);
+            if (property == "Address") assign(interface->mac_address, text);
+            else if (property == "Name") assign(interface->name, text);
+            else if (property == "Alias") assign(interface->alias, text);
+            else if (device && property == "Icon") assign(device->icon, text);
+            else if (device && property == "Adapter") assign(device->adapter, text);
+        } else if (type == DBUS_TYPE_BOOLEAN) {
+            dbus_bool_t enabled;
+            dbus_message_iter_get_basic(&value, &enabled);
+            if (adapter && property == "Powered") assign(adapter->powered, enabled);
+            else if (adapter && property == "Discovering") assign(adapter->discovering, enabled);
+            else if (device && property == "Paired") assign(device->paired, enabled);
+            else if (device && property == "Connected") assign(device->connected, enabled);
+            else if (device && property == "Bonded") assign(device->bonded, enabled);
+            else if (device && property == "Trusted") assign(device->trusted, enabled);
+        } else if (device && property == "Percentage" && type == DBUS_TYPE_BYTE) {
+            unsigned char percentage;
+            dbus_message_iter_get_basic(&value, &percentage);
+            assign(device->percentage, std::to_string(percentage));
+        }
+        dbus_message_iter_next(&entries);
+    }
+    return changed;
+}
+
+void parse_and_add_or_update_interface(DBusMessageIter iter2) {
+    if (dbus_message_iter_get_arg_type(&iter2) != DBUS_TYPE_OBJECT_PATH) return;
+    const char *object_path;
+    dbus_message_iter_get_basic(&iter2, &object_path);
+    dbus_message_iter_next(&iter2);
+    if (dbus_message_iter_get_arg_type(&iter2) != DBUS_TYPE_ARRAY) return;
+    // Device1 must be created before applying Battery1, regardless of dictionary order.
+    for (int pass = 0; pass < 2; ++pass) {
+        DBusMessageIter entries;
+        dbus_message_iter_recurse(&iter2, &entries);
+        while (dbus_message_iter_get_arg_type(&entries) == DBUS_TYPE_DICT_ENTRY) {
+            DBusMessageIter entry;
+            dbus_message_iter_recurse(&entries, &entry);
+            const char *name;
+            dbus_message_iter_get_basic(&entry, &name);
+            const bool adapter = std::string(name) == "org.bluez.Adapter1";
+            const bool device = std::string(name) == "org.bluez.Device1";
+            const bool battery = std::string(name) == "org.bluez.Battery1";
+            if ((pass == 0 && (adapter || device)) || (pass == 1 && battery)) {
+                BluetoothInterface *interface = nullptr;
+                for (auto existing : bluetooth_interfaces)
+                    if (existing->object_path == object_path) interface = existing;
+                if (!interface && !battery) {
+                    interface = adapter ? static_cast<BluetoothInterface *>(new Adapter(object_path)) : new Device(object_path);
+                    bluetooth_interfaces.push_back(interface);
+
+                }
+                dbus_message_iter_next(&entry);
+                if (interface) bluetooth_parse_properties(interface, entry);
+            }
+            dbus_message_iter_next(&entries);
+        }
     }
 }
 
@@ -2747,6 +2694,8 @@ static void on_get_managed_objects_response(DBusPendingCall *call, void *) {
             dbus_message_iter_next(&iter0);
         }
     }
+    if (on_any_bluetooth_property_changed)
+        on_any_bluetooth_property_changed();
 }
 
 void update_devices() {
@@ -2761,9 +2710,9 @@ void update_devices() {
     dbus_error_init(&error);
     
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
-    if (!dbus_connection_send_with_reply(dbus_connection_system, dbus_msg, &pending,
-                                         DBUS_TIMEOUT_USE_DEFAULT)) {
+    defer(if (pending) dbus_pending_call_unref(pending));
+    if (!dbus_connection_system || !send_with_tracked_reply(dbus_connection_system, dbus_msg, &pending,
+                                         DBUS_TIMEOUT_USE_DEFAULT) || !pending) {
         fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
                 dbus_message_get_interface(dbus_msg));
         return;
@@ -2786,7 +2735,6 @@ trim(std::string s) {
 static void general_response(DBusPendingCall *call, void *user_data) {
     // cast user_data to void (*function)(bool, std::string)
     auto callback_info = (BluetoothCallbackInfo *) user_data;
-    defer(delete callback_info);
     
     DBusMessage *dbus_reply = dbus_pending_call_steal_reply(call);
     defer(dbus_message_unref(dbus_reply));
@@ -2817,22 +2765,23 @@ static void general_response(DBusPendingCall *call, void *user_data) {
 }
 
 void submit_message(DBusMessage *dbus_msg, BluetoothCallbackInfo *callback_info) {
-    DBusError error;
-    dbus_error_init(&error);
-    
     DBusPendingCall *pending = nullptr;
-    defer(dbus_pending_call_unref(pending));
-    if (!dbus_connection_send_with_reply(dbus_connection_system, dbus_msg, &pending,
-                                         DBUS_TIMEOUT_USE_DEFAULT)) {
-        fprintf(stderr, "Not enough memory available to create message for interface: %s\n",
-                dbus_message_get_interface(dbus_msg));
+    // Pairing may require the user to type a code on another device.
+    int timeout = callback_info->command == "Pair" ? 120000 : 25000;
+    if (!dbus_connection_system ||
+        !send_with_tracked_reply(dbus_connection_system, dbus_msg, &pending, timeout) || !pending) {
+        callback_info->message = "Could not send the Bluetooth request";
+        if (callback_info->function) callback_info->function(callback_info);
+        delete callback_info;
         return;
     }
-    if (!dbus_pending_call_set_notify(pending, general_response, (void *) callback_info, nullptr)) {
-        fprintf(stderr, "Not enough memory available to set notification function for interface: %s\n",
-                dbus_message_get_interface(dbus_msg));
-        return;
+    if (!dbus_pending_call_set_notify(pending, general_response, callback_info, [](void *data) { delete static_cast<BluetoothCallbackInfo *>(data); })) {
+        dbus_pending_call_cancel(pending);
+        callback_info->message = "Could not track the Bluetooth request";
+        if (callback_info->function) callback_info->function(callback_info);
+        delete callback_info;
     }
+    dbus_pending_call_unref(pending);
 }
 
 void set_bool_property(bool from_device, const std::string &object_path, const std::string &property_name, bool value,
@@ -2928,9 +2877,12 @@ void Device::unpair(void (*function)(BluetoothCallbackInfo *)) {
             dbus_message_iter_append_basic(&iter0, DBUS_TYPE_OBJECT_PATH, &device);
             
             submit_message(dbus_msg, new BluetoothCallbackInfo(this, "Unpair", function));
-            break;
+            return;
         }
     }
+    BluetoothCallbackInfo result(this, "Unpair", function);
+    result.message = "The Bluetooth adapter is no longer available";
+    if (function) function(&result);
 }
 
 void Adapter::scan_on(void (*function)(BluetoothCallbackInfo *)) {
@@ -2964,6 +2916,7 @@ void (*on_any_bluetooth_property_changed)() = nullptr;
 BluetoothCallbackInfo::BluetoothCallbackInfo(BluetoothInterface *blue_interface, std::string command,
                                              void (*function)(BluetoothCallbackInfo *)) {
     this->mac_address = blue_interface->mac_address;
+    this->object_path = blue_interface->object_path;
     this->command = command;
     this->function = function;
 }
@@ -3180,7 +3133,8 @@ void upower_service_started() {
     dbus_bus_add_match(dbus_connection_system,
                        "type='signal',interface='org.freedesktop.UPower',member='DeviceRemoved'",
                        NULL);
-    dbus_connection_add_filter(dbus_connection_system, upower_device_signal_filter, NULL, NULL);
+    if (!registered_upower_filter)
+        registered_upower_filter = dbus_connection_add_filter(dbus_connection_system, upower_device_signal_filter, nullptr, nullptr);
 }
 
 

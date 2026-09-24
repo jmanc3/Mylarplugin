@@ -278,6 +278,8 @@ struct wl_window {
     wl_buffer_slot slots[WL_TRIPLE_BUFFER_COUNT];
     bool dropped_frame = false;
     bool resize_next = false;
+    std::atomic_bool redraw_requested { false };
+    struct wl_callback *frame_callback = nullptr;
 
     struct wl_cursor_theme *cursor_theme = nullptr;
     struct wl_cursor *cursor = nullptr;
@@ -329,7 +331,7 @@ static void buffer_release(void *data, struct wl_buffer *wl_buffer) {
     }
     if (win->dropped_frame) {
         win->dropped_frame = false;
-        windowing::redraw(win->rw);
+        if (win->on_render) win->on_render(win);
     }
 }
 
@@ -538,10 +540,27 @@ static wl_buffer *get_attach_buffer(struct wl_window *win) {
     return win->slots[0].buffer;
 }
 
+static void surface_frame_done(void *data, struct wl_callback *callback, uint32_t time) {
+    auto win = static_cast<wl_window *>(data);
+    wl_callback_destroy(callback);
+    win->frame_callback = nullptr;
+    if (win->redraw_requested.load() && win->on_render)
+        win->on_render(win);
+}
+
+static const struct wl_callback_listener surface_frame_listener = {
+    .done = surface_frame_done,
+};
+
 void on_window_render(wl_window *win) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (win->marked_for_closing) return;
+    win->redraw_requested.store(true);
+    // All paint paths share this gate, including input callbacks and redraw_now.
+    // Keep the update pending until the compositor invites the next frame.
+    if (win->frame_callback) return;
     if (win->resize_next) {
         wl_window_resize_buffer(win, win->logical_width, win->logical_height);
         win->resize_next = false;
@@ -559,6 +578,11 @@ void on_window_render(wl_window *win) {
         return;
     }
 
+    win->dropped_frame = false;
+    win->redraw_requested.store(false);
+    // Install the gate before painting: paint callbacks may request another frame.
+    win->frame_callback = wl_surface_frame(win->surface);
+    wl_callback_add_listener(win->frame_callback, &surface_frame_listener, win);
     if (win->rw) {
         win->rw->cr = slot->cr;
         if (win->rw->on_render) {
@@ -1768,6 +1792,7 @@ void wl_window_destroy(struct wl_window *win) {
     if (!win) return;
     if (win->ctx->pointer_scroll_window == win)
         pointer_scroll_cancel(win->ctx);
+    if (win->frame_callback) wl_callback_destroy(win->frame_callback);
 
     if (win->xdg_popup) xdg_popup_destroy(win->xdg_popup);
     if (win->xdg_toplevel) xdg_toplevel_destroy(win->xdg_toplevel);
@@ -1837,9 +1862,10 @@ void windowing::main_loop(RawApp *app) {
     wake_pf.func = [ctx](PolledFunction pf) {
         if (pf.revents & POLLIN) {
             char buf[64];
-            read(ctx->wake_pipe[0], buf, sizeof buf);
+            while (read(ctx->wake_pipe[0], buf, sizeof buf) > 0) {}
             for (auto w : ctx->windows) {
-                if (w->on_render) {
+                if (w->redraw_requested.load() && !w->frame_callback &&
+                    !w->dropped_frame && w->on_render) {
                     w->on_render(w);
                 }
             }
@@ -2288,20 +2314,26 @@ void windowing::wake_up(RawWindow *window) {
     write(ctx->wake_pipe[1], "x", 1);
 }
 
+void windowing::redraw_now(RawWindow *window) {
+    for (auto win : windows) {
+        if (win->rw == window) {
+            if (!win->marked_for_closing && win->on_render) win->on_render(win);
+            return;
+        }
+    }
+}
+
 void windowing::redraw(RawWindow *window) {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == window->creator->id)
-            ctx = c;
-    if (!ctx)
-        return;
-    wl_window *win = nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            win = w;
-    if (!win)
-        return;
-    write(ctx->wake_pipe[1], "x", 1);
+    if (!window) return;
+    for (auto win : windows) {
+        if (win->rw == window) {
+            // Coalesce requests across threads. Only the owning Wayland loop
+            // paints, and outstanding frame callbacks retain pending updates.
+            if (!win->redraw_requested.exchange(true))
+                write(win->ctx->wake_pipe[1], "x", 1);
+            return;
+        }
+    }
 }
 
 void windowing::set_size(RawWindow *window, int width, int height) {
@@ -2394,8 +2426,10 @@ static void set_popup_size_impl(
         win->pending_width = popup_w;
         win->pending_height = popup_h;
         wl_window_resize_buffer(win, popup_w, popup_h);
-        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
-        wl_surface_commit(win->surface);
+        // The replacement buffers are available; paint after leaving functions_mut.
+        win->dropped_frame = false;
+        win->redraw_requested.store(true);
+        write(ctx->wake_pipe[1], "x", 1);
     });
     ctx->have_functions_to_execute = true;
     write(ctx->wake_pipe[1], "x", 1);

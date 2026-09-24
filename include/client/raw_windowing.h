@@ -174,7 +174,11 @@ namespace windowing {
     void set_size(RawWindow *window, int width, int height);
     void set_popup_size(RawWindow *window, int width, int height);
     void set_popup_size(RawWindow *window, int width, int height, const RawWindowSettings &settings);
+    // Coalesced per window and paced by the compositor's surface frame callback.
     void redraw(RawWindow *window);
+    // Owning Wayland event-loop thread only; call outside RawApp::mutex.
+    // Try to paint only this window; defer if its previous frame is still pending.
+    void redraw_now(RawWindow *window);
 
     bool has_window(RawWindow *window);
     
