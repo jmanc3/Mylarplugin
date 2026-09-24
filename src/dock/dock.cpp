@@ -2143,7 +2143,9 @@ static void fill_date_menu(Dock *dock) {
             mylar_font, -1, -1, {.14, .18, .24, 1});
         draw_text(cr, c->real_bounds.x, c->real_bounds.y + 47 * dpi, date_text, 11 * dpi, true,
             mylar_font, -1, -1, {.43, .48, .55, 1});
-        set_argb(cr, border_color);
+        auto border_c = border_color;
+        border_c.a *= .2;
+        set_argb(cr, border_c);
         cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.bottom() - dpi, c->real_bounds.w, dpi);
         cairo_fill(cr);
     };
@@ -2163,7 +2165,7 @@ static void fill_date_menu(Dock *dock) {
             mylar_font, -1, -1, {.14, .18, .24, 1});
     };
     auto arrow = [navigation, dock, dpi](const char *glyph, int direction) {
-        auto button = navigation->child(36 * dpi, FILL_SPACE);
+        auto button = navigation->child(48 * dpi, FILL_SPACE);
         button->when_paint = [glyph](Container *root, Container *c) {
             auto dock = static_cast<Dock *>(root->user_data);
             auto cr = dock->date_menu->raw_window->cr;
