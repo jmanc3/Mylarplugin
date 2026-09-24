@@ -129,9 +129,9 @@ static const SettingsTheme light_theme = {
     .navigation_pressed = RGBA(0, 0, 0, .1),
 };
 
-// Select light_theme here to use the original light palette.
-static const SettingsTheme &theme = light_theme;
+static SettingsTheme theme = dark_theme;
 
+static float settings_control_rounding = 6;
 static float optiontopbottompad = 15;
 static float optionleftpad = 60;
 static float optionrighttpad = 25;
@@ -411,6 +411,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "show_docks", &settings->show_docks);
     bind(bool, "dock_current_workspace_only", &settings->dock_current_workspace_only);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
+    bind(bool, "dark_theme", &settings->dark_theme);
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "desktop_icons", &settings->desktop_icons);
     bind(int, "desktop_vertical_override", &settings->desktop_vertical_override);
@@ -579,7 +580,9 @@ static void paint_label(Container *root, Container *c, std::string text) {
 }
 
 static void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height,
-                     double radius, double stroke_width) {
+                     double radius, double stroke_width,
+                     bool round_top_left = true, bool round_top_right = true,
+                     bool round_bottom_right = true, bool round_bottom_left = true) {
     // Ensure the stroke width does not exceed the bounds
     double half_stroke = stroke_width / 2.0;
     double adjusted_radius = std::fmin(radius, std::fmin(width, height) / 2.0);
@@ -598,36 +601,39 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     // Begin path for rounded rectangle
     cairo_new_path(cr);
     
-    // Move to the start of the top-right corner
-    cairo_move_to(cr, adjusted_x + adjusted_radius, adjusted_y);
+    cairo_move_to(cr, adjusted_x + (round_top_left ? adjusted_radius : 0), adjusted_y);
     
-    // Top side
-    cairo_line_to(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y);
+    cairo_line_to(cr, adjusted_x + inner_width - (round_top_right ? adjusted_radius : 0), adjusted_y);
     
-    // Top-right corner
-    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
-              adjusted_radius, -M_PI / 2, 0);
+    if (round_top_right)
+        cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
+                  adjusted_radius, -M_PI / 2, 0);
+    else
+        cairo_line_to(cr, adjusted_x + inner_width, adjusted_y);
     
-    // Right side
-    cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - adjusted_radius);
+    cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - (round_bottom_right ? adjusted_radius : 0));
     
-    // Bottom-right corner
-    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
-              adjusted_radius, 0, M_PI / 2);
+    if (round_bottom_right)
+        cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+                  adjusted_radius, 0, M_PI / 2);
+    else
+        cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height);
     
-    // Bottom side
-    cairo_line_to(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height);
+    cairo_line_to(cr, adjusted_x + (round_bottom_left ? adjusted_radius : 0), adjusted_y + inner_height);
     
-    // Bottom-left corner
-    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
-              adjusted_radius, M_PI / 2, M_PI);
+    if (round_bottom_left)
+        cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+                  adjusted_radius, M_PI / 2, M_PI);
+    else
+        cairo_line_to(cr, adjusted_x, adjusted_y + inner_height);
     
-    // Left side
-    cairo_line_to(cr, adjusted_x, adjusted_y + adjusted_radius);
+    cairo_line_to(cr, adjusted_x, adjusted_y + (round_top_left ? adjusted_radius : 0));
     
-    // Top-left corner
-    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
-              adjusted_radius, M_PI, 3 * M_PI / 2);
+    if (round_top_left)
+        cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
+                  adjusted_radius, M_PI, 3 * M_PI / 2);
+    else
+        cairo_line_to(cr, adjusted_x, adjusted_y);
     
     // Close the path
     cairo_close_path(cr);
@@ -1106,59 +1112,6 @@ static Container *make_vert_space(Container *parent, float amount) {
     return pad;
 }
 
-static void fill_dock_settings(Container *root, Container *c) {
-    auto right = container_by_name("settings_right", root);
-    if (!right)
-        return;
-    for (auto child: right->children)
-        delete child;
-    right->children.clear();
-
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
-    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
-
-    make_section_title(padded_right, "Dock Settings");
-    
-    make_vert_space(padded_right, 10);
-    
-    make_bool(padded_right, "Show docks", "", set->show_docks, [](bool c) {
-        set->show_docks = c;
-
-        if (set->show_docks) {
-            dock::start();
-        } else {
-            dock::stop();
-        }
-    }, "\ue75b");
-
-    make_vert_space(padded_right, 4);
-
-    make_bool(padded_right, "Only show windows on the current workspace",
-        "Turn off to show windows from all workspaces and monitors",
-        set->dock_current_workspace_only, [](bool value) {
-            main_thread([value]() {
-                set->dock_current_workspace_only = value;
-                dock::update_workspaces();
-                settings::load_save_settings(true, set);
-            });
-        }, "\ue75b");
-}
-
 static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
                                                            float dpi,
                                                            int popup_w,
@@ -1229,10 +1182,10 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
             set_argb(cr, theme.dropdown_background);
         }
         auto b = c->real_bounds;
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * settings_control_rounding, 1.0); 
         cairo_fill(cr);
         set_argb(cr, theme.dropdown_border);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * 6, 1.0); 
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * settings_control_rounding, 1.0); 
         cairo_stroke(cr);
         
         Bounds bounds = draw_text(cr, 0, 0, td->text, text_height, false, mylar_font, -1, -1, theme.text, false);
@@ -1377,7 +1330,9 @@ static void make_button(Container *parent, std::string text, std::function<void(
         } else {
             set_argb(cr, theme.button_background);
         }
-        set_rect(cr, c->real_bounds);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
+                        c->real_bounds.w, c->real_bounds.h,
+                        settings_control_rounding * dpi, 1.0);
         cairo_fill(cr);
         Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, mylar_font, -1, -1, theme.text, false);
         draw_text(cr, 
@@ -1473,13 +1428,17 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         auto field = (Field *) c->user_data;
 
         set_argb(cr, c->active ? theme.accent : theme.field_border);
-        set_rect(cr, c->real_bounds);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
+                        c->real_bounds.w, c->real_bounds.h,
+                        settings_control_rounding * dpi, 1.0);
         cairo_fill(cr);
 
         set_argb(cr, theme.field_background);
         auto minus_border = c->real_bounds;
         minus_border.shrink(std::round(1 * dpi));
-        set_rect(cr, minus_border);
+        drawRoundedRect(cr, minus_border.x, minus_border.y,
+                        minus_border.w, minus_border.h,
+                        settings_control_rounding * dpi, 1.0);
         cairo_fill(cr);
         
         Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, mylar_font, -1, -1, theme.text, false);
@@ -1931,43 +1890,23 @@ static void fill_desktop_settings(Container *root, Container *c) {
         t.detach();
     }, "\uec6c");
     
-    make_vert_space(padded_right, 14);
+    make_vert_space(padded_right, 4);
 
     make_dropdown_option(padded_right, "Overview", "Change layout type", "\uE8A9", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
         set->overview_layout_type = new_type;
     });
-}
-
-static void fill_wallpaper_settings(Container *root, Container *c) {
-    auto right = container_by_name("settings_right", root);
-    if (!right)
-        return;
-    for (auto child: right->children)
-        delete child;
-    right->children.clear();
-
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
-    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
-
+    make_vert_space(padded_right, 4);
+    make_dropdown_option(padded_right, "Theme", "Choose the settings appearance", "\uE790", set->dark_theme ? "Dark" : "Light", {"Light", "Dark"}, [](std::string selected) {
+        set->dark_theme = selected == "Dark";
+        theme = set->dark_theme ? dark_theme : light_theme;
+        settings::load_save_settings(true, set);
+        if (settings_mylar)
+            windowing::redraw(settings_mylar->raw_window);
+    });
+    make_vert_space(padded_right, 24);
     make_section_title(padded_right, "Wallpaper Settings");
-    
-    make_vert_space(padded_right, 10);
 
+    make_vert_space(padded_right, 10);
     make_bool_with_button(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
         damage_all();
@@ -2000,6 +1939,33 @@ static void fill_wallpaper_settings(Container *root, Container *c) {
 
         t.detach();
     }, "\uE8b9");
+
+    make_vert_space(padded_right, 24);
+    make_section_title(padded_right, "Dock Settings");
+
+    make_vert_space(padded_right, 10);
+
+    make_bool(padded_right, "Show docks", "", set->show_docks, [](bool c) {
+        set->show_docks = c;
+
+        if (set->show_docks) {
+            dock::start();
+        } else {
+            dock::stop();
+        }
+    }, "\ue75b");
+
+    make_vert_space(padded_right, 4);
+
+    make_bool(padded_right, "Only show windows on the current workspace",
+        "Turn off to show windows from all workspaces and monitors",
+        set->dock_current_workspace_only, [](bool value) {
+            main_thread([value]() {
+                set->dock_current_workspace_only = value;
+                dock::update_workspaces();
+                settings::load_save_settings(true, set);
+            });
+        }, "\ue75b");
 }
 
 
@@ -2227,6 +2193,106 @@ static void fill_mouse_settings(Container *root, Container *c) {
     }, "\ue8b0");
 }
 
+struct Shortcut {
+    std::string name;
+    std::string shortcut;
+    std::string command;
+};
+
+void make_shortcut_option(Container *root, Shortcut &s, bool is_first = false, bool is_last = false) {
+    static const float height = 56;
+    static const float text_h = 12;
+    static const float round = 8;
+    auto line = root->child(FILL_SPACE, FILL_SPACE);
+    line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_bounds.h = height * dpi;
+    };
+    line->when_paint = [s, is_first, is_last](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+
+        auto before = c->real_bounds;
+        defer(c->real_bounds = before);
+        const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
+        c->real_bounds.y -= overlap;
+        c->real_bounds.h += 2.0 * overlap;
+
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
+                c->real_bounds.w, c->real_bounds.h, round * dpi, 0,
+                is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_background); 
+        cairo_fill(cr);
+        
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
+                        c->real_bounds.w, c->real_bounds.h, round * dpi,
+                        std::floor(1.0 * dpi),
+                        is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_border); 
+        cairo_set_line_width(cr, std::floor(1.0 * dpi)); 
+        cairo_stroke(cr);
+
+        auto tb = draw_text(cr, 0, 0, s.name, text_h * dpi, false, mylar_font, -1, -1, theme.text, false, 0);
+        auto overflow = ((c->real_bounds.h - tb.h) * .5) * 1.5;
+        draw_text(cr, 
+            c->real_bounds.x + overflow,
+            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
+            s.name, text_h * dpi, true, mylar_font, -1, -1, theme.text, false, 0);
+        
+        tb = draw_text(cr, 0, 0, s.shortcut, text_h * dpi, false, mylar_font, -1, -1, theme.text_secondary, false, 0);
+        draw_text(cr, 
+            c->real_bounds.x + c->real_bounds.w - tb.w - overflow,
+            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
+            s.shortcut, text_h * dpi, true, mylar_font, -1, -1, theme.text_secondary, false, 0);
+    };
+    line->when_clicked = [s](Container *root, Container *c) {
+        if (!s.command.empty())
+            launch_command(s.command);
+    };
+}
+
+static void fill_shortcuts_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children) {
+            modify_all(child, 0, d->scroll);
+        }
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    
+    make_section_title(padded_right, "Shortcuts");
+    
+    make_vert_space(padded_right, 10);
+
+    std::vector<Shortcut> shortcuts = {
+        {"Show desktop", "Super + D", "hyprctl dispatch hl.plugin.mylar.toggle_desktop_show"},
+        {"Snap Window Left", "CTRL + ALT + Left", "hyprctl dispatch hl.plugin.mylar.snap_left"}
+    };
+    for (int i = 0; i < shortcuts.size(); i++) {
+        make_shortcut_option(padded_right, shortcuts[i], i == 0, i == (shortcuts.size() - 1));
+    }
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->name = label;
@@ -2259,14 +2325,12 @@ void create_tab_option(Container *parent, std::string label) {
             fill_mouse_settings(root, c);
         } else if (label == "Keyboard") {
             fill_keyboard_settings(root, c);
-        } else if (label == "Dock") {
-            fill_dock_settings(root, c);
-        } else if (label == "Wallpaper") {
-            fill_wallpaper_settings(root, c);
         } else if (label == "Desktop") {
             fill_desktop_settings(root, c);
         } else if (label == "Display") {
             fill_display_settings(root);
+        } else if (label == "Shortcuts") {
+            fill_shortcuts_settings(root);
         }
     };
 }
@@ -2281,8 +2345,6 @@ void fill_left(Container *left) {
     create_tab_option(left, "Time & Date");
     create_tab_option(left, "Audio");
     create_tab_option(left, "Wifi");
-    create_tab_option(left, "Dock");
-    create_tab_option(left, "Wallpaper");
 }
 
 void fill_root(Container *root) {
@@ -2345,6 +2407,7 @@ void fill_root(Container *root) {
 }
 
 void actual_start() {
+    theme = set->dark_theme ? dark_theme : light_theme;
     settings_app = windowing::open_app();
     RawWindowSettings settings;
     settings.pos.w = 1000;
@@ -2352,6 +2415,7 @@ void actual_start() {
     //settings.pos.min_w = 900;
     //settings.pos.min_h = 700;
     settings.name = "Settings";
+    settings.app_id = "preferences-system";
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;
     settings_mylar = mylar;

@@ -86,6 +86,7 @@ struct ConfigSettings {
     bool show_docks = true;
     bool dock_current_workspace_only = true;
     bool draw_wallpaper = true;
+    bool dark_theme = true;
     bool hotcorners = true;
     bool desktop_icons = true;
     int desktop_vertical_override = 1; // -1: Hyprland config, 0: horizontal, 1: vertical
