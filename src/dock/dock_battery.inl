@@ -245,8 +245,10 @@ static std::string battery_clock(std::time_t timestamp, bool include_day = false
     std::tm local{};
     localtime_r(&timestamp, &local);
     char text[64];
-    std::strftime(text, sizeof(text), include_day ? "%a %H:%M" : "%H:%M", &local);
-    return text;
+    std::strftime(text, sizeof(text), include_day ? "%a %I:%M %p" : "%I:%M %p", &local);
+    std::string result = text;
+    if (!include_day && result[0] == '0') result.erase(0, 1);
+    return result;
 }
 
 static void battery_text(cairo_t *cr, double x, double y, const std::string &text, double size,
@@ -254,14 +256,15 @@ static void battery_text(cairo_t *cr, double x, double y, const std::string &tex
     draw_text(cr, x, y, text, size * dpi, true, mylar_font, width, -1, color, bold);
 }
 
-static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const BatteryView &view) {
+static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const BatteryView &view,
+                                double mouse_x, bool hovered) {
     const RGBA muted = {.40, .46, .54, 1};
     const RGBA blue = {.08, .48, .88, 1};
     const auto now = std::time(nullptr);
     const bool forecast = view.status.valid && view.status.state == 2 && view.remaining_seconds > 0;
     const double history_seconds = 3 * 3600;
-    // Keep "Now" three quarters across the plot, even while an estimate is unavailable.
-    const double future_seconds = 3600;
+    // Keep one third of the plot available for a discharge projection.
+    const double future_seconds = 5400;
     const double start = now - history_seconds;
     const double total = history_seconds + future_seconds;
     const Bounds plot(b.x + 32 * dpi, b.y + 8 * dpi, b.w - 44 * dpi, b.h - 40 * dpi);
@@ -332,10 +335,50 @@ static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const 
         cairo_arc(cr, x(now), y(view.status.percentage), 3.5 * dpi, 0, 2 * M_PI);
         cairo_fill(cr);
     }
+    if (hovered) {
+        const double hover_x = std::clamp(mouse_x, plot.x, plot.right());
+        const double hover_time = start + (hover_x - plot.x) / plot.w * total;
+        double hover_percent = 0;
+        bool intersects = false;
+        for (size_t i = 1; i < points.size(); ++i) {
+            if (hover_time < points[i - 1].timestamp || hover_time > points[i].timestamp ||
+                points[i].timestamp - points[i - 1].timestamp > 360) continue;
+            const double fraction = (hover_time - points[i - 1].timestamp) /
+                double(points[i].timestamp - points[i - 1].timestamp);
+            hover_percent = points[i - 1].percentage + fraction *
+                (points[i].percentage - points[i - 1].percentage);
+            intersects = true;
+            break;
+        }
+        if (forecast && hover_time >= now && hover_time <= now + std::min(future_seconds, view.remaining_seconds)) {
+            hover_percent = view.status.percentage * (1 - (hover_time - now) / view.remaining_seconds);
+            intersects = true;
+        }
+        if (intersects) {
+            const double hover_y = y(hover_percent);
+            set_argb(cr, {.25, .35, .46, .72});
+            double dash[] = {3 * dpi, 3 * dpi};
+            cairo_set_dash(cr, dash, 2, 0);
+            cairo_set_line_width(cr, dpi);
+            cairo_move_to(cr, hover_x, plot.y);
+            cairo_line_to(cr, hover_x, plot.bottom());
+            cairo_stroke(cr);
+            cairo_set_dash(cr, nullptr, 0, 0);
+            set_argb(cr, blue);
+            cairo_arc(cr, hover_x, hover_y, 3.5 * dpi, 0, 2 * M_PI);
+            cairo_fill(cr);
+            const auto time_label = battery_clock(static_cast<std::time_t>(std::round(hover_time)));
+            const auto charge_label = std::format("{:.1f}%", hover_percent);
+            const double label_x = std::clamp(hover_x + 6 * dpi, plot.x, plot.right() - 68 * dpi);
+            const double label_y = std::clamp(hover_y - 26 * dpi, plot.y, plot.bottom() - 28 * dpi);
+            battery_text(cr, label_x, label_y, charge_label, 9, dpi, {.12, .17, .24, 1}, 65 * dpi, true);
+            battery_text(cr, label_x, label_y + 14 * dpi, time_label, 8, dpi, muted, 68 * dpi);
+        }
+    }
     battery_text(cr, plot.x, plot.bottom() + 10 * dpi, battery_clock(now - 10800), 8, dpi, muted);
-    battery_text(cr, x(now - 5400) - 14 * dpi, plot.bottom() + 10 * dpi, battery_clock(now - 5400), 8, dpi, muted);
-    battery_text(cr, x(now) - 14 * dpi, plot.bottom() + 10 * dpi, "Now", 8, dpi, muted);
-    battery_text(cr, plot.right() - 28 * dpi, plot.bottom() + 10 * dpi, battery_clock(now + future_seconds), 8, dpi, muted);
+    battery_text(cr, x(now - 5400) - 24 * dpi, plot.bottom() + 10 * dpi, battery_clock(now - 5400), 8, dpi, muted);
+    battery_text(cr, x(now) - 12 * dpi, plot.bottom() + 10 * dpi, "Now", 8, dpi, muted);
+    battery_text(cr, plot.right() - 48 * dpi, plot.bottom() + 10 * dpi, battery_clock(now + future_seconds), 8, dpi, muted);
     if (recorded_points < 2) {
         battery_text(cr, plot.x + 12 * dpi, plot.y + 45 * dpi,
             view.history_enabled ? "Collecting battery history" : "History recording disabled", 11, dpi, muted);
@@ -466,8 +509,12 @@ static void fill_battery_container(Dock *dock) {
     auto graph = sized_row(175);
     graph->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        paint_battery_graph(dock->battery->raw_window->cr, c->real_bounds, dock->battery->raw_window->dpi, battery_snapshot());
+        paint_battery_graph(dock->battery->raw_window->cr, c->real_bounds, dock->battery->raw_window->dpi,
+            battery_snapshot(), root->mouse_current_x, c->state.mouse_hovering);
     };
+    graph->when_mouse_motion = request_damage;
+    graph->when_mouse_enters_container = request_damage;
+    graph->when_mouse_leaves_container = request_damage;
     auto legend = sized_row(24);
     legend->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
