@@ -4,8 +4,8 @@ struct BluetoothMenuView {
     unsigned long revision = 0;
     std::vector<Adapter> adapters;
     std::vector<Device> devices;
-    bool running = false;
-    bool agent_ready = false;
+    bool running = true;
+    bool agent_ready = true;
     bool busy = false;
     bool scanning = false;
     bool scan_pending = false;
@@ -586,6 +586,8 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
             std::string message = !view.running ? "Bluetooth service is unavailable" : view.adapters.empty() ?
                 "No Bluetooth adapter found" : !powered ? "Bluetooth is disabled" :
                 view.showing_paired ? "No paired devices" : "Searching for devices…";
+            if (!view.running)
+                message = "";
             auto b = c->real_bounds;
             b.x += 30 * window->dpi;
             b.w -= 60 * window->dpi;
@@ -849,7 +851,6 @@ static void fill_bluetooth_container(Dock *dock) {
         });
     };
     BluetoothMenuView loading;
-    loading.message = "Loading Bluetooth…";
     bluetooth_rebuild(dock, loading);
     main_thread([]() {
         if (finished) return;

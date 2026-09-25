@@ -2114,12 +2114,9 @@ void heart::begin() {
         later(1000, [](Timer*) {
             on_config_reload();
         });
-        later(2000, [](Timer*) {
+        later(100, [](Timer*) {
             dbus_start(DBUS_BUS_SYSTEM);
             dbus_start(DBUS_BUS_SESSION);
-        });
-
-        later(2100, [](Timer*) {
             audio_start();
         });
 
