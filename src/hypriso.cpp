@@ -3031,14 +3031,19 @@ hl.layer_rule({
     hl.layer_rule({ match = { namespace = "Dock" }, blur = true })
 })
 
-hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
+if hl.plugin.mylar ~= nil then
 
-hl.bind("SUPER_L + D", hl.plugin.mylar.toggle_desktop_show)
+    hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
+    hl.bind("SUPER_L + D", hl.plugin.mylar.toggle_desktop_show)
 
---hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
---hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
---hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
---hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
+    --hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
+    --hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
+    --hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
+    --hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
+end
+
+
+
 
 -- Shortcuts shown in the tiling menu. Keep the existing Alt bindings too.
 for _, direction in ipairs({ "left", "right", "up", "down" }) do
@@ -3149,12 +3154,15 @@ hl.bind(MOD .. " + L", hl.dsp.layout("mfact +0.05"))
     } else {
         base += "hl.config({ input = { touchpad = { disable_while_typing = true }}})\n\n";
     }
-
+    
+    
+    base += "if hl.plugin.mylar ~= nil then\n";
 #ifdef NDEBUG
-        base += "require(\"user\")\n\n";
+        base += "    require(\"user\")\n";
 #else
-        base += "require(\"debug_user\")\n\n";
+        base += "    require(\"debug_user\")\n";
 #endif
+    base += "end\n\n";
 
     if (hypriso->on_config_generated)
         hypriso->on_config_generated();
