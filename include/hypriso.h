@@ -272,6 +272,8 @@ struct SleptWindow {
     int pid;
     long time_slept;
     int monitor_id;
+    bool is_fullscreen = false;
+    bool is_fake_fullscreen = false;
 
     SleptWindow(int cid, int pid);
 };
