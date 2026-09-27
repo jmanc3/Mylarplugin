@@ -103,7 +103,7 @@ static void send_signal(pid_t pid, int signal) {
 static void sleep_cid(int cid) {
     auto is_fullscreen = hypriso->is_fullscreen(cid);
     auto is_fake_fullscreen = hypriso->is_fake_fullscreen(cid);
-    hypriso->set_fullscreen(cid, false); 
+    //hypriso->set_fullscreen(cid, false);
     
     hypriso->set_hidden(cid, true, true);
     dock::remove_window(cid);

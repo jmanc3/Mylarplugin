@@ -4970,7 +4970,7 @@ bool HyprIso::is_fake_fullscreen(int id) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             auto w = hw->w;
-            if (Fullscreen::controller()->getFullscreenModes(w).internal == 0 && Fullscreen::controller()->getFullscreenModes(w).client == 2) {
+            if (Fullscreen::controller()->getFullscreenModes(w).internal == 0 && Fullscreen::controller()->getFullscreenModes(w).client == Fullscreen::FSMODE_FULLSCREEN) {
                 return true;
             }
         }
@@ -4982,15 +4982,14 @@ bool HyprIso::is_fake_fullscreen(int id) {
 void HyprIso::set_fullscreen(int id, bool state) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            hw->w->m_ruleApplicator->syncFullscreenOverride(Desktop::Types::COverridableVar(false, Desktop::Types::PRIORITY_SET_PROP));
-
             if (state) {
                 Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_FULLSCREEN, Fullscreen::FSMODE_FULLSCREEN);
             } else {
                 Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
             }
-            hw->w->m_ruleApplicator->syncFullscreenOverride(
-                Desktop::Types::COverridableVar(Fullscreen::controller()->getFullscreenModes(hw->w).internal == Fullscreen::controller()->getFullscreenModes(hw->w).client, Desktop::Types::PRIORITY_SET_PROP));
+            if (auto m = hw->w->m_monitor.lock())
+                g_layoutManager->recalculateMonitor(m, Layout::CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN);
+            hw->w->m_monitor->m_activeWorkspace->m_space->recalculate();
         }
     }
 }
@@ -4998,18 +4997,14 @@ void HyprIso::set_fullscreen(int id, bool state) {
 void HyprIso::fake_fullscreen(int id, bool state) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            hw->w->m_ruleApplicator->syncFullscreenOverride(Desktop::Types::COverridableVar(false, Desktop::Types::PRIORITY_SET_PROP));
-
-            //hw->w->m_windowData.syncFullscreen = CWindowOverridableVar(false, PRIORITY_SET_PROP);
-            
-
             if (state) {
                 Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_FULLSCREEN);
             } else {
                 Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
             }
-            hw->w->m_ruleApplicator->syncFullscreenOverride(
-                Desktop::Types::COverridableVar(Fullscreen::controller()->getFullscreenModes(hw->w).internal == Fullscreen::controller()->getFullscreenModes(hw->w).client, Desktop::Types::PRIORITY_SET_PROP));
+            if (auto m = hw->w->m_monitor.lock())
+                g_layoutManager->recalculateMonitor(m, Layout::CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN);
+            hw->w->m_monitor->m_activeWorkspace->m_space->recalculate();
         }
     }
 }
@@ -6388,7 +6383,10 @@ bool HyprIso::is_fullscreen(int id) {
 #endif
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            return Fullscreen::controller()->isFullscreen(hw->w);
+            auto modes = Fullscreen::controller()->getFullscreenModes(hw->w);
+            auto client = modes.client;
+            auto internal = modes.internal;
+            return (client == Fullscreen::FSMODE_FULLSCREEN && internal == Fullscreen::FSMODE_FULLSCREEN);
         }
     }
     return false;

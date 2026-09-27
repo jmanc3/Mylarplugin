@@ -850,8 +850,12 @@ static void fill_bluetooth_container(Dock *dock) {
             bluetooth_stop_scanning();
         });
     };
-    BluetoothMenuView loading;
-    bluetooth_rebuild(dock, loading);
+    if (previous) {
+        bluetooth_rebuild(dock, *previous);
+    } else {
+        BluetoothMenuView empty;
+        bluetooth_rebuild(dock, empty);
+    }
     main_thread([]() {
         if (finished) return;
         if (!bluetooth_menu_count) bluetooth_showing_paired = true;
