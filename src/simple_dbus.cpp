@@ -4,6 +4,7 @@
 //
 
 #include "simple_dbus.h"
+#include "first.h"
 #include "hypriso.h"
 #include "container.h"
 //#include "application.h"
@@ -24,11 +25,14 @@
 #include <gio/gio.h>
 #include <memory>
 #include <cstdint>
+#include <cstdlib>
 #include <dbus/dbus.h>
 #include <defer.h>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
+#include <string_view>
 #include <thread>
 
 #ifdef TRACY_ENABLE
@@ -1282,12 +1286,50 @@ void dbus_poll_wakeup(PF *pf) {
 }
 
 void dbus_start(DBusBusType dbusType) {
+    // The compositor and its libraries use D-Bus from multiple threads. libdbus
+    // requires its threading support to be initialized before any other API call.
+    static std::once_flag dbus_threads_init_once;
+    static dbus_bool_t dbus_threads_initialized = FALSE;
+    std::call_once(dbus_threads_init_once, [] {
+        dbus_threads_initialized = dbus_threads_init_default();
+    });
+    if (!dbus_threads_initialized) {
+        fprintf(stderr, "%s\n", "Couldn't initialize D-Bus thread support");
+        return;
+    }
+
     // Open DBus connection
     //
     DBusError error = DBUS_ERROR_INIT;
     defer(dbus_error_free(&error));
     if (dbusType == DBUS_BUS_SYSTEM ? dbus_connection_system != nullptr : dbus_connection_session != nullptr)
         return;
+
+    if (dbusType == DBUS_BUS_SESSION && started_directly_from_hyprland) {
+        // During direct startup, autolaunch can wait for our own Xwayland,
+        // which needs this thread to finish startup and dispatch events.
+        // Plugin loading permits libdbus autolaunch on the running compositor.
+        const auto *address = std::getenv("DBUS_SESSION_BUS_ADDRESS");
+        if (!address || !*address) {
+            std::cerr << "Skipping session D-Bus: DBUS_SESSION_BUS_ADDRESS is unset or empty. "
+                         "Start the compositor with a session bus (e.g. dbus-run-session).\n";
+            return;
+        }
+
+        // An explicit address can also request autolaunch as a fallback.
+        std::string_view remaining = address;
+        while (!remaining.empty()) {
+            const auto separator = remaining.find(';');
+            if (remaining.substr(0, separator).starts_with("autolaunch:")) {
+                std::cerr << "Skipping session D-Bus: X11 autolaunch cannot run on the compositor thread. "
+                             "Set DBUS_SESSION_BUS_ADDRESS to an explicit bus address without autolaunch.\n";
+                return;
+            }
+            if (separator == std::string_view::npos)
+                break;
+            remaining.remove_prefix(separator + 1);
+        }
+    }
     
     // Shared bus connections can outlive dlclose and retain callbacks into this plugin.
     auto *dbus_connection = dbus_bus_get_private(dbusType, &error);

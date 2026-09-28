@@ -14,6 +14,7 @@
 #endif
 
 Globals *globals = new Globals;
+bool started_directly_from_hyprland = false;
 
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
@@ -65,6 +66,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
 }
 
 void init_mylar(void* h) { // When started directly from hyprland
+    started_directly_from_hyprland = true;
     PLUGIN_INIT(h);
 }
 
