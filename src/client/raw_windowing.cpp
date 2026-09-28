@@ -913,9 +913,14 @@ static void configure_layer_shell(void *data,
     win->configured = true;
 }
 
+static void closed_layer_shell(void* data, struct zwlr_layer_surface_v1*) {
+    auto* win               = static_cast<wl_window*>(data);
+    win->marked_for_closing = true;
+}
+
 static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
     .configure = configure_layer_shell,
-    .closed = nullptr
+    .closed    = closed_layer_shell,
 };
 
 struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int height,
