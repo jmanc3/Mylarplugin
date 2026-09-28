@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <pango/pango-font.h>
 #include <thread>
+#include <utility>
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
 #include <pango/pangocairo.h>
@@ -470,6 +471,38 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             return;
         if (!editable)
             return;
+        auto record_edit = [label_data]() {
+            label_data->undo_stack.push_back({label_data->text, label_data->cursor, label_data->selection, label_data->selecting});
+            label_data->redo_stack.clear();
+            label_data->coalescing_edit = 0;
+            label_data->last_text_cursor = -1;
+        };
+        if (mods & Modifier::MOD_CTRL) {
+            bool is_z = sym == XKB_KEY_z || sym == XKB_KEY_Z;
+            bool undo = is_z && !(mods & Modifier::MOD_SHIFT);
+            bool redo = sym == XKB_KEY_y || sym == XKB_KEY_Y ||
+                (is_z && (mods & Modifier::MOD_SHIFT));
+            if (undo || redo) {
+                auto &source = redo ? label_data->redo_stack : label_data->undo_stack;
+                auto &destination = redo ? label_data->undo_stack : label_data->redo_stack;
+                if (!source.empty()) {
+                    destination.push_back({label_data->text, label_data->cursor, label_data->selection, label_data->selecting});
+                    auto state = std::move(source.back());
+                    source.pop_back();
+                    label_data->text = std::move(state.text);
+                    label_data->cursor = state.cursor;
+                    label_data->selection = state.selection;
+                    label_data->selecting = state.selecting;
+                }
+                label_data->coalescing_edit = 0;
+                label_data->last_text_cursor = -1;
+                return;
+            }
+        }
+        if (!is_text && sym != XKB_KEY_BackSpace && sym != XKB_KEY_Delete) {
+            label_data->coalescing_edit = 0;
+            label_data->last_text_cursor = -1;
+        }
         if ((mods & Modifier::MOD_CTRL) &&
             (sym == XKB_KEY_c || sym == XKB_KEY_C ||
              sym == XKB_KEY_x || sym == XKB_KEY_X)) {
@@ -479,6 +512,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
                 auto selected_text = label_text->substr(min, max - min);
                 bool clipboard_set = windowing::set_clipboard(pin_data->window->raw_window, selected_text);
                 if (clipboard_set && (sym == XKB_KEY_x || sym == XKB_KEY_X)) {
+                    record_edit();
                     label_text->erase(min, max - min);
                     label_data->cursor = min;
                     label_data->selecting = false;
@@ -494,6 +528,10 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
                 auto pin_data = static_cast<PinData *>(root->user_data);
                 auto label_data = static_cast<LabelData *>(c->user_data);
                 int insertion = label_data->cursor;
+                label_data->undo_stack.push_back({label_data->text, label_data->cursor, label_data->selection, label_data->selecting});
+                label_data->redo_stack.clear();
+                label_data->coalescing_edit = 0;
+                label_data->last_text_cursor = -1;
                 if (label_data->selecting) {
                     int min = std::min(label_data->cursor, label_data->selection);
                     int max = std::max(label_data->cursor, label_data->selection);
@@ -509,19 +547,34 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             return;
         }
         if (is_text) {
-            if (label_data->selecting) {
+            if (text.empty())
+                return;
+            bool had_selection = label_data->selecting && label_data->cursor != label_data->selection;
+            if (had_selection) {
+                record_edit();
                 int min = std::min(label_data->cursor, label_data->selection);
                 int max = std::max(label_data->cursor, label_data->selection);
                 int len = max - min;
                 label_text->erase(min, len);
                 label_data->selecting = false;
                 label_data->cursor = min;
-            } 
-            label_text->insert(label_data->cursor, text);
-            label_data->cursor++;
+            } else {
+                label_data->selecting = false;
+            }
+            if (!had_selection && (label_data->coalescing_edit != 1 || label_data->cursor != label_data->last_text_cursor)) {
+                record_edit();
+            }
+            if (!text.empty()) {
+                label_text->insert(label_data->cursor, text);
+                label_data->cursor += text.size();
+                label_data->redo_stack.clear();
+                label_data->coalescing_edit = 1;
+                label_data->last_text_cursor = label_data->cursor;
+            }
             return;
         }
         if (sym == XKB_KEY_Return) {
+            record_edit();
             if (label_data->selecting) {
                 int min = std::min(label_data->cursor, label_data->selection);
                 int max = std::max(label_data->cursor, label_data->selection);
@@ -546,18 +599,25 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
                 activate_previous_activatable(actual_root, c);
             }, nullptr);
         } else if (sym == XKB_KEY_BackSpace) {
-            if (label_data->selecting) {
+            bool has_selection = label_data->selecting && label_data->cursor != label_data->selection;
+            bool has_character_before = !label_text->empty() && label_data->cursor > 0;
+            if (has_selection) {
+                record_edit();
                 int min = std::min(label_data->cursor, label_data->selection);
                 int max = std::max(label_data->cursor, label_data->selection);
-                int len = max - min;
-                label_text->erase(min, len);
+                label_text->erase(min, max - min);
                 label_data->selecting = false;
                 label_data->cursor = min;
             } else {
-               if (!label_text->empty() && label_data->cursor > 0) {
+                label_data->selecting = false;
+                if (has_character_before) {
+                    if (label_data->coalescing_edit != 2 || label_data->cursor != label_data->last_text_cursor)
+                        record_edit();
                     label_text->erase(label_data->cursor - 1, 1);
                     label_data->cursor--;
-               }
+                    label_data->coalescing_edit = 2;
+                    label_data->last_text_cursor = label_data->cursor;
+                }
             }
         } else if (sym == XKB_KEY_Left) {
             if (mods & Modifier::MOD_SHIFT) {
@@ -592,16 +652,23 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
                     label_data->cursor = label_text->size();
             }
         } else if (sym == XKB_KEY_Delete) {
-            if (label_data->selecting) {
+            bool has_selection = label_data->selecting && label_data->cursor != label_data->selection;
+            bool has_character_after = !label_text->empty() && label_data->cursor < label_text->size();
+            if (has_selection) {
+                record_edit();
                 int min = std::min(label_data->cursor, label_data->selection);
                 int max = std::max(label_data->cursor, label_data->selection);
-                int len = max - min;
-                label_text->erase(min, len);
+                label_text->erase(min, max - min);
                 label_data->selecting = false;
                 label_data->cursor = min;
             } else {
-                if (!label_text->empty() && label_data->cursor != label_text->size()) {
+                label_data->selecting = false;
+                if (has_character_after) {
+                    if (label_data->coalescing_edit != 3 || label_data->cursor != label_data->last_text_cursor)
+                        record_edit();
                     label_text->erase(label_data->cursor, 1);
+                    label_data->coalescing_edit = 3;
+                    label_data->last_text_cursor = label_data->cursor;
                 }
             }
         } else if (sym == XKB_KEY_a) {
