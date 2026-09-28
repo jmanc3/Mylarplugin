@@ -282,7 +282,8 @@ static void update_scene() {
         }
         // This virtual desktop always follows the real desktops. It only
         // becomes a compositor workspace when clicked or used as a drop target.
-        monitor.order.push_back(teaser_workspace);
+        if (set->dynamic_workspaces)
+            monitor.order.push_back(teaser_workspace);
         const auto active_index = std::find(monitor.order.begin(), monitor.order.end(), monitor.active) - monitor.order.begin();
         double workspace_shift = 0;
         if (previous_active != -1 && previous_active != monitor.active) {

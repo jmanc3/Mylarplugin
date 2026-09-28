@@ -934,6 +934,9 @@ void on_open_monitor(PHLMONITOR m) {
     hm->m = m;
     hyprmonitors.push_back(hm);
     hypriso->on_monitor_open(hm->id);
+    main_thread([]() {
+        hypriso->apply_workspace_settings();
+    });
 }
 
 void on_close_monitor(PHLMONITOR m) {
@@ -1859,6 +1862,116 @@ void setup_wake_main_thread() {
 
 PHLMONITORREF rendering_monitor;
 
+static std::vector<PHLWORKSPACE> monitor_workspaces(PHLMONITOR monitor, size_t minimum = 0) {
+    std::vector<PHLWORKSPACE> spaces;
+    WORKSPACEID next = 1;
+    for (const auto& workspace : State::workspaceState()->workspaces()) {
+        next = std::max(next, workspace->m_id + 1);
+        if (!workspace->m_isSpecialWorkspace && workspace->m_monitor == monitor)
+            spaces.push_back(workspace.lock());
+    }
+    std::sort(spaces.begin(), spaces.end(), [](const auto& a, const auto& b) {
+        return a->m_id < b->m_id;
+    });
+    while (spaces.size() < minimum) {
+        auto workspace = State::workspaceState()->create(next, monitor->m_id, std::to_string(next));
+        if (!workspace)
+            break;
+        spaces.push_back(workspace);
+        ++next;
+    }
+    return spaces;
+}
+
+static void update_workspace_persistence() {
+    // Track only persistence added by Mylar so user workspace rules survive.
+    static std::vector<PHLWORKSPACEREF> persistent_workspaces;
+    std::vector<PHLWORKSPACE> wanted;
+    const size_t fixed_count = std::clamp(set->fixed_workspace_count, 1, 20);
+    if (set->workspaces_span_monitors) {
+        // Keep matching slots alive on every monitor. Otherwise an empty
+        // workspace disappearing on just one monitor would shift its indices.
+        size_t count = set->dynamic_workspaces ? 0 : fixed_count;
+        for (auto monitor : hyprmonitors)
+            count = std::max(count, monitor_workspaces(monitor->m).size());
+        std::vector<std::vector<PHLWORKSPACE>> groups;
+        for (auto monitor : hyprmonitors)
+            groups.push_back(monitor_workspaces(monitor->m, count));
+        for (size_t i = 0; i < count; ++i) {
+            bool keep = !set->dynamic_workspaces && i < fixed_count;
+            for (const auto& spaces : groups) {
+                if (i >= spaces.size())
+                    continue;
+                const auto& workspace = spaces[i];
+                const auto monitor = workspace->m_monitor.lock();
+                const bool owned = std::any_of(persistent_workspaces.begin(), persistent_workspaces.end(), [&](const auto& entry) {
+                    return entry.lock() == workspace;
+                });
+                keep = keep || workspace->getWindowCount() > 0 ||
+                    (monitor && monitor->m_activeWorkspace == workspace) ||
+                    (workspace->isPersistent() && !owned);
+            }
+            if (keep)
+                for (const auto& spaces : groups)
+                    if (i < spaces.size())
+                        wanted.push_back(spaces[i]);
+        }
+    } else if (!set->dynamic_workspaces) {
+        for (auto monitor : hyprmonitors) {
+            auto spaces = monitor_workspaces(monitor->m, fixed_count);
+            for (size_t i = 0; i < std::min(fixed_count, spaces.size()); ++i)
+                wanted.push_back(spaces[i]);
+        }
+    }
+    for (auto it = persistent_workspaces.begin(); it != persistent_workspaces.end();) {
+        const auto workspace = it->lock();
+        if (!workspace || std::find(wanted.begin(), wanted.end(), workspace) == wanted.end()) {
+            if (workspace)
+                workspace->setPersistent(false);
+            it = persistent_workspaces.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (const auto& workspace : wanted) {
+        if (!workspace->isPersistent()) {
+            workspace->setPersistent(true);
+            persistent_workspaces.push_back(workspace);
+        }
+    }
+}
+
+static void sync_monitor_workspaces(PHLWORKSPACE active) {
+    static bool syncing = false;
+    if (syncing || !set->workspaces_span_monitors || !active || active->m_isSpecialWorkspace)
+        return;
+    const auto source_monitor = active->m_monitor.lock();
+    if (!source_monitor)
+        return;
+    syncing = true;
+    defer(syncing = false);
+    update_workspace_persistence();
+    auto source = monitor_workspaces(source_monitor);
+    const auto position = std::find(source.begin(), source.end(), active);
+    if (position == source.end())
+        return;
+    const size_t index = position - source.begin();
+    for (auto monitor : hyprmonitors) {
+        if (monitor->m == source_monitor)
+            continue;
+        auto spaces = monitor_workspaces(monitor->m, index + 1);
+        if (index < spaces.size() && monitor->m->m_activeWorkspace != spaces[index])
+            monitor->m->changeWorkspace(spaces[index], false, true, true);
+    }
+}
+
+void HyprIso::apply_workspace_settings() {
+    update_workspace_persistence();
+    const auto focused = Desktop::focusState()->monitor();
+    if (focused)
+        sync_monitor_workspaces(focused->m_activeWorkspace);
+}
+
 void HyprIso::create_callbacks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -1980,6 +2093,9 @@ void HyprIso::create_callbacks() {
     });
 
     static auto configReloaded = Event::bus()->m_events.config.reloaded.listen([this]() {
+        main_thread([]() {
+            hypriso->apply_workspace_settings();
+        });
         if (hypriso->on_config_reload) {
             hypriso->on_config_reload();
             
@@ -2036,6 +2152,7 @@ void HyprIso::create_callbacks() {
             }
     });
     static auto workspaceChanged = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE w) {
+        sync_monitor_workspaces(w);
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
             auto m = State::monitorState()->query().vec(g_pInputManager->getMouseCoordsInternal()).run();
@@ -2081,6 +2198,9 @@ void HyprIso::create_callbacks() {
                 }
             }
         }
+    });
+    main_thread([]() {
+        hypriso->apply_workspace_settings();
     });
 }
 

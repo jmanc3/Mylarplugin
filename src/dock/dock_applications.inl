@@ -44,12 +44,13 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     return pad;
 }
 
-void scripts_load(std::vector<Script *> &temp_scripts) {
+void scripts_load(std::vector<Script> &temp_scripts) {
     temp_scripts.clear();
 
     // go through every directory in $PATH environment variable
     // add to our scripts list if the files we check are executable
-    std::string paths = std::string(getenv("PATH"));
+    const auto env_path = getenv("PATH");
+    std::string paths = env_path ? env_path : "";
 
     std::replace(paths.begin(), paths.end(), ':', ' ');
 
@@ -89,8 +90,8 @@ void scripts_load(std::vector<Script *> &temp_scripts) {
                     if (!(FLAG('q'))) {
                         bool already_have_this_script = false;
                         std::string name = std::string(dp->d_name);
-                        for (auto *script: temp_scripts) {
-                            if (script->name == name) {
+                        for (const auto &script: temp_scripts) {
+                            if (script.name == name) {
                                 already_have_this_script = true;
                                 break;
                             }
@@ -98,7 +99,8 @@ void scripts_load(std::vector<Script *> &temp_scripts) {
                         if (already_have_this_script)
                             continue;
 
-                        auto *script = new Script();
+                        Script entry;
+                        auto *script = &entry;
                         script->name = name;
                         script->lowercase_name = script->name;
                         std::transform(script->lowercase_name.begin(),
@@ -116,7 +118,7 @@ void scripts_load(std::vector<Script *> &temp_scripts) {
                             }
                         }
 
-                        temp_scripts.push_back(script);
+                        temp_scripts.push_back(std::move(entry));
                     }
                 }
             }
@@ -126,6 +128,33 @@ void scripts_load(std::vector<Script *> &temp_scripts) {
 
     if (temp_scripts.empty())
         return;
+}
+
+static std::shared_future<std::vector<Script>> load_scripts_async() {
+    return std::async(std::launch::async, [] {
+        std::vector<Script> loaded;
+        scripts_load(loaded);
+        return loaded;
+    }).share();
+}
+
+static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
+                                      std::shared_future<std::vector<Script>> refresh,
+                                      std::function<void(const std::vector<Script> &)> rebuild) {
+    windowing::timer(dock->app, 30, [dock, applications, refresh, rebuild](void *) {
+        {
+            std::lock_guard<std::mutex> lock(dock->app->mutex);
+            if (dock->applications != applications)
+                return;
+            if (refresh.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+                watch_applications_scripts(dock, applications, refresh, rebuild);
+                return;
+            }
+            rebuild(refresh.get());
+        }
+        // Rendering acquires the app mutex and reruns the current search filter.
+        windowing::redraw_now(applications->raw_window);
+    }, nullptr);
 }
 
 static void fill_applications_container(Container *root) {
@@ -144,21 +173,23 @@ static void fill_applications_container(Container *root) {
         c->spacing = 8 * dpi;
     };
 
-    static std::string field_text;
-    field_text = "";
-    static int active_option = 0;
-    static bool keyboard_option_changed = false;
-    active_option = 0;
-    keyboard_option_changed = false;
+    struct SearchState {
+        std::string field_text;
+        int active_option = 0;
+        bool keyboard_option_changed = false;
+    };
+    auto search = std::make_shared<SearchState>();
 
-    auto field = make_field(padded, false, "", [](std::string text) {
+    auto field = make_field(padded, false, "", [search](std::string text) {
+        auto &[field_text, active_option, keyboard_option_changed] = *search;
         field_text = std::move(text);
         active_option = 0;
         keyboard_option_changed = false;
     });
     auto edit_key = std::move(field->when_key_event);
-    field->when_key_event = [edit_key](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+    field->when_key_event = [edit_key, search](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
                                      int mods, bool is_text, std::string text) {
+        auto &[field_text, active_option, keyboard_option_changed] = *search;
         if (!c->active)
             return;
         edit_key(root, c, key, pressed, sym, mods, is_text, text);
@@ -214,7 +245,8 @@ static void fill_applications_container(Container *root) {
     });
     auto scroll_content = scroll->content;
     scroll->name = "scroll_content";
-    scroll->pre_layout = [](Container *root, Container *c_, const Bounds &b) {
+    scroll->pre_layout = [search](Container *root, Container *c_, const Bounds &b) {
+        auto &[field_text, active_option, keyboard_option_changed] = *search;
         auto scroll = ((ScrollContainer *) c_);
         auto animation_active = datum<bool>(scroll, "applications_scroll_animation_active");
         if (*animation_active) {
@@ -316,7 +348,18 @@ static void fill_applications_container(Container *root) {
         }
     };
 
-    for (auto s: scripts) {
+    auto rebuild_scripts = [scroll_content, scroll, search](const std::vector<Script> &entries) {
+    auto &[field_text, active_option, keyboard_option_changed] = *search;
+    for (auto child : scroll_content->children)
+        delete child;
+    scroll_content->children.clear();
+    active_option = 0;
+    keyboard_option_changed = false;
+    scroll->scroll_v_real = 0;
+    scroll->scroll_v_visual = 0;
+    *datum<bool>(scroll, "applications_scroll_animation_active") = false;
+    for (const auto &entry : entries) {
+        auto s = new Script(entry);
         auto o = scroll_content->child(FILL_SPACE, FILL_SPACE);
         o->user_data = s;
         o->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -396,7 +439,8 @@ static void fill_applications_container(Container *root) {
             if (needs_clip)
                 cairo_restore(cr);
         };
-        o->when_mouse_enters_container = [](Container *root, Container *c) {
+        o->when_mouse_enters_container = [search](Container *root, Container *c) {
+            auto &[field_text, active_option, keyboard_option_changed] = *search;
             int index = 0;
             int alive_index = 0;
             for (auto sibling : c->parent->children) {
@@ -412,14 +456,30 @@ static void fill_applications_container(Container *root) {
             auto dock = (Dock *) root->user_data;
             windowing::redraw(dock->applications->raw_window);
         };
-        o->when_clicked = [](Container *root, Container *c) {
+        o->when_clicked = [search](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto s = (Script *) c->user_data;
             launch_command(s->full_path);
-            active_option = 0;
+            search->active_option = 0;
             windowing::close_window(dock->applications->raw_window);
         };
     }
+
+    };
+    std::shared_future<std::vector<Script>> refresh;
+    {
+        std::lock_guard<std::mutex> lock(scripts_mutex);
+        const bool refresh_ready = scripts_refresh.valid() &&
+            scripts_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+        if (refresh_ready)
+            scripts = scripts_refresh.get();
+        rebuild_scripts(scripts);
+        if (!scripts_refresh.valid() || refresh_ready)
+            scripts_refresh = load_scripts_async();
+        refresh = scripts_refresh;
+    }
+    auto dock = static_cast<Dock *>(root->user_data);
+    watch_applications_scripts(dock, dock->applications, refresh, rebuild_scripts);
 
     set_active(root, {field}, root, true, false);
 

@@ -88,6 +88,11 @@ struct ConfigSettings {
     bool draw_wallpaper = true;
     bool dark_theme = true;
     bool hotcorners = true;
+    bool app_switcher_current_workspace_only = false;
+    bool dynamic_workspaces = true;
+    int fixed_workspace_count = 4;
+    bool workspaces_span_monitors = false;
+    bool resize_at_screen_edges = true;
     bool desktop_icons = true;
     int desktop_vertical_override = 1; // -1: Hyprland config, 0: horizontal, 1: vertical
     std::string desktop_sort_by = "name";
@@ -538,6 +543,7 @@ struct HyprIso {
     Bounds clipbox;
 
     void generate_mylar_hyprland_config();
+    void apply_workspace_settings();
 };
 
 extern HyprIso *hypriso;

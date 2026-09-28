@@ -548,6 +548,8 @@ Bounds snap_position_to_bounds_limited(int mon, SnapPosition pos, SnapLimits lim
 }
 
 SnapPosition mouse_to_snap_position(int mon, int x, int y) {
+    if (!set->resize_at_screen_edges)
+        return SnapPosition::NONE;
     Bounds pos = bounds_reserved_monitor(mon);
 
     const float sideThreshX = pos.w * 0.05f;

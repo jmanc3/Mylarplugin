@@ -415,6 +415,12 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "dark_theme", &settings->dark_theme);
     bind(bool, "hotcorners", &settings->hotcorners);
+    bind(bool, "app_switcher_current_workspace_only", &settings->app_switcher_current_workspace_only);
+    bind(bool, "dynamic_workspaces", &settings->dynamic_workspaces);
+    bind(int, "fixed_workspace_count", &settings->fixed_workspace_count);
+    settings->fixed_workspace_count = std::clamp(settings->fixed_workspace_count, 1, 20);
+    bind(bool, "workspaces_span_monitors", &settings->workspaces_span_monitors);
+    bind(bool, "resize_at_screen_edges", &settings->resize_at_screen_edges);
     bind(bool, "desktop_icons", &settings->desktop_icons);
     bind(int, "desktop_vertical_override", &settings->desktop_vertical_override);
     bind(std::string, "desktop_sort_by", &settings->desktop_sort_by);
@@ -2150,14 +2156,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
             });
         }, set->touchpad_acceleration_curve, "\uec49");
 
-    make_vert_space(padded_right, 4);
-
-    make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
-        set->hotcorners = value;
-        main_thread([]() {
-            hypriso->generate_mylar_hyprland_config();
-        });
-    }, "\ue8b0");
 }
 
 struct Shortcut {
@@ -2260,6 +2258,90 @@ static void fill_shortcuts_settings(Container *root) {
     }
 }
 
+static void save_multitasking_settings() {
+    main_thread([]() {
+        settings::load_save_settings(true, set);
+        hypriso->apply_workspace_settings();
+        hypriso->generate_mylar_hyprland_config();
+    });
+}
+
+static void fill_multitasking_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto dpi = mylar->raw_window->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        auto d = (RightData *) c->user_data;
+        float overflow = -actual_true_height(c);
+        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
+
+        for (auto child : c->children)
+            modify_all(child, 0, d->scroll);
+    };
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Multitasking Settings");
+    make_vert_space(padded_right, 12);
+    make_button_group(padded_right, "App switching",
+        "Choose which windows appear in the app switcher",
+        {"All workspaces", "Current workspace"}, [](std::string selected) {
+            set->app_switcher_current_workspace_only = selected == "Current workspace";
+            save_multitasking_settings();
+        }, set->app_switcher_current_workspace_only ? "Current workspace" : "All workspaces");
+    make_vert_space(padded_right, 4);
+    make_button_group(padded_right, "Workspace behavior",
+        "Create workspaces as needed or keep a fixed number",
+        {"Dynamic", "Fixed"}, [](std::string selected) {
+            set->dynamic_workspaces = selected == "Dynamic";
+            save_multitasking_settings();
+        }, set->dynamic_workspaces ? "Dynamic" : "Fixed");
+    make_vert_space(padded_right, 4);
+    make_reset_textfield(padded_right, "Number of workspaces",
+        "Per monitor in Fixed mode (1–20); occupied extras are kept", "", true,
+        std::to_string(set->fixed_workspace_count), "4", [](std::string value) {
+            try {
+                size_t end = 0;
+                const int count = std::stoi(value, &end);
+                if (end != value.size() || count < 1 || count > 20)
+                    throw std::out_of_range("workspace count");
+                set->fixed_workspace_count = count;
+                save_multitasking_settings();
+            } catch (const std::exception&) {
+                main_thread([]() {
+                    notify("Enter a workspace count from 1 to 20");
+                });
+            }
+        });
+    make_vert_space(padded_right, 4);
+    make_button_group(padded_right, "Multiple monitors",
+        "Switch workspaces independently or on all monitors together",
+        {"Independent", "Together"}, [](std::string selected) {
+            set->workspaces_span_monitors = selected == "Together";
+            save_multitasking_settings();
+        }, set->workspaces_span_monitors ? "Together" : "Independent");
+    make_vert_space(padded_right, 4);
+    make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
+        set->hotcorners = value;
+        save_multitasking_settings();
+    }, "\ue8b0");
+    make_vert_space(padded_right, 4);
+    make_bool(padded_right, "Window resizing at screen edges",
+        "Automatically resize windows dragged to screen edges", set->resize_at_screen_edges, [](bool value) {
+            set->resize_at_screen_edges = value;
+            save_multitasking_settings();
+        });
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->name = label;
@@ -2298,6 +2380,8 @@ void create_tab_option(Container *parent, std::string label) {
             fill_display_settings(root);
         } else if (label == "Shortcuts") {
             fill_shortcuts_settings(root);
+        } else if (label == "Multitasking") {
+            fill_multitasking_settings(root);
         }
     };
 }
@@ -2306,6 +2390,7 @@ void fill_left(Container *left) {
     create_tab_option(left, "Search");
     create_tab_option(left, "Display");
     create_tab_option(left, "Desktop");
+    create_tab_option(left, "Multitasking");
     create_tab_option(left, "Mouse & Touchpad");
     create_tab_option(left, "Keyboard");
     create_tab_option(left, "Shortcuts");

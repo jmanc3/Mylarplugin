@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <pango/pango-layout.h>
@@ -85,8 +86,9 @@ struct Script : UserData {
     bool selected = false;
 };
 
-static std::vector<Script *> scripts;
-static bool scripts_loaded = false;
+static std::vector<Script> scripts;
+static std::mutex scripts_mutex;
+static std::shared_future<std::vector<Script>> scripts_refresh;
 
 class Window {
 public:
@@ -3027,10 +3029,6 @@ static int get_dock_alignment() {
     return hypriso->get_varint("plugin:mylardesktop:dock", 3);
 }
 
-static void start_loading_scripts() {
-    scripts_load(scripts);
-}
-
 void dock::start(std::string monitor_name) {
     if (monitor_name.empty())
         monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
@@ -3047,12 +3045,9 @@ void dock::start(std::string monitor_name) {
     t.detach();
     dock_threads.push_back(std::move(t));
 
-    if (!scripts_loaded) {
-        scripts_loaded = true;
-        std::thread t(start_loading_scripts);
-        t.detach();
-        dock_threads.push_back(std::move(t));
-    }
+    std::lock_guard<std::mutex> lock(scripts_mutex);
+    if (!scripts_refresh.valid())
+        scripts_refresh = load_scripts_async();
 }
 
 void dock::stop(std::string monitor_name) {

@@ -402,6 +402,9 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
         static std::vector<int> actual_order;
         actual_order.clear();
         for (auto o : order) {
+            if (set->app_switcher_current_workspace_only &&
+                hypriso->get_client_workspace_id(o) != hypriso->get_active_workspace_id(creation_monitor))
+                continue;
             if (hypriso->alt_tabbable(o)) {
                 actual_order.push_back(o);
             }
@@ -957,5 +960,4 @@ bool alt_tab::at_end_row() {
 
     return active_y == (lines.size() - 1);
 }
-
 

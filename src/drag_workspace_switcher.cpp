@@ -345,7 +345,8 @@ void drag_switcher_actual_open() {
             b.grow(new_h);
         }
         auto ids = hypriso->get_workspace_ids(monitor);
-        ids.push_back(-1);
+        if (set->dynamic_workspaces)
+            ids.push_back(-1);
         merge_create<int>(c, ids, [](Container *c) {
             return *datum<int>(c, "workspace");
         }, [monitor](Container *parent, int space) {
