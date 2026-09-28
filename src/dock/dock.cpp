@@ -74,7 +74,7 @@ struct Script : UserData {
     int historical_ranking = -1;
     int match_level = 100;
     std::string full_path;
-    
+
     std::string path;
 
     bool path_is_full_command = false;
@@ -89,19 +89,19 @@ class Window {
 public:
     int cid; // unique id
     bool on_workspace = false;
-   
+
     std::string window_icon;
     std::string command;
     std::string title;
-    std::string stack_rule; // Should be regex later, or multiple 
+    std::string stack_rule; // Should be regex later, or multiple
 
-    //cairo_surface_t* icon_surf = nullptr; 
-    
+    //cairo_surface_t* icon_surf = nullptr;
+
     ~Window() {
         //if (icon_surf)
             //cairo_surface_destroy(icon_surf);
     }
-    
+
     Window() {}
 
     Window(const Window& w) {
@@ -123,20 +123,20 @@ struct SpringAnimation {
     float damping;
     float stiffness;
     float mass;
-    
+
     // Create a spring animation with initial position 0, target position 100
     // SpringAnimation spring(0.0f, 100.0f, 0.1f, 10.0f, 1.0f); // Adjusted for bounce
-    
+
     // Simulate the spring animation
     float dt = 0.016f; // Assuming 60 updates per second
-    
+
     // Constructor to initialize the parameters
     SpringAnimation(float pos = 0.0f, float tar = 0.0f, float damp = 29.5f, float stiff = 350.0f, float m = 1.0f)
             : position(pos), velocity(0.0f), target(tar), damping(damp), stiffness(stiff), mass(m) {}
-    
+
     // Method to update the animation state
     void update(float deltaTime);
-    
+
     // Method to set a new target position
     void setTarget(float newTarget);
 };
@@ -165,13 +165,13 @@ struct Pin : UserData {
     std::string stacking_rule;
 
     std::string full_icon;
-    
-    cairo_surface_t* icon_surf = nullptr; 
+
+    cairo_surface_t* icon_surf = nullptr;
     bool attempted_load = false;
-    bool scale_change = false;    
+    bool scale_change = false;
 
     long creation_time = get_current_time_in_ms();
-    
+
     bool animating = false;
     SpringAnimation spring;
     double actual_w = 0;
@@ -183,7 +183,7 @@ struct Pin : UserData {
         if (icon_surf)
             cairo_surface_destroy(icon_surf);
     }
- 
+
 
     bool pinned = false;
     int natural_position_x = INT_MAX;
@@ -194,7 +194,7 @@ struct Pin : UserData {
 
 struct Windows {
     std::mutex mut;
-    
+
     //std::vector<Pin *> pins;
     std::vector<Window *> list;
 
@@ -232,12 +232,12 @@ struct Dock : UserData {
     int selected_date_year = 0;
 
     MylarWindow *wifi = nullptr;
-    
+
     MylarWindow *bluetooth = nullptr;
     std::string bluetooth_input;
     std::string bluetooth_prompt;
     unsigned long bluetooth_revision = 0;
-    
+
     MylarWindow *tiling = nullptr;
     STilingMenuState tiling_settings;
 
@@ -273,7 +273,7 @@ struct CachedFont {
     PangoWeight weight;
     PangoLayout *layout;
     cairo_t *cr; // Creator
-    
+
     ~CachedFont() { g_object_unref(layout); }
 };
 
@@ -493,7 +493,7 @@ static void paint_root_func(Container *root, Container *c) {
 
 static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
     auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
-    
+
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     pango_layout_set_alignment(layout, (PangoAlignment) align);
@@ -527,8 +527,8 @@ static void paint_label(Container *root, Container *c, std::string text) {
     auto size = 12 * dpi;
 
     auto b = draw_text(cr, 0, 0, text, size, false, set->font, -1, 0, {0, 0, 0, 1}, false);
-    draw_text(cr, 
-        c->real_bounds.x + 12 * dpi, 
+    draw_text(cr,
+        c->real_bounds.x + 12 * dpi,
         c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, set->font, -1, 0, {0, 0, 0, 1},  false);
 }
 
@@ -671,7 +671,10 @@ static void set_master_volume(float amount) {
     });
 }
 
-Container *simple_dock_item(Container *root, std::function<std::string()> ico, std::function<std::string()> text = nullptr) {
+Container *simple_dock_item(Container *root, std::function<std::string()> ico, std::function<std::string()> text = nullptr,
+                            std::function<std::string()> layout_text = nullptr) {
+    if (!layout_text)
+        layout_text = text;
     auto dock = (Dock *) root->user_data;
     auto c = root->child(40, FILL_SPACE);
     /*if (dock->vertical) {
@@ -682,7 +685,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
         c->wanted_bounds = Bounds(0, 0, 40, FILL_SPACE);
     }*/
     static int tex_size = 8;
-    c->when_paint = [ico, text](Container *root, Container *c) {
+    c->when_paint = [ico, text, layout_text](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
@@ -693,20 +696,23 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
             c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5,
             ico(), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
         if (text) {
-            auto tb = draw_text(cr, c, text(), tex_size * mylar->raw_window->dpi, false);
+            auto visual_text = text();
+            auto tb = draw_text(cr, c, visual_text, tex_size * mylar->raw_window->dpi, false);
+            auto layout_bounds = draw_text(cr, c, layout_text(), tex_size * mylar->raw_window->dpi, false);
             draw_text(cr,
-                c->real_bounds.x + 20 + b.w, c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5,
-                text(), tex_size * mylar->raw_window->dpi, true);
+                c->real_bounds.x + 20 + b.w + (layout_bounds.w - tb.w) * .5,
+                c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5,
+                visual_text, tex_size * mylar->raw_window->dpi, true);
         }
     };
-    c->pre_layout = [ico, text](Container *root, Container *c, const Bounds &b) {
+    c->pre_layout = [ico, layout_text](Container *root, Container *c, const Bounds &b) {
         auto dock = (Dock *) root->user_data;
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
         auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
-        if (text)
-            bounds.w += draw_text(cr, c, text(), tex_size * mylar->raw_window->dpi, false).w + 10;
-        
+        if (layout_text)
+            bounds.w += draw_text(cr, c, layout_text(), tex_size * mylar->raw_window->dpi, false).w + 10;
+
         c->wanted_bounds.w = bounds.w + 20;
     };
 
@@ -727,8 +733,8 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
             };
             root.push_back(pop);
         }
-        popup::open(root, 
-            m.x - (277 * .5) + 1.4, 
+        popup::open(root,
+            m.x - (277 * .5) + 1.4,
             m.y - (yoff / dpi) - 5 - (24 * root.size() * dpi));
     });
 }
@@ -945,7 +951,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
     ch->when_drag_end_is_click = false;
     ch->minimum_x_distance_to_move_before_drag_begins = 3;
     ch->minimum_y_distance_to_move_before_drag_begins = 10;
-    ch->when_paint = paint {        
+    ch->when_paint = paint {
         auto dock = (Dock*)root->user_data;
         if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->cr)
             return;
@@ -1051,7 +1057,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         auto popdata = new PopData{uuid};
         pin->hover_timer_fd = windowing::timer(dock->app, 500, [](void *data) {
             auto pop_data = ((PopData *) data);
-            for (auto d : docks) {                
+            for (auto d : docks) {
                 if (auto icons = container_by_name("icons", d->window->root)) {
                     for (auto p : icons->children) {
                         if (p->uuid == pop_data->uuid) {
@@ -1071,14 +1077,14 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 }
             }
             out:
-        }, popdata); 
+        }, popdata);
     };
     ch->when_mouse_leaves_container = paint {
         return;
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         if (pin->hover_timer_fd != -1) {
-            windowing::timer_stop(dock->app, pin->hover_timer_fd); 
+            windowing::timer_stop(dock->app, pin->hover_timer_fd);
             pin->hover_timer_fd = -1;
         }
     };
@@ -1096,7 +1102,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         int cid = -1;
         if (!pin->windows.empty())
             cid = pin->windows[0].cid;
-        
+
         if (c->state.mouse_button_pressed == BTN_LEFT) {
             main_thread([cid] {
                 if (overview::is_showing())
@@ -1107,7 +1113,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                     hypriso->bring_to_front(cid);
                     return;
                 }
-                
+
                 // todo we need to focus next (already wrote this combine code)
                 bool is_hidden = hypriso->is_hidden(cid);
                 if (is_hidden) {
@@ -1147,7 +1153,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 auto size = get_icon_size(mylar->raw_window->dpi);
                 auto icon = pin->icon;
                 auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon), "application-x-executable"});
-                if (!full.empty()) {                        
+                if (!full.empty()) {
                     pin->full_icon = full;
                     load_icon_full_path(&pin->icon_surf, full, size);
                 }
@@ -1182,12 +1188,12 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
             }
         }
     }
- 
+
     // Remove closed windows and windows outside this dock's active workspace.
     for (int pin_index = icons->children.size() - 1; pin_index >= 0; pin_index--) {
         auto pin_container = icons->children[pin_index];
         auto pin = (Pin *) pin_container->user_data;
-        
+
         // Keep other workspaces in the collection so they return when switching back.
         for (int window_index = pin->windows.size() -1; window_index >= 0; window_index--) {
             auto window = pin->windows[window_index];
@@ -1275,7 +1281,7 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
                     }
                 }
             }
-            
+
             if (needs_to_create_its_own_pin) {
                 create_pinned_icon(icons, window->stack_rule, window->command, window->window_icon, window);
             }
@@ -1357,23 +1363,23 @@ size_icons(Dock *dock, Container *icons) {
         c->real_bounds.h = icons->real_bounds.h;
         c->real_bounds.y = 0;
     }
-    
+
     for (auto c: icons->children) {
         total_width += c->real_bounds.w;
     }
-    
+
     // For pixel spacing between pinned icons
     int count = icons->children.size();
     if (count != 0)
         count--;
     total_width += count * pixel_spacing;
-    
+
     if (total_width > icons->real_bounds.w) {
         auto overflow = total_width - icons->real_bounds.w;
-        
+
         for (int i = 0; i < overflow; i++) {
             int largest = calc_largest(icons);
-            
+
             for (auto c: icons->children) {
                 if ((int) c->real_bounds.w == largest) {
                     c->real_bounds.w -= 1;
@@ -1383,13 +1389,13 @@ size_icons(Dock *dock, Container *icons) {
         }
         total_width = icons->real_bounds.w;
     }
-    
+
     return total_width;
 }
 
 void calc_natural_positions(Container *icons, float total_width, Container *root) {
     auto align = icon_alignment; // todo: pull from setting
-    
+
     int off = icons->real_bounds.x;
     if (align == container_alignment::ALIGN_RIGHT) {
         off += icons->real_bounds.w - total_width;
@@ -1414,7 +1420,7 @@ void calc_natural_positions(Container *icons, float total_width, Container *root
 
     for (auto c : icons->children) {
         auto data = (Pin *) c->user_data;
-        if (data->natural_position_x != off) 
+        if (data->natural_position_x != off)
             data->wants_reposition_animation = true;
         data->natural_position_x = off;
         off += c->real_bounds.w + pixel_spacing;
@@ -1425,13 +1431,13 @@ static void debounce(std::string id, long time_ms, std::function<void()> func) {
     struct DebounceData {
         bool started = false;
         long start_time = get_current_time_in_ms();
-        std::function<void()> func = nullptr; 
+        std::function<void()> func = nullptr;
     };
     static std::unordered_map<std::string, DebounceData> datas;
     if (datas.find(id) == datas.end())
         datas[id] = DebounceData();
     auto data = &datas[id];
-    
+
     if (!data->started) {
         data->started = true;
         data->start_time = get_current_time_in_ms();
@@ -1449,10 +1455,10 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     float total_width = size_icons(dock, icons);
 
     calc_natural_positions(icons, total_width, root);
-    
+
     Container *dragging = nullptr;
     int drag_index = 0;
-    
+
     // Position dragged icon based on current mouse position, and prevent it from leaving icons container
     for (auto c: icons->children) {
         auto data = (Pin *) c->user_data;
@@ -1473,7 +1479,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         drag_index++;
     }
 
-    if (dragging) { 
+    if (dragging) {
         // swap icons on taskbar
         int distance = 100000;
         int index = 0;
@@ -1542,7 +1548,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             float abs_vel = std::abs(data->spring.velocity);
             if ((current - data->animation_start_time) > 1500.0f) {
                 data->animating = false;
-                c->real_bounds.x = data->natural_position_x;           
+                c->real_bounds.x = data->natural_position_x;
             }
         } else if (data->wants_reposition_animation) {
             data->wants_reposition_animation = false;
@@ -1588,53 +1594,53 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     double adjusted_radius = std::fmin(radius, std::fmin(width, height) / 2.0);
     double inner_width = width - stroke_width;
     double inner_height = height - stroke_width - 1;
-    
+
     if (inner_width <= 0 || inner_height <= 0) {
         // Cannot draw if the stroke width exceeds or equals the bounds
         return;
     }
-    
+
     // Adjusted bounds to ensure the stroke remains inside
     double adjusted_x = x + half_stroke;
     double adjusted_y = y + half_stroke;
-    
+
     // Begin path for rounded rectangle
     cairo_new_path(cr);
-    
+
     // Move to the start of the top-right corner
     cairo_move_to(cr, adjusted_x + adjusted_radius, adjusted_y);
-    
+
     // Top side
     cairo_line_to(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y);
-    
+
     // Top-right corner
     cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
               adjusted_radius, -M_PI / 2, 0);
-    
+
     // Right side
     cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - adjusted_radius);
-    
+
     // Bottom-right corner
     cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
               adjusted_radius, 0, M_PI / 2);
-    
+
     // Bottom side
     cairo_line_to(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height);
-    
+
     // Bottom-left corner
     cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
               adjusted_radius, M_PI / 2, M_PI);
-    
+
     // Left side
     cairo_line_to(cr, adjusted_x, adjusted_y + adjusted_radius);
-    
+
     // Top-left corner
     cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
               adjusted_radius, M_PI, 3 * M_PI / 2);
-    
+
     // Close the path
     cairo_close_path(cr);
-    
+
     // Set stroke width and stroke
     cairo_set_line_width(cr, stroke_width);
 }
@@ -1716,7 +1722,7 @@ static void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, 
     }
 }
 
-Container *make_self_sizing_slider(Container *root, 
+Container *make_self_sizing_slider(Container *root,
                             std::function<std::string (Container *)> left_text,
                             std::function<std::string (Container *)> right_text,
                             std::function<void (Container *, float)> on_value_change,
@@ -1750,8 +1756,8 @@ Container *make_self_sizing_slider(Container *root,
         auto cr = window->raw_window->cr;
         auto left = left_text(c);
         auto b = draw_text(cr, 0, 0, left, 12 * dpi, false, "Segoe Fluent Icons");
-        draw_text(cr, 
-            c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
+        draw_text(cr,
+            c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5,
             c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, left, 12 * dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
     };
     right->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
@@ -1769,8 +1775,8 @@ Container *make_self_sizing_slider(Container *root,
         auto cr = window->raw_window->cr;
         auto right = right_text(c);
         auto b = draw_text(cr, 0, 0, right, 12 * dpi, false);
-        draw_text(cr, 
-            c->real_bounds.x + c->real_bounds.w - b.w, 
+        draw_text(cr,
+            c->real_bounds.x + c->real_bounds.w - b.w,
             c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, right, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
     };
     slider->when_paint = [get_window, get_value](Container *root, Container *c) {
@@ -1778,7 +1784,7 @@ Container *make_self_sizing_slider(Container *root,
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
         auto cr = window->raw_window->cr;
-        
+
         paint_slider(root, c, cr, dpi, get_value(c));
     };
     slider->when_clicked = [on_value_change](Container *root, Container *c) {
@@ -1813,7 +1819,7 @@ Container *make_self_sizing_slider(Container *root,
                 }
                 last_digit = full % 10;
             } while (!(last_digit == 0 || last_digit == 5));
-            
+
             value = ((double) full);
         }
         if (value > 100)
@@ -2319,7 +2325,7 @@ static void fill_root(Container *root) {
             dock->applications->root->wanted_bounds.w = FILL_SPACE;
             dock->applications->root->wanted_bounds.h = FILL_SPACE;
             fill_applications_container(dock->applications->root);
-            
+
             windowing::redraw(dock->applications->raw_window);
         };
         super->after_paint = paint {
@@ -2357,7 +2363,7 @@ static void fill_root(Container *root) {
             }
 
             merge_to_be_into_list(dock, c);
-            
+
             merge_list_into_icons(dock, c);
         };
         icons->when_clicked = [](Container *root, Container *c) {
@@ -2482,10 +2488,10 @@ static void fill_root(Container *root) {
            nightlight_on = !nightlight_on;
         };
     }
-    
+
     if (false) {
         auto change = simple_dock_item(root, ICON("\uE705"));
-         
+
         change->when_clicked = paint {
             auto dock = (Dock *) root->user_data;
             static bool first = true;
@@ -2498,7 +2504,7 @@ static void fill_root(Container *root) {
             }
         };
     }
-    
+
     if (true) {
         auto tiling = simple_dock_item(root, ICON("\uECA5"));
         tiling->when_clicked = [](Container *root, Container *c) {
@@ -2522,9 +2528,9 @@ static void fill_root(Container *root) {
             fill_tiling_container(dock);
             main_thread(dock::redraw);
             windowing::redraw(dock->tiling->raw_window);
-        };        
+        };
     }
-    
+
     if (true) {
         auto bluetooth = simple_dock_item(root, ICON("\uE702"));
         bluetooth->name = "bluetooth";
@@ -2568,6 +2574,8 @@ static void fill_root(Container *root) {
     {
         auto brightness = simple_dock_item(root, ICON("\uE706"), []() {
            return fz("{}%", (int) std::round(brightness_level));
+        }, []() {
+           return std::string("100%");
         });
         auto brightness_data = new BrightnessData;
         std::thread t([&brightness_data]() {
@@ -2630,7 +2638,9 @@ static void fill_root(Container *root) {
            return text;
         }, []() {
            return std::format("{}%", (int) volume_level);
-        }) ;
+        }, []() {
+            return "100%";
+        });
         volume->name = "volume";
         volume_level = 100;
         volume->when_clicked = paint {
@@ -2696,7 +2706,7 @@ static void fill_root(Container *root) {
                     }
                     last_digit = full % 10;
                 } while (!(last_digit == 0 || last_digit == 3 || last_digit == 5 || last_digit == 7));
-                
+
                 volume_level = ((double) full);
             }
             if (volume_level > 100) {
@@ -2725,6 +2735,8 @@ static void fill_root(Container *root) {
             auto status = battery_status_snapshot();
             if (!status.valid) return std::string("—");
             return std::format("{}{}%", status.state == 1 ? "+" : "", (int) std::round(status.percentage));
+        }, []() {
+            return std::string("+100%");
         });
         battery->when_clicked = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
@@ -2823,7 +2835,7 @@ static void fill_root(Container *root) {
             c->wanted_bounds.w = 4 * mylar->raw_window->dpi;
         };
     }
-    
+
 };
 
 static int current_alignment = 3;
@@ -2840,25 +2852,25 @@ static void load_saved_pins_from_file(Container *icons) {
     const char *home = getenv("HOME");
     std::string itemsPath(home);
     itemsPath += "/.config/";
-    
+
     if (mkdir(itemsPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == -1) {
         if (errno != EEXIST) {
             printf("Couldn't mkdir %s\n", itemsPath.c_str());
             return;
         }
     }
-    
+
     itemsPath += "/mylar/";
-    
+
     if (mkdir(itemsPath.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) == -1) {
         if (errno != EEXIST) {
             printf("Couldn't mkdir %s\n", itemsPath.c_str());
             return;
         }
     }
-    
+
     itemsPath += "pinned_items.ini";
-    
+
     if (!std::filesystem::exists(itemsPath)) {
         //write_default_pinned_icons_file_if_none_exists(itemsPath);
     }
@@ -2910,12 +2922,12 @@ static void write_saved_pins_to_file(Container *icons) {
     std::ofstream out(filepath, std::ios::trunc);
     if (!out)
         return;
-    
+
     std::map<std::string, bool> seen_before;
     int i = 0;
     for (auto icon: icons->children) {
         auto *data = static_cast<Pin *>(icon->user_data);
-        
+
         if (!data)
             continue;
         if (!data->pinned)
@@ -2923,9 +2935,9 @@ static void write_saved_pins_to_file(Container *icons) {
         if (seen_before.find(data->stacking_rule) != seen_before.end())
             continue;
         seen_before[data->stacking_rule] = true;
-        
+
         out << "[PinnedIcon" << i++ << "]" << std::endl;
-        
+
         out << "#The class_name is a property that windows set on themselves so that they "
                      "can be stacked with windows of the same kind as them. If when you click this "
                      "pinned icon button, it launches a window that creates an icon button that "
@@ -2938,7 +2950,7 @@ static void write_saved_pins_to_file(Container *icons) {
         out << "command=" << data->command << std::endl << std::endl;
         out << std::endl;
     }
-    
+
     out.close();
 }
 
@@ -2976,7 +2988,7 @@ void dock_start(std::string monitor_name) {
     dock->window->root->user_data = dock;
     fill_root(dock->window->root);
     if (auto icons = container_by_name("icons", dock->window->root))
-        load_saved_pins_from_file(icons); 
+        load_saved_pins_from_file(icons);
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
     bluetooth_watch_dock(dock);
@@ -3009,7 +3021,7 @@ static void start_loading_scripts() {
     scripts_load(scripts);
 }
 
-void dock::start(std::string monitor_name) {    
+void dock::start(std::string monitor_name) {
     if (monitor_name.empty())
         monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
     if (monitor_name == "FALLBACK")
@@ -3029,7 +3041,7 @@ void dock::start(std::string monitor_name) {
         scripts_loaded = true;
         std::thread t(start_loading_scripts);
         t.detach();
-        dock_threads.push_back(std::move(t));        
+        dock_threads.push_back(std::move(t));
     }
 }
 
@@ -3050,7 +3062,7 @@ void dock::stop(std::string monitor_name) {
             windowing::close_window(d->window->raw_window);
         }
         docks.clear();
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         for (int i = 0; i < dock_threads.size(); i++) {
@@ -3058,11 +3070,11 @@ void dock::stop(std::string monitor_name) {
                 dock_threads[i].join();
             }
         }
-        
+
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         dock_threads.clear();
-        cleanup_cached_fonts();   
+        cleanup_cached_fonts();
     } else {
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
@@ -3071,7 +3083,7 @@ void dock::stop(std::string monitor_name) {
                 windowing::close_app(d->app);
             }
         }
-    } 
+    }
 }
 
 // This happens on the main thread, not the dock thread
@@ -3082,22 +3094,22 @@ std::string get_launch_command(int cid) {
     if (pid != -1) {
         std::ifstream cmdline("/proc/" + std::to_string(pid) + "/cmdline");
         std::getline((cmdline), command_launched_by_line);
-        
+
         size_t index = 0;
         while (true) {
             /* Locate the substring to replace. */
             index = command_launched_by_line.find('\000', index);
             if (index == std::string::npos)
                 break;
-            
+
             /* Make the replacement. */
             command_launched_by_line.replace(index, 1, " ");
-            
+
             /* Advance index forward so the next iteration doesn't pick it up as well. */
             index += 1;
         }
     }
-    
+
     return command_launched_by_line;
 }
 
@@ -3122,7 +3134,7 @@ void dock::add_window(int cid) {
             command = get_steam_launch_command(icon);
         }
     }
-    
+
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto c = container_by_name("icons", d->window->root)) {
@@ -3137,7 +3149,7 @@ void dock::add_window(int cid) {
         }
     }
 
-    
+
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
 
@@ -3152,7 +3164,7 @@ void dock::add_window(int cid) {
         window->title = hypriso->title_name(cid);
         window->window_icon = icon;
         window->command = command;
-        
+
         if (hypriso->has_focus(cid))
             active_cid = cid;
 
@@ -3324,7 +3336,7 @@ Bounds dock::get_location(std::string name, int cid) {
             }
         }
     }
-     
+
     return {0, 0, 100, 100};
 }
 
@@ -3398,10 +3410,10 @@ void dock::create_slept_button() {
             static float throb_time = 700.0f;
             if (delta < throb_time) {
                 windowing::redraw(mylar->raw_window);
-                
+
                 set_rect(cr, c->real_bounds);
                 set_argb(cr, {.15, .52, .9, 0.7f * pull(throb, delta / throb_time)});
-                cairo_fill(cr); 
+                cairo_fill(cr);
             }
 
             auto ico_bounds = draw_text(cr, c, "\uF738", 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
@@ -3426,7 +3438,7 @@ void dock::create_slept_button() {
                 root->children.insert(root->children.begin() + i + 1, sleep_button);
                 break;
             }
-    }    
+    }
 }
 
 void actual_remove_slept_button(Dock *d) {
@@ -3457,13 +3469,13 @@ void dock::remove_slept_button() {
         dock::add_window(zed.cid);
         hypriso->set_hidden(zed.cid, false, false);
         if (zed.is_fullscreen) {
-            hypriso->set_fullscreen(zed.cid, zed.is_fullscreen); 
+            hypriso->set_fullscreen(zed.cid, zed.is_fullscreen);
         } else if (zed.is_fake_fullscreen) {
-            hypriso->fake_fullscreen(zed.cid, zed.is_fullscreen); 
+            hypriso->fake_fullscreen(zed.cid, zed.is_fullscreen);
         }
     }
     slept_windows.clear();
-    
+
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         actual_remove_slept_button(d);
@@ -3481,12 +3493,12 @@ void dock::open_applications() {
                 closed_window = windowing::close_window(d->applications->raw_window);
             if (closed_window)
                 return;
-            
+
             if (auto s = container_by_name("super", d->window->root)) {
                 if (s->when_clicked) {
                     s->when_clicked(d->window->root, s);
                 }
-            }                
+            }
         }
     }
 }

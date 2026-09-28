@@ -19,6 +19,21 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
 
+#include <fontconfig/fontconfig.h>
+#include <filesystem>
+
+void load_in_fonts() {
+    char *home = getenv("HOME");
+    std::string font_directory(home);
+    font_directory += "/.config/mylar/fonts";
+
+    FcInit();
+    FcConfig *now = FcConfigGetCurrent();
+    const FcChar8 *file = (const FcChar8 *) font_directory.c_str();
+    FcBool fontAddStatus = FcConfigAppFontAddDir(now, file);
+    FcConfigBuildFonts(now);
+}
+
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When started as a plugin
 #ifdef TRACY_ENABLE
     TracyAppInfo("Mylar Desktop", 13);
@@ -28,11 +43,12 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 
     settings::load_save_settings(false, set); // load
     settings::load_save_settings(true, set); // save
+    load_in_fonts();
 
     try {
         heart::begin();
     } catch (...) {
-        
+
     }
 
     return {"Mylardesktop", "Mylar is a smooth and beautiful wayland desktop, written on Hyprland", "jmanc3", "1.0"};
@@ -55,4 +71,3 @@ void init_mylar(void* h) { // When started directly from hyprland
 void exit_mylar(void* h) {
     PLUGIN_EXIT();
 }
-

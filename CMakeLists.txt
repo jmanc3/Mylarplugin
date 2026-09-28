@@ -41,7 +41,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     libinput
     libudev
     wayland-server
-    wayland-client 
+    wayland-client
     gio-2.0
     wayland-cursor
     xkbcommon
@@ -51,6 +51,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     libpipewire-0.3
     libpulse
     gtk+-3.0
+    fontconfig
 )
 
 target_link_libraries(Mylardesktop PRIVATE rt PkgConfig::deps)
@@ -75,4 +76,3 @@ target_compile_options(Mylardesktop PRIVATE
 )
 
 install(TARGETS Mylardesktop)
-
