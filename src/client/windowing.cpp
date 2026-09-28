@@ -36,6 +36,8 @@ bool on_mouse_move(RawWindow *rw, float x, float y) {
 }
 
 bool on_mouse_press(RawWindow *rw, int button, int state, float x, float y) {
+    if (rw->keyboard_focus_on_click && state == WL_POINTER_BUTTON_STATE_PRESSED)
+        windowing::request_keyboard_focus(rw);
     std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_mouse_press");
     x *= rw->dpi;
@@ -138,6 +140,18 @@ void on_close(RawWindow *rw) {
     std::lock_guard<std::mutex> lock(rw->creator->mutex);
     auto m = mylar(rw);
     if (!m) return;
+    if (rw->keyboard_focus_on_click)
+        windowing::release_keyboard_focus(rw);
+    if (rw->parent) {
+        auto parent = mylar(rw->parent);
+        if (parent && parent->popup_window == m)
+            parent->popup_window = nullptr;
+        std::erase(rw->parent->children, rw);
+    }
+    if (m->root->on_closed) {
+        auto on_closed = std::move(m->root->on_closed);
+        on_closed(m->root);
+    }
     for (int i = mylar_windows.size() - 1; i >= 0; i--)
         if (m == mylar_windows[i]) {
             //delete m->root;

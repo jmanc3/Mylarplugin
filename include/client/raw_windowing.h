@@ -118,6 +118,7 @@ struct RawWindowSettings {
     PositioningInfo pos;
     int alignment = 0; // 0 none, 1 top, clockwise + 1
     PopupPositioner popup;
+    bool keyboard_focus_on_click = false;
 };
 
 struct RawWindow {    
@@ -130,6 +131,7 @@ struct RawWindow {
     
     RawWindow *parent = nullptr;
     std::vector<RawWindow *> children;
+    bool keyboard_focus_on_click = false;
 
     cairo_t *cr = nullptr;
 
@@ -179,6 +181,8 @@ namespace windowing {
     // Owning Wayland event-loop thread only; call outside RawApp::mutex.
     // Try to paint only this window; defer if its previous frame is still pending.
     void redraw_now(RawWindow *window);
+    void request_keyboard_focus(RawWindow *window);
+    void release_keyboard_focus(RawWindow *window);
 
     // Clipboard access must be initiated on the owning Wayland event-loop thread.
     bool set_clipboard(RawWindow *window, const std::string &text);

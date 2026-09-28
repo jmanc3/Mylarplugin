@@ -75,6 +75,8 @@ struct Script : UserData {
     int historical_ranking = -1;
     int match_level = 100;
     std::string full_path;
+    std::shared_ptr<cairo_surface_t> icon_surface;
+    int icon_size = 0;
 
     std::string path;
 
@@ -2314,19 +2316,26 @@ static void fill_root(Container *root) {
 
             RawWindowSettings settings = make_icon_anchored_popup_settings(
                 c, dpi, volume_popup_w * 2.4, volume_popup_w * 1.9);
+            settings.keyboard_focus_on_click = true;
 
             dock->applications = open_mylar_popup(mylar, settings);
             if (!dock->applications)
                 return;
-            dock->applications->root->on_closed = [](Container *root) {
+            auto applications = dock->applications;
+            applications->root->on_closed = [applications](Container *root) {
                 auto dock = (Dock *) root->user_data;
-                dock->applications = nullptr;
+                if (dock->applications == applications)
+                    dock->applications = nullptr;
             };
             dock->applications->root->user_data = dock;
             dock->applications->root->wanted_bounds.w = FILL_SPACE;
             dock->applications->root->wanted_bounds.h = FILL_SPACE;
             fill_applications_container(dock->applications->root);
 
+            later(30, [dock, applications](Timer *) {
+                if (dock->applications == applications)
+                    windowing::request_keyboard_focus(applications->raw_window);
+            });
             windowing::redraw(dock->applications->raw_window);
         };
         super->after_paint = paint {

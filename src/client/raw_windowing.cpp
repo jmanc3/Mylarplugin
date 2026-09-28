@@ -2286,6 +2286,14 @@ static wl_window *find_window(RawWindow *window) {
     return nullptr;
 }
 
+static wl_window *layer_surface_for(wl_window *window) {
+    while (window && !window->layer_surface) {
+        auto parent = window->rw ? window->rw->parent : nullptr;
+        window = find_window(parent);
+    }
+    return window;
+}
+
 static uint32_t to_xdg_popup_anchor(RawWindowSettings::PopupAnchor anchor) {
     switch (anchor) {
         case RawWindowSettings::PopupAnchor::NONE: return XDG_POSITIONER_ANCHOR_NONE;
@@ -2429,6 +2437,7 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
     auto rw = new RawWindow;
     rw->creator = parent->creator;
     rw->id = unique_id++;
+    rw->keyboard_focus_on_click = settings.keyboard_focus_on_click;
 
     auto window = wl_popup_window_create(ctx, settings.pos.w, settings.pos.h, settings.name.c_str(), rw);
     if (!window) {
@@ -2465,6 +2474,17 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
         return nullptr;
     }
 
+    if (settings.keyboard_focus_on_click) {
+        auto layer = layer_surface_for(parent_wl);
+        if (layer && layer->layer_surface) {
+            const auto mode = zwlr_layer_surface_v1_get_version(layer->layer_surface) >=
+                                      ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND_SINCE_VERSION
+                                  ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND
+                                  : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
+            zwlr_layer_surface_v1_set_keyboard_interactivity(layer->layer_surface, mode);
+            wl_surface_commit(layer->surface);
+        }
+    }
     if (window_wl->xdg_popup && ctx->seat && ctx->last_pointer_button_serial != 0) {
         xdg_popup_grab(window_wl->xdg_popup, ctx->seat, ctx->last_pointer_button_serial);
     }
@@ -2506,6 +2526,58 @@ void windowing::redraw_now(RawWindow *window) {
             return;
         }
     }
+}
+
+static void queue_keyboard_interactivity(RawWindow *window, uint32_t mode, bool only_if_unfocused) {
+    if (!window || !window->creator)
+        return;
+    auto ctx = find_context(window->creator);
+    auto target = find_window(window);
+    auto layer = layer_surface_for(target);
+    if (!ctx || !target || !layer)
+        return;
+
+    const int target_id = target->id;
+    const int layer_id = layer->id;
+    {
+        std::lock_guard<std::mutex> lock(ctx->functions_mut);
+        ctx->functions_to_call.push_back([ctx, target_id, layer_id, mode, only_if_unfocused]() {
+            wl_window *target = nullptr;
+            wl_window *layer = nullptr;
+            for (auto candidate : ctx->windows) {
+                if (candidate->id == target_id)
+                    target = candidate;
+                if (candidate->id == layer_id)
+                    layer = candidate;
+            }
+            if (!layer || !layer->layer_surface)
+                return;
+            if (mode != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
+                (!target || target->marked_for_closing || (only_if_unfocused && target->has_keyboard_focus)))
+                return;
+            if (mode == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) {
+                // A replacement popup may already own focus by the time cleanup runs.
+                for (auto candidate : ctx->windows) {
+                    if (candidate != target && !candidate->marked_for_closing && candidate->rw &&
+                        candidate->rw->keyboard_focus_on_click && layer_surface_for(candidate) == layer)
+                        return;
+                }
+            }
+
+            zwlr_layer_surface_v1_set_keyboard_interactivity(layer->layer_surface, mode);
+            wl_surface_commit(layer->surface);
+        });
+        ctx->have_functions_to_execute = true;
+    }
+    write(ctx->wake_pipe[1], "x", 1);
+}
+
+void windowing::request_keyboard_focus(RawWindow *window) {
+    queue_keyboard_interactivity(window, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE, true);
+}
+
+void windowing::release_keyboard_focus(RawWindow *window) {
+    queue_keyboard_interactivity(window, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE, false);
 }
 
 bool windowing::set_clipboard(RawWindow *window, const std::string &text) {
