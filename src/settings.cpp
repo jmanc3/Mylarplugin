@@ -1,5 +1,6 @@
 
 #include "settings.h"
+#include "text_editor.h"
 
 #include "container.h"
 #include "desktop_icons.h"
@@ -1378,63 +1379,37 @@ static void make_bool_with_button(Container *parent, std::string title, std::str
     make_button(right, button_text, on_click);
 }
 
-struct Field : UserData {
-    std::string text;
-};
-
-static bool is_digits(const std::string& s) {
-    return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); });
-}
-
 static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (std::string)> on_change) {
-    static float pad_amount = 11;
-    static float text_height = 11;
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
-    auto field = new Field;
-    field->text = initial_value;
-    pad->user_data = field;
+    STextEditorOptions options;
+    options.multiline = false;
+    options.only_numbers = only_numbers;
+    options.font_size = 11;
+    options.window = [](Container *root) { return static_cast<MylarWindow *>(root->user_data)->raw_window; };
+    options.viewport = [](Container *root, Container *c) {
+        auto dpi = static_cast<MylarWindow *>(root->user_data)->raw_window->dpi;
+        auto bounds = c->real_bounds;
+        bounds.x += 11 * dpi;
+        bounds.w = std::max(0.0, bounds.w - 22 * dpi);
+        return bounds;
+    };
+    options.on_change = std::move(on_change);
+    setup_text_editor(pad, std::move(initial_value), std::move(options));
     pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        text_height = 11 * dpi;
-        pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, set->font, -1, -1, theme.text, true);
+        auto dpi = static_cast<MylarWindow *>(root->user_data)->raw_window->dpi;
+        auto bounds = measure_text_editor(root, c);
         c->wanted_bounds.w = FILL_SPACE;
-        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+        c->wanted_bounds.h = bounds.h + 11 * dpi * 2 * .8;
     };
-    pad->when_key_event = [only_numbers, on_change](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        if (!c->active && !c->parent->active)
-            return;
-        if (!pressed)
-            return;
-        auto field = (Field *) c->user_data;
-        auto start = field->text;
-        defer(if (start != field->text) { on_change(field->text); });
-        
-        if (sym == XKB_KEY_BackSpace && !field->text.empty()) {
-            field->text.pop_back();
-        }
-        
-        if (is_text) {
-            if (only_numbers && !is_digits(text))
-                return;
-            field->text += text;
-        }
-    };
-  
     pad->when_paint = [](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
+        auto mylar = static_cast<MylarWindow *>(root->user_data);
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        auto field = (Field *) c->user_data;
-
         set_argb(cr, c->active ? theme.accent : theme.field_border);
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
                         c->real_bounds.w, c->real_bounds.h,
                         settings_control_rounding * dpi, 1.0);
         cairo_fill(cr);
-
         set_argb(cr, theme.field_background);
         auto minus_border = c->real_bounds;
         minus_border.shrink(std::round(1 * dpi));
@@ -1442,32 +1417,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
                         minus_border.w, minus_border.h,
                         settings_control_rounding * dpi, 1.0);
         cairo_fill(cr);
-        
-        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, set->font, -1, -1, theme.text, false);
-
-        float over = ((c->real_bounds.h - bounds.h) * .5);
-        
-        if (c->active) {
-            set_argb(cr, theme.text);
-            auto cursor_width = std::round(1.0 * dpi);
-            auto cursor_bounds = Bounds(c->real_bounds.x + c->real_bounds.w - cursor_width - over, 
-                c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-                cursor_width, bounds.h);
-            set_rect(cr, cursor_bounds);
-            cairo_fill(cr);
-        }
-
-        cairo_save(cr);
-        set_rect(cr, c->real_bounds);
-        cairo_clip(cr);
-  
-        draw_text(cr, 
-            c->real_bounds.x + c->real_bounds.w - bounds.w - over, 
-            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            field->text, text_height, true, set->font, -1, -1, theme.text, false);
-        
-        cairo_reset_clip(cr);
-        cairo_restore(cr);
+        paint_text_editor(root, c, theme.text, theme.accent);
     };
     return pad;
 }
@@ -2008,12 +1958,12 @@ static void make_reset_textfield(Container *parent, std::string title, std::stri
     });
     
     make_button(right, "Apply", [field, on_change]() {
-        auto value = ((Field *) field->user_data)->text;
+        auto value = static_cast<STextEditorData *>(field->user_data)->text;
         on_change(value);
     });
     make_button(right, "Reset", [field, reset_value, on_change]() {
-        ((Field *) field->user_data)->text = reset_value;
-        auto value = ((Field *) field->user_data)->text;
+        reset_text_editor(field, reset_value);
+        auto value = static_cast<STextEditorData *>(field->user_data)->text;
         on_change(value);
     });
 }

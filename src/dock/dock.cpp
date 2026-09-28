@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "components.h"
 #include "settings.h"
+#include "text_editor.h"
 #include "simple_dbus.h"
 
 #include "process.hpp"

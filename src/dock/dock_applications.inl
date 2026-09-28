@@ -1,55 +1,30 @@
-struct Field : UserData {
-    std::string text;
-};
-
-static bool is_digits(const std::string& s) {
-    return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isdigit(c); });
-}
-
-static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (Container *root, Container *c, int key, bool pressed,
-                                                 xkb_keysym_t sym, int mods, bool is_text,
-                                                 std::string text, std::string total)> on_change) {
-    static float pad_amount = 11;
-    static float text_height = 11;
+static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void(std::string)> on_change) {
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
-    auto field = new Field;
-    field->text = initial_value;
-    pad->user_data = field;
-    pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto dock = (Dock*)root->user_data;
-        auto cr = dock->applications->raw_window->cr;
-        auto dpi = dock->applications->raw_window->dpi;
-        text_height = 11 * dpi;
-        pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, set->font, -1, -1, {1, 1, 1, 1}, true);
-        c->wanted_bounds.w = FILL_SPACE;
-        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+    STextEditorOptions options;
+    options.multiline = false;
+    options.only_numbers = only_numbers;
+    options.font_size = 11;
+    options.window = [](Container *root) { return static_cast<Dock *>(root->user_data)->applications->raw_window; };
+    options.viewport = [](Container *root, Container *c) {
+        auto dpi = static_cast<Dock *>(root->user_data)->applications->raw_window->dpi;
+        auto bounds = c->real_bounds;
+        bounds.x += 11 * dpi;
+        bounds.w = std::max(0.0, bounds.w - 22 * dpi);
+        return bounds;
     };
-    pad->when_key_event = [only_numbers, on_change](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        if (!c->active && !c->parent->active)
-            return;
-        auto field = (Field *) c->user_data;
-        defer(on_change(root, c, key, pressed, sym, mods, is_text, text, field->text););
-        if (!pressed)
-            return;
-        auto start = field->text;
-        
-        if (sym == XKB_KEY_BackSpace && !field->text.empty()) {
-            field->text.pop_back();
-        }
-        
-        if (is_text) {
-            if (only_numbers && !is_digits(text))
-                return;
-            field->text += text;
-        }
+    options.on_change = std::move(on_change);
+    setup_text_editor(pad, std::move(initial_value), std::move(options));
+    pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dpi = static_cast<Dock *>(root->user_data)->applications->raw_window->dpi;
+        auto bounds = measure_text_editor(root, c);
+        c->wanted_bounds.w = FILL_SPACE;
+        c->wanted_bounds.h = bounds.h + 11 * dpi * 2 * .8;
     };
   
     pad->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock*)root->user_data;
         auto cr = dock->applications->raw_window->cr;
         auto dpi = dock->applications->raw_window->dpi;
-        auto field = (Field *) c->user_data;
 
         set_argb(cr, c->active ? accent : RGBA(.8, .8, .8, 1));
         auto b = c->real_bounds;
@@ -64,24 +39,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         //set_rect(cr, minus_border);
         cairo_fill(cr);
         
-        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, set->font, -1, -1, {1, 1, 1, 1}, false);
-
-        float over = ((c->real_bounds.h - bounds.h) * .5);
-        
-        if (c->active) {
-            set_argb(cr, {0, 0, 0, 1});
-            auto cursor_width = std::round(1.0 * dpi);
-            auto cursor_bounds = Bounds(c->real_bounds.x + over + bounds.w, 
-                c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-                cursor_width, bounds.h);
-            set_rect(cr, cursor_bounds);
-            cairo_fill(cr);
-        }
-        
-        draw_text(cr, 
-            c->real_bounds.x + over, 
-            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            field->text, text_height, true, set->font, -1, -1, {0, 0, 0, 1}, false);
+        paint_text_editor(root, c, RGBA(0, 0, 0, 1), accent);
     };
     return pad;
 }
@@ -191,15 +149,22 @@ static void fill_applications_container(Container *root) {
     static int active_option = 0;
     active_option = 0;
     
-    auto field = make_field(padded, false, "", [](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
-                                                  int mods, bool is_text, std::string text, std::string total) {
-        field_text = total;
+    auto field = make_field(padded, false, "", [](std::string text) {
+        field_text = std::move(text);
+        active_option = 0;
+    });
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+                                     int mods, bool is_text, std::string text) {
+        if (!c->active)
+            return;
+        edit_key(root, c, key, pressed, sym, mods, is_text, text);
         if (pressed) {
             auto dock = (Dock *) root->user_data;
             if (sym == XKB_KEY_Escape) {
                 windowing::close_window(dock->applications->raw_window);
                 active_option = 0;
-            } else if (sym == XKB_KEY_Return) {
+            } else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
                 if (auto o_ = container_by_name("scroll_content", root)) {
                     auto o = ((ScrollContainer *) o_)->content;
                     bool none_matched = true;
@@ -214,8 +179,8 @@ static void fill_applications_container(Container *root) {
                         }
                     }
                     if (none_matched) {
-                        if (!total.empty())
-                            launch_command(total);
+                        if (!field_text.empty())
+                            launch_command(field_text);
                     }
                 }
                 windowing::close_window(dock->applications->raw_window);
@@ -223,11 +188,9 @@ static void fill_applications_container(Container *root) {
                 active_option--;
             } else if (sym == XKB_KEY_Down) {
                 active_option++;
-            } else if (is_text) {
-                active_option = 0;
             }
         }
-    });
+    };
 
     auto scroll_parent = padded->child(FILL_SPACE, FILL_SPACE);
     auto scroll = make_newscrollpane_as_child(scroll_parent, ScrollPaneSettings(1.0), [](Container *root) {
@@ -367,4 +330,3 @@ static void fill_applications_container(Container *root) {
         };
     }
 }
-

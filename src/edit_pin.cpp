@@ -150,29 +150,6 @@ static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double
     cairo_close_path(cr);
 }
 
-// Returns the starting index of the line containing `pos`.
-static int line_start(const std::string &text, int pos) {
-    if (pos <= 0) return 0;
-    int nl = text.rfind('\n', pos - 1);
-    return (nl == std::string::npos) ? 0 : nl + 1;
-}
-
-// Returns the index *after* the end of the line containing `pos`.
-static int line_end(const std::string &text, int pos) {
-    int nl = text.find('\n', pos);
-    return (nl == std::string::npos) ? text.size() : nl;
-}
-
-static bool did_double_click(long *last_time, long *last_activation, long timeout) {
-    long current = get_current_time_in_ms();
-    if (current - *last_time < timeout && current - *last_activation > timeout * 2) {
-        *last_activation = current;
-        return true; 
-    }
-    *last_time = current;
-    return false;
-}
-
 static void collect_preorder(Container *node, std::vector<Container*> &out) {
     if (!node) return;
     for (auto *child : node->children)
@@ -270,694 +247,73 @@ Container *get_root(Container *c) {
 static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
 
 static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
-    auto label_data = new LabelData;
-    
-    auto text = func(root, label_parent);
-    label_data->cursor = text.size();
-    label_data->text = text;
     label_parent->type = ::absolute;
-
-    static int padding = 10.0f;
-    static float rounding = 6.0f;
-    
+    auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
+    STextEditorOptions options;
+    options.bold = bold;
+    options.editable = editable;
+    options.parent_activates = true;
+    options.window = [](Container *root) { return static_cast<PinData *>(root->user_data)->window->raw_window; };
+    options.viewport = [](Container *root, Container *c) { return c->real_bounds; };
+    options.on_tab = [](Container *root, Container *c, bool previous) {
+        auto data = static_cast<PinData *>(root->user_data);
+        std::weak_ptr<bool> lifetime = c->lifetime;
+        std::weak_ptr<bool> root_lifetime = root->lifetime;
+        windowing::timer(data->app, 1, [root, c, previous, lifetime, root_lifetime](void *) {
+            if (lifetime.expired() || root_lifetime.expired())
+                return;
+            if (previous)
+                activate_previous_activatable(root, c);
+            else
+                activate_next_activatable(root, c);
+        }, nullptr);
+    };
+    setup_text_editor(label, func(root, label_parent), std::move(options));
+    label->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto bounds = measure_text_editor(root, c);
+        c->wanted_bounds.w = FILL_SPACE;
+        c->wanted_bounds.h = bounds.h;
+    };
     label_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto child = c->children[0];
-        auto data = (PinData *) root->user_data;
-        auto dpi = data->window->raw_window->dpi;
-        
-        if (child->pre_layout) {
-            child->pre_layout(root, child, b);
-            auto hh = child->wanted_bounds.w + padding * 2 * dpi;
-            auto hhh = child->wanted_bounds.h + padding * dpi;
-            //if (child->wanted_bounds.w > b.w)
-                //child->wanted_bounds.w = b.w - padding;
-            auto bounds = Bounds(b.x + hh * .5 - child->wanted_bounds.w * .5, b.y + hhh * .5 - child->wanted_bounds.h * .5, 
-            child->wanted_bounds.w, child->wanted_bounds.h);
-
-            {
-                auto label_data = (LabelData *) child->user_data;
-                bounds.x -= label_data->scroll_x; 
-                
-                // keep cursor on screen via scrolling
-            }
-            
-            ::layout(root, child, bounds);
-        }
-        
+        auto dpi = static_cast<PinData *>(root->user_data)->window->raw_window->dpi;
+        child->pre_layout(root, child, b);
         c->wanted_bounds.w = FILL_SPACE;
-        c->wanted_bounds.h = child->wanted_bounds.h + padding * dpi;
+        c->wanted_bounds.h = child->wanted_bounds.h + 10 * dpi;
+        ::layout(root, child, Bounds(b.x + 10 * dpi, b.y + 5 * dpi,
+            std::max(0.0, b.w - 20 * dpi), child->wanted_bounds.h));
     };
-    label_parent->when_paint = [bold, editable](Container *root, Container *c) {
+    label_parent->when_paint = [editable](Container *root, Container *c) {
         if (!editable)
             return;
-        auto data = (PinData *) root->user_data;
-        auto cr = data->window->raw_window->cr;
-        auto dpi = data->window->raw_window->dpi;
-        
+        auto window = static_cast<PinData *>(root->user_data)->window->raw_window;
+        auto cr = window->cr;
         set_argb(cr, {1, 1, 1, 1});
-        rounded_rect_new(cr, rounding * dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        rounded_rect_new(cr, 6 * window->dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
         cairo_fill(cr);
-
-        if (c->children[0]->active || c->active) {
-            set_argb(cr, {.23, .6, 1, 1});
-        } else {
-            set_argb(cr, {0, 0, 0, .2});
-        }
-        rounded_rect_new(cr, rounding * dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        set_argb(cr, c->active || c->children[0]->active ? RGBA(.23, .6, 1, 1) : RGBA(0, 0, 0, .2));
+        rounded_rect_new(cr, 6 * window->dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
         cairo_stroke(cr);
-
-        auto b = c->real_bounds;
-        b.x += padding * dpi;
-        b.w -= padding * 2 * dpi;
-        b.y += padding * dpi * .5;
-        b.h -= padding * dpi;
-        set_rect(cr, b);
-        cairo_clip(cr);
     };
-    label_parent->after_paint = paint {
-        auto data = (PinData *) root->user_data;
-        auto cr = data->window->raw_window->cr;
-        auto dpi = data->window->raw_window->dpi;
-        cairo_reset_clip(cr);
+    label->when_paint = [](Container *root, Container *c) {
+        paint_text_editor(root, c, RGBA(0, 0, 0, 1), RGBA(.2, .5, .8, 1));
     };
-
-    auto label = label_parent->child(FILL_SPACE, FILL_SPACE);
-    label_parent->when_drag_end_is_click = false;
-    label->when_drag_end_is_click = false;
-    
-    label->user_data = label_data;
-
-    label->pre_layout = [bold, editable](Container* root, Container* c, const Bounds &b) {
-        auto data = (PinData *) root->user_data;
-        auto label_data = (LabelData *) c->user_data;
-        auto text = label_data->text;
-        auto cr = data->window->raw_window->cr;
-
-        int size = 13 * data->window->raw_window->dpi;
-
-        auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
-        if (bold)
-            layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_BOLD, false);
-        pango_layout_set_text(layout, text.data(), text.size());
-        cairo_set_source_rgba(cr, 0, 0, 0, 1);
-        PangoRectangle ink;
-        PangoRectangle logical;
-        pango_layout_get_pixel_extents(layout, &ink, &logical);
-        
-        c->wanted_bounds.w = logical.width;
-        c->wanted_bounds.h = logical.height;
-    };
-    static auto keep_cursor_in_view = [](Container *c, PinData *data, LabelData *label_data) {
-        auto cr = data->window->raw_window->cr;
-        int size = 13 * data->window->raw_window->dpi;
-        float dpi = data->window->raw_window->dpi;
-
-        constexpr float caret_margin = 60.0f; // critical
-
-        auto layout = get_cached_pango_font(
-            cr,
-            set->font,
-            size,
-            PANGO_WEIGHT_NORMAL,
-            false
-        );
-
-        pango_layout_set_text(layout,
-                              label_data->text.data(),
-                              label_data->text.size());
-
-        PangoRectangle strong, weak;
-        pango_layout_get_cursor_pos(layout,
-                                    label_data->cursor,
-                                    &strong,
-                                    &weak);
-
-        // Pixel-accurate caret geometry
-        float caret_x =
-            std::floor(strong.x / (float)PANGO_SCALE);
-        float caret_w =
-            std::max(1.0f, std::ceil(strong.width / (float)PANGO_SCALE));
-
-        float view_w = c->parent->real_bounds.w - padding * 2 * dpi;
-        if (view_w <= 0)
-            return;
-
-        float view_left  = label_data->scroll_x;
-        float view_right = view_left + view_w;
-
-        // ---- LEFT SIDE FIX ----
-        if (caret_x < view_left + caret_margin) {
-            label_data->scroll_x = caret_x - caret_margin;
-        }
-        // ---- RIGHT SIDE FIX ----
-        else if (caret_x + caret_w > view_right - caret_margin) {
-            label_data->scroll_x =
-                caret_x + caret_w - view_w + caret_margin;
-        }
-
-        // Clamp
-        auto bounds = draw_text(cr, 0, 0, label_data->text, size, false);
-        float overflow_x = bounds.w - view_w;
-        if (overflow_x < 0)
-            overflow_x = 0;
-
-        if (label_data->scroll_x < 0)
-            label_data->scroll_x = 0;
-        if (label_data->scroll_x > overflow_x)
-            label_data->scroll_x = overflow_x;
-    };
-    static auto execute_scroll = [](Container *c, PinData *data, LabelData *label_data, float scroll_y) {
-        auto cr = data->window->raw_window->cr;
-        int size = 13 * data->window->raw_window->dpi;
-
-        label_data->scroll_x -= scroll_y;
-        if (label_data->scroll_x < 0)
-           label_data->scroll_x = 0;
-
-        auto dpi = data->window->raw_window->dpi;
-
-        auto bounds = draw_text(cr, 0, 0, label_data->text, size, false);
-        float overflow_x = bounds.w - (c->parent->real_bounds.w - padding * 2 * dpi);
-        if (overflow_x <= 0)
-            overflow_x = 0;
-
-        if (label_data->scroll_x > overflow_x) {
-            label_data->scroll_x = overflow_x;
-        }
-    };
-    label->when_fine_scrolled = [editable](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
-        if (!editable)
-            return;
-        auto data = (PinData *) root->user_data;
-        auto label_data = (LabelData *) c->user_data;
-        execute_scroll(c, data, label_data, scroll_y);
-    };
-    label_parent->when_fine_scrolled = [editable](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
-        if (!editable)
-            return;
-        auto data = (PinData *) root->user_data;
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        execute_scroll(c->children[0], data, label_data, scroll_y);
-    };
-    label->when_key_event = [editable](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        if (!c->active && !c->parent->active)
-            return;
-        auto pin_data = (PinData *) root->user_data;
-        auto label_data = (LabelData *) c->user_data;
-        auto label_text = &label_data->text;
-        defer(keep_cursor_in_view(c, pin_data, label_data));
-        
-        if (!pressed)
-            return;
-        if (!editable)
-            return;
-        auto record_edit = [label_data]() {
-            label_data->undo_stack.push_back({label_data->text, label_data->cursor, label_data->selection, label_data->selecting});
-            label_data->redo_stack.clear();
-            label_data->coalescing_edit = 0;
-            label_data->last_text_cursor = -1;
+    if (editable) {
+        label_parent->when_drag_end_is_click = false;
+        // Padding around the text participates in the same selection gesture.
+        label_parent->when_mouse_down = [label](Container *root, Container *c) {
+            label->active = true;
+            label->viakey = true;
+            label->when_mouse_down(root, label);
         };
-        if (mods & Modifier::MOD_CTRL) {
-            bool is_z = sym == XKB_KEY_z || sym == XKB_KEY_Z;
-            bool undo = is_z && !(mods & Modifier::MOD_SHIFT);
-            bool redo = sym == XKB_KEY_y || sym == XKB_KEY_Y ||
-                (is_z && (mods & Modifier::MOD_SHIFT));
-            if (undo || redo) {
-                auto &source = redo ? label_data->redo_stack : label_data->undo_stack;
-                auto &destination = redo ? label_data->undo_stack : label_data->redo_stack;
-                if (!source.empty()) {
-                    destination.push_back({label_data->text, label_data->cursor, label_data->selection, label_data->selecting});
-                    auto state = std::move(source.back());
-                    source.pop_back();
-                    label_data->text = std::move(state.text);
-                    label_data->cursor = state.cursor;
-                    label_data->selection = state.selection;
-                    label_data->selecting = state.selecting;
-                }
-                label_data->coalescing_edit = 0;
-                label_data->last_text_cursor = -1;
-                return;
-            }
-        }
-        if (!is_text && sym != XKB_KEY_BackSpace && sym != XKB_KEY_Delete) {
-            label_data->coalescing_edit = 0;
-            label_data->last_text_cursor = -1;
-        }
-        if ((mods & Modifier::MOD_CTRL) &&
-            (sym == XKB_KEY_c || sym == XKB_KEY_C ||
-             sym == XKB_KEY_x || sym == XKB_KEY_X)) {
-            if (label_data->selecting && label_data->cursor != label_data->selection) {
-                int min = std::min(label_data->cursor, label_data->selection);
-                int max = std::max(label_data->cursor, label_data->selection);
-                auto selected_text = label_text->substr(min, max - min);
-                bool clipboard_set = windowing::set_clipboard(pin_data->window->raw_window, selected_text);
-                if (clipboard_set && (sym == XKB_KEY_x || sym == XKB_KEY_X)) {
-                    record_edit();
-                    label_text->erase(min, max - min);
-                    label_data->cursor = min;
-                    label_data->selecting = false;
-                }
-            }
-            return;
-        }
-        if ((mods & Modifier::MOD_CTRL) && (sym == XKB_KEY_v || sym == XKB_KEY_V)) {
-            auto raw_window = pin_data->window->raw_window;
-            windowing::get_clipboard(raw_window, [root, c, raw_window](std::string pasted_text) {
-                if (!windowing::has_window(raw_window) || pasted_text.empty())
-                    return;
-                auto pin_data = static_cast<PinData *>(root->user_data);
-                auto label_data = static_cast<LabelData *>(c->user_data);
-                int insertion = label_data->cursor;
-                label_data->undo_stack.push_back({label_data->text, label_data->cursor, label_data->selection, label_data->selecting});
-                label_data->redo_stack.clear();
-                label_data->coalescing_edit = 0;
-                label_data->last_text_cursor = -1;
-                if (label_data->selecting) {
-                    int min = std::min(label_data->cursor, label_data->selection);
-                    int max = std::max(label_data->cursor, label_data->selection);
-                    label_data->text.erase(min, max - min);
-                    insertion = min;
-                }
-                label_data->text.insert(insertion, pasted_text);
-                label_data->cursor = insertion + pasted_text.size();
-                label_data->selecting = false;
-                keep_cursor_in_view(c, pin_data, label_data);
-                windowing::redraw(raw_window);
-            });
-            return;
-        }
-        if (is_text) {
-            if (text.empty())
-                return;
-            bool had_selection = label_data->selecting && label_data->cursor != label_data->selection;
-            if (had_selection) {
-                record_edit();
-                int min = std::min(label_data->cursor, label_data->selection);
-                int max = std::max(label_data->cursor, label_data->selection);
-                int len = max - min;
-                label_text->erase(min, len);
-                label_data->selecting = false;
-                label_data->cursor = min;
-            } else {
-                label_data->selecting = false;
-            }
-            if (!had_selection && (label_data->coalescing_edit != 1 || label_data->cursor != label_data->last_text_cursor)) {
-                record_edit();
-            }
-            if (!text.empty()) {
-                label_text->insert(label_data->cursor, text);
-                label_data->cursor += text.size();
-                label_data->redo_stack.clear();
-                label_data->coalescing_edit = 1;
-                label_data->last_text_cursor = label_data->cursor;
-            }
-            return;
-        }
-        if (sym == XKB_KEY_Return) {
-            record_edit();
-            if (label_data->selecting) {
-                int min = std::min(label_data->cursor, label_data->selection);
-                int max = std::max(label_data->cursor, label_data->selection);
-                int len = max - min;
-                label_text->erase(min, len);
-                label_data->selecting = false;
-                label_data->cursor = min;
-            } 
-            label_text->insert(label_data->cursor, "\n");
-            label_data->cursor++;
-        } else if (sym == XKB_KEY_Tab) {
-            auto root_data = (PinData *) root->user_data;
-            // we lose the first captured param for some reason, and crash if we attempt to use it?????
-            windowing::timer(root_data->app, 1, [root, c](void *data) {
-                auto actual_root = get_root(c);
-                activate_next_activatable(actual_root, c);
-            }, nullptr);
-        } else if (sym == XKB_KEY_ISO_Left_Tab) {
-            auto root_data = (PinData *) root->user_data;
-            windowing::timer(root_data->app, 1, [root, c](void *data) {
-                auto actual_root = get_root(c);
-                activate_previous_activatable(actual_root, c);
-            }, nullptr);
-        } else if (sym == XKB_KEY_BackSpace) {
-            bool has_selection = label_data->selecting && label_data->cursor != label_data->selection;
-            bool has_character_before = !label_text->empty() && label_data->cursor > 0;
-            if (has_selection) {
-                record_edit();
-                int min = std::min(label_data->cursor, label_data->selection);
-                int max = std::max(label_data->cursor, label_data->selection);
-                label_text->erase(min, max - min);
-                label_data->selecting = false;
-                label_data->cursor = min;
-            } else {
-                label_data->selecting = false;
-                if (has_character_before) {
-                    if (label_data->coalescing_edit != 2 || label_data->cursor != label_data->last_text_cursor)
-                        record_edit();
-                    label_text->erase(label_data->cursor - 1, 1);
-                    label_data->cursor--;
-                    label_data->coalescing_edit = 2;
-                    label_data->last_text_cursor = label_data->cursor;
-                }
-            }
-        } else if (sym == XKB_KEY_Left) {
-            if (mods & Modifier::MOD_SHIFT) {
-                if (!label_data->selecting) {
-                    label_data->selecting = true;
-                    label_data->selection = label_data->cursor;
-                    label_data->cursor = label_data->cursor;
-                }
-                label_data->cursor--;
-                if (label_data->cursor < 0)
-                   label_data->cursor = 0;                    
-            } else {
-                label_data->selecting = false;
-                label_data->cursor--;
-                if (label_data->cursor < 0)
-                   label_data->cursor = 0;
-            }
-        } else if (sym == XKB_KEY_Right) {
-            if (mods & Modifier::MOD_SHIFT) {
-                if (!label_data->selecting) {
-                    label_data->selecting = true;
-                    label_data->selection = label_data->cursor;
-                    label_data->cursor = label_data->cursor;
-                }
-                label_data->cursor++;
-                if (label_data->cursor > label_text->size())
-                    label_data->cursor = label_text->size();
-            } else {
-                label_data->selecting = false;
-                label_data->cursor++;
-                if (label_data->cursor > label_text->size())
-                    label_data->cursor = label_text->size();
-            }
-        } else if (sym == XKB_KEY_Delete) {
-            bool has_selection = label_data->selecting && label_data->cursor != label_data->selection;
-            bool has_character_after = !label_text->empty() && label_data->cursor < label_text->size();
-            if (has_selection) {
-                record_edit();
-                int min = std::min(label_data->cursor, label_data->selection);
-                int max = std::max(label_data->cursor, label_data->selection);
-                label_text->erase(min, max - min);
-                label_data->selecting = false;
-                label_data->cursor = min;
-            } else {
-                label_data->selecting = false;
-                if (has_character_after) {
-                    if (label_data->coalescing_edit != 3 || label_data->cursor != label_data->last_text_cursor)
-                        record_edit();
-                    label_text->erase(label_data->cursor, 1);
-                    label_data->coalescing_edit = 3;
-                    label_data->last_text_cursor = label_data->cursor;
-                }
-            }
-        } else if (sym == XKB_KEY_a) {
-            if (mods & Modifier::MOD_CTRL) {
-                label_data->selecting = true;
-                label_data->cursor = label_data->text.size();
-                label_data->selection = 0;
-            }
-        } else if (sym == XKB_KEY_Up) {
-            int cur = label_data->cursor;
-            int start = line_start(label_data->text, cur);
-            if (start == 0)
-                return; // already on first line
-
-            // Current column
-            int col = cur - start;
-
-            // Previous line boundaries
-            int prev_end = start - 1; // the '\n' before this line
-            int prev_start = line_start(label_data->text, prev_end);
-
-            int prev_len = prev_end - prev_start;
-            int new_cursor = prev_start + std::min(col, prev_len);
-
-            // Selection logic (matches your Left-arrow example)
-            if (mods & Modifier::MOD_SHIFT) {
-                if (!label_data->selecting) {
-                    label_data->selecting = true;
-                    label_data->selection = label_data->cursor;
-                }
-            } else {
-                label_data->selecting = false;
-            }
-
-            label_data->cursor = new_cursor;
-        } else if (sym == XKB_KEY_Down) {
-            int cur = label_data->cursor;
-            int start = line_start(label_data->text, cur);
-            int end = line_end(label_data->text, cur);
-            if (end >= (int)label_data->text.size())
-                return; // last line; nowhere to go
-
-            // Current column
-            int col = cur - start;
-
-            // Next line starts right after '\n'
-            int next_start = end + 1;
-            int next_end = line_end(label_data->text, next_start);
-            int next_len = next_end - next_start;
-
-            int new_cursor = next_start + std::min(col, next_len);
-
-            // Selection logic
-            if (mods & Modifier::MOD_SHIFT) {
-                if (!label_data->selecting) {
-                    label_data->selecting = true;
-                    label_data->selection = label_data->cursor;
-                }
-            } else {
-                label_data->selecting = false;
-            }
-
-            label_data->cursor = new_cursor;
-        }
-    };
-    label->when_paint = [bold, editable](Container* root, Container* c) {
-        auto data = (PinData *) root->user_data;
-        auto label_data = (LabelData *) c->user_data;
-        if (!c->active && !c->parent->active)
-            label_data->selecting = false;
-        auto text = label_data->text;
-        auto cr = data->window->raw_window->cr;
-
-        int size = 13 * data->window->raw_window->dpi;
-        
-        auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
-        if (bold)
-            layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_BOLD, false);
-        pango_layout_set_text(layout, text.data(), text.size());
-        PangoRectangle ink;
-        PangoRectangle logical;
-        pango_layout_get_pixel_extents(layout, &ink, &logical);
-        
-        PangoRectangle cursor_strong_pos;
-        PangoRectangle cursor_weak_pos;
-        pango_layout_get_cursor_pos(layout, label_data->cursor, &cursor_strong_pos, &cursor_weak_pos);
-
-        if (label_data->selecting) { // selection painting
-            set_argb(cr, RGBA(.2, .5, .8, 1));
-            PangoRectangle selection_strong_pos;
-            PangoRectangle selection_weak_pos;
-            pango_layout_get_cursor_pos(layout, label_data->selection, &selection_strong_pos, &selection_weak_pos);
-            
-            bool cursor_first = false;
-            if (cursor_strong_pos.y == selection_strong_pos.y) {
-                if (cursor_strong_pos.x < selection_strong_pos.x) {
-                    cursor_first = true;
-                }
-            } else if (cursor_strong_pos.y < selection_strong_pos.y) {
-                cursor_first = true;
-            }
-            
-            double w = std::max(c->real_bounds.w, c->parent->real_bounds.w);
-            
-            double minx = std::min(selection_strong_pos.x, cursor_strong_pos.x) / PANGO_SCALE;
-            double miny = std::min(selection_strong_pos.y, cursor_strong_pos.y) / PANGO_SCALE;
-            double maxx = std::max(selection_strong_pos.x, cursor_strong_pos.x) / PANGO_SCALE;
-            double maxy = std::max(selection_strong_pos.y, cursor_strong_pos.y) / PANGO_SCALE;
-            double h = selection_strong_pos.height / PANGO_SCALE;
-            
-            if (maxy == miny) {// Same line
-                set_argb(cr, RGBA(.2, .5, .8, 1));
-                set_rect(cr, Bounds(c->real_bounds.x + minx, c->real_bounds.y + miny, maxx - minx, h));
-                cairo_fill(cr);
-            } else {
-                Bounds b;
-                if ((maxy - miny) > h) {// More than one line off difference
-                    b = Bounds(c->real_bounds.x, c->real_bounds.y + miny + h, w, maxy - miny - h);
-                    set_rect(cr, b);
-                    set_argb(cr, RGBA(.2, .5, .8, 1));
-                    cairo_fill(cr);
-                }
-                // If the y's aren't on the same line then we always draw the two rects
-                // for when there's a one line diff
-                
-                if (cursor_first) {
-                    // Top line
-                    b = Bounds(c->real_bounds.x + cursor_strong_pos.x / PANGO_SCALE,
-                               c->real_bounds.y + cursor_strong_pos.y / PANGO_SCALE,
-                               w,
-                               h);
-                    set_rect(cr, b);
-                    set_argb(cr, RGBA(.2, .5, .8, 1));
-                    cairo_fill(cr);
-                    
-                    // Bottom line
-                    int bottom_width = selection_strong_pos.x / PANGO_SCALE;
-                    b = Bounds(c->real_bounds.x,
-                               c->real_bounds.y + selection_strong_pos.y / PANGO_SCALE,
-                               bottom_width,
-                               h);
-                    set_rect(cr, b);
-                    set_argb(cr, RGBA(.2, .5, .8, 1));
-                    cairo_fill(cr);
-                } else {
-                    // Top line
-                    b = Bounds(c->real_bounds.x + selection_strong_pos.x / PANGO_SCALE,
-                               c->real_bounds.y + selection_strong_pos.y / PANGO_SCALE,
-                               w,
-                               h);
-                    set_rect(cr, b);
-                    set_argb(cr, RGBA(.2, .5, .8, 1));
-                    cairo_fill(cr);
-                    
-                    // Bottom line
-                    int bottom_width = cursor_strong_pos.x / PANGO_SCALE;
-                    b = Bounds(c->real_bounds.x,
-                               c->real_bounds.y + cursor_strong_pos.y / PANGO_SCALE,
-                               bottom_width,
-                               h);
-                    set_rect(cr, b);
-                    set_argb(cr, RGBA(.2, .5, .8, 1));
-                    cairo_fill(cr);
-                 }
-            }
-        }
-        
-        cairo_set_source_rgba(cr, 0, 0, 0, 1);
-        cairo_move_to(cr, 
-            c->real_bounds.x + c->real_bounds.w * .5 - logical.width * .5, 
-            c->real_bounds.y + c->real_bounds.h * .5 - logical.height * .5);
-        pango_cairo_show_layout(cr, layout);
-
-        if ((c->active || c->parent->active) && !bold) {
-            int kern_offset = cursor_strong_pos.x != 0 ? -1 : 0;
-            set_rect(cr, Bounds(cursor_strong_pos.x / PANGO_SCALE + c->real_bounds.x + kern_offset,
-                            cursor_strong_pos.y / PANGO_SCALE + c->real_bounds.y,
-                            1.0f,
-                            cursor_strong_pos.height / PANGO_SCALE));
-            set_argb(cr, {0, 0, 0, 1});
-            cairo_fill(cr);
-        }
-    };
-    static auto update_index = [](Container* root, Container* c, bool bold, std::string text, int *target = nullptr) {
-        auto data = (PinData *) root->user_data;
-        auto cr = data->window->raw_window->cr;
-        auto label_data = (LabelData *) c->user_data;
-        
-        int size = 13 * data->window->raw_window->dpi;
-
-        auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
-        if (bold)
-            layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_BOLD, false);
-        pango_layout_set_text(layout, text.data(), text.size());
- 
-        int index;
-        int trailing;
-        float x = root->mouse_current_x - c->real_bounds.x;
-        float y = root->mouse_current_y - c->real_bounds.y;
-        bool inside = pango_layout_xy_to_index(layout, x * PANGO_SCALE, y * PANGO_SCALE, &index, &trailing);
-        if (target) {
-            *target = index + trailing;        
-        } else {
-            label_data->cursor = index + trailing;        
-        }
-    };
-    label->when_clicked = paint {
-        auto label_data = (LabelData *) c->user_data;
-        if (did_double_click(&label_data->last_time, &label_data->last_activation, 400))  {
-            if (label_data->selecting) {
-                label_data->selecting = false;
-            } else {
-                label_data->selecting = true;
-                label_data->selection = 0;
-                label_data->cursor = label_data->text.size();
-            }
-        }
-    };
-    label->when_mouse_down = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->user_data;
-        auto text = label_data->text;
-        update_index(root, c, bold, text);
-        label_data->selection = label_data->cursor;
-    };
-    label->when_drag_start = [bold](Container* root, Container* c) {
-        auto label_data = (LabelData*)c->user_data;
-        auto text = label_data->text;
-        label_data->selecting = true;
-        update_index(root, c, bold, text);
-        label_data->selecting = label_data->cursor;
-    };
-    label->when_drag = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->user_data;
-        label_data->selecting = true;
-        auto text = label_data->text;
-        update_index(root, c, bold, text);
-    };
-    label->when_drag_end = [bold](Container* root, Container* c) {
-        auto label_data = (LabelData*)c->user_data;
-        label_data->selecting = true;
-        auto text = label_data->text;
-        update_index(root, c, bold, text);
-    };
-    label_parent->when_clicked = paint {
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        if (did_double_click(&label_data->last_time, &label_data->last_activation, 400))  {
-            if (label_data->selecting) {
-                label_data->selecting = false;
-            } else {
-                label_data->selecting = true;
-                label_data->selection = 0;
-                label_data->cursor = label_data->text.size();
-            }
-        }
-    };
-    label_parent->when_mouse_down = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        label_data->selecting = false;
-        auto text = label_data->text;
-        update_index(root, c->children[0], bold, text);
-        c->children[0]->active = true;
-        c->children[0]->viakey = true;
-        label_data->selection = label_data->cursor;
-    };
-    label_parent->when_drag = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        label_data->selecting = true;
-        auto text = label_data->text;
-        update_index(root, c->children[0], bold, text);
-        c->children[0]->active = true;
-        c->children[0]->viakey = true;
-    };
-    label_parent->when_drag_start = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        label_data->selecting = true;
-        auto text = label_data->text;
-        update_index(root, c->children[0], bold, text);
-        c->children[0]->active = true;
-        c->children[0]->viakey = true;
-        label_data->selection = label_data->cursor;
-    };
-    label_parent->when_drag_end = [bold](Container *root, Container *c) {
-        auto label_data = (LabelData *) c->children[0]->user_data;
-        label_data->selecting = true;
-        auto text = label_data->text;
-        update_index(root, c->children[0], bold, text);
-        c->children[0]->active = true;
-        c->children[0]->viakey = true;
-    };
+        label_parent->when_clicked = [label](Container *root, Container *c) { label->when_clicked(root, label); };
+        label_parent->when_drag_start = [label](Container *root, Container *c) { label->when_drag_start(root, label); };
+        label_parent->when_drag = [label](Container *root, Container *c) { label->when_drag(root, label); };
+        label_parent->when_drag_end = [label](Container *root, Container *c) { label->when_drag_end(root, label); };
+        label_parent->when_fine_scrolled = [label](Container *root, Container *c, double x, double y, bool touchpad) {
+            label->when_fine_scrolled(root, label, x, y, touchpad);
+        };
+    }
     return label;
 }
 
