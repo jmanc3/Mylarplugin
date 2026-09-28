@@ -470,6 +470,44 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
             return;
         if (!editable)
             return;
+        if ((mods & Modifier::MOD_CTRL) &&
+            (sym == XKB_KEY_c || sym == XKB_KEY_C ||
+             sym == XKB_KEY_x || sym == XKB_KEY_X)) {
+            if (label_data->selecting && label_data->cursor != label_data->selection) {
+                int min = std::min(label_data->cursor, label_data->selection);
+                int max = std::max(label_data->cursor, label_data->selection);
+                auto selected_text = label_text->substr(min, max - min);
+                bool clipboard_set = windowing::set_clipboard(pin_data->window->raw_window, selected_text);
+                if (clipboard_set && (sym == XKB_KEY_x || sym == XKB_KEY_X)) {
+                    label_text->erase(min, max - min);
+                    label_data->cursor = min;
+                    label_data->selecting = false;
+                }
+            }
+            return;
+        }
+        if ((mods & Modifier::MOD_CTRL) && (sym == XKB_KEY_v || sym == XKB_KEY_V)) {
+            auto raw_window = pin_data->window->raw_window;
+            windowing::get_clipboard(raw_window, [root, c, raw_window](std::string pasted_text) {
+                if (!windowing::has_window(raw_window) || pasted_text.empty())
+                    return;
+                auto pin_data = static_cast<PinData *>(root->user_data);
+                auto label_data = static_cast<LabelData *>(c->user_data);
+                int insertion = label_data->cursor;
+                if (label_data->selecting) {
+                    int min = std::min(label_data->cursor, label_data->selection);
+                    int max = std::max(label_data->cursor, label_data->selection);
+                    label_data->text.erase(min, max - min);
+                    insertion = min;
+                }
+                label_data->text.insert(insertion, pasted_text);
+                label_data->cursor = insertion + pasted_text.size();
+                label_data->selecting = false;
+                keep_cursor_in_view(c, pin_data, label_data);
+                windowing::redraw(raw_window);
+            });
+            return;
+        }
         if (is_text) {
             if (label_data->selecting) {
                 int min = std::min(label_data->cursor, label_data->selection);

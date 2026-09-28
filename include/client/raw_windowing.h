@@ -180,6 +180,10 @@ namespace windowing {
     // Try to paint only this window; defer if its previous frame is still pending.
     void redraw_now(RawWindow *window);
 
+    // Clipboard access must be initiated on the owning Wayland event-loop thread.
+    bool set_clipboard(RawWindow *window, const std::string &text);
+    void get_clipboard(RawWindow *window, std::function<void(std::string)> callback);
+
     bool has_window(RawWindow *window);
     
     // bool denotes if window found

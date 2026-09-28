@@ -71,6 +71,7 @@ static int unique_id = 0;
 static uint32_t popup_reposition_token = 1;
 
 struct wl_window;
+struct wl_context;
 
 bool wl_window_resize_buffer(struct wl_window *win, int new_width, int new_height);
 
@@ -95,6 +96,26 @@ struct output {
     bool received_geom = false;
     int32_t physical_height = -1;
     int32_t physical_width  = -1;
+};
+
+struct clipboard_offer_state {
+    wl_data_offer *offer = nullptr;
+    std::vector<std::string> mime_types;
+    bool selected = false;
+    int active_reads = 0;
+};
+
+struct clipboard_source_state {
+    wl_data_source *source = nullptr;
+    wl_context *ctx = nullptr;
+    std::string text;
+};
+
+struct clipboard_read_state {
+    int fd = -1;
+    std::string text;
+    clipboard_offer_state *offer = nullptr;
+    std::function<void(std::string)> callback;
 };
 
 struct pending_pointer_axis_event {
@@ -218,6 +239,14 @@ struct wl_context {
     struct wl_compositor *compositor = nullptr;
     struct wl_shm *shm = nullptr;
     struct wl_seat *seat = nullptr;
+    struct wl_data_device_manager *data_device_manager = nullptr;
+    struct wl_data_device *data_device = nullptr;
+    clipboard_offer_state *selection_offer = nullptr;
+    clipboard_source_state *clipboard_source = nullptr;
+    std::vector<clipboard_offer_state *> clipboard_offers;
+    std::vector<clipboard_read_state *> clipboard_reads;
+    uint32_t last_keyboard_serial = 0;
+    bool has_keyboard_serial = false;
     struct xdg_wm_base *wm_base = nullptr;
     struct zwlr_layer_shell_v1 *layer_shell = nullptr;
     struct wl_keyboard *keyboard = nullptr;
@@ -1483,6 +1512,8 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
     keyboard_emit_key(ctx, key, state, true);
 
     if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+        ctx->last_keyboard_serial = serial;
+        ctx->has_keyboard_serial = true;
         const xkb_keycode_t keycode = key + 8;
         const bool repeatable = ctx->keymap && xkb_keymap_key_repeats(ctx->keymap, keycode);
         if (repeatable && ctx->key_repeat_rate > 0) {
@@ -1540,6 +1571,8 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 /* ---- seat listener ---- */
+static void ensure_data_device(wl_context *ctx);
+
 static void seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t caps) {
     wl_context *d = (wl_context *) data;
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !d->pointer) {
@@ -1561,6 +1594,7 @@ static void seat_handle_capabilities(void *data, struct wl_seat *seat, uint32_t 
         wl_keyboard_destroy(d->keyboard);
         d->keyboard = NULL;
     }
+    ensure_data_device(d);
 }
 
 static void seat_handle_name(void *data, struct wl_seat *seat, const char *name) {
@@ -1571,6 +1605,130 @@ static const struct wl_seat_listener seat_listener = {
     .capabilities = seat_handle_capabilities,
     .name = seat_handle_name,
 };
+
+static void clipboard_offer_mime_type(void *data, wl_data_offer *offer, const char *mime_type) {
+    auto state = static_cast<clipboard_offer_state *>(data);
+    if (mime_type)
+        state->mime_types.emplace_back(mime_type);
+}
+
+static const wl_data_offer_listener clipboard_offer_listener = {
+    .offer = clipboard_offer_mime_type,
+};
+
+static void clipboard_data_device_offer(void *data, wl_data_device *device, wl_data_offer *offer) {
+    auto ctx = static_cast<wl_context *>(data);
+    auto state = new clipboard_offer_state;
+    state->offer = offer;
+    ctx->clipboard_offers.push_back(state);
+    wl_data_offer_add_listener(offer, &clipboard_offer_listener, state);
+}
+
+static void destroy_clipboard_offer(wl_context *ctx, clipboard_offer_state *state) {
+    if (!state || state->active_reads > 0)
+        return;
+    if (ctx->selection_offer == state)
+        ctx->selection_offer = nullptr;
+    wl_data_offer_destroy(state->offer);
+    for (int i = ctx->clipboard_offers.size() - 1; i >= 0; --i) {
+        if (ctx->clipboard_offers[i] == state) {
+            ctx->clipboard_offers.erase(ctx->clipboard_offers.begin() + i);
+            break;
+        }
+    }
+    delete state;
+}
+
+static void clipboard_data_device_selection(void *data, wl_data_device *device, wl_data_offer *offer) {
+    auto ctx = static_cast<wl_context *>(data);
+    auto previous = ctx->selection_offer;
+    ctx->selection_offer = nullptr;
+    if (previous)
+        previous->selected = false;
+    if (offer) {
+        for (auto state : ctx->clipboard_offers) {
+            if (state->offer == offer) {
+                state->selected = true;
+                ctx->selection_offer = state;
+                break;
+            }
+        }
+    }
+    if (previous && previous != ctx->selection_offer)
+        destroy_clipboard_offer(ctx, previous);
+}
+
+static const wl_data_device_listener clipboard_data_device_listener = {
+    .data_offer = clipboard_data_device_offer,
+    .selection = clipboard_data_device_selection,
+};
+
+static void ensure_data_device(wl_context *ctx) {
+    if (!ctx->data_device && ctx->seat && ctx->data_device_manager) {
+        ctx->data_device = wl_data_device_manager_get_data_device(ctx->data_device_manager, ctx->seat);
+        wl_data_device_add_listener(ctx->data_device, &clipboard_data_device_listener, ctx);
+    }
+}
+
+static void clipboard_source_send(void *data, wl_data_source *source, const char *mime_type, int fd) {
+    auto state = static_cast<clipboard_source_state *>(data);
+    size_t written = 0;
+    while (written < state->text.size()) {
+        ssize_t result = write(fd, state->text.data() + written, state->text.size() - written);
+        if (result > 0) {
+            written += static_cast<size_t>(result);
+        } else if (result < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+    close(fd);
+}
+
+static void clipboard_source_target(void*, wl_data_source*, const char*) {
+    ;
+}
+
+static void clipboard_source_cancelled(void *data, wl_data_source *source) {
+    auto state = static_cast<clipboard_source_state *>(data);
+    if (state->ctx->clipboard_source == state)
+        state->ctx->clipboard_source = nullptr;
+    wl_data_source_destroy(source);
+    delete state;
+}
+
+static const wl_data_source_listener clipboard_source_listener = {
+    .target = clipboard_source_target,
+    .send = clipboard_source_send,
+    .cancelled = clipboard_source_cancelled,
+};
+
+static void finish_clipboard_read(wl_context *ctx, clipboard_read_state *state, bool deliver) {
+    for (int i = ctx->polled_fds.size() - 1; i >= 0; --i) {
+        if (ctx->polled_fds[i].fd == state->fd) {
+            ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
+            break;
+        }
+    }
+    close(state->fd);
+    if (state->offer) {
+        --state->offer->active_reads;
+        if (!state->offer->selected)
+            destroy_clipboard_offer(ctx, state->offer);
+    }
+    for (int i = ctx->clipboard_reads.size() - 1; i >= 0; --i) {
+        if (ctx->clipboard_reads[i] == state) {
+            ctx->clipboard_reads.erase(ctx->clipboard_reads.begin() + i);
+            break;
+        }
+    }
+    auto callback = std::move(state->callback);
+    auto text = std::move(state->text);
+    delete state;
+    if (deliver && callback)
+        callback(std::move(text));
+}
 
 /* ---- xdg_wm_base ping handler ---- */
 static void xdg_wm_base_ping(void *data, struct xdg_wm_base *wm_base, uint32_t serial) {
@@ -1728,6 +1886,11 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
     } else if (strcmp(interface, wl_seat_interface.name) == 0) {
         d->seat = (wl_seat *) wl_registry_bind(registry, id, &wl_seat_interface, 5);
         wl_seat_add_listener(d->seat, &seat_listener, d);
+        ensure_data_device(d);
+    } else if (strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+        const uint32_t manager_version = version < 3 ? version : 3;
+        d->data_device_manager = (wl_data_device_manager *) wl_registry_bind(registry, id, &wl_data_device_manager_interface, manager_version);
+        ensure_data_device(d);
     } else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
         const uint32_t wm_base_version = version < 3 ? version : 3;
         d->wm_base = (xdg_wm_base *) wl_registry_bind(registry, id, &xdg_wm_base_interface, wm_base_version);
@@ -1814,7 +1977,24 @@ void wl_context_destroy(struct wl_context *ctx) {
     if (!ctx) return;
 
     for (auto w : ctx->windows)
-        wl_window_destroy(w); 
+        wl_window_destroy(w);
+
+    for (auto read : ctx->clipboard_reads)
+        delete read;
+    ctx->clipboard_reads.clear();
+    for (auto offer : ctx->clipboard_offers) {
+        wl_data_offer_destroy(offer->offer);
+        delete offer;
+    }
+    ctx->clipboard_offers.clear();
+    ctx->selection_offer = nullptr;
+    if (ctx->clipboard_source) {
+        wl_data_source_destroy(ctx->clipboard_source->source);
+        delete ctx->clipboard_source;
+        ctx->clipboard_source = nullptr;
+    }
+    if (ctx->data_device) wl_data_device_destroy(ctx->data_device);
+    if (ctx->data_device_manager) wl_data_device_manager_destroy(ctx->data_device_manager);
 
     if (ctx->keyboard) wl_keyboard_release(ctx->keyboard);
     if (ctx->xkb_state) xkb_state_unref(ctx->xkb_state);
@@ -2321,6 +2501,108 @@ void windowing::redraw_now(RawWindow *window) {
             return;
         }
     }
+}
+
+bool windowing::set_clipboard(RawWindow *window, const std::string &text) {
+    if (!window || !window->creator)
+        return false;
+    auto ctx = find_context(window->creator);
+    if (!ctx || !ctx->data_device || !ctx->data_device_manager || !ctx->has_keyboard_serial)
+        return false;
+
+    auto source = new clipboard_source_state;
+    source->ctx = ctx;
+    source->text = text;
+    source->source = wl_data_device_manager_create_data_source(ctx->data_device_manager);
+    if (!source->source) {
+        delete source;
+        return false;
+    }
+    wl_data_source_add_listener(source->source, &clipboard_source_listener, source);
+    wl_data_source_offer(source->source, "text/plain;charset=utf-8");
+    wl_data_source_offer(source->source, "text/plain");
+
+    if (ctx->clipboard_source) {
+        wl_data_source_destroy(ctx->clipboard_source->source);
+        delete ctx->clipboard_source;
+    }
+    ctx->clipboard_source = source;
+    wl_data_device_set_selection(ctx->data_device, source->source, ctx->last_keyboard_serial);
+    return true;
+}
+
+void windowing::get_clipboard(RawWindow *window, std::function<void(std::string)> callback) {
+    if (!window || !window->creator)
+        return;
+    auto ctx = find_context(window->creator);
+    auto offer = ctx ? ctx->selection_offer : nullptr;
+    if (!ctx || !ctx->data_device || !offer) {
+        if (callback)
+            callback({});
+        return;
+    }
+
+    const char *mime_type = nullptr;
+    for (const auto &candidate : offer->mime_types) {
+        if (candidate == "text/plain;charset=utf-8") {
+            mime_type = candidate.c_str();
+            break;
+        }
+        if (!mime_type && (candidate == "text/plain" || candidate == "UTF8_STRING"))
+            mime_type = candidate.c_str();
+    }
+    if (!mime_type) {
+        if (callback)
+            callback({});
+        return;
+    }
+
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) < 0) {
+        if (callback)
+            callback({});
+        return;
+    }
+    int flags = fcntl(fds[0], F_GETFL, 0);
+    if (flags >= 0)
+        fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+
+    auto state = new clipboard_read_state;
+    state->fd = fds[0];
+    state->offer = offer;
+    state->callback = std::move(callback);
+    ++offer->active_reads;
+
+    wl_data_offer_receive(offer->offer, mime_type, fds[1]);
+    close(fds[1]);
+
+    PolledFunction read_function;
+    read_function.fd = state->fd;
+    read_function.name = "Wayland clipboard read";
+    read_function.func = [ctx, state](PolledFunction pf) {
+        bool finished = (pf.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
+        char buffer[4096];
+        while (pf.revents & (POLLIN | POLLHUP)) {
+            ssize_t bytes = read(state->fd, buffer, sizeof buffer);
+            if (bytes > 0) {
+                state->text.append(buffer, static_cast<size_t>(bytes));
+                continue;
+            }
+            if (bytes == 0) {
+                finished = true;
+                break;
+            }
+            if (errno == EINTR)
+                continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                finished = true;
+            break;
+        }
+        if (finished)
+            finish_clipboard_read(ctx, state, true);
+    };
+    ctx->clipboard_reads.push_back(state);
+    ctx->polled_fds.push_back(std::move(read_function));
 }
 
 void windowing::redraw(RawWindow *window) {
