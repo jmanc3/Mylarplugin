@@ -204,8 +204,12 @@ static void fill_applications_container(Container *root) {
     scroll_settings.right_inline_track = true;
     auto scroll = make_newscrollpane_as_child(scroll_parent, scroll_settings, [](Container *root) {
         auto dock = ((Dock *) root->user_data);
-        return DrawContext({dock->applications->raw_window->cr, dock->applications->raw_window->dpi, [dock]() {
-            windowing::redraw(dock->applications->raw_window);
+        auto applications = dock->applications;
+        return DrawContext({applications->raw_window->cr, applications->raw_window->dpi, [dock, applications]() {
+            // Scroll animations can finish after this popup has closed or been replaced.
+            if (dock->applications != applications)
+                return;
+            windowing::redraw(applications->raw_window);
         }});
     });
     auto scroll_content = scroll->content;
