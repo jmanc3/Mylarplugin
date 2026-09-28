@@ -259,9 +259,9 @@ static Container *add_volume_option(Container *parent) {
         int val = (int) std::round(audio_data->level * 100);
         std::string level = std::to_string(val);
         RGBA color = {0, 0, 0, 1};
-        auto b = draw_text(cr, 0, 0, level, 12 * dpi, false, mylar_font);
+        auto b = draw_text(cr, 0, 0, level, 12 * dpi, false, set->font);
         auto x = c->real_bounds.x + 17 * dpi;
-        draw_text(cr, x, center_y(c, b.h), level, 12 * dpi, true, mylar_font, -1, -1, color);
+        draw_text(cr, x, center_y(c, b.h), level, 12 * dpi, true, set->font, -1, -1, color);
     };
 
     auto right_pad = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);

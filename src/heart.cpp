@@ -874,7 +874,7 @@ static void test_container(Container *m) {
         } else {
             rect(c->real_bounds, {1, 0, 1, 1});
         }
-        auto info = gen_text_texture(mylar_font, fz("{} {}", c->real_bounds.x, c->real_bounds.y), 20, {1, 1, 1, 1});
+        auto info = gen_text_texture(set->font, fz("{} {}", c->real_bounds.x, c->real_bounds.y), 20, {1, 1, 1, 1});
         draw_texture(info, c->real_bounds.x, c->real_bounds.y);
         free_text_texture(info.id);
         c->real_bounds = b;

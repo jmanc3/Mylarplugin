@@ -492,7 +492,7 @@ static void paint_root_func(Container *root, Container *c) {
 }
 
 static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
-    auto layout = get_cached_pango_font(cr, mylar_font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
@@ -526,14 +526,14 @@ static void paint_label(Container *root, Container *c, std::string text) {
     auto dpi = mylar->raw_window->dpi;
     auto size = 12 * dpi;
 
-    auto b = draw_text(cr, 0, 0, text, size, false, mylar_font, -1, 0, {0, 0, 0, 1}, false);
+    auto b = draw_text(cr, 0, 0, text, size, false, set->font, -1, 0, {0, 0, 0, 1}, false);
     draw_text(cr, 
         c->real_bounds.x + 12 * dpi, 
-        c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, mylar_font, -1, 0, {0, 0, 0, 1},  false);
+        c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, set->font, -1, 0, {0, 0, 0, 1},  false);
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
-    auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
+    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
@@ -558,10 +558,10 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1) {
+Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1) {
     if (!cr)
         return {0, 0, 0, 0};
-    auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
@@ -1016,16 +1016,16 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             auto bc = c->real_bounds;
             if (offx == 0) { // No Icon
                 auto text_w = (pin->actual_w - 20) * PANGO_SCALE;
-                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, set->font, text_w, c->real_bounds.h * PANGO_SCALE);
                 draw_clip_begin(cr, bc);
-                draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w,
+                draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, set->font, text_w,
                           c->real_bounds.h * PANGO_SCALE);
                 draw_clip_end(cr);
             } else {
                 auto text_w = (pin->actual_w - offx - 30) * PANGO_SCALE;
-                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, set->font, text_w, c->real_bounds.h * PANGO_SCALE);
                 draw_clip_begin(cr, bc);
-                draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, mylar_font, text_w, c->real_bounds.h * PANGO_SCALE);
+                draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, set->font, text_w, c->real_bounds.h * PANGO_SCALE);
                 draw_clip_end(cr);
             }
         }
@@ -1771,7 +1771,7 @@ Container *make_self_sizing_slider(Container *root,
         auto b = draw_text(cr, 0, 0, right, 12 * dpi, false);
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w - b.w, 
-            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, right, 12 * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
+            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, right, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
     };
     slider->when_paint = [get_window, get_value](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -1840,7 +1840,7 @@ Container *make_self_sizing_label(Container *root, std::string text, int size, s
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
         auto cr = window->raw_window->cr;
-        draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, size * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
+        draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, size * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
     };
     return label;
 }
@@ -1890,7 +1890,7 @@ static void paint_tiling_text(Dock *dock, Container *c, const std::string& text,
     const auto dpi = dock->tiling->raw_window->dpi;
     const auto bounds = draw_text(cr, 0, 0, text, 12 * dpi, false);
     draw_text(cr, right ? c->real_bounds.right() - bounds.w : c->real_bounds.x,
-        c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5, text, 12 * dpi, true, mylar_font, -1, -1, color);
+        c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5, text, 12 * dpi, true, set->font, -1, -1, color);
 }
 
 static void tiling_label(Container *parent, const std::string& text, double height = 28) {
@@ -1953,7 +1953,7 @@ static void tiling_segments(Container *parent, const std::string& first, const s
             const std::string text = (selected ? "\u2713  " : "") + (is_first ? first : second);
             const auto bounds = draw_text(cr, 0, 0, text, 12 * dpi, false);
             draw_text(cr, c->real_bounds.x + (c->real_bounds.w - bounds.w) * .5,
-                c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5, text, 12 * dpi, true, mylar_font, -1, -1,
+                c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5, text, 12 * dpi, true, set->font, -1, -1,
                 selected ? accent : RGBA(0, 0, 0, 1));
         };
         segment->when_clicked = [is_first, change](Container *, Container *) {
@@ -2140,9 +2140,9 @@ static void fill_date_menu(Dock *dock) {
             clock_text.erase(0, 1);
         std::strftime(date_text, sizeof(date_text), "%A, %B %d, %Y", &local);
         draw_text(cr, c->real_bounds.x, c->real_bounds.y + 2 * dpi, clock_text, 27 * dpi, true,
-            mylar_font, -1, -1, {.14, .18, .24, 1});
+            set->font, -1, -1, {.14, .18, .24, 1});
         draw_text(cr, c->real_bounds.x, c->real_bounds.y + 47 * dpi, date_text, 11 * dpi, true,
-            mylar_font, -1, -1, {.43, .48, .55, 1});
+            set->font, -1, -1, {.43, .48, .55, 1});
         auto border_c = border_color;
         border_c.a *= .2;
         set_argb(cr, border_c);
@@ -2162,7 +2162,7 @@ static void fill_date_menu(Dock *dock) {
         auto bounds = draw_text(dock->date_menu->raw_window->cr, 0, 0, label, 13 * dpi, false);
         draw_text(dock->date_menu->raw_window->cr, c->real_bounds.x,
             c->real_bounds.y + (c->real_bounds.h - bounds.h) / 2, label, 13 * dpi, true,
-            mylar_font, -1, -1, {.14, .18, .24, 1});
+            set->font, -1, -1, {.14, .18, .24, 1});
     };
     auto arrow = [navigation, dock, dpi](const char *glyph, int direction) {
         auto button = navigation->child(48 * dpi, FILL_SPACE);
@@ -2208,7 +2208,7 @@ static void fill_date_menu(Dock *dock) {
             auto b = draw_text(cr, 0, 0, name, 10 * dpi, false);
             draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
                 c->real_bounds.y + (c->real_bounds.h - b.h) / 2, name, 10 * dpi, true,
-                mylar_font, -1, -1, {.43, .48, .55, 1});
+                set->font, -1, -1, {.43, .48, .55, 1});
         };
     }
 
@@ -2256,7 +2256,7 @@ static void fill_date_menu(Dock *dock) {
                     color = {1, 1, 1, 1};
                 draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
                     c->real_bounds.y + (c->real_bounds.h - b.h) / 2, text, 11 * dpi, true,
-                    mylar_font, -1, -1, color);
+                    set->font, -1, -1, color);
             };
             cell->when_clicked = [](Container *root, Container *c) {
                 auto dock = static_cast<Dock *>(root->user_data);

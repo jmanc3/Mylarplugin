@@ -358,7 +358,7 @@ static Container *bluetooth_row(Container *parent, double height) {
 static void bluetooth_draw_text(Container *root, Bounds b, const std::string &text, double size = 10,
                                 RGBA color = {.14, .18, .24, 1}, bool centered = false, bool bold = false) {
     auto window = bluetooth_window(root);
-    auto font = get_cached_pango_font(window->cr, mylar_font, size * window->dpi,
+    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
         bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(font, text.c_str(), -1);
     pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
@@ -600,7 +600,7 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
             auto window = bluetooth_window(root);
             const auto &view = bluetooth_menu_data(root)->view;
             c->exists = !view.message.empty();
-            auto font = get_cached_pango_font(window->cr, mylar_font, 10 * window->dpi, PANGO_WEIGHT_NORMAL, false);
+            auto font = get_cached_pango_font(window->cr, set->font, 10 * window->dpi, PANGO_WEIGHT_NORMAL, false);
             pango_layout_set_text(font, view.message.c_str(), -1);
             pango_layout_set_width(font, std::max(1.0, root->real_bounds.w - 24 * window->dpi) * PANGO_SCALE);
             pango_layout_set_height(font, -1);

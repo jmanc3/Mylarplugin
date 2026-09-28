@@ -21,7 +21,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         auto dpi = dock->applications->raw_window->dpi;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, true);
+        Bounds bounds = draw_text(cr, 0, 0, "W", text_height, false, set->font, -1, -1, {1, 1, 1, 1}, true);
         c->wanted_bounds.w = FILL_SPACE;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
     };
@@ -64,7 +64,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         //set_rect(cr, minus_border);
         cairo_fill(cr);
         
-        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, mylar_font, -1, -1, {1, 1, 1, 1}, false);
+        Bounds bounds = draw_text(cr, 0, 0, field->text, text_height, false, set->font, -1, -1, {1, 1, 1, 1}, false);
 
         float over = ((c->real_bounds.h - bounds.h) * .5);
         
@@ -81,7 +81,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         draw_text(cr, 
             c->real_bounds.x + over, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            field->text, text_height, true, mylar_font, -1, -1, {0, 0, 0, 1}, false);
+            field->text, text_height, true, set->font, -1, -1, {0, 0, 0, 1}, false);
     };
     return pad;
 }
@@ -315,9 +315,9 @@ static void fill_applications_container(Container *root) {
             // bool bold, int align = 0) {
             std::string text = fz("{} ({})", name, full);
             auto b = draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, 13 * dpi,
-                               false, mylar_font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
+                               false, set->font, -1, -1, RGBA(0, 0, 0, 1), false, 0);
             draw_text(cr, std::round(c->real_bounds.x + (c->real_bounds.h - b.h) * .5),
-                      std::round(center_y(c, b.h)), text, std::round(13 * dpi), true, mylar_font, -1, -1,
+                      std::round(center_y(c, b.h)), text, std::round(13 * dpi), true, set->font, -1, -1,
                       RGBA(0, 0, 0, 1), false, 0);
         };
         o->when_clicked = [](Container *root, Container *c) {

@@ -5867,7 +5867,7 @@ TextureInfo generate_dropshadow_texture(int id, float size, float darken) {
     return t->info;
 }
 
-static SP<Render::ITexture> draw_text(std::string text, int size = 10, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}, int alignment = 0) {
+static SP<Render::ITexture> draw_text(std::string text, int size = 10, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}, int alignment = 0) {
     PangoFontMap*         fontMap    = pango_cairo_font_map_get_default();
     PangoContext*         context    = pango_font_map_create_context(fontMap);
     PangoLayout*          layout = pango_layout_new(context);

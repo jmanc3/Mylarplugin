@@ -24,7 +24,7 @@ Container *label(Container *parent, std::string icon, std::string text) {
             return;
         auto info = gen_text_texture("Segoe Fluent Icons", icon, label_h * s, {1, 1, 1, 1});
         free_text_texture(info.id); 
-        auto info2 = gen_text_texture(mylar_font, text, label_h * s, {1, 1, 1, 1});
+        auto info2 = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});
         free_text_texture(info2.id); 
         c->wanted_bounds.w = info.w + info2.w + pad * s;
         c->wanted_bounds.h = std::max(info.h, info2.h) + pad * s;
@@ -53,7 +53,7 @@ Container *label(Container *parent, std::string icon, std::string text) {
         }
         xoff += 8 * s;
         {
-            auto info = gen_text_texture(mylar_font, text, label_h * s, {1, 1, 1, 1});
+            auto info = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});
             draw_texture(info, {c->real_bounds.x + pad * s + xoff, 
                                c->real_bounds.y + c->real_bounds.h * .5 - info.h * .5, 
                                (double) info.w, (double) info.h});

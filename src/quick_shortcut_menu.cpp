@@ -292,7 +292,7 @@ void open_quick_shortcut_menu() {
                     }
                 }
                 
-                auto info = gen_text_texture(mylar_font, text, 13 * s, {0, 0, 0, 1});
+                auto info = gen_text_texture(set->font, text, 13 * s, {0, 0, 0, 1});
                 draw_texture(info, c->real_bounds.x + 14 * s, center_y(c, info.h));
                 free_text_texture(info.id);
             }
@@ -336,7 +336,7 @@ void open_quick_shortcut_menu() {
             if (debugging_key_presses) {
                 text = "Turn off key printing";
             }
-            auto info = gen_text_texture(mylar_font, text, 12 * s, color);
+            auto info = gen_text_texture(set->font, text, 12 * s, color);
             draw_texture(info, c->real_bounds.x - 11 * s + c->real_bounds.w - info.w, center_y(c, info.h));
             free_text_texture(info.id);
         }

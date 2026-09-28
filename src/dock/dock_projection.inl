@@ -36,7 +36,7 @@ static void fill_projection_container(Dock *dock) {
             auto dock = (Dock *) root->user_data;
             auto dpi = dock->projection->raw_window->dpi;
             auto cr = dock->projection->raw_window->cr;
-            auto bounds_text = draw_text(cr, 0, 0, text, size * dpi, false, mylar_font, -1, -1, color);
+            auto bounds_text = draw_text(cr, 0, 0, text, size * dpi, false, set->font, -1, -1, color);
             auto left_color = color;
             auto right_color = color;
             auto bounds_left = draw_text(cr, 0, 0, left, size * dpi, false, "Segoe Fluent Icons", -1, -1, left_color);
@@ -51,21 +51,21 @@ static void fill_projection_container(Dock *dock) {
             draw_text(cr, 
                 xoff, 
                 c->real_bounds.y + c->real_bounds.h * .5 - bounds_left.h * .5, 
-                left, size * dpi, true, mylar_font, -1, -1, left_color);
+                left, size * dpi, true, set->font, -1, -1, left_color);
             
             xoff += bounds_left.w;
             
             draw_text(cr, 
                 xoff, 
                 c->real_bounds.y + c->real_bounds.h * .5 - bounds_right.h * .5, 
-                right, size * dpi, true, mylar_font, -1, -1, right_color);
+                right, size * dpi, true, set->font, -1, -1, right_color);
 
             xoff += bounds_right.w;
 
             draw_text(cr, 
                 xoff + 8 * dpi, 
                 c->real_bounds.y + c->real_bounds.h * .5 - bounds_text.h * .5, 
-                text, size * dpi, true, mylar_font, -1, -1, color);
+                text, size * dpi, true, set->font, -1, -1, color);
             
             if (c->state.mouse_hovering) {
                 if (c->state.mouse_pressing) {
@@ -112,10 +112,10 @@ static void fill_projection_container(Dock *dock) {
                 cairo_stroke(cr);
 
 
-                auto b = draw_text(cr, 0, 0, option, size * dpi, false, mylar_font, -1, -1, color);
+                auto b = draw_text(cr, 0, 0, option, size * dpi, false, set->font, -1, -1, color);
                 draw_text(cr, 
                     center_x(c, b.w), center_y(c, b.h), 
-                    option, size * dpi, true, mylar_font, -1, -1, color);
+                    option, size * dpi, true, set->font, -1, -1, color);
             };
         }
         
@@ -128,7 +128,7 @@ static void fill_projection_container(Dock *dock) {
             float xoff = c->real_bounds.x;
             float layout_yoff = c->real_bounds.y;
             for (int i = 0; i < options.size(); i++) {
-                auto bounds_text = draw_text(cr, 0, 0, options[i], size * dpi, false, mylar_font, -1, -1, color);
+                auto bounds_text = draw_text(cr, 0, 0, options[i], size * dpi, false, set->font, -1, -1, color);
                 if ((xoff + bounds_text.w) > (b.w + c->real_bounds.x)) {
                     xoff = c->real_bounds.x;
                     lines++;

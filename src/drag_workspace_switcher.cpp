@@ -417,7 +417,7 @@ void drag_switcher_actual_open() {
 
                         auto num = hypriso->space_id_to_raw(space);
 
-                        auto text = gen_text_texture(mylar_font, fz("Desktop {}", num), 12 * s, {1, 1, 1, 1});
+                        auto text = gen_text_texture(set->font, fz("Desktop {}", num), 12 * s, {1, 1, 1, 1});
                         b.w = text.w;
                         b.h = text.h;
                         b.x += 6 * s;
@@ -542,7 +542,7 @@ void drag_switcher_actual_open() {
             }
             auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uf407", {.8, .8, .8, 1}, 13);
             draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, peaking_amount * text_alpha);
-            auto t = get_cached_texture(root, c, "drag_text", mylar_font, "Drag a window here to move it to another workspace.", 
+            auto t = get_cached_texture(root, c, "drag_text", set->font, "Drag a window here to move it to another workspace.",
                 {.8, .8, .8, 1}, 13);
             draw_texture(*t, 
                 c->real_bounds.x + 14 * s + 10 * s + icon->w, 

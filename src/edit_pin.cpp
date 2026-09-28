@@ -266,7 +266,7 @@ Container *get_root(Container *c) {
     return temp;
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
+static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
 
 static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func) {
     auto label_data = new LabelData;
@@ -354,9 +354,9 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
 
         int size = 13 * data->window->raw_window->dpi;
 
-        auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+        auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
         if (bold)
-            layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_BOLD, false);
+            layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_BOLD, false);
         pango_layout_set_text(layout, text.data(), text.size());
         cairo_set_source_rgba(cr, 0, 0, 0, 1);
         PangoRectangle ink;
@@ -375,7 +375,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
 
         auto layout = get_cached_pango_font(
             cr,
-            mylar_font,
+            set->font,
             size,
             PANGO_WEIGHT_NORMAL,
             false
@@ -639,9 +639,9 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
 
         int size = 13 * data->window->raw_window->dpi;
         
-        auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+        auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
         if (bold)
-            layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_BOLD, false);
+            layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_BOLD, false);
         pango_layout_set_text(layout, text.data(), text.size());
         PangoRectangle ink;
         PangoRectangle logical;
@@ -754,9 +754,9 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         
         int size = 13 * data->window->raw_window->dpi;
 
-        auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+        auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
         if (bold)
-            layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_BOLD, false);
+            layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_BOLD, false);
         pango_layout_set_text(layout, text.data(), text.size());
  
         int index;
@@ -857,7 +857,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
 }
 
 static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color) {
-    auto layout = get_cached_pango_font(cr, mylar_font, size, PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
@@ -954,7 +954,7 @@ static void button(Container *root, std::function<std::string()> get_text, std::
         auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5,
-            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, text, size * dpi, true, mylar_font, -1, -1, {0, 0, 0, 1});
+            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, text, size * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
     };
     child->pre_layout = [size, get_text](Container* root, Container* c, const Bounds& b) {
         auto mylar = (PinData*)root->user_data;

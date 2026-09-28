@@ -253,7 +253,7 @@ static std::string battery_clock(std::time_t timestamp, bool include_day = false
 
 static void battery_text(cairo_t *cr, double x, double y, const std::string &text, double size,
                          double dpi, RGBA color, double width = -1, bool bold = false) {
-    draw_text(cr, x, y, text, size * dpi, true, mylar_font, width, -1, color, bold);
+    draw_text(cr, x, y, text, size * dpi, true, set->font, width, -1, color, bold);
 }
 
 static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const BatteryView &view,

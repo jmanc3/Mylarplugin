@@ -284,7 +284,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
                     }
                 }
                 if (pop_option.checked) {
-                    auto info = gen_text_texture(mylar_font, "✓", 14 * s, {0, 0, 0, 1});
+                    auto info = gen_text_texture(set->font, "✓", 14 * s, {0, 0, 0, 1});
                     draw_texture(info, c->real_bounds.x + 20 * s - info.w * .5, center_y(c, info.h));
                     free_text_texture(info.id);
                 } else if (pop_option.is_text_icon) {
@@ -298,11 +298,11 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
                 }
 
                 if (!pop_option.submenu.empty()) {
-                    auto arrow = gen_text_texture(mylar_font, "›", 18 * s, {0, 0, 0, 1});
+                    auto arrow = gen_text_texture(set->font, "›", 18 * s, {0, 0, 0, 1});
                     draw_texture(arrow, c->real_bounds.right() - 16 * s - arrow.w * .5, center_y(c, arrow.h));
                     free_text_texture(arrow.id);
                 }
-                auto info = gen_text_texture(mylar_font, pop_option.text, 14 * s, {0, 0, 0, 1},
+                auto info = gen_text_texture(set->font, pop_option.text, 14 * s, {0, 0, 0, 1},
                                              c->real_bounds.w - 72 * s, c->real_bounds.h);
                 draw_texture(info, c->real_bounds.x + 40 * s, center_y(c, info.h));
                 free_text_texture(info.id);

@@ -1078,7 +1078,7 @@ static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, 
 
     TextureInfo text_img = *datum<TextureInfo>(c, "label");
     if (text_img.id == -1) {
-        text_img = gen_text_texture(mylar_font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, std::ceil(two_line_height * s), 1);
+        text_img = gen_text_texture(set->font, item->name, conf_font_size() * s, RGBA(1, 1, 1, 1), c->real_bounds.w, std::ceil(two_line_height * s), 1);
         *datum<TextureInfo>(c, "label") = text_img;
         free_text_texture(ico->label_shadow.id);
         ico->label_shadow = generate_dropshadow_texture(text_img.id, 3 * s, 2.0);
@@ -1336,7 +1336,7 @@ static void create_root_popup() {
 }
 
 void desktop_icons::start() {
-    auto in = gen_text_texture(mylar_font, "W\n", conf_font_size(), RGBA(1, 1, 1, 1));
+    auto in = gen_text_texture(set->font, "W\n", conf_font_size(), RGBA(1, 1, 1, 1));
     two_line_height = in.h;
     free_text_texture(in.id);
     // each monitor needs its own desktop pane possibly every workspace

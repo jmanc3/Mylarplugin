@@ -46,7 +46,7 @@ using PLUGIN_LUA_FN    = int (*)(lua_State* L);
 static int titlebar_h = 28;
 //static std::string mylar_font = "Noto Sans";
 //static std::string mylar_font = "SF Pro Rounded";
-static std::string mylar_font = "Segoe UI Variable";
+//static std::string mylar_font = "Segoe UI Variable";
 //static std::string icon_font = "Segoe Fluent Icons";
 static std::string icon_font = "Segoe Fluent Icons";
 static long minimize_anim_time = 100;
@@ -95,6 +95,7 @@ struct ConfigSettings {
     bool desktop_sort_ascending = true;
     std::string desktop_folder = "~/Desktop";
     std::string overview_layout_type = "Grid";
+    std::string font = "Segoe UI Variable";
 
     bool is_tiling = false;
     // Scope of explicit toggle changes; new workspaces use their own default.

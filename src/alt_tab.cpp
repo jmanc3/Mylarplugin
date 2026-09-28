@@ -187,9 +187,9 @@ static void paint_tab_option(Container *actual_root, Container *c) {
         auto color_titlebar_textfo = color_titlebar_text_focused();
         auto titlebar_text = titlebar_text_h();
         auto color_titlebar_textunfo = color_titlebar_text_unfocused();
-        focused = get_cached_texture(root, c, std::to_string(rid) + "_title_focused", mylar_font, 
+        focused = get_cached_texture(root, c, std::to_string(rid) + "_title_focused", set->font,
             title_text, color_titlebar_textfo, titlebar_text);
-        unfocused = get_cached_texture(root, c, std::to_string(rid) + "_title_unfocused", mylar_font, 
+        unfocused = get_cached_texture(root, c, std::to_string(rid) + "_title_unfocused", set->font,
             title_text, color_titlebar_textunfo, titlebar_text);
         
         auto texture_info = focused;

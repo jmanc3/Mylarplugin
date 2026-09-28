@@ -94,7 +94,7 @@ static void fill_extra_container(Container *root) {
             set_argb(cr, {0, 0, 0, .2});
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dock->extra->raw_window->dpi, 1.0);
             cairo_stroke(cr);
-//static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = mylar_font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
+//static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
 
             auto b = draw_text(cr, 0, 0, argsa[i], 36, false, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
             draw_text(cr, 
