@@ -39,8 +39,8 @@ static void fill_projection_container(Dock *dock) {
             auto bounds_text = draw_text(cr, 0, 0, text, size * dpi, false, set->font, -1, -1, color);
             auto left_color = color;
             auto right_color = color;
-            auto bounds_left = draw_text(cr, 0, 0, left, size * dpi, false, "Segoe Fluent Icons", -1, -1, left_color);
-            auto bounds_right = draw_text(cr, 0, 0, right, size * dpi, false, "Segoe Fluent Icons", -1, -1, right_color);
+            auto bounds_left = draw_text(cr, 0, 0, left, size * dpi, false, icon_font, -1, -1, left_color);
+            auto bounds_right = draw_text(cr, 0, 0, right, size * dpi, false, icon_font, -1, -1, right_color);
             if (!left_bright)
                 left_color.a = .4;
             if (!right_bright)

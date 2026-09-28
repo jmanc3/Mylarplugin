@@ -382,11 +382,11 @@ void paint_button(Container *actual_root, Container *c, std::string name, std::s
             }
         }
 
-        auto focused = get_cached_texture(root, root, name + "_focused", "Segoe Fluent Icons",
+        auto focused = get_cached_texture(root, root, name + "_focused", icon_font,
             icon, color_titlebar_text_focused(), titlebar_button_icon_h());
-        auto unfocused = get_cached_texture(root, root, name + "_unfocused", "Segoe Fluent Icons", 
+        auto unfocused = get_cached_texture(root, root, name + "_unfocused", icon_font,
             icon, color_titlebar_text_unfocused(), titlebar_button_icon_h());
-        auto closed = get_cached_texture(root, root, name + "_close_invariant", "Segoe Fluent Icons", 
+        auto closed = get_cached_texture(root, root, name + "_close_invariant", icon_font,
             icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h());
 
         int mask = 16;

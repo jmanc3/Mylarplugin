@@ -494,7 +494,7 @@ paint_arrow(Container *root, Container *container) {
 
     auto scroll_data = (ScrollData *) scroll_container->user_data;
     auto ctx = scroll_data->func(root);
-    auto layout = get_cached_pango_font(ctx.cr, "Segoe Fluent Icons", 8 * ctx.dpi, PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(ctx.cr, icon_font, 8 * ctx.dpi, PANGO_WEIGHT_NORMAL, false);
     std::string text = data->text;
     pango_layout_set_text(layout, text.data(), text.size());
     pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);

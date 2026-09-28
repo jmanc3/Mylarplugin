@@ -599,7 +599,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 }
 
                 auto icon = "\ue8bb";
-                auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+                auto closed = get_cached_texture(root, root, "close_close_invariant", icon_font,
                     icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h());
 
                 if (c->state.mouse_pressing || c->state.mouse_hovering || c->parent->state.mouse_hovering) {

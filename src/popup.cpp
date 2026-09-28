@@ -288,7 +288,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
                     draw_texture(info, c->real_bounds.x + 20 * s - info.w * .5, center_y(c, info.h));
                     free_text_texture(info.id);
                 } else if (pop_option.is_text_icon) {
-                    auto info = gen_text_texture("Segoe Fluent Icons", pop_option.icon_left, 14 * s, {0, 0, 0, 1});
+                    auto info = gen_text_texture(icon_font, pop_option.icon_left, 14 * s, {0, 0, 0, 1});
                     draw_texture(info, c->real_bounds.x + (40 * s * .5) - info.w * .5, center_y(c, info.h));
                     free_text_texture(info.id);
                 } else if (!pop_option.icon_path.empty()) {

@@ -22,7 +22,7 @@ Container *label(Container *parent, std::string icon, std::string text) {
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (rid != hypriso->monitor_from_cursor())
             return;
-        auto info = gen_text_texture("Segoe Fluent Icons", icon, label_h * s, {1, 1, 1, 1});
+        auto info = gen_text_texture(icon_font, icon, label_h * s, {1, 1, 1, 1});
         free_text_texture(info.id); 
         auto info2 = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});
         free_text_texture(info2.id); 
@@ -44,7 +44,7 @@ Container *label(Container *parent, std::string icon, std::string text) {
         }
         float xoff = pad * s * 2;
         {
-            auto info = gen_text_texture("Segoe Fluent Icons", icon, label_h * s, {1, 1, 1, 1});
+            auto info = gen_text_texture(icon_font, icon, label_h * s, {1, 1, 1, 1});
             draw_texture(info, {c->real_bounds.x + pad * s + xoff, 
                                c->real_bounds.y + c->real_bounds.h * .5 - info.h * .5, 
                                (double) info.w, (double) info.h});

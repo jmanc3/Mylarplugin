@@ -691,10 +691,10 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
         auto cr = mylar->raw_window->cr;
         paint_button_bg(root, c);
 
-        auto ico_bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto ico_bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, icon_font);
         auto b = draw_text(cr,
             c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5,
-            ico(), 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+            ico(), 12 * mylar->raw_window->dpi, true, icon_font);
         if (text) {
             auto visual_text = text();
             auto tb = draw_text(cr, c, visual_text, tex_size * mylar->raw_window->dpi, false);
@@ -709,7 +709,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
         auto dock = (Dock *) root->user_data;
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
-        auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+        auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, icon_font);
         if (layout_text)
             bounds.w += draw_text(cr, c, layout_text(), tex_size * mylar->raw_window->dpi, false).w + 10;
 
@@ -1755,10 +1755,10 @@ Container *make_self_sizing_slider(Container *root,
         auto dpi = window->raw_window->dpi;
         auto cr = window->raw_window->cr;
         auto left = left_text(c);
-        auto b = draw_text(cr, 0, 0, left, 12 * dpi, false, "Segoe Fluent Icons");
+        auto b = draw_text(cr, 0, 0, left, 12 * dpi, false, icon_font);
         draw_text(cr,
             c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5,
-            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, left, 12 * dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, left, 12 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
     };
     right->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
         auto dock = (Dock *) root->user_data;
@@ -2181,10 +2181,10 @@ static void fill_date_menu(Dock *dock) {
                 cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
                 cairo_fill(cr);
             }
-            auto b = draw_text(cr, 0, 0, glyph, 12 * dpi, false, "Segoe Fluent Icons");
+            auto b = draw_text(cr, 0, 0, glyph, 12 * dpi, false, icon_font);
             draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
                 c->real_bounds.y + (c->real_bounds.h - b.h) / 2, glyph, 12 * dpi, true,
-                "Segoe Fluent Icons", -1, -1, {.14, .18, .24, 1});
+                icon_font, -1, -1, {.14, .18, .24, 1});
         };
         button->when_clicked = [direction](Container *root, Container *) {
             auto dock = static_cast<Dock *>(root->user_data);
@@ -3416,10 +3416,10 @@ void dock::create_slept_button() {
                 cairo_fill(cr);
             }
 
-            auto ico_bounds = draw_text(cr, c, "\uF738", 12 * mylar->raw_window->dpi, false, "Segoe Fluent Icons");
+            auto ico_bounds = draw_text(cr, c, "\uF738", 12 * mylar->raw_window->dpi, false, icon_font);
             auto b = draw_text(cr,
                 c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5,
-                "\uF738", 12 * mylar->raw_window->dpi, true, "Segoe Fluent Icons");
+                "\uF738", 12 * mylar->raw_window->dpi, true, icon_font);
         };
         sleep_button->name = "sleep_button";
         sleep_button->when_clicked = [d](Container *root, Container *c) {

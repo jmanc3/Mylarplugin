@@ -176,10 +176,10 @@ static Container *add_volume_option(Container *parent) {
         } else if (audio_data->indent_level > 0) {
             label = "  " + label;
         }
-        auto bounds = draw_text(cr, c, label, 12 * dpi, false, "Segoe Fluent Icons");
+        auto bounds = draw_text(cr, c, label, 12 * dpi, false, icon_font);
         auto b = draw_text(cr,
             c->real_bounds.x + 7 * dpi + x_off, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
-            label, 12 * dpi, true, "Segoe Fluent Icons", 
+            label, 12 * dpi, true, icon_font,
             (c->real_bounds.w - 14 * dpi - x_off) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
     
@@ -221,8 +221,8 @@ static Container *add_volume_option(Container *parent) {
         if (!is_muted) {
             std::string background_bars = "\uE995";
             RGBA color = {.4, .4, .4, .4};
-            auto b = draw_text(cr, 0, 0, background_bars, 14 * dpi, false, "Segoe Fluent Icons");
-            draw_text(cr, center_x(c, b.w), center_y(c, b.h), background_bars, 14 * dpi, true, "Segoe Fluent Icons", -1, -1, color);
+            auto b = draw_text(cr, 0, 0, background_bars, 14 * dpi, false, icon_font);
+            draw_text(cr, center_x(c, b.w), center_y(c, b.h), background_bars, 14 * dpi, true, icon_font, -1, -1, color);
         }
         
         std::string text;
@@ -239,8 +239,8 @@ static Container *add_volume_option(Container *parent) {
         }
         
         RGBA color = {0, 0, 0, 1};
-        auto b = draw_text(cr, 0, 0, text, 14 * dpi, false, "Segoe Fluent Icons");
-        draw_text(cr, center_x(c, b.w), center_y(c, b.h), text, 14 * dpi, true, "Segoe Fluent Icons", -1, -1, color);
+        auto b = draw_text(cr, 0, 0, text, 14 * dpi, false, icon_font);
+        draw_text(cr, center_x(c, b.w), center_y(c, b.h), text, 14 * dpi, true, icon_font, -1, -1, color);
     };
     
     auto slider = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);

@@ -360,10 +360,10 @@ static void fill_applications_container(Container *root) {
             }
 
             
-            auto b = draw_text(cr, 0, 0, icon[i], 12 * dpi, false, "Segoe Fluent Icons");
+            auto b = draw_text(cr, 0, 0, icon[i], 12 * dpi, false, icon_font);
             draw_text(cr, 
                 c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, 
-                c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, icon[i], 12 * dpi, true, "Segoe Fluent Icons", -1, -1, {0, 0, 0, 1});
+                c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, icon[i], 12 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
         };
     }
 }

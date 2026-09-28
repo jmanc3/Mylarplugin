@@ -317,7 +317,7 @@ static void create_tab_option(int cid, Container *parent) {
         }
 
         auto icon = "\ue8bb";
-        auto closed = get_cached_texture(root, root, "close_close_invariant", "Segoe Fluent Icons", 
+        auto closed = get_cached_texture(root, root, "close_close_invariant", icon_font,
             icon, titlebar_closed_button_icon_color_hovered_pressed(), titlebar_button_icon_h());
 
         auto texture_info = closed;

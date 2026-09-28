@@ -481,7 +481,7 @@ static Container *bluetooth_device_row(Container *parent) {
             cairo_paint(window->cr);
         } else {
             draw_text(window->cr, b.x + 10 * dpi, b.y + 19 * dpi, "\uE702", 20 * dpi, true,
-                "Segoe Fluent Icons", -1, -1, accent);
+                icon_font, -1, -1, accent);
         }
         std::string subtitle = data->device.connected ? "Connected" : "Paired";
         if (!data->device.paired) subtitle = data->device.mac_address;

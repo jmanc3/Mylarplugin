@@ -444,8 +444,8 @@ void drag_switcher_actual_open() {
                 border(b, {1, 1, 1, .1f * openess}, 1.0, 0, 8 * s, 2.0, false); 
                 
                 if (space == -1) {
-                    //auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uF8AA", {1, 1, 1, .8}, 20);
-                    auto info = get_cached_texture(root, c, "plus", "Segoe Fluent Icons", "\uE710", {1, 1, 1, .8}, 20);
+                    //auto info = get_cached_texture(root, c, "plus", icon_font, "\uF8AA", {1, 1, 1, .8}, 20);
+                    auto info = get_cached_texture(root, c, "plus", icon_font, "\uE710", {1, 1, 1, .8}, 20);
                     //draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
                     Bounds tb = {center_x(c, info->w), center_y(c, info->h), (float) info->w, (float) info->h};
                     tb.scale_from_center(1.0f + (.08f * active_amount));
@@ -540,7 +540,7 @@ void drag_switcher_actual_open() {
             if (overview::is_showing()) {
                 text_alpha = 1.0;
             }
-            auto icon = get_cached_texture(root, c, "drag_text_icon", "Segoe Fluent Icons", "\uf407", {.8, .8, .8, 1}, 13);
+            auto icon = get_cached_texture(root, c, "drag_text_icon", icon_font, "\uf407", {.8, .8, .8, 1}, 13);
             draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, peaking_amount * text_alpha);
             auto t = get_cached_texture(root, c, "drag_text", set->font, "Drag a window here to move it to another workspace.",
                 {.8, .8, .8, 1}, 13);
