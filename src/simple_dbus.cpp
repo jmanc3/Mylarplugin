@@ -3482,7 +3482,8 @@ struct BatteryBus {
 
 static BatteryVariant battery_call(BatteryBus &bus, const char *service, const char *path,
                                   const char *interface, const char *method,
-                                  GVariant *args, const GVariantType *type, std::string *error = nullptr) {
+                                  GVariant *args, const GVariantType *type, std::string *error = nullptr,
+                                  GDBusCallFlags flags = G_DBUS_CALL_FLAGS_NO_AUTO_START) {
     // Consume the floating argument even when the bus is unavailable.
     BatteryVariant parameters(args ? g_variant_ref_sink(args) : nullptr, g_variant_unref);
     if (!bus.connection) {
@@ -3491,7 +3492,7 @@ static BatteryVariant battery_call(BatteryBus &bus, const char *service, const c
     }
     GError *failure = nullptr;
     auto reply = g_dbus_connection_call_sync(bus.connection, service, path, interface, method,
-        parameters.get(), type, G_DBUS_CALL_FLAGS_NO_AUTO_START, 2000, nullptr, &failure);
+        parameters.get(), type, flags, 2000, nullptr, &failure);
     if (failure) {
         if (error) {
             if (g_error_matches(failure, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED) ||
@@ -3526,12 +3527,13 @@ static BatteryStatus read_battery(BatteryBus &bus) {
     constexpr auto interface = "org.freedesktop.UPower.Device";
     bool all_protected = true;
     bool all_supported = true;
-    bool enumeration_complete = true;
-    if (battery_service_running(bus, service)) {
-        auto reply = battery_call(bus, service, "/org/freedesktop/UPower", service,
-            "EnumerateDevices", nullptr, G_VARIANT_TYPE("(ao)"));
-        enumeration_complete = bool(reply);
-        if (reply) {
+    // UPower may be activated on demand at boot. Query it directly and allow
+    // activation; checking NameHasOwner first would keep skipping it forever.
+    auto reply = battery_call(bus, service, "/org/freedesktop/UPower", service,
+        "EnumerateDevices", nullptr, G_VARIANT_TYPE("(ao)"), nullptr, G_DBUS_CALL_FLAGS_NONE);
+    bool enumeration_complete = bool(reply);
+    if (reply) {
+        {
             BatteryVariant paths(g_variant_get_child_value(reply.get(), 0), g_variant_unref);
             GVariantIter iter;
             g_variant_iter_init(&iter, paths.get());
@@ -3582,7 +3584,7 @@ static BatteryStatus read_battery(BatteryBus &bus) {
             result.reading_reason = "Waiting for an internal battery reading…";
         }
     } else {
-        result.reading_reason = "UPower is not running. Start it to read battery information.";
+        result.reading_reason = "Waiting for UPower battery information…";
     }
 
     result.protector_enabled = result.present && enumeration_complete && all_protected;

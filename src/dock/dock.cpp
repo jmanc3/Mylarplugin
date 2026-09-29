@@ -250,6 +250,7 @@ struct Dock : UserData {
 
     Windows *collection = nullptr;
     bool first_fill = true;
+    int startup_audio_update_count = 0;
     RawWindowSettings creation_settings;
 
     //bool vertical = false;
@@ -2966,6 +2967,17 @@ static void write_saved_pins_to_file(Container *icons) {
     out.close();
 }
 
+void total_update();
+
+static void schedule_startup_audio_update(Dock *dock) {
+    windowing::timer(dock->app, 1000, [](void *data) {
+        auto dock = static_cast<Dock *>(data);
+        total_update();
+        if (++dock->startup_audio_update_count < 30)
+            schedule_startup_audio_update(dock);
+    }, dock);
+}
+
 void dock_start(std::string monitor_name) {
     if (!monitor_name.empty()) {
         for (auto d : docks) {
@@ -3004,6 +3016,8 @@ void dock_start(std::string monitor_name) {
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
     bluetooth_watch_dock(dock);
+    total_update();
+    schedule_startup_audio_update(dock);
     windowing::main_loop(dock->app);
     if (docks.size() == 1) {
         finished = true;

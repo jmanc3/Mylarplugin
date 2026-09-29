@@ -81,8 +81,15 @@ bool on_key_press(RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mo
     //on_key_press(rw, key, pressed, sym, mods, is_text, text);
     auto m = mylar(rw);
     if (!m) return false;
+    // A popup opened by a shortcut may have no pointer serial for a grab.
+    // Its focus request then focuses the parent layer surface (the dock).
+    auto popup = target_popup_if_exists_instead(m);
+    if (popup->raw_window->keyboard_focus_on_click)
+        m = popup;
     ::layout(m->root, m->root, m->root->real_bounds);
     key_press(m->root, key, pressed, sym, mods, is_text, text);
+    if (m->raw_window != rw)
+        windowing::redraw(m->raw_window);
 
     log("on_key_press");
     return false;

@@ -226,7 +226,7 @@ static void watch_battery_level() {
             }
             if (!finished) dock::change_in_battery();
             std::unique_lock<std::mutex> lock(battery_mutex);
-            battery_wakeup.wait_for(lock, std::chrono::seconds(30), []() {
+            battery_wakeup.wait_for(lock, std::chrono::seconds(next.status.valid ? 30 : 2), []() {
                 return finished || battery_action != 0 || battery_refresh_requested;
             });
         }
