@@ -488,8 +488,8 @@ static void fill_applications_container(Container *root) {
     bottom->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->applications->raw_window->dpi;
-        c->wanted_bounds.h = 32 * dpi;
-        c->wanted_pad = Bounds(pad_amount, pad_amount, pad_amount, pad_amount).scale(dpi);
+        c->wanted_bounds.h = 36 * dpi;
+        //c->wanted_pad = Bounds(pad_amount, pad_amount, pad_amount, pad_amount).scale(dpi);
         c->spacing = 8 * dpi;
         for (auto ch : c->children) {
             ch->wanted_bounds.w = c->wanted_bounds.h;
@@ -501,7 +501,7 @@ static void fill_applications_container(Container *root) {
         "\uE7E8", // PowerButton
     };
     for (int i = 0; i < 2; i++) {
-        auto b = bottom->child(32, 32);
+        auto b = bottom->child(FILL_SPACE, FILL_SPACE);
         b->when_paint = [i](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto dpi = dock->applications->raw_window->dpi;
@@ -517,10 +517,24 @@ static void fill_applications_container(Container *root) {
             }
 
 
-            auto b = draw_text(cr, 0, 0, icons[i], 12 * dpi, false, icon_font);
+            auto b = draw_text(cr, 0, 0, icons[i], 16 * dpi, false, icon_font);
             draw_text(cr,
                 c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5,
-                c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, icons[i], 12 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
+                c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, icons[i], 16 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
         };
+        if (i == 0) {
+            b->when_clicked = [](Container *root, Container *c) {
+                auto dock = (Dock *) root->user_data;
+                windowing::close_window(dock->applications->raw_window);
+                main_thread([]() {
+                    settings::start();
+                });
+            };
+        } else if (i == 1) {
+            b->when_clicked = [](Container *root, Container *c) {
+                auto dock = (Dock *) root->user_data;
+                windowing::close_window(dock->applications->raw_window);
+            };
+        }
     }
 }

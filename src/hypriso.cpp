@@ -1828,23 +1828,28 @@ void on_layer_close(PHLLS l) {
     }
 }
 
-static int main_wake_pipe[2];
+static int main_wake_pipe[2] = {-1, -1};
+static wl_event_source *main_wake_source = nullptr;
 static std::vector<std::function<void()>> funcs;
 static std::mutex funcs_mutex;
 
 void main_thread(std::function<void()> func) {
-    {
-        std::lock_guard<std::mutex> lock(funcs_mutex);
-        funcs.emplace_back(std::move(func));
-    }
+    std::lock_guard<std::mutex> lock(funcs_mutex);
+    if (main_wake_pipe[1] == -1)
+        return;
+    funcs.emplace_back(std::move(func));
     write(main_wake_pipe[1], "x", 1);
 }
 
 void setup_wake_main_thread() {
-    pipe2(main_wake_pipe, O_CLOEXEC | O_NONBLOCK);
+    std::lock_guard<std::mutex> lock(funcs_mutex);
+    if (main_wake_source)
+        return;
+    if (pipe2(main_wake_pipe, O_CLOEXEC | O_NONBLOCK) == -1)
+        return;
     int fd = main_wake_pipe[0];
     uint32_t mask = WL_EVENT_READABLE;
-    wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, fd, mask, [](int fd, uint32_t mask, void *data){
+    main_wake_source = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, fd, mask, [](int fd, uint32_t mask, void *data){
         char buf[64];
         while (read(main_wake_pipe[0], buf, sizeof buf) > 0) {}
 
@@ -1858,6 +1863,29 @@ void setup_wake_main_thread() {
             f();
         return 0;
     }, nullptr);
+    if (!main_wake_source) {
+        close(main_wake_pipe[0]);
+        close(main_wake_pipe[1]);
+        main_wake_pipe[0] = main_wake_pipe[1] = -1;
+    }
+}
+
+static void stop_wake_main_thread() {
+    std::vector<std::function<void()>> pending;
+    {
+        std::lock_guard<std::mutex> lock(funcs_mutex);
+        if (main_wake_source) {
+            wl_event_source_remove(main_wake_source);
+            main_wake_source = nullptr;
+        }
+        for (auto &fd : main_wake_pipe) {
+            if (fd != -1)
+                close(fd);
+            fd = -1;
+        }
+        pending.swap(funcs);
+    }
+    // Destroy captured objects outside the mutex, while the plugin is still loaded.
 }
 
 PHLMONITORREF rendering_monitor;
@@ -4474,6 +4502,7 @@ void HyprIso::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    stop_wake_main_thread();
     g_pHyprRenderer->m_renderPass.removeAllOfType("CRectPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CBorderPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CTexPassElement");

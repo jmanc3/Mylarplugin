@@ -4,6 +4,7 @@
 #include "mutex"
 #include "thread"
 #include "functional"
+#include <atomic>
 
 struct Polled {
     int fd = -1;
@@ -12,9 +13,9 @@ struct Polled {
 };
 
 struct PollThread {
-    bool started = false;
-    bool keep_running = true;
-    int main_wake_pipe[2];
+    std::atomic<bool> started = false;
+    std::atomic<bool> keep_running = true;
+    int main_wake_pipe[2] = {-1, -1};
 
     std::mutex polling_mutex;
     std::vector<Polled *> polling;

@@ -7,9 +7,13 @@
 PollThread *poll_thread = new PollThread;
 
 void PollThread::start() {
+    if (started)
+        return;
+    stop();
+    if (pipe2(main_wake_pipe, O_CLOEXEC | O_NONBLOCK) == -1)
+        return;
     started = true;
     keep_running = true;
-    pipe2(main_wake_pipe, O_CLOEXEC | O_NONBLOCK);
  
     thread = std::thread([this] {
         while (keep_running) {
@@ -74,12 +78,8 @@ void PollThread::start() {
             }
         }
 
-        close(main_wake_pipe[0]);
-        close(main_wake_pipe[1]);
-
         started = false;
     });
-    thread.detach();
 }
 
 static void wake(PollThread *poll_thread) {
@@ -118,7 +118,7 @@ void PollThread::remove(int fd) {
 }
 
 void PollThread::stop() {
-    if (!started)
+    if (!thread.joinable())
         return;
     
     {
@@ -128,7 +128,8 @@ void PollThread::stop() {
     
     wake(poll_thread);
 
-    if (thread.joinable())
-        thread.join();
+    thread.join();
+    close(main_wake_pipe[0]);
+    close(main_wake_pipe[1]);
+    main_wake_pipe[0] = main_wake_pipe[1] = -1;
 }
-
