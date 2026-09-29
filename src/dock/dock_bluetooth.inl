@@ -255,7 +255,7 @@ static void bluetooth_refresh() {
     queued = true;
     later(50, [](Timer *) {
         queued = false;
-        if (finished || !bluetooth_menu_count) return;
+        if (finished) return;
         if (!bluetooth_running) {
             bluetooth_clear_request(true);
             bluetooth_scans.clear();
@@ -304,9 +304,21 @@ static void bluetooth_refresh() {
     });
 }
 
+static void bluetooth_preload() {
+    main_thread([]() {
+        if (finished) return;
+        // Refresh the BlueZ object cache while the menu is still closed. The
+        // GetManagedObjects response publishes the first usable menu snapshot.
+        update_devices();
+        bluetooth_refresh();
+    });
+}
+
 void dock::change_in_bluetooth() {
     bluetooth_available = bluetooth_running;
-    if (!bluetooth_running) {
+    if (bluetooth_running) {
+        bluetooth_preload();
+    } else {
         bluetooth_clear_request(true);
         bluetooth_scans.clear();
         bluetooth_scan_pending.clear();
