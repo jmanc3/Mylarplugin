@@ -109,12 +109,98 @@ double single_filler_height(Container* container) {
 }
 
 void modify_all(Container* container, double x_change, double y_change) {
+    if (!container)
+        return;
+
     for (auto child : container->children) {
         modify_all(child, x_change, y_change);
     }
 
+    if (container->type & layout_type::newscroll) {
+        auto scroll = static_cast<ScrollContainer*>(container);
+        modify_all(scroll->content, x_change, y_change);
+        modify_all(scroll->right, x_change, y_change);
+        modify_all(scroll->bottom, x_change, y_change);
+    }
+
     container->real_bounds.x += x_change;
     container->real_bounds.y += y_change;
+    container->children_bounds.x += x_change;
+    container->children_bounds.y += y_change;
+}
+
+static void align_children(Container* container) {
+    if (container->alignment == ALIGN_NONE)
+        return;
+
+    Container* first = nullptr;
+    double left = 0, top = 0, right = 0, bottom = 0;
+    for (auto child : container->children) {
+        if (!child || !child->exists)
+            continue;
+        const auto& b = child->real_bounds;
+        if (!first) {
+            first = child;
+            left = b.x;
+            top = b.y;
+            right = b.right();
+            bottom = b.bottom();
+        } else {
+            left = std::min(left, b.x);
+            top = std::min(top, b.y);
+            right = std::max(right, b.right());
+            bottom = std::max(bottom, b.bottom());
+        }
+    }
+    if (!first)
+        return;
+
+    // USE_CHILD_SIZE may have changed the container's dimensions during layout.
+    container->children_bounds.w = container->real_bounds.w - container->wanted_pad.x - container->wanted_pad.w;
+    container->children_bounds.h = container->real_bounds.h - container->wanted_pad.y - container->wanted_pad.h;
+    const auto& area = container->children_bounds;
+    auto root = container;
+    while (root->parent)
+        root = root->parent;
+
+    const int flags = container->alignment;
+    for (auto child : container->children) {
+        if (!child || !child->exists)
+            continue;
+
+        // Keep rows/columns together on their flow axis; align each child on
+        // the other axis. Stacked children are aligned individually on both.
+        const bool row = container->type & layout_type::hbox;
+        const bool column = container->type & layout_type::vbox;
+        const double x = row ? left : child->real_bounds.x;
+        const double y = column ? top : child->real_bounds.y;
+        const double w = row ? right - left : child->real_bounds.w;
+        const double h = column ? bottom - top : child->real_bounds.h;
+        const double free_w = std::max(0.0, area.w - w);
+        const double free_h = std::max(0.0, area.h - h);
+        double dx = 0, dy = 0;
+
+        if (flags & ALIGN_LEFT) {
+            dx = area.x + container->scroll_h_visual - x;
+        } else if (flags & ALIGN_RIGHT) {
+            dx = area.x + free_w + container->scroll_h_visual - x;
+        } else if (flags & ALIGN_GLOBAL_CENTER_HORIZONTALLY) {
+            const double target = root->real_bounds.x + (root->real_bounds.w - w) * .5;
+            dx = std::max(area.x, std::min(target, area.x + free_w)) + container->scroll_h_visual - x;
+        } else if (flags & ALIGN_CENTER_HORIZONTALLY) {
+            dx = area.x + free_w * .5 + container->scroll_h_visual - x;
+        }
+
+        if (flags & ALIGN_TOP) {
+            dy = area.y + container->scroll_v_visual - y;
+        } else if (flags & ALIGN_BOTTOM) {
+            dy = area.y + free_h + container->scroll_v_visual - y;
+        } else if (flags & ALIGN_CENTER) {
+            dy = area.y + free_h * .5 + container->scroll_v_visual - y;
+        }
+
+        modify_all(child, dx, dy);
+    }
 }
 
 
@@ -241,13 +327,7 @@ void layout_vbox(Container* root, Container* container, const Bounds& bounds) {
         container->real_bounds.h = reserved_height(container);
     }
 
-    if (container->alignment & ALIGN_CENTER) {
-        // Get height, divide by two, subtract that by parent y - h / 2
-        double full_height  = offset;
-        double align_offset = bounds.h / 2 - full_height / 2;
-
-        modify_all(container, 0, align_offset);
-    }
+    align_children(container);
 }
 
 // Sum of non filler child widths and spacing
@@ -399,93 +479,15 @@ void layout_hbox(Container* root, Container* container, const Bounds& bounds) {
         container->real_bounds.h = reserved_height(container);
     }
 
-    if (container->alignment & ALIGN_CENTER) {
-        for (auto c : container->children) {
-            if (c->wanted_bounds.h != FILL_SPACE) {
-                // Get height, divide by two, subtract that by parent y - h / 2
-                double full_height  = c->real_bounds.h;
-                double align_offset = bounds.h / 2 - full_height / 2;
-                modify_all(c, 0, align_offset);
-            }
-        }
-    }
-    if (container->alignment & ALIGN_RIGHT) {
-        if (!container->children.empty()) {
-            Container* first            = container->children[0];
-            Container* last             = container->children[container->children.size() - 1];
-            double     total_children_w = (last->real_bounds.x + last->real_bounds.w) - first->real_bounds.x;
-
-            for (auto c : container->children) {
-                modify_all(c, (container->real_bounds.w - container->wanted_pad.w - total_children_w), 0);
-            }
-        }
-    }
-    if (container->alignment & ALIGN_CENTER_HORIZONTALLY) {
-        if (!container->children.empty()) {
-            Bounds     real_bounds      = container->real_bounds;
-            Container* first            = container->children[0];
-            Container* last             = container->children[container->children.size() - 1];
-            double     total_children_w = (last->real_bounds.x + last->real_bounds.w) - first->real_bounds.x;
-
-            for (auto c : container->children) {
-                modify_all(c, (container->real_bounds.w - total_children_w) * .5, 0);
-            }
-            // guarantee first is greater than real_bounds.x
-            if (first->real_bounds.x < real_bounds.x) {
-                auto diff = real_bounds.x - first->real_bounds.x;
-                for (auto c : container->children) {
-                    modify_all(c, diff, 0);
-                }
-            }
-        }
-    }
-    if (container->alignment & ALIGN_GLOBAL_CENTER_HORIZONTALLY) {
-        if (!container->children.empty()) {
-            Container* root = container;
-            while (true) {
-                if (root->parent == nullptr)
-                    break;
-                root = root->parent;
-            }
-
-            Bounds     real_bounds      = container->real_bounds;
-            Container* first            = container->children[0];
-            Container* last             = container->children[container->children.size() - 1];
-            double     total_children_w = (last->real_bounds.x + last->real_bounds.w) - first->real_bounds.x;
-            double     target_x         = root->real_bounds.w / 2 - total_children_w / 2;
-            double     initial_x        = first->real_bounds.x;
-            for (auto c : container->children) {
-                modify_all(c, target_x - initial_x, 0);
-            }
-            // guarantee first is greater than real_bounds.x
-            if (first->real_bounds.x < real_bounds.x) {
-                auto diff = real_bounds.x - first->real_bounds.x;
-                for (auto c : container->children) {
-                    modify_all(c, diff, 0);
-                }
-            }
-            // guarantee last is less than real_bounds.x
-            if (last->real_bounds.x + last->real_bounds.w > real_bounds.x + real_bounds.w) {
-                auto diff = (real_bounds.x + real_bounds.w) - (last->real_bounds.x + last->real_bounds.w);
-                for (auto c : container->children) {
-                    modify_all(c, diff, 0);
-                }
-            }
-            // guarantee first is greater than real_bounds.x
-            if (first->real_bounds.x < real_bounds.x) {
-                auto diff = real_bounds.x - first->real_bounds.x;
-                for (auto c : container->children) {
-                    modify_all(c, diff, 0);
-                }
-            }
-        }
-    }
+    align_children(container);
 }
 
 void layout_stack(Container* root, Container* container, const Bounds& bounds) {
     for (auto child : container->children) {
-        layout(root, child, bounds);
+        if (child && child->exists)
+            layout(root, child, bounds);
     }
+    align_children(container);
 }
 
 // Expected container children:
@@ -1117,5 +1119,4 @@ ScrollPaneSettings::ScrollPaneSettings(float scale) {
     this->right_arrow_height = this->right_arrow_height * scale;
     this->bottom_arrow_width = this->bottom_arrow_width * scale;
 }
-
 

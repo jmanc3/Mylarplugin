@@ -146,6 +146,10 @@ enum layout_type {
     fullycustom = 1 << 20,
 };
 
+// Combine horizontal and vertical flags with |. ALIGN_CENTER centers vertically;
+// use ALIGN_CENTER | ALIGN_CENTER_HORIZONTALLY to center on both axes.
+// Conflicts resolve in this order: LEFT, RIGHT, GLOBAL_CENTER_HORIZONTALLY,
+// CENTER_HORIZONTALLY on X; TOP, BOTTOM, CENTER on Y.
 enum container_alignment {
     ALIGN_NONE                       = 0,
     ALIGN_GLOBAL_CENTER_HORIZONTALLY = 1 << 0,
@@ -236,7 +240,7 @@ struct Container {
     // Spacing between children when laying them out
     double spacing = 0;
 
-    // Where you are placed inside the parent
+    // How children are aligned within this hbox, vbox, or stack's padded bounds.
     int alignment = 0;
 
     // These numbers are usually going to be negative
