@@ -834,7 +834,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                 } else {
                     pop.text = "End tasks";
                 }
-                pop.icon_left = "\uE087";
+                pop.icon_left = "\uF140";
                 pop.is_text_icon = true;
                 auto text = pop.text;
                 pop.on_clicked = [text, stacking_rule, uuid]() {

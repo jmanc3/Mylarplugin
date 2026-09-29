@@ -73,7 +73,7 @@ void request_submenu(Container *row) {
         return;
     data->requested_row_uuid = row->uuid;
     // Event dispatch holds container snapshots. Replace branches after it finishes.
-    later_immediate([panel_uuid = panel->uuid, row_uuid = row->uuid](Timer *) {
+    later(150, [panel_uuid = panel->uuid, row_uuid = row->uuid](Timer *) {
         auto *panel = find_popup(panel_uuid);
         auto *data = popup_data(panel);
         if (!data || data->closing || data->requested_row_uuid != row_uuid)
