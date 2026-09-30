@@ -65,7 +65,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // The compositor thread outlives this plugin; workers release their own
-    // caches when their rendering loops finish (with thread exit as a fallback).
+    // caches when their rendering loops finish.
     cleanup_cached_pango_fonts();
 }
 

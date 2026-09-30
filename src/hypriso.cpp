@@ -3433,6 +3433,7 @@ std::expected<Config::Supplementary::Jeremy::SConfigStateReply, std::string> hoo
 }
 
 void hook_default_config() {
+    return_default_config = false;
     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "getMainConfigPath");
     for (auto m : METHODS) {
         if (m.demangled.find("Jeremy::getMainConfigPath") != std::string::npos) {

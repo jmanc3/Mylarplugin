@@ -48,7 +48,10 @@ struct FontCache {
     std::list<CachedFont> fonts;
 };
 
-thread_local std::unique_ptr<FontCache> cache;
+// A non-trivial thread_local destructor pins this shared library until the
+// compositor thread exits, even if its unique_ptr has already been reset.
+// Rendering threads release their caches explicitly before leaving the plugin.
+thread_local FontCache *cache = nullptr;
 constexpr size_t max_cached_fonts = 64;
 
 void prepare_layout(cairo_t *cr, CachedFont &font) {
@@ -82,7 +85,7 @@ PangoLayout *get_cached_pango_font(cairo_t *cr, const std::string &name,
     ZoneScoped;
 #endif
     if (!cache)
-        cache = std::make_unique<FontCache>();
+        cache = new FontCache;
 
     auto &fonts = cache->fonts;
     for (auto it = fonts.begin(); it != fonts.end(); ++it) {
@@ -102,5 +105,6 @@ PangoLayout *get_cached_pango_font(cairo_t *cr, const std::string &name,
 }
 
 void cleanup_cached_pango_fonts() {
-    cache.reset();
+    delete cache;
+    cache = nullptr;
 }

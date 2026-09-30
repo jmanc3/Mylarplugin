@@ -15,8 +15,8 @@ PangoLayout *get_cached_pango_font(cairo_t *cr, const std::string &name,
 
 // Releases only the calling thread's layouts and private font map. Safe to call
 // repeatedly once that thread has finished using its borrowed layouts; another
-// lookup lazily starts a new cache. Normal thread exit does this automatically,
-// so after all rendering threads exit all their caches have been released.
+// lookup lazily starts a new cache. Every rendering thread must call this before
+// exiting, and the compositor thread must call it during plugin shutdown.
 // A shutdown coordinator must not free another thread's in-use layouts.
 void cleanup_cached_pango_fonts();
 
