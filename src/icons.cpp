@@ -11,11 +11,14 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <math.h>
 #include <optional>
 #include <pango/pangocairo.h>
 #include <sstream>
 #include <string>
+#include <stdexcept>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <thread>
@@ -28,7 +31,7 @@
 #endif
 
 static uint32_t cache_version = 3;
-bool icons_loaded = false;
+std::atomic<bool> icons_loaded = false;
 
 int getExtension(unsigned short int i) {
     // return the top two bits
@@ -87,22 +90,29 @@ struct OptionsData {
     }
 };
 
-static std::vector<std::string> icon_search_paths;
-static auto* data = new OptionsData;
-
-char* name_buffer   = nullptr;
-char* option_buffer = nullptr;
+// A background rescan must not change the live lookup thread's search paths.
+static thread_local std::vector<std::string> icon_search_paths;
 struct Range {
     unsigned long start  = -1;
     unsigned long length = -1;
 };
-std::unordered_map<std::string_view, Range> ranges;
+struct IconCache {
+    OptionsData data;
+    std::vector<char> name_buffer;
+    std::vector<char> option_buffer;
+    std::unordered_map<std::string_view, Range> ranges;
+};
 
-void traverse_dir(const char* path) {
+static std::atomic<std::shared_ptr<const IconCache>> active_cache{std::make_shared<IconCache>()};
+static std::mutex cache_update_mutex;
+
+static void traverse_dir(const char* path, OptionsData *data, const std::vector<std::string>& icon_search_paths) {
     DIR* dir = opendir(path);
     if (dir == nullptr) {
         return;
     }
+    auto close_directory = [](DIR *directory) { closedir(directory); };
+    std::unique_ptr<DIR, decltype(close_directory)> directory(dir, close_directory);
 
     std::string path_as_string(path);
     std::string theme;
@@ -170,20 +180,19 @@ void traverse_dir(const char* path) {
         if (stat(file, &entryStat) == -1)
             continue;
         if (S_ISDIR(entryStat.st_mode)) {
-            traverse_dir(file);
+            traverse_dir(file, data, icon_search_paths);
         } else if (S_ISLNK(entryStat.st_mode)) {
             char    link[PATH_MAX];
             ssize_t len = readlink(file, link, sizeof(link));
             if (len != -1) {
                 link[len] = '\0';
-                traverse_dir(link);
+                traverse_dir(link, data, icon_search_paths);
             }
         }
     }
-    closedir(dir);
 }
 
-void generate_data() {
+static void generate_data(OptionsData *data, const std::vector<std::string>& icon_search_paths) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -200,7 +209,7 @@ void generate_data() {
         if (stat(search_path.c_str(), &st) != 0)
             continue;
 
-        traverse_dir(search_path.data());
+        traverse_dir(search_path.data(), data, icon_search_paths);
     }
 }
 
@@ -212,7 +221,7 @@ void generate_data() {
 //
 //
 
-void save_data() {
+static void save_data(const OptionsData *data) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -222,7 +231,7 @@ void save_data() {
     std::ofstream cache_file;
     cache_file.open(icon_cache_temp_path, std::ios_base::out | std::ios_base::binary);
     if (!cache_file.is_open())
-        return;
+        throw std::runtime_error("Cannot open temporary icon cache");
 
     // version (string)
     cache_file << std::to_string(cache_version) << '\0';
@@ -286,127 +295,102 @@ void save_data() {
     rename(icon_cache_temp_path.data(), icon_cache_path.data());
 }
 
-static bool first_time_load_data = true;
-
-void load_data() {
+static void load_data() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto item : data->options)
-        item.second.clear();
-    data->options.clear();
-    data->parentPaths.clear();
-    data->themes.clear();
-    if (name_buffer != nullptr)
-        delete[] name_buffer;
-    if (option_buffer != nullptr)
-        delete[] option_buffer;
-    ranges.clear();
+    std::ifstream cache_file("/var/tmp/winbar_icon.cache", std::ios::binary | std::ios::ate);
+    if (!cache_file)
+        throw std::runtime_error("Cannot open icon cache");
 
-    std::string icon_cache_path("/var/tmp/winbar_icon.cache");
+    auto file_size = cache_file.tellg();
+    if (file_size <= 0)
+        throw std::runtime_error("Empty icon cache");
+    std::vector<char> bytes(static_cast<size_t>(file_size));
+    cache_file.seekg(0);
+    if (!cache_file.read(bytes.data(), bytes.size()))
+        throw std::runtime_error("Cannot read icon cache");
 
-    struct stat cache_stat{};
-    if (stat(icon_cache_path.c_str(), &cache_stat) == 0) { // exists
-        // Open the file
-        int fd = open(icon_cache_path.c_str(), O_RDONLY);
-        if (fd == -1) {
-            fprintf(stderr, "Error opening file");
-            return;
+    size_t index = 0;
+    auto read_string = [&]() {
+        auto begin = bytes.data() + index;
+        auto end = static_cast<const char *>(std::memchr(begin, '\0', bytes.size() - index));
+        if (!end)
+            throw std::runtime_error("Truncated icon cache string");
+        index += end - begin + 1;
+        return std::string(begin, end - begin);
+    };
+    auto read_number = [&](auto &number) {
+        if (sizeof(number) > bytes.size() - index)
+            throw std::runtime_error("Truncated icon cache number");
+        std::memcpy(&number, bytes.data() + index, sizeof(number));
+        index += sizeof(number);
+    };
+    auto read_count = [&]() {
+        auto text = read_string();
+        size_t consumed = 0;
+        auto count = std::stoull(text, &consumed);
+        if (consumed != text.size() || count > bytes.size())
+            throw std::runtime_error("Invalid icon cache count");
+        return static_cast<size_t>(count);
+    };
+
+    if (read_count() != cache_version)
+        throw std::runtime_error("Unsupported icon cache version");
+
+    auto next = std::make_shared<IconCache>();
+    unsigned long names_size = 0;
+    unsigned long options_size = 0;
+    read_number(names_size);
+    read_number(options_size);
+    if (names_size > bytes.size() || options_size > bytes.size())
+        throw std::runtime_error("Invalid icon cache buffer size");
+    next->name_buffer.resize(names_size);
+    next->option_buffer.resize(options_size);
+
+    auto parents_count = read_count();
+    for (size_t i = 0; i < parents_count; ++i)
+        next->data.parentPaths.push_back(read_string());
+    auto themes_count = read_count();
+    for (size_t i = 0; i < themes_count; ++i)
+        next->data.themes.push_back(read_string());
+
+    auto entries_count = read_count();
+    next->ranges.reserve(entries_count);
+    size_t name_index = 0;
+    size_t option_index = 0;
+    for (size_t i = 0; i < entries_count; ++i) {
+        auto name = read_string();
+        unsigned short option_count = 0;
+        read_number(option_count);
+        size_t option_bytes = static_cast<size_t>(option_count) * 3;
+        if (name.empty() || name.size() > names_size - name_index ||
+            option_bytes > options_size - option_index || option_bytes > bytes.size() - index)
+            throw std::runtime_error("Invalid icon cache entry");
+        std::memcpy(next->name_buffer.data() + name_index, name.data(), name.size());
+        std::string_view view(next->name_buffer.data() + name_index, name.size());
+        if (!next->ranges.emplace(view, Range{option_index, option_bytes}).second)
+            throw std::runtime_error("Duplicate icon cache entry");
+        name_index += name.size();
+
+        for (size_t j = 0; j < option_count; ++j) {
+            unsigned short parent = 0;
+            unsigned char theme = 0;
+            read_number(parent);
+            read_number(theme);
+            if (getParentIndex(parent) >= next->data.parentPaths.size() || theme >= next->data.themes.size())
+                throw std::runtime_error("Invalid icon cache path index");
+            std::memcpy(next->option_buffer.data() + option_index, &parent, sizeof(parent));
+            std::memcpy(next->option_buffer.data() + option_index + sizeof(parent), &theme, sizeof(theme));
+            option_index += 3;
         }
-
-        off_t fileSize = cache_stat.st_size;
-
-        // Map the file into memory
-        char* icon_cache_data = (char*)mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (icon_cache_data == MAP_FAILED) {
-            fprintf(stderr, "Error mapping file");
-            close(fd);
-            return;
-        }
-
-        std::string versionString = std::string(icon_cache_data);
-        int         version       = atoi(versionString.data());
-        if (version < cache_version) {
-            if (first_time_load_data) {
-                munmap(icon_cache_data, fileSize);
-                close(fd);
-                first_time_load_data = false;
-                generate_data();
-                save_data();
-                load_data();
-                first_time_load_data = true;
-            }
-            return;
-        }
-
-        unsigned long index_into_file = 0;
-        char          buffer[PATH_MAX * 2];
-        size_t        max = sizeof(buffer) - 1;
-        long          len;
-
-#define READ_STRING(tess)                                                                                                                                                          \
-    strncpy(buffer, icon_cache_data + index_into_file, max);                                                                                                                       \
-    buffer[max] = '\0';                                                                                                                                                            \
-    len         = strlen(buffer);                                                                                                                                                  \
-    index_into_file += len + 1;                                                                                                                                                    \
-    std::string tess = std::string(buffer, std::max(len, (long)0));
-
-#define READ_NUM(tem)                                                                                                                                                              \
-    *reinterpret_cast<tem*>((icon_cache_data + index_into_file));                                                                                                                  \
-    index_into_file += sizeof(tem)
-
-        // Version
-        READ_STRING(version_number)
-
-        unsigned long size_of_pre_allocated_string_buffer  = READ_NUM(unsigned long);
-        name_buffer                                        = new char[size_of_pre_allocated_string_buffer];
-        unsigned long size_of_pre_allocated_options_buffer = READ_NUM(unsigned long);
-        option_buffer                                      = new char[size_of_pre_allocated_options_buffer];
-
-        READ_STRING(amountOfParentsString)
-        int amountOfParents = std::stoi(amountOfParentsString);
-        for (int i = 0; i < amountOfParents; ++i) {
-            READ_STRING(parentPath)
-            data->parentPaths.push_back(std::move(parentPath));
-        }
-
-        READ_STRING(amountOfThemesString)
-        int amountOfThemes = std::stoi(amountOfThemesString);
-        for (int i = 0; i < amountOfThemes; ++i) {
-            READ_STRING(theme)
-            data->themes.push_back(std::move(theme));
-        }
-
-        READ_STRING(optionsSizeString)
-        int optionsSize = std::stoi(optionsSizeString);
-
-        ranges.reserve(optionsSize);
-        unsigned long names_buffer_index = 0;
-        unsigned long option_data_index  = 0;
-        for (int i = 0; i < optionsSize; ++i) {
-            strncpy(buffer, icon_cache_data + index_into_file, max);
-            buffer[max] = '\0';
-            len         = strlen(buffer);
-            strncpy(name_buffer + names_buffer_index, icon_cache_data + index_into_file, len);
-            index_into_file += len + 1;
-            std::string name = std::string(buffer, std::max(len, (long)0));
-
-            auto        optionSize = READ_NUM(unsigned short int);
-            auto        view       = std::string_view(name_buffer + names_buffer_index, len);
-            names_buffer_index += len;
-            ranges[view] = {option_data_index, (unsigned long)optionSize * 3};
-
-            for (int j = 0; j < optionSize; ++j) {
-                std::memcpy(option_buffer + option_data_index, icon_cache_data + index_into_file, sizeof(unsigned short int));
-                std::memcpy(option_buffer + option_data_index + sizeof(unsigned short int), icon_cache_data + index_into_file + sizeof(unsigned short int), sizeof(unsigned char));
-                index_into_file += sizeof(unsigned short int) + sizeof(unsigned char);
-                option_data_index += sizeof(unsigned short int) + sizeof(unsigned char);
-            }
-        }
-
-        munmap(icon_cache_data, fileSize);
-        close(fd);
     }
+    if (name_index != names_size || option_index != options_size || index != bytes.size())
+        throw std::runtime_error("Invalid icon cache size");
+
+    // Readers retain their snapshot until the lookup finishes.
+    std::shared_ptr<const IconCache> ready = std::move(next);
+    active_cache.store(std::move(ready));
     icons_loaded = true;
 }
 
@@ -448,9 +432,11 @@ void update_paths() {
 }
 
 void generate_cache() {
+    std::lock_guard<std::mutex> lock(cache_update_mutex);
     update_paths();
-    generate_data();
-    save_data();
+    OptionsData generated;
+    generate_data(&generated, icon_search_paths);
+    save_data(&generated);
 }
 
 bool icon_cache_needs_update() {
@@ -462,17 +448,10 @@ bool icon_cache_needs_update() {
 
     if (std::filesystem::exists(path)) {
         // If cache version is not the same as modern cache version, icon cache needs update
-        FILE* fp;
-        char buf[1024];
-        if ((fp = fopen(path.data(), "rb"))) {
-            fread(buf, 1, 10, fp);
-            std::string versionString = std::string(buf, std::max(strlen(buf), (unsigned long)0));
-            int version = atoi(versionString.data());
-            if (version != cache_version) {
-                return true;
-            }
-            fclose(fp);
-        }
+        std::ifstream cache_file(path, std::ios::binary);
+        std::string version;
+        if (!std::getline(cache_file, version, '\0') || version != std::to_string(cache_version))
+            return true;
 
         auto cache_time = std::filesystem::last_write_time(path);
         // If any icon folders are newer than cache
@@ -491,18 +470,31 @@ bool icon_cache_needs_update() {
     return true;
 }
 
-void icon_cache_generate() {
+bool icon_cache_generate() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-     generate_cache();
+    try {
+        generate_cache();
+        return true;
+    } catch (const std::exception &error) {
+        fprintf(stderr, "Icon cache generation failed: %s\n", error.what());
+        return false;
+    }
 }
 
-void icon_cache_load() {
+bool icon_cache_load() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-     load_data();
+    std::lock_guard<std::mutex> lock(cache_update_mutex);
+    try {
+        load_data();
+        return true;
+    } catch (const std::exception &error) {
+        fprintf(stderr, "Icon cache loading failed: %s\n", error.what());
+        return false;
+    }
 }
 
 bool equals_case_insensitive(std::string_view a, std::string_view b) {
@@ -524,6 +516,10 @@ void search_icons(std::vector<IconTarget>& targets) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    auto cache = active_cache.load();
+    const auto &ranges = cache->ranges;
+    const auto *data = &cache->data;
+    const auto *option_buffer = cache->option_buffer.data();
     for (int i = 0; i < targets.size(); ++i) {
         auto             &target = targets[i];
         target.was_searched = true;
@@ -593,7 +589,7 @@ void search_icons(std::vector<IconTarget>& targets) {
             continue;
         }
         if (!found)
-            range = ranges[target_name];
+            range = ranges.at(target_name);
 
         std::vector<Candidate> candidates;
         for (int j = 0; j < (range.length / 3); ++j) {
@@ -899,26 +895,11 @@ void unload_icons() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    if (data != nullptr) {
-        data->parentPaths.clear();
-        data->parentPaths.shrink_to_fit();
-        data->themes.clear();
-        data->themes.shrink_to_fit();
-        for (auto item : data->options)
-            item.second.clear();
-        data->options.clear();
-        delete data;
-        data = nullptr;
-        delete[] name_buffer;
-        delete[] option_buffer;
-        name_buffer   = nullptr;
-        option_buffer = nullptr;
-        ranges.clear();
-    }
-
+    std::lock_guard<std::mutex> lock(cache_update_mutex);
+    std::shared_ptr<const IconCache> empty = std::make_shared<IconCache>();
+    active_cache.store(std::move(empty));
+    icons_loaded = false;
     icon_search_paths.clear();
-    icon_search_paths.shrink_to_fit();
-    icon_search_paths = std::vector<std::string>();
 }
 
 std::string c3ic_fix_desktop_file_icon(const std::string& given_name, const std::string& given_wm_class, const std::string& given_path, const std::string& given_icon) {
@@ -1077,6 +1058,8 @@ std::string c3ic_fix_wm_class(const std::string& given_wm_class) {
 }
 
 bool has_options(const std::string& name) {
+    auto cache = active_cache.load();
+    const auto &ranges = cache->ranges;
     // Ignore preferred theme tag
     if (name.size() > 2 && name[0] == ':' && name.find(':', 1) != std::string::npos) {
         int              start          = name.find(':', 1);
@@ -1091,7 +1074,9 @@ bool is_case_insensitive_substring(const std::string_view& str_view, const std::
     return std::search(str_view.begin(), str_view.end(), target.begin(), target.end(), [](char a, char b) { return std::tolower(a) == std::tolower(b); }) != str_view.end();
 }
 
-void get_options(std::vector<std::string_view>& names, const std::string& name, int max) {
+void get_options(std::vector<std::string>& names, const std::string& name, int max) {
+    auto cache = active_cache.load();
+    const auto &ranges = cache->ranges;
     std::string_view icon_name_only = name.c_str();
     if (name.size() > 2 && name[0] == ':' && name.find(':', 1) != std::string::npos) {
         int start      = name.find(':', 1);
@@ -1105,7 +1090,7 @@ void get_options(std::vector<std::string_view>& names, const std::string& name, 
                     only_print = false;
             }
             if (only_print) {
-                names.push_back(entry.first);
+                names.emplace_back(entry.first);
                 if (names.size() > max && max != 0)
                     return;
             }
@@ -1312,5 +1297,3 @@ std::string single_shot_icon_live(std::string icon, int size) {
     }
     return targets[0].best_full_path;
 }
-
-

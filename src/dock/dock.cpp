@@ -658,6 +658,16 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
             };
             root.push_back(pop);
         }
+        {
+            PopOption pop;
+            pop.text = "Settings";
+            pop.icon_left = "\uE713";
+            pop.is_text_icon = true;
+            pop.on_clicked = []() {
+                settings::start();
+            };
+            root.push_back(pop);
+        }
         popup::open(root,
             m.x - (277 * .5) + 1.4,
             m.y - (yoff / dpi) - 5 - (24 * root.size() * dpi));

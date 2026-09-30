@@ -4342,10 +4342,12 @@ void HyprIso::create_hooks() {
     hook_native_drag_end();
     hook_native_drag_begin();
 
-    auto connection = g_pXWayland->m_wm->getConnection();
-    xcb_intern_atom_cookie_t *c = xcb_ewmh_init_atoms(connection, &ewmh);
-    xcb_ewmh_init_atoms_replies(&ewmh, c, NULL);
-    xcb_flush(connection);
+    if (g_pXWayland->m_wm) {
+        auto connection = g_pXWayland->m_wm->getConnection();
+        xcb_intern_atom_cookie_t *c = xcb_ewmh_init_atoms(connection, &ewmh);
+        xcb_ewmh_init_atoms_replies(&ewmh, c, NULL);
+        xcb_flush(connection);
+    }
     
     //create_custom_shaders();
 }

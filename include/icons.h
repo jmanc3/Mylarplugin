@@ -7,6 +7,7 @@
 
 #include "container.h"
 #include <algorithm>
+#include <atomic>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,11 +17,11 @@ static bool starts_with(const std::string& str, const std::string& prefix) {
     return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
 }
 
-extern bool icons_loaded;
+extern std::atomic<bool> icons_loaded;
 
 bool icon_cache_needs_update();
-void icon_cache_generate();
-void icon_cache_load();
+bool icon_cache_generate();
+bool icon_cache_load();
 
 // Remove all icons from memory
 void unload_icons();
@@ -98,7 +99,7 @@ std::string one_shot_icon(int size, const std::vector<std::string>& alt_names);
 
 bool has_options(const std::string& name);
 
-void get_options(std::vector<std::string_view>& names, const std::string& name, int max);
+void get_options(std::vector<std::string>& names, const std::string& name, int max);
 
 std::string c3ic_fix_desktop_file_icon(const std::string& given_name, const std::string& given_wm_class, const std::string& given_path, const std::string& given_icon);
 

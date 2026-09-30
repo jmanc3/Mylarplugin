@@ -6,6 +6,7 @@
 #include "container.h"
 #include "desktop_icons.h"
 #include "heart.h"
+#include "icons.h"
 #include "hypriso.h"
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
@@ -31,6 +32,7 @@
 static RawApp *settings_app = nullptr;
 static MylarWindow *settings_mylar = nullptr;
 static std::string requested_page;
+static bool icon_cache_rescan_in_progress = false;
 
 struct SettingsTheme {
     RGBA background;
@@ -1224,7 +1226,7 @@ static Container *make_dropdown_option(Container *parent, std::string title, std
     return p;
 }
 
-static void make_button(Container *parent, std::string text, std::function<void()> func) {
+static void make_button(Container *parent, std::string text, std::function<void()> func, std::function<bool()> is_enabled = {}) {
     static float pad_amount = 11;
     static float text_height = 11;
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
@@ -1238,11 +1240,16 @@ static void make_button(Container *parent, std::string text, std::function<void(
         c->wanted_bounds.w = bounds.w + pad_amount * 2;
         c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
     };
-    pad->when_paint = [text](Container *root, Container *c) {
+    pad->when_paint = [text, is_enabled](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
         auto dpi = mylar->raw_window->dpi;
-        if (c->state.mouse_pressing) {
+        const bool enabled = !is_enabled || is_enabled();
+        auto text_color = enabled ? theme.text : theme.text_secondary;
+        if (!enabled) {
+            text_color.a *= .5;
+            set_argb(cr, theme.slider_track);
+        } else if (c->state.mouse_pressing) {
             set_argb(cr, theme.button_pressed);
         } else if (c->state.mouse_hovering) {
             set_argb(cr, theme.button_hover);
@@ -1257,13 +1264,30 @@ static void make_button(Container *parent, std::string text, std::function<void(
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, 
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            text, text_height, true, set->font, -1, -1, theme.text, false);
+            text, text_height, true, set->font, -1, -1, text_color, false);
     };
-   pad->when_clicked = [func](Container *root, Container *c) {
-       if (func) {
+   pad->when_clicked = [func, is_enabled](Container *root, Container *c) {
+       if (func && (!is_enabled || is_enabled())) {
            func();
        }
    };
+}
+
+static void make_button_option(Container *parent, std::string title, std::string description, std::string button_text, std::function<void()> on_click, std::string icon = "", std::function<bool()> is_enabled = {}) {
+    auto p = make_self_height_sized_parent(parent);
+    make_label_like(p, title, description, icon);
+
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    right->alignment = container_alignment::ALIGN_CENTER | container_alignment::ALIGN_RIGHT;
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 250 * dpi;
+        c->real_bounds.h = 70 * dpi;
+    };
+    right->child(FILL_SPACE, FILL_SPACE);
+    right->parent_bounds_limit_input_bounds = false;
+    make_button(right, button_text, on_click, is_enabled);
 }
 
 static void make_bool_with_button(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change, std::string button_text, std::function<void()> on_click, std::string icon = "") {
@@ -1732,6 +1756,32 @@ static void fill_desktop_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 10);
 
+    make_button_option(padded_right, "Icon Cache", "Re-scan installed icons", "Re-scan Icons", []() {
+        if (icon_cache_rescan_in_progress)
+            return;
+
+        icon_cache_rescan_in_progress = true;
+        damage_all();
+
+        std::thread([]() {
+            bool succeeded = true;
+            try {
+                icon_cache_generate();
+                icon_cache_load();
+            } catch (...) {
+                succeeded = false;
+            }
+
+            main_thread([succeeded]() {
+                icon_cache_rescan_in_progress = false;
+                if (!succeeded)
+                    notify("Failed to re-scan icons");
+                damage_all();
+            });
+        }).detach();
+    }, "\uE71D", []() { return !icon_cache_rescan_in_progress; });
+
+    make_vert_space(padded_right, 4);
     make_bool_with_button(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
         set->desktop_icons = c;
         main_thread([]() {
