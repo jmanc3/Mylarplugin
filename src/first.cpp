@@ -1,4 +1,5 @@
 #include "first.h"
+#include "pango_font_cache.h"
 
 #include "heart.h"
 #include "settings.h"
@@ -63,6 +64,9 @@ APICALL EXPORT void PLUGIN_EXIT() {
 
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // The compositor thread outlives this plugin; workers release their own
+    // caches when their rendering loops finish (with thread exit as a fallback).
+    cleanup_cached_pango_fonts();
 }
 
 void init_mylar(void* h) { // When started directly from hyprland

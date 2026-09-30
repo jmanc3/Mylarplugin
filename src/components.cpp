@@ -3,6 +3,7 @@
 //
 
 #include "components.h"
+#include "pango_font_cache.h"
 #include "hypriso.h"
 #include "hsluv.h"
 #include "heart.h"
@@ -357,97 +358,6 @@ fine_right_thumb_scrolled(Container *root, Container *container, int scroll_x, i
 static void
 fine_bottom_thumb_scrolled(Container *root, Container *container, int scroll_x, int scroll_y,
                            bool came_from_touchpad) {
-}
-
-struct CachedFont {
-    std::string name;
-    int size;
-    int used_count;
-    bool italic = false;
-    PangoWeight weight;
-    PangoLayout *layout;
-    cairo_t *cr; // Creator
-    
-    ~CachedFont() { g_object_unref(layout); }
-};
-
-static std::vector<CachedFont *> cached_fonts;
-
-static PangoLayout *
-get_cached_pango_font(cairo_t *cr, std::string name, int pixel_height, PangoWeight weight, bool italic) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    // Look for a matching font in the cache (including italic style)
-    for (int i = cached_fonts.size() - 1; i >= 0; i--) {
-        auto font = cached_fonts[i];
-        if (font->name == name &&
-            font->size == pixel_height &&
-            font->weight == weight &&
-            font->cr == cr &&
-            font->italic == italic) { // New italic check
-            pango_layout_set_attributes(font->layout, nullptr);
-            font->used_count++;
-            if (font->used_count < 512) {
-//            printf("returned: %p\n", font->layout);
-            	return font->layout;
-            } else {
-				delete font;
-				cached_fonts.erase(cached_fonts.begin() + i);
-            }
-        }
-    }
-
-    // Create a new CachedFont entry
-    auto *font = new CachedFont;
-    assert(font);
-    font->name = name;
-    font->size = pixel_height;
-    font->weight = weight;
-    font->cr = cr;
-    font->italic = italic; // Save the italic setting
-    font->used_count = 0;
-
-    PangoLayout *layout = pango_cairo_create_layout(cr);
-    PangoFontDescription *desc = pango_font_description_new();
-
-    pango_font_description_set_size(desc, pixel_height * PANGO_SCALE);
-    pango_font_description_set_family_static(desc, name.c_str());
-    pango_font_description_set_weight(desc, weight);
-    // Set the style to italic or normal based on the parameter
-    pango_font_description_set_style(desc, italic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
-
-    pango_layout_set_font_description(layout, desc);
-    pango_font_description_free(desc);
-    pango_layout_set_attributes(layout, nullptr);
-
-    assert(layout);
-
-    font->layout = layout;
-    //printf("new: %p\n", font->layout);
-
-    cached_fonts.push_back(font);
-
-    assert(font->layout);
-
-    return font->layout;
-}
-
-static void cleanup_cached_fonts() {
-    for (auto font: cached_fonts) {
-        delete font;
-    }
-    cached_fonts.clear();
-    cached_fonts.shrink_to_fit();
-}
-
-static void remove_cached_fonts(cairo_t *cr) {
-    for (int i = cached_fonts.size() - 1; i >= 0; --i) {
-        if (cached_fonts[i]->cr == cr) {
-            delete cached_fonts[i];
-            cached_fonts.erase(cached_fonts.begin() + i);
-        }
-    }
 }
 
 static void
@@ -1073,6 +983,3 @@ make_newscrollpane_as_child(Container *parent, const ScrollPaneSettings &setting
     
     return scrollpane;    
 }
-
-
-

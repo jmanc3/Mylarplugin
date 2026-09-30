@@ -51,6 +51,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     libpipewire-0.3
     libpulse
     gtk+-3.0
+    xcb-ewmh 
     fontconfig
 )
 
