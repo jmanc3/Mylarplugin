@@ -32,6 +32,7 @@ struct Bounds {
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <hyprutils/signal/Signal.hpp>
 
 #include <cairo/cairo.h>
 #include <cmath>
@@ -303,6 +304,7 @@ struct HyprIso {
     bool whitelist_on = false;
     bool input_bypass_whitelist = false;
     std::vector<int> render_whitelist;
+    std::vector<Hyprutils::Signal::CHyprSignalListener> eventListeners;
 
     float get_varfloat(std::string target, float default_float = 1.0);    
     RGBA get_varcolor(std::string target, RGBA default_color = {1.0, 0.0, 1.0, 1.0});
@@ -395,6 +397,8 @@ struct HyprIso {
     int get_pid(int client);
 
     std::string class_name(int id);
+    // Returns an owned surface, or nullptr when no X11 window icon is available.
+    cairo_surface_t* get_icon_on_window(int id, int size);
     std::string title_name(int id);
     std::string monitor_name(int id);
 
@@ -608,6 +612,7 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
 // Adds ceil(size) transparent pixels on each side; draw at (x - padding, y - padding).
 TextureInfo generate_dropshadow_texture(int id, float size, float darken = 1.0);
 TextureInfo gen_texture(std::string path, float h, RGBA *dye = nullptr);
+TextureInfo gen_texture(cairo_surface_t* surface);
 TextureInfo gen_texture_png(std::string path);
 
 void draw_texture(TextureInfo info, int x, int y, float a = 1.0, float clip_w = 0.0);

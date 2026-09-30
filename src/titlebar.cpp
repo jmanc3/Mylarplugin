@@ -455,6 +455,14 @@ void paint_titlebar(Container *actual_root, Container *c) {
 
                         *info = gen_texture(path, real_icon_h);
                         info->cached_h = real_icon_h;
+                    } else {
+                        cairo_surface_t *surface = hypriso->get_icon_on_window(cid, real_icon_h);
+                        if (surface) {
+                            *info = gen_texture(surface);
+                            cairo_surface_destroy(surface);
+                            if (info->id != -1)
+                                info->cached_h = real_icon_h;
+                        }
                     }
                 }
             }
@@ -762,4 +770,3 @@ void titlebar::on_activated(int id) {
         request_damage(actual_root, c);
     }
 }
-

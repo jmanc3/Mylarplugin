@@ -10,6 +10,7 @@
 #include "stb_image.h"
 
 #include <any>
+#include <climits>
 #include <sstream>
 #include <unordered_set>
 #define private public
@@ -212,6 +213,7 @@
 #include <hyprutils/utils/ScopeGuard.hpp>
 
 #include <hyprlang.hpp>
+#include <xcb/xcb_ewmh.h>
 
 #ifdef AS_SHARED_OBJECT
 struct Globals {
@@ -252,6 +254,7 @@ static int native_tiled_drag_id = -1;
 static bool native_tiled_drag_released = false;
 static bool capturing_workspace = false;
 static std::string previously_seen_instance_signature = "";
+static xcb_ewmh_connection_t ewmh;
 ConfigSettings *set = new ConfigSettings;
 
 std::vector<SleptWindow> slept_windows;
@@ -1615,6 +1618,84 @@ std::string HyprIso::class_name(int id) {
     return "";
 }
 
+cairo_surface_t* HyprIso::get_icon_on_window(int id, int size) {
+    if (size <= 0 || !ewmh.connection || ewmh._NET_WM_ICON == XCB_ATOM_NONE)
+        return nullptr;
+
+    xcb_window_t window = XCB_WINDOW_NONE;
+    for (auto hw : hyprwindows) {
+        if (hw->id != id)
+            continue;
+        auto w = hw->w.get();
+        if (!w || !w->backend().isX11() || !w->backend().valid())
+            return nullptr;
+        window = w->backend().clientID().id;
+        break;
+    }
+    if (window == XCB_WINDOW_NONE)
+        return nullptr;
+
+    xcb_generic_error_t* error = nullptr;
+    xcb_ewmh_get_wm_icon_reply_t wm_icon = {};
+    auto cookie = xcb_ewmh_get_wm_icon(&ewmh, window);
+    auto success = xcb_ewmh_get_wm_icon_reply(&ewmh, cookie, &wm_icon, &error);
+    defer(free(error));
+    defer(xcb_ewmh_get_wm_icon_reply_wipe(&wm_icon));
+    if (!success || error)
+        return nullptr;
+
+    xcb_ewmh_wm_icon_iterator_t best = {};
+    // Prefer the smallest icon that covers the requested size, otherwise the largest.
+    for (auto iter = xcb_ewmh_get_wm_icon_iterator(&wm_icon); iter.rem; xcb_ewmh_get_wm_icon_next(&iter)) {
+        if (!iter.width || !iter.height || iter.width > INT_MAX || iter.height > INT_MAX)
+            continue;
+        auto extent = std::max(iter.width, iter.height);
+        auto best_extent = std::max(best.width, best.height);
+        if (!best.data || (best_extent < size && extent > best_extent) ||
+            (extent >= size && best_extent >= size && extent < best_extent))
+            best = iter;
+    }
+    if (!best.data)
+        return nullptr;
+
+    auto source = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, best.width, best.height);
+    defer(cairo_surface_destroy(source));
+    if (cairo_surface_status(source) != CAIRO_STATUS_SUCCESS)
+        return nullptr;
+
+    auto pixels = cairo_image_surface_get_data(source);
+    auto stride = cairo_image_surface_get_stride(source);
+    // EWMH stores straight ARGB; Cairo requires premultiplied alpha.
+    for (uint32_t y = 0; y < best.height; ++y) {
+        auto row = reinterpret_cast<uint32_t*>(pixels + static_cast<size_t>(y) * stride);
+        for (uint32_t x = 0; x < best.width; ++x) {
+            auto pixel = best.data[static_cast<size_t>(y) * best.width + x];
+            auto alpha = pixel >> 24;
+            auto red = (((pixel >> 16) & 0xff) * alpha + 127) / 255;
+            auto green = (((pixel >> 8) & 0xff) * alpha + 127) / 255;
+            auto blue = ((pixel & 0xff) * alpha + 127) / 255;
+            row[x] = (alpha << 24) | (red << 16) | (green << 8) | blue;
+        }
+    }
+    cairo_surface_mark_dirty(source);
+
+    auto surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    auto cr = cairo_create(surface);
+    double scale = static_cast<double>(size) / std::max(best.width, best.height);
+    cairo_translate(cr, (size - best.width * scale) / 2.0, (size - best.height * scale) / 2.0);
+    cairo_scale(cr, scale, scale);
+    cairo_set_source_surface(cr, source, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BEST);
+    cairo_paint(cr);
+    auto status = cairo_status(cr);
+    cairo_destroy(cr);
+    if (status != CAIRO_STATUS_SUCCESS || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(surface);
+        return nullptr;
+    }
+    return surface;
+}
+
 float HyprIso::get_rounding(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2018,15 +2099,15 @@ void HyprIso::create_callbacks() {
         on_open_layer(l);
     }
 
-    static auto openWindow = Event::bus()->m_events.window.open.listen([this](PHLWINDOW w) {
+    eventListeners.emplace_back(Event::bus()->m_events.window.open.listen([this](PHLWINDOW w) {
         if (hypriso->on_window_open)
             on_open_window(w);
-    });
-    static auto closeWindow1 = Event::bus()->m_events.window.close.listen([this](PHLWINDOW w) {
+    }));
+    eventListeners.emplace_back(Event::bus()->m_events.window.close.listen([this](PHLWINDOW w) {
         if (hypriso->on_window_closed)
             on_close_window(w);
-    });
-    static auto windowTitle = Event::bus()->m_events.window.title.listen([this](PHLWINDOW w) {
+    }));
+    eventListeners.emplace_back(Event::bus()->m_events.window.title.listen([this](PHLWINDOW w) {
         if (hypriso->on_title_change) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w) {
@@ -2035,26 +2116,26 @@ void HyprIso::create_callbacks() {
                 }
             }
         }
-    });
+    }));
 
-    static auto openLayer = Event::bus()->m_events.layer.opened.listen([this](PHLLS l) {
+    eventListeners.emplace_back(Event::bus()->m_events.layer.opened.listen([this](PHLLS l) {
         on_open_layer(l);
 
         if (hypriso->on_layer_change)
             hypriso->on_layer_change();
-    });
-    static auto closeLayer = Event::bus()->m_events.layer.closed.listen([this](PHLLS l) {
+    }));
+    eventListeners.emplace_back(Event::bus()->m_events.layer.closed.listen([this](PHLLS l) {
         on_layer_close(l);
 
         if (hypriso->on_layer_change)
             hypriso->on_layer_change();
-    });
+    }));
 
-    static auto activeMonitor = Event::bus()->m_events.render.preChecks.listen([this](const PHLMONITOR &m) {
+    eventListeners.emplace_back(Event::bus()->m_events.render.preChecks.listen([this](const PHLMONITOR &m) {
         rendering_monitor = m;
-    });
+    }));
     
-    static auto render = Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
+    eventListeners.emplace_back(Event::bus()->m_events.render.stage.listen([this](eRenderStage stage) {
         if (stage == eRenderStage::RENDER_PRE) {
             #ifdef TRACY_ENABLE
                 FrameMarkStart("Render");
@@ -2072,9 +2153,9 @@ void HyprIso::create_callbacks() {
                 FrameMarkEnd("Render");
             #endif
         }
-    });
+    }));
     
-    static auto mouseMove = Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
+    eventListeners.emplace_back(Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
         if (g_layoutManager->dragController()->target()) {
             if (native_tiled_drag_id != -1 && hypriso->on_tiled_drag_motion)
                 hypriso->on_tiled_drag_motion();
@@ -2088,9 +2169,9 @@ void HyprIso::create_callbacks() {
         }
         // A titlebar or resize edge can start a native interaction in this callback.
         info.cancelled = consume && !g_layoutManager->dragController()->target();
-    });
+    }));
 
-    static auto mouseButton = Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo &info) {
+    eventListeners.emplace_back(Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo &info) {
         const bool native_drag = !!g_layoutManager->dragController()->target();
         if (native_tiled_drag_id != -1)
             native_tiled_drag_released = e.state == WL_POINTER_BUTTON_STATE_RELEASED;
@@ -2102,25 +2183,25 @@ void HyprIso::create_callbacks() {
         }
         // Still release Mylar's pressed containers, but let Hyprland finish its drag.
         info.cancelled = consume && !native_drag && !g_layoutManager->dragController()->target();
-    });
+    }));
 
-    static auto mouseAxis = Event::bus()->m_events.input.mouse.axis.listen([this](IPointer::SAxisEvent axisevent, Event::SCallbackInfo &info) {
+    eventListeners.emplace_back(Event::bus()->m_events.input.mouse.axis.listen([this](IPointer::SAxisEvent axisevent, Event::SCallbackInfo &info) {
         bool consume = false;
         if (hypriso->on_scrolled) {
             consume = hypriso->on_scrolled(0, axisevent.source, axisevent.axis, axisevent.relativeDirection, axisevent.delta, axisevent.deltaDiscrete, axisevent.mouse);
         }
         info.cancelled = consume;
-    });
+    }));
 
-    static auto keyPress = Event::bus()->m_events.input.keyboard.key.listen([this](IKeyboard::SKeyEvent skeyevent, Event::SCallbackInfo &info) {
+    eventListeners.emplace_back(Event::bus()->m_events.input.keyboard.key.listen([this](IKeyboard::SKeyEvent skeyevent, Event::SCallbackInfo &info) {
         auto consume = false;
         if (hypriso->on_key_press) {
             consume = hypriso->on_key_press(0, skeyevent.keycode, skeyevent.state, skeyevent.updateMods);
         }
         info.cancelled = consume;
-    });
+    }));
 
-    static auto configReloaded = Event::bus()->m_events.config.reloaded.listen([this]() {
+    eventListeners.emplace_back(Event::bus()->m_events.config.reloaded.listen([this]() {
         main_thread([]() {
             hypriso->apply_workspace_settings();
         });
@@ -2132,7 +2213,7 @@ void HyprIso::create_callbacks() {
             // //initial_value = *f;
             // *f = 2;
         }
-    });
+    }));
 
     for (auto e : State::workspaceState()->workspaces()) {
         auto hs = new HyprWorkspaces;
@@ -2148,7 +2229,7 @@ void HyprIso::create_callbacks() {
     }
     settings::load_save_settings(true, set);
 
-    static auto createWorkspace = Event::bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF sref) {
+    eventListeners.emplace_back(Event::bus()->m_events.workspace.created.listen([this](PHLWORKSPACEREF sref) {
         auto s = sref.lock();
         if (!s)
             return;
@@ -2161,9 +2242,9 @@ void HyprIso::create_callbacks() {
             remember_workspace_tiling(s->getConfigName(), hs->is_tiling);
         hyprspaces.push_back(hs);
         settings::load_save_settings(true, set);
-    });
+    }));
 
-    static auto destroyedWorkspace = Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF sref) {
+    eventListeners.emplace_back(Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF sref) {
         if (auto s = sref.get())
             for (int i = hyprspaces.size() - 1; i >= 0; i--) {
                 auto hs = hyprspaces[i];
@@ -2178,8 +2259,8 @@ void HyprIso::create_callbacks() {
                     hyprspaces.erase(hyprspaces.begin() + i);
                 }
             }
-    });
-    static auto workspaceChanged = Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE w) {
+    }));
+    eventListeners.emplace_back(Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE w) {
         sync_monitor_workspaces(w);
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();
@@ -2193,9 +2274,9 @@ void HyprIso::create_callbacks() {
                 }
             }
         }
-    });
+    }));
 
-    static auto windowWorkspaceChanged = Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW w, PHLWORKSPACE workspace) {
+    eventListeners.emplace_back(Event::bus()->m_events.window.moveToWorkspace.listen([this](PHLWINDOW w, PHLWORKSPACE workspace) {
         // The event precedes monitor assignment and layout target attachment.
         // Do not retain a closed window or apply an obsolete intermediate move.
         main_thread([window_ref = PHLWINDOWREF(w), workspace_ref = PHLWORKSPACEREF(workspace)]() {
@@ -2212,13 +2293,13 @@ void HyprIso::create_callbacks() {
         });
         if (hypriso->on_workspace_windows_change)
             hypriso->on_workspace_windows_change();
-    });
-    static auto workspaceMonitorChanged = Event::bus()->m_events.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) {
+    }));
+    eventListeners.emplace_back(Event::bus()->m_events.workspace.moveToMonitor.listen([this](PHLWORKSPACE, PHLMONITOR) {
         if (hypriso->on_workspace_windows_change)
             hypriso->on_workspace_windows_change();
-    });
+    }));
 
-    static auto windowChanged = Event::bus()->m_events.window.active.listen([this](PHLWINDOW p, Desktop::eFocusReason reason) {
+    eventListeners.emplace_back(Event::bus()->m_events.window.active.listen([this](PHLWINDOW p, Desktop::eFocusReason reason) {
         if (hypriso->on_activated) {
             for (auto h : hyprwindows) {
                 if (h->w == p) {
@@ -2226,7 +2307,7 @@ void HyprIso::create_callbacks() {
                 }
             }
         }
-    });
+    }));
     main_thread([]() {
         hypriso->apply_workspace_settings();
     });
@@ -4259,6 +4340,12 @@ void HyprIso::create_hooks() {
     hook_floating_position_restore();
     hook_native_drag_end();
     hook_native_drag_begin();
+
+    auto connection = g_pXWayland->m_wm->getConnection();
+    xcb_intern_atom_cookie_t *c = xcb_ewmh_init_atoms(connection, &ewmh);
+    xcb_ewmh_init_atoms_replies(&ewmh, c, NULL);
+    xcb_flush(connection);
+    
     //create_custom_shaders();
 }
 
@@ -4502,6 +4589,7 @@ void HyprIso::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    eventListeners.clear();
     stop_wake_main_thread();
     g_pHyprRenderer->m_renderPass.removeAllOfType("CRectPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CBorderPassElement");
@@ -4538,6 +4626,8 @@ void HyprIso::end() {
     for (auto g : gestures_created)
         g_pTrackpadGestures->removeGesture(g.fingerCount, g.direction, (Input::ModifierMask) (g.modMask), g.deltaScale, g.disableInhibit);
     gestures_created.clear();
+
+    xcb_ewmh_connection_wipe(&ewmh);
 }
 
 CBox tocbox(Bounds b) {
@@ -5763,6 +5853,28 @@ TextureInfo gen_texture(std::string path, float h, RGBA *dye) {
         return t->info;
     }
     return {};
+}
+
+TextureInfo gen_texture(cairo_surface_t* surface) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (!surface || cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS)
+        return {};
+
+    auto tex = g_pHyprRenderer->createTexture(surface);
+    if (!tex.get())
+        return {};
+
+    auto t = new Texture;
+    t->texture = tex;
+    TextureInfo info;
+    info.id = unique_id++;
+    info.w = t->texture->m_size.x;
+    info.h = t->texture->m_size.y;
+    t->info = info;
+    hyprtextures.push_back(t);
+    return info;
 }
 
 SP<Render::ITexture> loadAsset(const std::string& filename) {
@@ -10178,7 +10290,7 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     // if we have no tracking or full tracking, invalidate the entire monitor
     if (*PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == Render::DAMAGE_TRACKING_MONITOR || pMonitor->m_forceFullFrames > 0 || damageBlinkCleanup > 0)
-        damage = {0, 0, sc<int>(pMonitor->m_transformedSize.x) * 10, sc<int>(pMonitor->m_transformedSize.y) * 10};
+        damage = {0, 0, static_cast<double>(sc<int>(pMonitor->m_transformedSize.x) * 10), static_cast<double>(sc<int>(pMonitor->m_transformedSize.y) * 10)};
 
     finalDamage = damage;
 
@@ -10205,7 +10317,7 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
             Event::bus()->m_events.render.stage.emit(RENDER_POST_MIRROR);
             renderCursor = false;
         } else {
-            CBox renderBox = {0, 0, sc<int>(pMonitor->m_pixelSize.x), sc<int>(pMonitor->m_pixelSize.y)};
+            CBox renderBox = {0, 0, static_cast<double>(sc<int>(pMonitor->m_pixelSize.x)), static_cast<double>(sc<int>(pMonitor->m_pixelSize.y))};
             tis->renderWorkspace(pMonitor, pMonitor->m_activeWorkspace, NOW, renderBox);
 
             tis->renderLockscreen(pMonitor, NOW, renderBox);

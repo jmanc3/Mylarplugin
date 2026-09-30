@@ -1077,10 +1077,23 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 pin->attempted_load = true;
                 auto size = get_icon_size(mylar->raw_window->dpi);
                 auto icon = pin->icon;
-                auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon), "application-x-executable"});
+                auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon)});
+                //"application-x-executable"
                 if (!full.empty()) {
                     pin->full_icon = full;
                     load_icon_full_path(&pin->icon_surf, full, size);
+                } else {
+                    for (auto w : pin->windows) {
+                        auto cid = w.cid;
+                        // Take the icon from the window
+                        cairo_surface_t *surface = hypriso->get_icon_on_window(cid, size);
+                        if (!surface)
+                            continue;
+                        if (pin->icon_surf)
+                            cairo_surface_destroy(pin->icon_surf);
+                        pin->icon_surf = surface;
+                        break;
+                    }
                 }
             }
         }
