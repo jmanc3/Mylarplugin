@@ -242,6 +242,7 @@ struct wl_context {
     struct wl_data_device_manager *data_device_manager = nullptr;
     struct wl_data_device *data_device = nullptr;
     clipboard_offer_state *selection_offer = nullptr;
+    clipboard_offer_state *drag_offer = nullptr;
     clipboard_source_state *clipboard_source = nullptr;
     std::vector<clipboard_offer_state *> clipboard_offers;
     std::vector<clipboard_read_state *> clipboard_reads;
@@ -1617,8 +1618,20 @@ static void clipboard_offer_mime_type(void *data, wl_data_offer *offer, const ch
         state->mime_types.emplace_back(mime_type);
 }
 
+// Clipboard offers share their interface with drag-and-drop offers. The latter
+// also send action events, even when this client does not accept drops.
+static void clipboard_offer_source_actions(void*, wl_data_offer*, uint32_t) {
+    ;
+}
+
+static void clipboard_offer_action(void*, wl_data_offer*, uint32_t) {
+    ;
+}
+
 static const wl_data_offer_listener clipboard_offer_listener = {
     .offer = clipboard_offer_mime_type,
+    .source_actions = clipboard_offer_source_actions,
+    .action = clipboard_offer_action,
 };
 
 static void clipboard_data_device_offer(void *data, wl_data_device *device, wl_data_offer *offer) {
@@ -1634,6 +1647,8 @@ static void destroy_clipboard_offer(wl_context *ctx, clipboard_offer_state *stat
         return;
     if (ctx->selection_offer == state)
         ctx->selection_offer = nullptr;
+    if (ctx->drag_offer == state)
+        ctx->drag_offer = nullptr;
     wl_data_offer_destroy(state->offer);
     for (int i = ctx->clipboard_offers.size() - 1; i >= 0; --i) {
         if (ctx->clipboard_offers[i] == state) {
@@ -1663,8 +1678,47 @@ static void clipboard_data_device_selection(void *data, wl_data_device *device, 
         destroy_clipboard_offer(ctx, previous);
 }
 
+static void clipboard_data_device_leave(void *data, wl_data_device*) {
+    auto ctx = static_cast<wl_context *>(data);
+    destroy_clipboard_offer(ctx, ctx->drag_offer);
+}
+
+static void clipboard_data_device_enter(void *data, wl_data_device *device, uint32_t serial,
+                                        wl_surface*, wl_fixed_t, wl_fixed_t, wl_data_offer *offer) {
+    auto ctx = static_cast<wl_context *>(data);
+    clipboard_data_device_leave(data, device);
+    if (!offer)
+        return;
+
+    for (auto state : ctx->clipboard_offers) {
+        if (state->offer != offer)
+            continue;
+        ctx->drag_offer = state;
+        break;
+    }
+
+    // Drag-and-drop is not supported here. Reject the payload and actions,
+    // retaining the offer only until leave/drop so it can be destroyed safely.
+    wl_data_offer_accept(offer, serial, nullptr);
+    if (wl_data_offer_get_version(offer) >= WL_DATA_OFFER_SET_ACTIONS_SINCE_VERSION)
+        wl_data_offer_set_actions(offer, WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE,
+                                 WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
+}
+
+static void clipboard_data_device_motion(void*, wl_data_device*, uint32_t, wl_fixed_t, wl_fixed_t) {
+    ;
+}
+
+static void clipboard_data_device_drop(void *data, wl_data_device *device) {
+    clipboard_data_device_leave(data, device);
+}
+
 static const wl_data_device_listener clipboard_data_device_listener = {
     .data_offer = clipboard_data_device_offer,
+    .enter = clipboard_data_device_enter,
+    .leave = clipboard_data_device_leave,
+    .motion = clipboard_data_device_motion,
+    .drop = clipboard_data_device_drop,
     .selection = clipboard_data_device_selection,
 };
 
