@@ -1,6 +1,7 @@
 #include "polling_thread.h"
 #include <fcntl.h>
 #include <poll.h>
+#include <unistd.h>
 #include <mutex>
 #include <hypriso.h>
 

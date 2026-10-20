@@ -1,6 +1,8 @@
 
 #include "alt_tab.h"
 
+#include <climits>
+
 #include "heart.h"
 #include "drag.h"
 #include "icons.h"

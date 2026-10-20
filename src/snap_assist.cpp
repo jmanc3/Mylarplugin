@@ -9,6 +9,7 @@
 #include "overview.h"
 
 #include <algorithm>
+#include <climits>
 
 static bool skip_close = false;
 static unsigned int lifecycle = 0;
