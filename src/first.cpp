@@ -25,9 +25,10 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 #include <filesystem>
 
 void load_in_fonts() {
-    char *home = getenv("HOME");
-    std::string font_directory(home);
-    font_directory += "/.config/mylar/fonts";
+    //char *home = getenv("HOME");
+    //std::string font_directory(home);
+    //font_directory += "/.config/mylar/fonts";
+    std::string font_directory = "/usr/share/mylardesktop/fonts";
 
     FcInit();
     FcConfig *now = FcConfigGetCurrent();

@@ -35,18 +35,6 @@ Mylarplugin implements Mylardesktop on Hyprland
 - Screen lock
 - Pixel perfect zoom
 
-## Installation
-
-You can install Mylar wherever there is a stable Hyprland package for your system.
-
-```bash
-yay -S mylardesktop
-```
-
-Or, if you already have Hyprand, you can install it as a [plugin]() instead.
-
-In your login manager you should now see an option `Mylardesktop via USWM`. Select that and login.
-
 ## Manually building plugin
 
 First install build dependencies
@@ -55,18 +43,20 @@ First install build dependencies
 sudo pacman -S git gcc cmake make pkg-config pango cairo librsvg libxkbcommon dbus
 ```
 
-Download the latest Mylardesktop release 0.2.1 (for Hyprland 0.51.0) and unzip it (or untar it), and enter the folder.
+Download latest release.
 
 ```
-cd Mylardesktop
+cd Mylarplugin
 make release
+sudo make install # for resources
 ```
 
 That will generate `mylar-desktop.so` inside of the `out` folder.
 
-Now you can load the plugin on Hyprland by running `hyprctl plugin load /full/path/to/mylar-desktop.so`. To automatically run the plugin when Hyprland starts, Modify `~/.config/hypr/hyprland.conf`, and add `exec-once = hyprland plugin load /full/path/to/mylar-desktop.so` somewhere.
+Now you can load the plugin on Hyprland by running `hyprctl plugin load /full/qualified/path/to/mylar-desktop.so`.
 
-## Information for packagers
+To auto start it on login with Hyprland, add the following to `$HOME/.config/hypr/hyprland.lua`
 
-https://github.com/*
-
+```lua
+hl.exec_cmd("sleep 3s; hyprctl plugin load /full/qualified/path/to/mylar-desktop.so")
+```

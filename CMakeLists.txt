@@ -76,4 +76,10 @@ target_compile_options(Mylardesktop PRIVATE
     -fno-gnu-unique
 )
 
+install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/res/"
+    DESTINATION "share/mylardesktop/fonts"
+)
+
 install(TARGETS Mylardesktop)
+

@@ -4,23 +4,27 @@
 #when we upgrade to a new version these need to be handled one by one
 #MORE_DEBUG_FLAGS := -DFORK_WARN
 
-
 PLUGIN_NAME = mylar-desktop
 MAKEFLAGS += -j16
+
+# --- Installation paths ---
+PREFIX ?= /usr
+SHARE_DIR = $(PREFIX)/share/mylardesktop
+RES_DIR = ./res
 
 # --- Source discovery ---
 SOURCE_FILES := $(wildcard ./src/*.cpp ./src/*/*.cpp)
 OBJECT_FILES := $(patsubst ./%, out/%, $(SOURCE_FILES:.cpp=.o))
 
 # --- Pkg-config dependencies ---
-PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo wayland-server  wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh dbus-1 alsa libpipewire-0.3 libpulse gio-2.0)
+PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo wayland-server wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh dbus-1 alsa libpipewire-0.3 libpulse gio-2.0)
 PKG_LIBS  := $(shell pkg-config --libs librsvg-2.0 libdrm hyprland pangocairo wayland-server wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh dbus-1 alsa libpipewire-0.3 libpulse gio-2.0)
 
 # --- Include paths ---
 INCLUDE_FLAGS := -I./include
 
 # --- Common compiler flags ---
-COMMON_FLAGS := -std=c++2b -fPIC --no-gnu-unique -fno-gnu-unique -Wno-unknown-argument $(INCLUDE_FLAGS) $(PKG_FLAGS) 
+COMMON_FLAGS := -std=c++2b -fPIC --no-gnu-unique -fno-gnu-unique -Wno-unknown-argument $(INCLUDE_FLAGS) $(PKG_FLAGS)
 
 # --- Build type flags ---
 DEBUG_FLAGS := -g -O0 $(MORE_DEBUG_FLAGS)
@@ -29,13 +33,13 @@ RELEASE_FLAGS := -O3 -DNDEBUG
 # --- Output ---
 OUTPUT = out/$(PLUGIN_NAME).so
 
-.PHONY: all debug release clean load unload
+.PHONY: all debug release clean load unload install uninstall
 
 # --- Default target ---
 all: debug
 
 # --- Build modes ---
-debug:   CXX_FLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
+debug: CXX_FLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
 release: CXX_FLAGS := $(COMMON_FLAGS) $(RELEASE_FLAGS)
 
 debug release: $(OUTPUT)
@@ -51,6 +55,18 @@ out/%.o: %.cpp
 	@echo "Compiling $<"
 	$(CXX) $(CXX_FLAGS) -c $< -o $@
 
+# --- Install resources ---
+install:
+	@test -d "$(RES_DIR)" || (echo "Error: $(RES_DIR) directory not found"; exit 1)
+	@echo "Installing resources to $(SHARE_DIR)"
+	install -d "$(SHARE_DIR)"
+	cp -a "$(RES_DIR)/." "$(SHARE_DIR)/"
+	@echo "Resources installed successfully."
+
+# --- Uninstall resources ---
+uninstall:
+	rm -rf "$(SHARE_DIR)"
+
 # --- Utility targets ---
 clean:
 	$(RM) $(OUTPUT) $(OBJECT_FILES)
@@ -60,4 +76,3 @@ load: all unload
 
 unload:
 	hyprctl plugin unload ${PWD}/$(OUTPUT)
-
