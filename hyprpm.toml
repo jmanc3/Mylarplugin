@@ -1,0 +1,15 @@
+[repository]
+name = "mylar-desktop"
+authors = "jmanc3"
+commit_pins = [
+    ["efb50993780079460b0cbed1363e2166a2de1d9f", "d4f3c90b93acee87201de5b6a0eef662f88e8830"], # v0.56.2
+]
+
+[mylar-desktop]
+description = "Implements Mylar Desktop"
+authors = ["jmanc3"]
+output = "out/mylar-desktop.so"
+build = [
+    "make release",
+    "make install"
+]
