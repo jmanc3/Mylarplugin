@@ -10,5 +10,5 @@ description = "Implements Mylar Desktop"
 authors = ["jmanc3"]
 output = "out/mylar-desktop.so"
 build = [
-    "make release; make install",
+    "make release",
 ]

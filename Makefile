@@ -42,7 +42,8 @@ all: debug
 debug: CXX_FLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
 release: CXX_FLAGS := $(COMMON_FLAGS) $(RELEASE_FLAGS)
 
-debug release: $(OUTPUT)
+debug: $(OUTPUT)
+release: $(OUTPUT) install
 
 # --- Link step ---
 $(OUTPUT): $(OBJECT_FILES)
