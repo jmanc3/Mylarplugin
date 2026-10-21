@@ -635,7 +635,7 @@ void create_titlebar(Container *root, Container *parent) {
     titlebar_parent->alignment = ALIGN_RIGHT;
     auto min = titlebar_parent->child(FILL_SPACE, FILL_SPACE);
     min->when_paint = paint {
-        paint_button(root, c, "min", "\ue921");
+        paint_button(root, c, "min", "\uE921");
     };
     min->when_mouse_down = consume_event;
     min->when_mouse_up = consume_event;
@@ -650,9 +650,9 @@ void create_titlebar(Container *root, Container *parent) {
         bool snapped = *datum<bool>(client, "snapped");
 
         if (snapped) {
-            paint_button(root, c, "max_snapped", "\ue923");
+            paint_button(root, c, "max_snapped", "\uE923");
         } else {
-            paint_button(root, c, "max_unsnapped", "\ue922");
+            paint_button(root, c, "max_unsnapped", "\uE922");
         }
     };
     max->when_mouse_down = consume_event;
@@ -672,7 +672,7 @@ void create_titlebar(Container *root, Container *parent) {
     };
     auto close = titlebar_parent->child(FILL_SPACE, FILL_SPACE);
     close->when_paint = paint {
-        paint_button(root, c, "close", "\ue8bb", true);
+        paint_button(root, c, "close", "\uE8BB", true);
     };
     close->when_clicked = paint {
         auto client = first_above_of(c, TYPE::CLIENT);

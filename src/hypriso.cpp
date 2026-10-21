@@ -767,6 +767,7 @@ static std::vector<HyprWindow *> hyprwindows;
 struct HyprMonitor {
     int id;  
     PHLMONITOR m;
+    bool callback_notified = false;
     long creation_time = get_current_time_in_ms();
     bool first = true;
 
@@ -1182,14 +1183,22 @@ void on_close_window(PHLWINDOW w) {
 
 void on_open_monitor(PHLMONITOR m) {
     for (auto mons : hyprmonitors) {
-        if (mons->m == m)
+        if (mons->m == m) {
+            if (!mons->callback_notified && hypriso->on_monitor_open) {
+                hypriso->on_monitor_open(mons->id);
+                mons->callback_notified = true;
+            }
             return;
+        }
     }
     auto hm = new HyprMonitor;
     hm->id = unique_id++;
     hm->m = m;
     hyprmonitors.push_back(hm);
-    hypriso->on_monitor_open(hm->id);
+    if (hypriso->on_monitor_open) {
+        hypriso->on_monitor_open(hm->id);
+        hm->callback_notified = true;
+    }
     main_thread([]() {
         hypriso->apply_workspace_settings();
     });
@@ -4828,6 +4837,8 @@ void HyprIso::end() {
     ZoneScoped;
 #endif
     eventListeners.clear();
+    for (auto monitor : hyprmonitors)
+        monitor->callback_notified = false;
     stop_wake_main_thread();
     g_pHyprRenderer->m_renderPass.removeAllOfType("CRectPassElement");
     g_pHyprRenderer->m_renderPass.removeAllOfType("CBorderPassElement");

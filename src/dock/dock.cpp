@@ -3023,7 +3023,6 @@ void dock::stop(std::string monitor_name) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
             windowing::close_window(d->window->raw_window);
         }
-        docks.clear();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -3036,6 +3035,7 @@ void dock::stop(std::string monitor_name) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         dock_threads.clear();
+        docks.clear();
     } else {
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
