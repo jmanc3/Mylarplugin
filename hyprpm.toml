@@ -11,4 +11,5 @@ authors = ["jmanc3"]
 output = "out/mylar-desktop.so"
 build = [
     "make release",
+    "sudo make install"
 ]
