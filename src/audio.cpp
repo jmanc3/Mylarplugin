@@ -1307,10 +1307,15 @@ void meter_watching_stop() {
     }
 }
 
-void AudioClient::set_mute(bool mute_on) {
+void AudioClient::set_mute(bool mute_on, bool user_initiated) {
 #ifdef  TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (user_initiated)
+        user_muted = mute_on;
+    else if (!mute_on && user_muted)
+        return;
+
     if (backend == AudioBackend::PULSEAUDIO) {
         pa_operation *pa_op;
         if (this->is_master) {

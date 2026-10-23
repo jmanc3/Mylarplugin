@@ -310,6 +310,8 @@ struct WindowRestoreLocation {
     bool keep_above = false;
     bool fake_fullscreen = false;
     bool remove_titlebar = false;
+
+    bool mute_when_unfocused = false;
     
     bool remember_size = false;
     bool remember_maximized = true;
@@ -361,6 +363,9 @@ struct SnapLimits {
 SnapLimits get_snap_limits(int monitor);
 Bounds snap_position_to_bounds_limited(int mon, SnapPosition pos, SnapLimits limits);
 Bounds fixed_box(float startx, float starty, float endx, float endy);
+
+// By default changes all windows mute state
+void update_mute_states_for_pids(int cid = 0);
 
 namespace heart {    
     void begin();

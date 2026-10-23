@@ -220,10 +220,23 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
     }
     {
         PopOption pop;
-        auto info = &restore_infos[hypriso->class_name(cid)];
         pop.text = "Sleep";
         pop.on_clicked = [cid]() {            
             sleep_cid(cid);
+        };
+        root.push_back(pop);
+    }
+    {
+        PopOption pop;
+        auto info = &restore_infos[hypriso->class_name(cid)];
+        if (info->mute_when_unfocused)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        pop.text = "Mute when unfocused";
+        pop.on_clicked = [cid]() {
+            auto info = &restore_infos[hypriso->class_name(cid)];
+            info->mute_when_unfocused= !info->mute_when_unfocused;
+
+            update_mute_states_for_pids(cid);
         };
         root.push_back(pop);
     }

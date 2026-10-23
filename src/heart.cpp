@@ -941,7 +941,7 @@ static void on_monitor_closed(int id) {
     dock::stop(hypriso->monitor_name(id));
 }
 
-static void on_activated(int id) {    
+static void on_activated(int id) {
     Container *c = get_cid_container(id);
     if (!c) return;
     static bool leave = false;
@@ -968,6 +968,7 @@ static void on_activated(int id) {
             leave = false;
         });
     }
+    update_mute_states_for_pids();
     heart::layout_containers();
 
     if (show_desktop::is_opened()) {
@@ -2747,4 +2748,50 @@ void heart::set_force_meta_open(bool state) {
 void heart::set_zoom(float zoom) {
     zoom_factor = zoom;
     hypriso->set_zoom_factor(zoom);
+}
+
+
+void update_mute_state_for_pid(int pid, bool mute_when_unfocused, bool focused) {
+    audio([pid, mute_when_unfocused, focused]() {
+        for (auto c : audio_clients) {
+            if (pid == c->pid) {
+                c->set_mute(mute_when_unfocused && !focused, false);
+            }
+        }
+    });
+}
+
+void update_mute_states_for_pids(int cid) {
+    if (cid != 0) {
+        auto info = &restore_infos[hypriso->class_name(cid)];
+        update_mute_state_for_pid(hypriso->get_pid(cid), info->mute_when_unfocused, hypriso->has_focus(cid));
+        return;
+    }
+
+    auto windows = get_window_stacking_order();
+
+    struct Target {
+        int pid;
+        bool mute_when_unfocused;
+        bool focused;
+    };
+    std::vector<Target> targets;
+    for (auto cid : windows) {
+        auto info = &restore_infos[hypriso->class_name(cid)];
+        targets.push_back({hypriso->get_pid(cid), info->mute_when_unfocused, hypriso->has_focus(cid)});
+    }
+    audio([targets]() {
+        for (auto c : audio_clients) {
+            bool matched = false;
+            bool should_mute = false;
+            for (auto &target : targets) {
+                if (target.pid == c->pid) {
+                    matched = true;
+                    should_mute = should_mute || (target.mute_when_unfocused && !target.focused);
+                }
+            }
+            if (matched)
+                c->set_mute(should_mute, false);
+        }
+    });
 }

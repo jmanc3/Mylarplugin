@@ -30,6 +30,7 @@ struct AudioClient {
     bool is_master = false;
     pa_cvolume volume = {0};
     bool mute = 0;
+    bool user_muted = false;
     double peak = 0;
     pa_stream *stream = nullptr; // for showing uv meter
     std::vector<float> pw_channel_volumes;
@@ -38,7 +39,7 @@ struct AudioClient {
     double cached_volume = 1;
     double alsa_volume = 0;
 
-    void set_mute(bool mute_on);
+    void set_mute(bool mute_on, bool user_initiated = true);
 
     void set_volume(double value);
     bool is_muted();
