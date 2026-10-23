@@ -6229,19 +6229,7 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto tex = g_pHyprRenderer->renderText(text, CHyprColor(color.r, color.g, color.b, color.a), h, false, font, 0);
-    if (tex.get()) {
-        auto t = new Texture;
-        t->texture = tex;
-        TextureInfo info;
-        info.id = unique_id++;
-        info.w = t->texture->m_size.x;
-        info.h = t->texture->m_size.y;
-        t->info = info;
-        hyprtextures.push_back(t);
-        return t->info;
-    }
-    return {};
+    return gen_text_texture(font, text, h, color, -1, -1, 0);
 }
 
 TextureInfo generate_dropshadow_texture(int id, float size, float darken) {
