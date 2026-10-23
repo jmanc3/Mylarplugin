@@ -6366,7 +6366,9 @@ TextureInfo generate_dropshadow_texture(int id, float size, float darken) {
 }
 
 static SP<Render::ITexture> draw_text(std::string text, int size = 10, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}, int alignment = 0) {
-    PangoFontMap*         fontMap    = pango_cairo_font_map_get_default();
+    // The compositor may have initialized Pango's default map before Mylar
+    // registers its app fonts. Use a map created after font loading instead.
+    PangoFontMap*         fontMap    = pango_cairo_font_map_new();
     PangoContext*         context    = pango_font_map_create_context(fontMap);
     PangoLayout*          layout = pango_layout_new(context);
     PangoFontDescription* pangoFD    = pango_font_description_new();
@@ -6406,6 +6408,7 @@ static SP<Render::ITexture> draw_text(std::string text, int size = 10, std::stri
 
     pango_font_description_free(pangoFD);
     g_object_unref(layout);
+    g_object_unref(fontMap);
 
     cairo_surface_flush(CAIROSURFACE);
     auto tex = g_pHyprRenderer->createTexture(CAIROSURFACE);
