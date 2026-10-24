@@ -2999,7 +2999,6 @@ void dock::start(std::string monitor_name) {
     bluetooth_available = bluetooth_running;
 
     std::thread t(dock_start, monitor_name);
-    t.detach();
     dock_threads.push_back(std::move(t));
 
     std::lock_guard<std::mutex> lock(scripts_mutex);
@@ -3021,7 +3020,8 @@ void dock::stop(std::string monitor_name) {
 
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
-            windowing::close_window(d->window->raw_window);
+            //windowing::close_window(d->window->raw_window);
+            windowing::close_app(d->app);
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
