@@ -133,6 +133,14 @@ bool popup::dismiss_outside(int x, int y) {
     return !outside.empty();
 }
 
+bool popup::is_open() {
+    for (auto *panel : actual_root->children) {
+        if (panel->custom_type == (int)TYPE::OUR_POPUP && panel->exists)
+            return true;
+    }
+    return false;
+}
+
 namespace {
 
 Container *build_menu(const std::vector<PopOption>& options, int x, int y, int mid, int cid,

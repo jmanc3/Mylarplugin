@@ -55,7 +55,9 @@
 #define BTN_MIDDLE		0x112
 #define ICON(str) [](){ return str; }
 
-static bool merge_windows = false;
+// Persisted in ConfigSettings::dock_merge_windows. The dock thread reads this
+// while the compositor/settings threads write it.
+static std::atomic<bool> merge_windows{false};
 static bool labels = true;
 static int pixel_spacing = 1;
 static float max_width = 200;
@@ -163,6 +165,11 @@ void SpringAnimation::setTarget(float newTarget) {
     target = newTarget;
 }
 
+struct HoverTimerData {
+    RawApp *app = nullptr;
+    std::string uuid;
+};
+
 struct Pin : UserData {
     std::vector<Window> windows;
 
@@ -184,6 +191,7 @@ struct Pin : UserData {
     long animation_start_time = 0;
 
     int hover_timer_fd = -1;
+    void *hover_timer_data = nullptr;
 
     ~Pin() {
         if (icon_surf)
@@ -251,6 +259,7 @@ struct Dock : UserData {
 
     Windows *collection = nullptr;
     bool first_fill = true;
+    bool thumbnails_dirty = false;
     int startup_audio_update_count = 0;
     RawWindowSettings creation_settings;
 
@@ -848,6 +857,44 @@ void draw_clip_end(cairo_t *cr) {
     cairo_restore(cr);
 }
 
+static Bounds pin_thumbnail_bounds(Container *pin_container, Dock *dock, bool use_layout_target = false) {
+    Bounds b = pin_container->real_bounds;
+    auto *pin = (Pin *) pin_container->user_data;
+    // While the dock animates a reflow, anchor to the position the icon is
+    // moving to so the preview ends up on the icon instead of its old spot.
+    if (use_layout_target && pin && pin->natural_position_x != INT_MAX)
+        b.x = pin->natural_position_x;
+    if (dock && dock->window && dock->window->raw_window && dock->window->raw_window->dpi > 0)
+        b.scale(1.0f / dock->window->raw_window->dpi);
+    return b;
+}
+
+static std::vector<int> pin_window_ids(Pin *pin) {
+    std::vector<int> ids;
+    ids.reserve(pin->windows.size());
+    for (const auto &window : pin->windows)
+        ids.push_back(window.cid);
+    // Previews keep a stable creation-time order. pin->windows is reordered by
+    // focus (see dock::on_activated) for title/activation purposes, but the
+    // thumbnail strip should not jump around when the active window changes.
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+static void sync_thumbnails(Dock *dock, Container *icons) {
+    for (auto pin_container : icons->children) {
+        auto *pin = (Pin *) pin_container->user_data;
+        if (!pin)
+            continue;
+        auto ids = pin_window_ids(pin);
+        auto icon = pin_thumbnail_bounds(pin_container, dock, true);
+        const auto source = pin_container->uuid;
+        main_thread([source, ids = std::move(ids), icon]() {
+            dock_thumbnails::refresh_if_open(source, ids, icon);
+        });
+    }
+}
+
 static void create_pinned_icon(Container *icons, std::string stack_rule, std::string command, std::string icon, Window *window = nullptr) {
     auto ch = icons->child(::absolute, FILL_SPACE, FILL_SPACE);
     auto pin = new Pin;
@@ -930,7 +977,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             cairo_fill(cr);
         }
         auto none = pin->windows.empty();
-        if (!labels)
+        if (!labels || merge_windows.load())
             none = true;
 
         int offx = 0;
@@ -981,53 +1028,84 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             cairo_fill(cr);
         }
     };
-    struct PopData {
-        std::string uuid;
-    };
     ch->when_mouse_enters_container = paint {
-        return;
-        Pin* pin = (Pin*)c->user_data;
-        auto dock = (Dock*)root->user_data;
-        auto uuid = c->uuid;
-        auto popdata = new PopData{uuid};
-        pin->hover_timer_fd = windowing::timer(dock->app, 500, [](void *data) {
-            auto pop_data = ((PopData *) data);
+        Pin *pin = (Pin *) c->user_data;
+        auto dock = (Dock *) root->user_data;
+        if (!dock)
+            return;
+
+        // The cursor returned to the icon, so keep any visible preview alive.
+        // If a preview is already showing, switch it to this icon immediately
+        // instead of waiting for the hover timer.
+        auto ids = pin_window_ids(pin);
+        auto icon = pin_thumbnail_bounds(c, dock);
+        const auto source = c->uuid;
+        main_thread([source, ids = std::move(ids), icon]() {
+            dock_thumbnails::keep_open();
+            dock_thumbnails::refresh_if_open(source, ids, icon, true);
+        });
+
+        if (pin->windows.empty()) {
+            // Nothing to preview; drop a preview from a previous icon.
+            main_thread([]() { dock_thumbnails::open({}); });
+            return;
+        }
+
+        if (pin->hover_timer_fd != -1)
+            return;
+
+        auto *hover = new HoverTimerData{dock->app, c->uuid};
+        pin->hover_timer_data = hover;
+        pin->hover_timer_fd = windowing::timer(dock->app, 450, [](void *data) {
+            auto *hover = (HoverTimerData *) data;
+            std::vector<int> ids;
+            Bounds icon;
+            std::string source;
             for (auto d : docks) {
+                if (d->app != hover->app)
+                    continue;
                 if (auto icons = container_by_name("icons", d->window->root)) {
                     for (auto p : icons->children) {
-                        if (p->uuid == pop_data->uuid) {
-                            auto pin = (Pin *) p->user_data;
-                            std::vector<int> ids;
-                            for (auto w : pin->windows)
-                                ids.push_back(w.cid);
-                            delete pop_data;
-
-                            float posx = (p->real_bounds.x + p->real_bounds.w * .5) / d->window->raw_window->dpi;
-                            float posy = p->real_bounds.y / d->window->raw_window->dpi - 10;
-
-                            main_thread([posx, posy, ids]() { dock_thumbnails::open(posx, posy, 1, ids); });
-                            goto out;
-                        }
+                        if (p->uuid != hover->uuid)
+                            continue;
+                        auto *pin = (Pin *) p->user_data;
+                        ids = pin_window_ids(pin);
+                        icon = pin_thumbnail_bounds(p, d);
+                        source = p->uuid;
+                        pin->hover_timer_fd = -1;
+                        pin->hover_timer_data = nullptr;
+                        break;
                     }
                 }
+                break;
             }
-            out:
-        }, popdata);
+            delete hover;
+            if (ids.empty())
+                return;
+            main_thread([ids = std::move(ids), icon, source = std::move(source)]() {
+                dock_thumbnails::open(ids, icon, source);
+            });
+        }, hover);
     };
     ch->when_mouse_leaves_container = paint {
-        return;
-        Pin* pin = (Pin*)c->user_data;
-        auto dock = (Dock*)root->user_data;
-        if (pin->hover_timer_fd != -1) {
+        Pin *pin = (Pin *) c->user_data;
+        auto dock = (Dock *) root->user_data;
+        if (pin->hover_timer_fd != -1 && dock) {
             windowing::timer_stop(dock->app, pin->hover_timer_fd);
             pin->hover_timer_fd = -1;
         }
+        delete (HoverTimerData *) pin->hover_timer_data;
+        pin->hover_timer_data = nullptr;
+        main_thread([]() { dock_thumbnails::close(); });
     };
     ch->when_clicked = paint {
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
+
+        // Clicking the icon dismisses any hover preview.
+        main_thread([]() { dock_thumbnails::open({}); });
 
         if (pin->windows.empty() && c->state.mouse_button_pressed == BTN_LEFT) {
             launch_command(pin->command);
@@ -1124,6 +1202,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
 
 static void merge_list_into_icons(Dock *dock, Container *icons) {
     // merging: dock->collection->list -> icons->children
+    const bool merging = merge_windows.load();
 
     // also title needs to be updated or scale change
     for (auto pin_container : icons->children) {
@@ -1154,6 +1233,7 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
 
             if (!window_still_exists) {
                 pin->windows.erase(pin->windows.begin() + window_index);
+                dock->thumbnails_dirty = true;
             }
         }
     }
@@ -1166,7 +1246,7 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
             if (!pin->pinned) {
                 delete pin_container;
                 icons->children.erase(icons->children.begin() + pin_index);
-            } else if (!merge_windows) {
+            } else if (!merging) {
                 // in the case where we are not merging windows, and the stacking rule is pinned, we need to remove it, unless it's the last
                 int count = 0;
                 for (auto pc : icons->children) {
@@ -1217,14 +1297,16 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
             for (auto pin_container : icons->children) {
                 auto pin = (Pin *) pin_container->user_data;
                 if (pin->stacking_rule == window->stack_rule) {
-                    if (merge_windows) {
+                    if (merging) {
                         needs_to_create_its_own_pin = false;
                         pin->windows.push_back(*window);
+                        dock->thumbnails_dirty = true;
                         break;
                     } else if (pin->windows.empty() && pin->pinned) {
                         // If we are not merging windows, we still need to group up with pinned no windows item
                         needs_to_create_its_own_pin = false;
                         pin->windows.push_back(*window);
+                        dock->thumbnails_dirty = true;
                         break;
                     }
                 }
@@ -1232,6 +1314,7 @@ static void merge_list_into_icons(Dock *dock, Container *icons) {
 
             if (needs_to_create_its_own_pin) {
                 create_pinned_icon(icons, window->stack_rule, window->command, window->window_icon, window);
+                dock->thumbnails_dirty = true;
             }
         }
     }
@@ -1268,6 +1351,7 @@ static void merge_to_be_into_list(Dock *dock, Container *c) {
         dock->collection->to_be_added.clear();
     }
     if (!no_modification) {
+        dock->thumbnails_dirty = true;
         if (auto icons = container_by_name("icons", dock->window->root)) {
             for (auto p : icons->children) {
                 auto pin = (Pin *) p->user_data;
@@ -1303,7 +1387,7 @@ size_icons(Dock *dock, Container *icons) {
     for (auto c: icons->children) {
         //auto w = get_label_width(client, c);
         auto pin = (Pin *) c->user_data;
-        if (pin->windows.empty() || !labels) {
+        if (pin->windows.empty() || !labels || merge_windows.load()) {
             c->real_bounds.w = 50 * dock->window->raw_window->dpi;
         } else {
             c->real_bounds.w = max_width * dock->window->raw_window->dpi;
@@ -2363,6 +2447,14 @@ static void fill_root(Container *root) {
                 auto *active_data = (Pin *) active->user_data;
                 active->real_bounds.w = active_data->actual_w;
             }
+
+            // Keep an open hover preview in sync when windows are added,
+            // removed, or the icon moves because the dock reflowed.
+            auto dock = (Dock *) root->user_data;
+            if (dock && dock->thumbnails_dirty) {
+                dock->thumbnails_dirty = false;
+                sync_thumbnails(dock, c);
+            }
         };
     }
     if (false) {
@@ -2921,6 +3013,11 @@ static void schedule_startup_audio_update(Dock *dock) {
 }
 
 void dock_start(std::string monitor_name) {
+    // Docks can be recreated, so always pick up the persisted setting before
+    // the first grouping pass.
+    if (set)
+        merge_windows = set->dock_merge_windows;
+
     if (!monitor_name.empty()) {
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
@@ -2987,6 +3084,9 @@ static int get_dock_alignment() {
 }
 
 void dock::start(std::string monitor_name) {
+    if (set)
+        merge_windows = set->dock_merge_windows;
+
     if (monitor_name.empty())
         monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
     if (monitor_name == "FALLBACK")
@@ -3202,16 +3302,34 @@ void dock::update_workspaces() {
     }
 }
 
-void dock::toggle_dock_merge() {
-    merge_windows = !merge_windows;
-    auto order = get_window_stacking_order();
-    for (auto cid : order) {
-        remove_window(cid);
-    }
-    for (auto cid : order) {
-        add_window(cid);
+void dock::set_dock_merge(bool enabled) {
+    merge_windows = enabled;
+    // Rebuild every pin's window list from the collection instead of removing
+    // and re-adding windows. Removing and re-adding created separate pins for
+    // windows that should have been grouped under an existing pinned icon.
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (auto icons = container_by_name("icons", d->window->root)) {
+            for (auto pin_container : icons->children) {
+                auto *pin = (Pin *) pin_container->user_data;
+                if (!pin)
+                    continue;
+                pin->windows.clear();
+                pin->wants_reposition_animation = true;
+            }
+            d->thumbnails_dirty = true;
+        }
     }
     dock::redraw();
+}
+
+void dock::toggle_dock_merge() {
+    const bool next = set ? !set->dock_merge_windows : !merge_windows.load();
+    if (set)
+        set->dock_merge_windows = next;
+    set_dock_merge(next);
+    if (set)
+        settings::load_save_settings(true, set);
 }
 
 void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {

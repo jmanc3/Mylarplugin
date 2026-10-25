@@ -87,6 +87,7 @@ struct ConfigSettings {
     bool show_docks = true;
     bool battery_history_enabled = true;
     bool dock_current_workspace_only = true;
+    bool dock_merge_windows = false;
     bool draw_wallpaper = true;
     bool dark_theme = true;
     bool hotcorners = true;

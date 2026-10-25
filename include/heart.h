@@ -88,6 +88,7 @@ enum struct TYPE : uint8_t {
     SCREENSHOT_TOOL,
     DESKTOP_ICONS,
     DESKTOP_ICON,
+    DOCK_THUMBNAILS,
 };
 
 extern std::vector<Container *> actual_monitors;

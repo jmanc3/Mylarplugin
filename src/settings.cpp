@@ -401,6 +401,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "show_docks", &settings->show_docks);
     bind(bool, "battery_history_enabled", &settings->battery_history_enabled);
     bind(bool, "dock_current_workspace_only", &settings->dock_current_workspace_only);
+    bind(bool, "dock_merge_windows", &settings->dock_merge_windows);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "dark_theme", &settings->dark_theme);
     bind(bool, "hotcorners", &settings->hotcorners);
@@ -1898,7 +1899,22 @@ static void fill_desktop_settings(Container *root, Container *c) {
                 dock::update_workspaces();
                 settings::load_save_settings(true, set);
             });
-        }, "\ue75b");    
+        }, "\ue75b");
+
+    make_vert_space(padded_right, 4);
+
+    make_bool(padded_right,
+        "Combine taskbar buttons and hide labels",
+        "Group all windows that belong to one dock icon under a single icon",
+        set->dock_merge_windows,
+        [](bool value) {
+            main_thread([value]() {
+                set->dock_merge_windows = value;
+                dock::set_dock_merge(value);
+                settings::load_save_settings(true, set);
+            });
+        },
+        "\ue75b");
 }
 
 

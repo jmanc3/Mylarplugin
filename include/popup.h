@@ -40,4 +40,8 @@ namespace popup {
     void open(std::vector<PopOption> root, int x, int y, int cid = -1);
     void close(std::string container_uuid);
     bool dismiss_outside(int x, int y);
+
+    // True while any context menu is visible. Used to suppress hover previews
+    // while a right-click menu is open.
+    bool is_open();
 }
