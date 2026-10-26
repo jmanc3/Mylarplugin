@@ -228,6 +228,27 @@ void paint_thumbnail(Container *actual_root, Container *c) {
     renderfix
     const int cid = *datum<int>(c, "cid");
     hypriso->draw_thumbnail(cid, c->real_bounds, std::round(9 * s), 2.0f, 0);
+
+    // Window title along the bottom, styled like the drag workspace switcher's
+    // "Desktop #" label: a translucent black bar with white text on it.
+    const std::string title = hypriso->title_name(cid);
+    if (!title.empty()) {
+        auto *text = get_cached_texture(root, c, "dock_thumb_title", set->font, title, RGBA(1, 1, 1, 1), 12);
+        if (text && text->id != -1) {
+            const double padding = std::round(6 * s);
+            auto b = c->real_bounds;
+            const double bar_h = std::min<double>(b.h, std::max<double>(text->h + padding, std::round(b.h * .2)));
+            b.y += b.h - bar_h;
+            b.h = bar_h;
+            b.round();
+            rect(b, {0, 0, 0, .5f}, 3, std::round(9 * s));
+
+            clip(c->real_bounds, 1.0);
+            draw_texture(*text, {c->real_bounds.x + padding, b.y + (bar_h - text->h) * .5, (double) text->w, (double) text->h},
+                         1.0, c->real_bounds.w - padding * 2);
+        }
+    }
+
     if (c->state.mouse_hovering) {
         auto b = c->real_bounds;
         b.grow(std::round(2 * s));
@@ -584,6 +605,16 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
                 hypriso->bring_to_front(cid);
                 dock_thumbnails::open({});
             });
+        };
+
+        thumb->on_closed = [](Container *c) {
+            // The cached title texture belongs to this thumbnail; release it
+            // when the preview is rebuilt so it does not leak.
+            auto *title = datum<TextureInfo>(c, "dock_thumb_title");
+            if (title->id != -1) {
+                free_text_texture(title->id);
+                title->id = -1;
+            }
         };
 
         const double close_size = std::round(std::clamp(0.35 * std::min(widths[i], heights[i]), (double) kCloseMinSize, (double) kCloseMaxSize));
