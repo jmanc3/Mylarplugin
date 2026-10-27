@@ -6554,7 +6554,18 @@ void set_cursor_hidden_for_desktop_fade(bool hidden) {
     }
 
     cursor_hidden_for_desktop_fade = hidden;
-    g_pHyprRenderer->ensureCursorRenderingMode();
+
+    // ensureCursorRenderingMode() can update the hardware cursor, which starts a
+    // nested render pass and clears the renderer's current monitor. This is
+    // called from the initial fade-in paint callback, so doing it inline leaves
+    // the outer renderMonitor() with no monitor and crashes its endRender().
+    // Defer it to after the frame in that case.
+    if (g_pHyprRenderer->m_renderData.pMonitor.lock()) {
+        later_immediate([](Timer *) {
+            g_pHyprRenderer->ensureCursorRenderingMode();
+        });
+    } else
+        g_pHyprRenderer->ensureCursorRenderingMode();
 
     // Repaint immediately when starting, finishing, or skipping the fade.
     for (const auto& monitor : State::monitorState()->monitors())
