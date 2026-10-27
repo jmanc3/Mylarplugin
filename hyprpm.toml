@@ -3,6 +3,7 @@ name = "mylar-desktop"
 authors = "jmanc3"
 commit_pins = [
     ["efb50993780079460b0cbed1363e2166a2de1d9f", "d4f3c90b93acee87201de5b6a0eef662f88e8830"], # v0.56.2
+    ["efb50993780079460b0cbed1363e2166a2de1d9f", "d942db64e378567308dbf59deb5742b2d1f0aec8"], # v0.56.2
 ]
 
 [mylar-desktop]
