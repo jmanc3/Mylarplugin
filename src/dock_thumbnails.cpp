@@ -19,6 +19,10 @@ namespace {
 constexpr float kPad = 10;
 constexpr float kGap = 8;
 constexpr float kThumbSize = 150;      // logical px, along the short side
+// Widest a thumbnail is allowed to get. The short side stays at kThumbSize and
+// wider windows have their screenshot letterboxed instead of stretching the
+// preview past the width a 16:9 thumbnail used to occupy.
+constexpr float kThumbMaxWidth = kThumbSize * 16.f / 9.f;
 constexpr float kMaxPageFraction = .8; // of the monitor, before shrinking
 constexpr float kDockMargin = 8;
 constexpr int kCloseGraceMs = 220;
@@ -227,7 +231,17 @@ void paint_thumbnail(Container *actual_root, Container *c) {
 
     renderfix
     const int cid = *datum<int>(c, "cid");
-    hypriso->draw_thumbnail(cid, c->real_bounds, std::round(9 * s), 2.0f, 0);
+    // Keep the screenshot's aspect ratio: a window wider than the preview gets
+    // letterboxed and vertically centered instead of being stretched wider.
+    Bounds thumb = c->real_bounds;
+    const auto size = hypriso->thumbnail_size(cid);
+    if (size.w > 1 && size.h > 1) {
+        const double aspect = size.w / size.h;
+        const double w = std::min(thumb.w, thumb.h * aspect);
+        const double h = w / aspect;
+        thumb = Bounds(thumb.x + (thumb.w - w) * .5, thumb.y + (thumb.h - h) * .5, w, h);
+    }
+    hypriso->draw_thumbnail(cid, thumb, std::round(9 * s), 2.0f, 0);
 
     // Window title along the bottom, styled like the drag workspace switcher's
     // "Desktop #" label: a translucent black bar with white text on it.
@@ -322,6 +336,13 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
 
     const bool vertical = edge == kEdgeLeft || edge == kEdgeRight;
 
+    // Capture before measuring the aspect ratio: a window that was never
+    // captured has no thumbnail geometry yet, and falling back to 16:9 would
+    // stretch the resulting screenshot. The fresh capture also makes sure the
+    // width can be squeezed to the screenshot's real aspect ratio.
+    for (int cid : ids)
+        hypriso->screenshot(cid);
+
     struct Item {
         int cid;
         double aspect;
@@ -404,7 +425,7 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
                 widths[i] = std::round(s);
                 heights[i] = std::max(1.0, std::round(s / items[i].aspect));
             } else {
-                widths[i] = std::max(1.0, std::round(s * items[i].aspect));
+                widths[i] = std::min<double>(kThumbMaxWidth, std::max(1.0, std::round(s * items[i].aspect)));
                 heights[i] = std::round(s);
             }
             sum_w += widths[i];
@@ -430,6 +451,8 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
         s = std::max(1.0, s);
 
         cell_w = std::max(1.0, std::round(max_w_unit * s));
+        if (!vertical)
+            cell_w = std::min<double>(kThumbMaxWidth, cell_w);
         cell_h = std::max(1.0, std::round(max_h_unit * s));
         cw = cols * cell_w + (cols - 1) * kGap + 2 * kPad;
         ch = rows * cell_h + (rows - 1) * kGap + 2 * kPad;
@@ -478,10 +501,6 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
     }
     x = std::clamp<double>(x, mb.x + kDockMargin, std::max<double>(mb.x + kDockMargin, mb.right() - cw - kDockMargin));
     y = std::clamp<double>(y, mb.y + kDockMargin, std::max<double>(mb.y + kDockMargin, mb.bottom() - ch - kDockMargin));
-
-    // Capture before creating the overlay so the first frame already has pixels.
-    for (const auto &item : items)
-        hypriso->screenshot(item.cid);
 
     auto *preview = actual_root->child((int) std::round(cw), (int) std::round(ch));
     preview->custom_type = (int) TYPE::DOCK_THUMBNAILS;

@@ -7919,6 +7919,16 @@ Bounds HyprIso::thumbnail_size_deco(int id) {
 Bounds HyprIso::thumbnail_size(int id) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
+            if (hw->w_bounds_raw.w > 1 && hw->w_bounds_raw.h > 1)
+                return hw->w_bounds_raw;
+            // The window has not produced a screenshot yet. Use its live
+            // geometry so callers can still preserve the real aspect ratio
+            // instead of falling back to a generic 16:9 box.
+            if (hw->w) {
+                const auto current = tobounds(hw->w->getWindowMainSurfaceBox());
+                if (current.w > 1 && current.h > 1)
+                    return current;
+            }
             return hw->w_bounds_raw;
         }
     }
