@@ -4,7 +4,7 @@
 
 #include "integrator.h"
 
-#include "../Mylardesktop/include/first.h"
+#include "../plugin/Mylarplugin/include/first.h"
 
 static void *api_handle = nullptr;
 
