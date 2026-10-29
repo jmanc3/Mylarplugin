@@ -728,7 +728,7 @@ static void on_window_open(int id) {
         c->handles_pierced = [](Container* c, int x, int y) {
             auto cid = *datum<int>(c, "cid");
             bool inside = bounds_contains(c->real_bounds, x, y);
-            bool on_workspace = (hypriso->get_client_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()));
+            bool on_workspace = hypriso->is_window_workspace_visible(cid);
             return inside && on_workspace;
         };
         c->when_mouse_down = paint {
@@ -901,12 +901,89 @@ static void test_container(Container *m) {
     c->when_mouse_enters_container = request_damage;
 }
 
+static void create_magic_workspace_exit(int monitor) {
+    auto bubble = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
+    bubble->custom_type = (int) TYPE::MAGIC_WORKSPACE_EXIT;
+    *datum<int>(bubble, "monitor") = monitor;
+    bubble->pre_layout = [](Container *, Container *c, const Bounds &) {
+        const auto monitor = *datum<int>(c, "monitor");
+        const auto bounds = bounds_monitor(monitor);
+        constexpr double width = 258.0;
+        constexpr double height = 44.0;
+        constexpr double margin = 18.0;
+        c->real_bounds = Bounds(bounds.right() - width - margin, bounds.y + margin, width, height);
+        c->exists = hypriso->is_magic_workspace_active(monitor);
+    };
+    bubble->when_paint = [](Container *root, Container *c) {
+        auto rendering_root = get_rendering_root();
+        if (!rendering_root)
+            return;
+        const auto [monitor, s, stage, active_id] = roots_info(root, rendering_root);
+        if (monitor != *datum<int>(c, "monitor") || stage != (int) STAGE::RENDER_POST_WINDOWS ||
+            !hypriso->is_magic_workspace_active(monitor))
+            return;
+
+        renderfix
+        rect(c->real_bounds, RGBA(.12, .12, .14, .78), 0, 22 * s, 2.0, true);
+        auto label = get_cached_texture(rendering_root, c, "magic_workspace_exit_label", set->font,
+                                        "Exit magic workspace", RGBA(.96, .97, 1.0, .98), 14);
+        if (label->id != -1)
+            draw_texture(*label, c->real_bounds.x + 16 * s, center_y(c, label->h));
+    };
+    bubble->interactable = true;
+    bubble->when_mouse_down = consume_event;
+    bubble->when_mouse_up = consume_event;
+    bubble->when_clicked = [](Container *root, Container *c) {
+        if (c->state.mouse_button_pressed != BTN_LEFT)
+            return;
+        consume_event(root, c);
+        hypriso->exit_magic_workspace(*datum<int>(c, "monitor"));
+        damage_all();
+    };
+
+    auto close = bubble->child(::absolute, 38, 38);
+    close->pre_layout = [](Container *, Container *c, const Bounds &) {
+        const auto bounds = c->parent->real_bounds;
+        c->real_bounds = Bounds(bounds.right() - 41.0, bounds.y + 3.0, 38.0, 38.0);
+    };
+    close->when_paint = [](Container *root, Container *c) {
+        auto rendering_root = get_rendering_root();
+        if (!rendering_root)
+            return;
+        const auto [monitor, s, stage, active_id] = roots_info(root, rendering_root);
+        if (monitor != *datum<int>(c->parent, "monitor") || stage != (int) STAGE::RENDER_POST_WINDOWS ||
+            !hypriso->is_magic_workspace_active(monitor))
+            return;
+
+        renderfix
+        const bool hovered = c->state.mouse_hovering || c->state.mouse_pressing;
+        rect(c->real_bounds, hovered ? RGBA(.34, .36, .40, .95) : RGBA(.22, .23, .26, .80), 0, 19 * s, 2.0, true);
+        auto icon = get_cached_texture(rendering_root, c, "magic_workspace_exit_icon", icon_font,
+                                       "\uE8BB", RGBA(1.0, 1.0, 1.0, .98), 13);
+        if (icon->id != -1)
+            draw_texture(*icon, center_x(c, icon->w), center_y(c, icon->h));
+    };
+    close->when_mouse_down = consume_event;
+    close->when_mouse_up = consume_event;
+    close->when_mouse_motion = request_damage;
+    close->when_mouse_enters_container = request_damage;
+    close->when_mouse_leaves_container = request_damage;
+    close->when_clicked = [](Container *root, Container *c) {
+        if (c->state.mouse_button_pressed != BTN_LEFT)
+            return;
+        consume_event(root, c);
+        hypriso->exit_magic_workspace(*datum<int>(c->parent, "monitor"));
+        damage_all();
+    };
+}
+
 static void on_monitor_open(int id) {
     auto c = new Container();
     //c->when_paint = paint_debug;
     actual_monitors.push_back(c);
     auto cid = datum<int>(c, "cid");
     *cid = id;
+    create_magic_workspace_exit(id);
     heart::layout_containers();
     if (set->show_docks)
         dock::start(hypriso->monitor_name(id));
@@ -926,6 +1003,13 @@ static void on_monitor_open(int id) {
 }
 
 static void on_monitor_closed(int id) {
+    for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+        auto c = actual_root->children[i];
+        if (c->custom_type == (int) TYPE::MAGIC_WORKSPACE_EXIT && *datum<int>(c, "monitor") == id) {
+            delete c;
+            actual_root->children.erase(actual_root->children.begin() + i);
+        }
+    }
     for (int i = actual_monitors.size() - 1; i >= 0; i--) {
         auto cid = *datum<int>(actual_monitors[i], "cid");
         if (cid == id) {
@@ -2296,8 +2380,10 @@ void heart::layout_containers() {
             auto cid = *datum<int>(c, "cid");
             for (int i = 0; i < order.size(); i++)
                if (order[i] == cid) {
-                   bool is_pinned = hypriso->is_pinned(cid);
-                   *sort_index = (i + (is_pinned ? 1000 : 0));
+                   const bool is_pinned = hypriso->is_pinned(cid);
+                   const bool is_visible_special = hypriso->get_client_workspace_id(cid) < 0 && hypriso->is_window_workspace_visible(cid);
+                   const int stacking_span = static_cast<int>(order.size()) + 1;
+                   *sort_index = i + (is_visible_special ? stacking_span : 0) + (is_pinned ? 2 * stacking_span : 0);
                }
         }
         // sort the children based on index
@@ -2315,7 +2401,7 @@ void heart::layout_containers() {
 
     for (auto c : actual_root->children) {
         auto cid = *datum<int>(c, "cid");
-        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->resizable(cid) && hypriso->get_client_workspace(cid) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(cid);
+        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->resizable(cid) && hypriso->is_window_workspace_visible(cid) && !is_slept(cid);
         if (hypriso->whitelist_on) {
             bool found = false;
             for (auto wid : hypriso->render_whitelist) {
@@ -2374,7 +2460,7 @@ void heart::layout_containers() {
         }
         if (c->custom_type == (int) TYPE::CLIENT_RESIZE) {
             auto id = *datum<int>(c, "cid");
-            bool exists = hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id) && hypriso->get_client_workspace(id) == hypriso->get_active_workspace(hypriso->monitor_from_cursor()) && !is_slept(id);
+            bool exists = hypriso->is_mapped(id) && !hypriso->is_hidden(id) && hypriso->resizable(id) && hypriso->is_window_workspace_visible(id) && !is_slept(id);
             if (hypriso->whitelist_on) {
                 bool found = false;
                 for (auto wid : hypriso->render_whitelist) {
@@ -2518,6 +2604,15 @@ void heart::layout_containers() {
             if (c->pre_layout) {
                 c->pre_layout(actual_root, c, c->parent->real_bounds);
             }
+            *datum<bool>(c, "touched") = true;
+        }
+    }
+    for (auto c : backup) {
+        if (c->custom_type == (int) TYPE::MAGIC_WORKSPACE_EXIT) {
+            c->parent->children.insert(c->parent->children.begin(), c);
+            if (c->pre_layout)
+                c->pre_layout(actual_root, c, c->parent->real_bounds);
+            ::layout(actual_root, c, c->real_bounds);
             *datum<bool>(c, "touched") = true;
         }
     }

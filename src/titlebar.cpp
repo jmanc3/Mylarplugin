@@ -241,6 +241,20 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
         root.push_back(pop);
     }
     {
+        const bool in_magic_workspace = hypriso->is_window_in_magic_workspace(cid);
+        PopOption pop;
+        pop.text = in_magic_workspace ? "Remove from magic space" : "Send to magic space";
+        if (in_magic_workspace)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        pop.on_clicked = [cid, in_magic_workspace]() {
+            if (in_magic_workspace)
+                hypriso->remove_from_magic_workspace(cid);
+            else
+                hypriso->send_to_magic_workspace(cid);
+        };
+        root.push_back(pop);
+    }
+    {
         PopOption pop;
         pop.seperator = true;
         root.push_back(pop);        

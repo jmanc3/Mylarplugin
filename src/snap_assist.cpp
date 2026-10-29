@@ -14,6 +14,15 @@
 static bool skip_close = false;
 static unsigned int lifecycle = 0;
 
+static bool same_visible_workspace(int first_cid, int second_cid, int monitor) {
+    const int first_workspace = hypriso->get_client_workspace(first_cid);
+    if (first_workspace != -1 && first_workspace == hypriso->get_client_workspace(second_cid))
+        return true;
+
+    return get_monitor(first_cid) == monitor && get_monitor(second_cid) == monitor &&
+        hypriso->is_window_workspace_visible(first_cid) && hypriso->is_window_workspace_visible(second_cid);
+}
+
 struct HelperData : UserData {
     bool showing = false;
     int cid = 0;
@@ -99,7 +108,7 @@ std::vector<float> slidetopos2 = { 0.000, 0.044, 0.085, 0.123, 0.159, 0.193, 0.2
 // {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.4484324841621595,"y":0.10111109415690105}]}
 std::vector<float> slidetopos2fade = { 0.000, 0.044, 0.085, 0.123, 0.159, 0.193, 0.225, 0.256, 0.285, 0.313, 0.340, 0.365, 0.390, 0.414, 0.436, 0.458, 0.480, 0.500, 0.520, 0.539, 0.557, 0.575, 0.593, 0.610, 0.626, 0.642, 0.657, 0.672, 0.687, 0.701, 0.715, 0.728, 0.741, 0.754, 0.766, 0.778, 0.790, 0.802, 0.813, 0.824, 0.834, 0.845, 0.855, 0.865, 0.874, 0.884, 0.893, 0.902, 0.910, 0.919, 0.927, 0.935, 0.943, 0.951, 0.958, 0.966, 0.973, 0.980, 0.987, 0.993, 1.000 };
 
-void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
+void do_snap(int snap_mon, int cid, int target_workspace, int pos, Bounds start_pos) {
     if (snap_mon == -1)
         return;
     auto c = get_cid_container(cid);
@@ -117,9 +126,8 @@ void do_snap(int snap_mon, int cid, int pos, Bounds start_pos) {
         auto s = start_pos;
         hypriso->move_resize(cid, s.x, s.y, s.w, s.h, true);
     }
-    if (hypriso->get_active_workspace_id(snap_mon) != hypriso->get_active_workspace_id_client(cid)) {
-        hypriso->move_to_workspace(cid, hypriso->get_active_workspace(snap_mon));
-    }
+    if (target_workspace != -1 && hypriso->get_client_workspace(cid) != target_workspace)
+        hypriso->move_to_workspace(cid, target_workspace);
     hypriso->whitelist_on = true;
     hypriso->render_whitelist.push_back(cid);
     if (hypriso->has_decorations(cid)) {
@@ -195,11 +203,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     {
         auto order = get_window_stacking_order();
         std::reverse(order.begin(), order.end());
-        auto our_workspace = hypriso->get_active_workspace_id(monitor);
         std::stable_sort(order.begin(), order.end(),
-            [our_workspace](int a, int b) {
-                const bool a_on = hypriso->get_active_workspace_id_client(a) == our_workspace;
-                const bool b_on = hypriso->get_active_workspace_id_client(b) == our_workspace;
+            [monitor](int a, int b) {
+                const bool a_on = get_monitor(a) == monitor && hypriso->is_window_workspace_visible(a);
+                const bool b_on = get_monitor(b) == monitor && hypriso->is_window_workspace_visible(b);
                 return b_on && !a_on;
             }
         );
@@ -262,7 +269,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 b.y += titlebar_h * s;
                 b.h -= titlebar_h * s;
                 skip_close = true;
-                do_snap(parent_data->monitor, data->cid, (int) parent_data->pos, b);
+                const int target_workspace = hypriso->get_client_workspace(parent_data->cid);
+                do_snap(parent_data->monitor, data->cid, target_workspace, (int) parent_data->pos, b);
                 auto snap_edge_animation = datum<float>(actual_root, "snap_edge_animation");
                 *snap_edge_animation = 0.0;
                 spring_animate(snap_edge_animation, 1.0, 450, actual_root->lifetime);
@@ -316,8 +324,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
                 auto cid = data->cid;
-                auto parent_space = hypriso->get_client_workspace(parent_data->cid);
-                auto our_space = hypriso->get_client_workspace(data->cid);
                 auto ratioscalar = .53;
                 if (parent_data->pos != SnapPosition::LEFT && parent_data->pos != SnapPosition::RIGHT) {
                     ratioscalar *= 1.15;
@@ -325,7 +331,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 //float alpha = ((float) (get_current_time_in_ms() - parent_data->creation_time)) / (450.0f * ratioscalar);
                 float alpha = parent_data->visibility;
                 float fadea = alpha;
-                bool start_at_final_position = our_space != parent_space || hypriso->is_hidden(cid);
+                bool start_at_final_position =
+                    !same_visible_workspace(parent_data->cid, cid, parent_data->monitor) || hypriso->is_hidden(cid);
                 if (hypriso->has_decorations(cid) && !start_at_final_position)
                     fadea = 1.0;
                     
@@ -676,13 +683,12 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     
 
     auto parent_data = (HelperData *) c->user_data;
-    auto parent_space = hypriso->get_client_workspace(parent_data->cid);
     for (int i = 0; i < c->children.size(); i++) {
         auto ch = c->children[i];
         auto data = (SnapThumb *) ch->user_data;
-        auto our_space = hypriso->get_client_workspace(data->cid);
  
-        bool start_at_final_position = our_space != parent_space || hypriso->is_hidden(data->cid);
+        bool start_at_final_position =
+            !same_visible_workspace(parent_data->cid, data->cid, parent_data->monitor) || hypriso->is_hidden(data->cid);
         
         ch->z_index = c->children.size() + 10 - i;
         if (start_at_final_position) {

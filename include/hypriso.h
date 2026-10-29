@@ -522,6 +522,15 @@ struct HyprIso {
     int get_active_workspace_id_client(int client);
     int get_client_workspace(int client);
     int get_client_workspace_id(int client);
+    // True when the client's workspace is currently shown on a monitor. This
+    // includes the toggled-on special workspace, unlike get_active_workspace.
+    bool is_window_workspace_visible(int client);
+    bool is_window_in_magic_workspace(int client);
+    bool is_magic_workspace_active(int monitor);
+    void enter_magic_workspace(int monitor);
+    void send_to_magic_workspace(int client);
+    void remove_from_magic_workspace(int client);
+    void exit_magic_workspace(int monitor);
 
     float zoom_progress(int monitor);
 

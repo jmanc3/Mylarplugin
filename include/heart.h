@@ -89,6 +89,7 @@ enum struct TYPE : uint8_t {
     DESKTOP_ICONS,
     DESKTOP_ICON,
     DOCK_THUMBNAILS,
+    MAGIC_WORKSPACE_EXIT, // Exit control shown over the magic workspace
 };
 
 extern std::vector<Container *> actual_monitors;

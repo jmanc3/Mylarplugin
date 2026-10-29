@@ -16,11 +16,29 @@
 static bool switcher_showing = false;
 static bool switcher_closing = false;
 static bool hold_open = false;
+static bool workspace_thumbnails_ready = false;
 static unsigned int switcher_generation = 0;
 static unsigned int close_generation = 0;
 static constexpr float active_thumbnail_refresh_ms = 16.0f;
 static constexpr float inactive_thumbnail_refresh_ms = 500.0f;
 static std::unordered_map<int, double> saved_scroll_offsets;
+
+int target_monitor();
+
+static void capture_workspace_thumbnails() {
+    if (workspace_thumbnails_ready || !switcher_showing)
+        return;
+
+    const auto monitor = target_monitor();
+    if (monitor == -1)
+        return;
+
+    workspace_thumbnails_ready = true;
+    for (auto id : hypriso->get_workspace_ids(monitor))
+        hypriso->screenshot_space(monitor, id);
+    hypriso->screenshot_wallpaper(monitor);
+    damage_all();
+}
 
 static constexpr double drag_transition_ms = 120.0;
 static constexpr long drag_hover_delay_ms = 150;
@@ -195,18 +213,19 @@ void drag_workspace_switcher::transform_thumbnail(int cid, Bounds &bounds, float
 }
 
 bool drag_workspace_switcher::replaces_window(int cid) {
-    return cid == dragged_preview.cid && !dragged_preview.from_overview && dragged_preview.ready &&
-        dragged_preview.amount > 0.0f && !hypriso->rendering_snapshot();
+    return cid == dragged_preview.cid && hypriso->get_client_workspace_id(cid) >= 0 &&
+        !dragged_preview.from_overview && dragged_preview.ready && dragged_preview.amount > 0.0f &&
+        !hypriso->rendering_snapshot();
 }
 
 bool drag_workspace_switcher::omit_from_workspace_snapshot(int cid) {
-    return cid != -1 && cid == dragged_preview.cid && dragged_preview.ready &&
-        (dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f);
+    return cid != -1 && cid == dragged_preview.cid && hypriso->get_client_workspace_id(cid) >= 0 &&
+        dragged_preview.ready && (dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f);
 }
 
 void drag_workspace_switcher::paint_drag(int monitor, bool above_switcher) {
     const auto &p = dragged_preview;
-    if (p.cid == -1 || !p.ready || p.amount <= 0.0f || hypriso->rendering_snapshot())
+    if (p.cid == -1 || hypriso->get_client_workspace_id(p.cid) < 0 || !p.ready || p.amount <= 0.0f || hypriso->rendering_snapshot())
         return;
     const float alpha = p.alpha * (above_switcher ? p.amount : 1.0f - p.amount);
     if (alpha <= 0.0f)
@@ -663,7 +682,12 @@ void drag_switcher_actual_open() {
         }
 
     };
-    c->when_mouse_motion = paint {
+    c->when_mouse_enters_container = [](Container *root, Container *c) {
+        capture_workspace_thumbnails();
+        request_damage(root, c);
+    };
+    c->when_mouse_motion = [](Container *root, Container *c) {
+        capture_workspace_thumbnails();
         request_damage(root, c);
     };
     c->when_fine_scrolled = [](Container *root, Container *c, double scroll_x, double scroll_y, bool came_from_touchpad) {
@@ -698,22 +722,21 @@ void drag_workspace_switcher::open() {
     }
     switcher_showing = true;
     hold_open = false;
+    workspace_thumbnails_ready = false;
     const auto generation = ++switcher_generation;
 
     later_immediate([generation](Timer *) {
         if (!switcher_showing || generation != switcher_generation)
             return;
         auto mon = target_monitor();
-        auto ids = hypriso->get_workspace_ids(mon);
-        for (auto id : ids)
-            hypriso->screenshot_space(mon, id);
-        hypriso->screenshot_wallpaper(mon);
         int size = 550 * scale(mon);
         RGBA center = {1, 1, 1, .3};
         RGBA edge = {1, 1, 1, 0};
         *datum<TextureInfo>(actual_root, "drag_gradient") = gen_gradient_texture(center, edge, size);
         *datum<TextureInfo>(actual_root, "drag_gradient_inner") = gen_gradient_texture({1, 1, 1, .6}, edge, size * .4);
         *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect") = gen_gradient_texture({1, 1, 1, .12}, edge, size * .8);
+        if (overview::is_showing() && overview::get_openess() > 0.0f)
+            capture_workspace_thumbnails();
         drag_switcher_actual_open();
     });
 
@@ -750,6 +773,8 @@ void drag_workspace_switcher::open() {
             t->keep_running = false;
             return;
         }
+        if (!workspace_thumbnails_ready)
+            return;
         
         auto spaces = hypriso->get_workspace_ids(monitor);
         int active_id = hypriso->get_active_workspace_id(monitor);
@@ -783,6 +808,8 @@ void drag_workspace_switcher::open() {
             t->keep_running = false;
             return;
         }
+        if (!workspace_thumbnails_ready)
+            return;
         
         auto spaces = hypriso->get_workspace_ids(monitor);
         int active_id = hypriso->get_active_workspace_id(monitor);
@@ -928,6 +955,8 @@ void drag_workspace_switcher::on_mouse_move(int x, int y) {
 
 void drag_workspace_switcher::force_hold_open(bool state) {
     hold_open = state;
+    if (state)
+        capture_workspace_thumbnails();
     auto m = mouse();
     drag_workspace_switcher::on_mouse_move(m.x, m.y);
 }

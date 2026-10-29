@@ -114,6 +114,8 @@
 #include <hyprland/src/desktop/DesktopTypes.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/state/WorkspaceState.hpp>
+#include <hyprland/src/state/workspace/State.hpp>
+#include <hyprland/src/state/workspace/Resolver.hpp>
 
 #include <unordered_map>
 #include <wlr-layer-shell-unstable-v1.hpp>
@@ -5625,6 +5627,111 @@ int HyprIso::get_client_workspace(int client) {
     return -1;
 }
 
+bool HyprIso::is_window_workspace_visible(int client) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    for (auto hw : hyprwindows) {
+        if (hw->id != client || !hw->w)
+            continue;
+        // Regular workspaces and the currently shown special workspace are
+        // both marked visible, so this works for either one.
+        return hw->w->m_workspace && hw->w->m_workspace->visible();
+    }
+    return false;
+}
+
+bool HyprIso::is_window_in_magic_workspace(int client) {
+    for (auto hw : hyprwindows) {
+        if (hw->id != client || !hw->w || !hw->w->m_workspace)
+            continue;
+        return hw->w->m_workspace->type() == Workspace::eWorkspaceType::SPECIAL &&
+            hw->w->m_workspace->addressableName() == "special:magic";
+    }
+    return false;
+}
+
+bool HyprIso::is_magic_workspace_active(int monitor) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id != monitor || !hm->m || !hm->m->m_activeSpecialWorkspace)
+            continue;
+        const auto workspace = hm->m->m_activeSpecialWorkspace;
+        return workspace->addressableName() == "special:magic";
+    }
+    return false;
+}
+
+void HyprIso::send_to_magic_workspace(int client) {
+    PHLWINDOW window;
+    for (auto hw : hyprwindows) {
+        if (hw->id == client) {
+            window = hw->w;
+            break;
+        }
+    }
+    if (!window || !window->m_monitor)
+        return;
+
+    const auto monitor = window->m_monitor.lock();
+    const auto target = State::Workspace::resolver()->getWorkspaceTargetFromString("special:magic", monitor);
+    if (!target.valid())
+        return;
+
+    auto workspace = State::Workspace::state()->find(target);
+    if (!workspace)
+        workspace = State::Workspace::state()->create(target, monitor);
+    if (!workspace)
+        return;
+
+    Config::Actions::moveToWorkspace(workspace, false, window);
+    workspace->ready();
+}
+
+void HyprIso::remove_from_magic_workspace(int client) {
+    if (!is_window_in_magic_workspace(client))
+        return;
+
+    for (auto hw : hyprwindows) {
+        if (hw->id != client || !hw->w || !hw->w->m_monitor)
+            continue;
+        const auto monitor = hw->w->m_monitor.lock();
+        if (monitor && monitor->m_activeWorkspace)
+            Config::Actions::moveToWorkspace(monitor->m_activeWorkspace, false, hw->w);
+        return;
+    }
+}
+
+void HyprIso::enter_magic_workspace(int monitor) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id != monitor || !hm->m)
+            continue;
+
+        const auto target = State::Workspace::resolver()->getWorkspaceTargetFromString("special:magic", hm->m);
+        if (!target.valid())
+            return;
+
+        auto workspace = State::Workspace::state()->find(target);
+        if (!workspace)
+            workspace = State::Workspace::state()->create(target, hm->m);
+        if (!workspace)
+            return;
+
+        hm->m->setSpecialWorkspace(workspace);
+        workspace->ready();
+        return;
+    }
+}
+
+void HyprIso::exit_magic_workspace(int monitor) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id != monitor || !hm->m || !hm->m->m_activeSpecialWorkspace)
+            continue;
+        if (hm->m->m_activeSpecialWorkspace->addressableName() == "special:magic")
+            hm->m->setSpecialWorkspace(nullptr);
+        return;
+    }
+}
+
 int HyprIso::get_client_workspace_id(int client) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -7251,6 +7358,8 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
     glClearColor(0, 0, 0, 1.0);
 
     const auto   PWORKSPACE = w.lock();
+    const bool   STARTED_ON_WAS_VISIBLE = startedOn->visible();
+    const bool   WORKSPACE_WAS_VISIBLE = PWORKSPACE && PWORKSPACE->visible();
 
     PHLWORKSPACE openSpecial = pMonitor->m_activeSpecialWorkspace;
     if (openSpecial)
@@ -7271,8 +7380,11 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
         Event::bus()->m_events.render.stage.emit({sc<eRenderStage>(STAGE::RENDER_PRE_CURSOR), pMonitor, g_pHyprRenderer->context()});
         Event::bus()->m_events.render.stage.emit({sc<eRenderStage>(STAGE::RENDER_POST_CURSOR), pMonitor, g_pHyprRenderer->context()});
 
-        PWORKSPACE->setVisible(false);
-        Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_OUT, false, true);
+        PWORKSPACE->setVisible(WORKSPACE_WAS_VISIBLE);
+        if (WORKSPACE_WAS_VISIBLE)
+            Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
+        else
+            Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_OUT, false, true);
 
         if (PWORKSPACE == startedOn)
             pMonitor->m_activeSpecialWorkspace.reset();
@@ -7288,7 +7400,7 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 
     pMonitor->m_activeSpecialWorkspace = openSpecial;
     pMonitor->m_activeWorkspace        = startedOn;
-    startedOn->setVisible(true);
+    startedOn->setVisible(STARTED_ON_WAS_VISIBLE);
 
     Animation::Workspace::startAnimation(PWORKSPACE, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
     

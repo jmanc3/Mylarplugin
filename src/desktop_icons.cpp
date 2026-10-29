@@ -1247,7 +1247,7 @@ static void arrange_desktop_icons() {
     request_refresh();
 }
 
-static void create_root_popup() {
+static void create_root_popup(int monitor) {
     auto m = mouse();
     std::vector<PopOption> root;
     {
@@ -1318,6 +1318,20 @@ static void create_root_popup() {
         };
         root.push_back(pop);
     }
+
+    PopOption magic_workspace;
+    if (hypriso->is_magic_workspace_active(monitor)) {
+        magic_workspace.text = "Exit magic workspace";
+        magic_workspace.on_clicked = [monitor]() {
+            hypriso->exit_magic_workspace(monitor);
+        };
+    } else {
+        magic_workspace.text = "Enter magic workspace";
+        magic_workspace.on_clicked = [monitor]() {
+            hypriso->enter_magic_workspace(monitor);
+        };
+    }
+    root.push_back(magic_workspace);
   
     PopOption pop;
     pop.seperator = true;
@@ -1430,7 +1444,7 @@ void desktop_icons::start() {
     c->when_drag_end_is_click = false;
     c->when_clicked = [](Container* actual_root, Container* c) {
         if (c->state.mouse_button_pressed == BTN_RIGHT) {
-           create_root_popup();
+           create_root_popup(*datum<int>(c, "monitor"));
         } else {
             clear_desktop_selection(c);
         }
