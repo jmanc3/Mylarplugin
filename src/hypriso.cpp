@@ -8354,6 +8354,17 @@ static void draw_magic_lamp(SP<Render::ITexture> texture, const Bounds& source, 
     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
     data.damage = &renderData.damage;
     data.allowCustomUV = true;
+    // The snapshot framebuffer spans the whole monitor, but the window is
+    // rendered at its top-left corner (see screenshot_window_with_decos).
+    // Sample only that crop so the preview starts at the window's real size
+    // instead of squeezing the whole monitor snapshot into it.
+    const auto texSize = texture->m_size;
+    if (texSize.x > 0 && texSize.y > 0) {
+        data.primarySurfaceUVTopLeft = Vector2D(0.0, 0.0);
+        data.primarySurfaceUVBottomRight = Vector2D(
+            std::clamp(source.w / texSize.x, 0.0, 1.0),
+            std::clamp(source.h / texSize.y, 0.0, 1.0));
+    }
     // Keep the window solid while it bends; fade only the final tail.
     data.a = sc<float>(1.0 - lamp_smoothstep((progress - 0.90) / 0.10));
     texture->minFilter = GL_LINEAR_MIPMAP_LINEAR;
