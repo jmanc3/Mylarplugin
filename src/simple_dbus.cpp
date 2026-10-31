@@ -34,6 +34,12 @@
 #include <mutex>
 #include <string_view>
 #include <thread>
+#include <fcntl.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <cerrno>
 
 #ifdef TRACY_ENABLE
 
@@ -74,6 +80,101 @@ bool binded_network_manager = false;
 static bool registered_network_manager_filter = false;
 static bool registered_upower_filter = false;
 static std::vector<DBusPendingCall *> pending_calls;
+
+
+static std::string decodeAddressValue(std::string_view value) {
+    std::string decoded;
+    decoded.reserve(value.size());
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value[i] == '%' && i + 2 < value.size()) {
+            char hex[3] = {value[i + 1], value[i + 2], '\0'};
+            char* end = nullptr;
+            const auto byte = std::strtol(hex, &end, 16);
+            if (end && *end == '\0') {
+                decoded.push_back(static_cast<char>(byte));
+                i += 2;
+                continue;
+            }
+        }
+        decoded.push_back(value[i]);
+    }
+    return decoded;
+}
+
+static bool unixBusAddressReachable(std::string_view address) {
+    constexpr int CONNECT_TIMEOUT_MS = 100;
+    size_t alternativeStart = 0;
+    while (alternativeStart < address.size()) {
+        const auto alternativeEnd = address.find(';', alternativeStart);
+        const auto alternative = address.substr(alternativeStart, alternativeEnd == std::string_view::npos ? address.size() - alternativeStart : alternativeEnd - alternativeStart);
+        alternativeStart = alternativeEnd == std::string_view::npos ? address.size() : alternativeEnd + 1;
+        if (!alternative.starts_with("unix:"))
+            continue;
+
+        std::string path;
+        bool abstract = false;
+        size_t fieldStart = 5;
+        while (fieldStart < alternative.size()) {
+            const auto fieldEnd = alternative.find(',', fieldStart);
+            const auto field = alternative.substr(fieldStart, fieldEnd == std::string_view::npos ? alternative.size() - fieldStart : fieldEnd - fieldStart);
+            if (field.starts_with("path="))
+                path = decodeAddressValue(field.substr(5));
+            else if (field.starts_with("abstract=")) {
+                path = decodeAddressValue(field.substr(9));
+                abstract = true;
+            }
+            fieldStart = fieldEnd == std::string_view::npos ? alternative.size() : fieldEnd + 1;
+        }
+        if (path.empty() || path.size() >= sizeof(sockaddr_un{}.sun_path))
+            continue;
+
+        const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        if (fd < 0)
+            continue;
+        sockaddr_un socketAddress{};
+        socketAddress.sun_family = AF_UNIX;
+        socklen_t addressLength = sizeof(socketAddress);
+        if (abstract) {
+            socketAddress.sun_path[0] = '\0';
+            std::memcpy(socketAddress.sun_path + 1, path.data(), path.size());
+            addressLength = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + 1 + path.size());
+        } else {
+            std::memcpy(socketAddress.sun_path, path.c_str(), path.size() + 1);
+        }
+
+        int result = connect(fd, reinterpret_cast<sockaddr*>(&socketAddress), addressLength);
+        if (result < 0 && errno == EINPROGRESS) {
+            pollfd pfd{fd, POLLOUT, 0};
+            result = poll(&pfd, 1, CONNECT_TIMEOUT_MS);
+            if (result > 0) {
+                int error = 0;
+                socklen_t errorLength = sizeof(error);
+                result = getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &errorLength);
+                if (result == 0 && error != 0) {
+                    errno = error;
+                    result = -1;
+                }
+            } else
+                result = -1;
+        }
+        close(fd);
+        if (result == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool busAddressReachable(DBusBusType type) {
+    const char* address = std::getenv(type == DBUS_BUS_SESSION ? "DBUS_SESSION_BUS_ADDRESS" : "DBUS_SYSTEM_BUS_ADDRESS");
+    if (!address || !*address) {
+        if (type == DBUS_BUS_SESSION)
+            return false; // Avoid libdbus autolaunch on the compositor thread.
+        address = "unix:path=/run/dbus/system_bus_socket";
+    }
+    if (std::string_view(address).find("autolaunch:") != std::string_view::npos)
+        return false;
+    return unixBusAddressReachable(address);
+}
 
 static DBusHandlerResult network_manager_device_signal_filter(DBusConnection *, DBusMessage *, void *);
 static DBusHandlerResult upower_device_signal_filter(DBusConnection *, DBusMessage *, void *);
@@ -1285,6 +1386,10 @@ void dbus_poll_wakeup(PF *pf) {
     }
 }
 
+bool dbus_startup_ready() {
+    return busAddressReachable(DBUS_BUS_SYSTEM) && busAddressReachable(DBUS_BUS_SESSION);
+}
+
 void dbus_start(DBusBusType dbusType) {
     // The compositor and its libraries use D-Bus from multiple threads. libdbus
     // requires its threading support to be initialized before any other API call.
@@ -1304,6 +1409,12 @@ void dbus_start(DBusBusType dbusType) {
     defer(dbus_error_free(&error));
     if (dbusType == DBUS_BUS_SYSTEM ? dbus_connection_system != nullptr : dbus_connection_session != nullptr)
         return;
+    // if (!busAddressReachable(dbusType)) {
+    //     std::cerr << "Skipping D-Bus startup: "
+    //               << (dbusType == DBUS_BUS_SESSION ? "session" : "system")
+    //               << " bus address is missing, unsupported, or its Unix socket is unreachable.\n";
+    //     return;
+    // }
 
     if (dbusType == DBUS_BUS_SESSION && started_directly_from_hyprland) {
         // During direct startup, autolaunch can wait for our own Xwayland,

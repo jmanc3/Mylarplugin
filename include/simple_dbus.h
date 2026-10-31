@@ -146,6 +146,7 @@ T get_num_property(std::string bus_name, std::string path, std::string iface, st
 
 void network_manager_service_get_all_devices();
 
+bool dbus_startup_ready();
 void dbus_start(DBusBusType dbusType);
 
 void dbus_end();

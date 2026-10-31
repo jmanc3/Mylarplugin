@@ -23,6 +23,7 @@
 #include "popup.h"
 #include "quick_shortcut_menu.h"
 #include "settings.h"
+#include "first.h"
 #include "snap_assist.h"
 #include "overview.h"
 #include "workspace_indicator.h"
@@ -2201,10 +2202,19 @@ void heart::begin() {
         later(1000, [](Timer*) {
             on_config_reload();
         });
-        later(100, [](Timer*) {
-            dbus_start(DBUS_BUS_SYSTEM);
-            dbus_start(DBUS_BUS_SESSION);
-            audio_start();
+        later(200, [](Timer *t) {
+            static unsigned int attempts = 0;
+            ++attempts;
+            const bool ready = dbus_startup_ready();
+            t->keep_running = !ready && attempts < 20;
+            if (!ready && t->keep_running)
+                return;
+
+            later(200, [](Timer *) {
+                dbus_start(DBUS_BUS_SYSTEM);
+                dbus_start(DBUS_BUS_SESSION);
+                audio_start();
+            });
         });
 
         later_immediate([](Timer*) {
