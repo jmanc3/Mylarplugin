@@ -16,6 +16,7 @@
 #include "edit_pin.h"
 #include "audio.h"
 #include "components.h"
+#include "hsluv.h"
 #include "settings.h"
 #include "text_editor.h"
 #include "simple_dbus.h"
@@ -404,6 +405,80 @@ static RGBA color_dock_sel_press_color() {
 static RGBA color_dock_sel_accent_color() {
     static RGBA default_color("ffffff88");
     return hypriso->get_varcolor("plugin:mylardesktop:dock_sel_accent_color", default_color);
+}
+
+// Brightness shift used to build the subtle left-to-right shading of the
+// pinned icon background and highlight bar (ported from winbar's darken()).
+static RGBA darken_dock_color(RGBA color, double amount) {
+    double h; // hue
+    double s; // saturation
+    double p; // perceived brightness
+    rgb2hsluv(color.r, color.g, color.b, &h, &s, &p);
+    p = std::clamp(p - amount, 0.0, 100.0);
+    hsluv2rgb(h, s, p, &color.r, &color.g, &color.b);
+    return color;
+}
+
+// Paints a rectangle as three horizontal bands, leaving a slightly darker
+// strip on the right side. This mirrors winbar's paint_double_bg /
+// paint_double_bar helpers. The bands are composited in a group so their
+// semi-transparent colors replace each other instead of double-blending.
+static void paint_dock_horizontal_bands(cairo_t *cr, const Bounds &bounds, double dpi,
+                                        const RGBA &left, const RGBA &middle, const RGBA &right) {
+    if (bounds.w <= 0 || bounds.h <= 0)
+        return;
+
+    auto fill = [&](const Bounds &b, const RGBA &color) {
+        if (b.w <= 0 || b.h <= 0)
+            return;
+        cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
+        cairo_rectangle(cr, b.x, b.y, b.w, b.h);
+        cairo_fill(cr);
+    };
+
+    cairo_save(cr);
+    // Keep the temporary group from being the size of the entire dock.
+    cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
+    cairo_clip(cr);
+    cairo_push_group(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+
+    Bounds b = bounds;
+    fill(b, right);
+
+    b.w -= std::round(3 * dpi);
+    if (b.w > 0) {
+        fill(b, middle);
+
+        b.w -= std::round(1 * dpi);
+        if (b.w > 0)
+            fill(b, left);
+    }
+
+    cairo_pop_group_to_source(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+static void paint_dock_icon_pane(cairo_t *cr, const Bounds &bounds, double dpi,
+                                 const RGBA &left, const RGBA &middle, const RGBA &right) {
+    paint_dock_horizontal_bands(cr, bounds, dpi, left, middle, right);
+}
+
+static void paint_dock_highlight_bar(cairo_t *cr, const Bounds &bounds, double dpi, double bar_amount,
+                                     const RGBA &left, const RGBA &middle, const RGBA &right) {
+    bar_amount = std::clamp(bar_amount, 0.0, 1.0);
+
+    Bounds bar = bounds;
+    bar.h = std::round(2 * dpi);
+    bar.y = bounds.y + bounds.h - bar.h;
+
+    const double bar_inset = std::round(4 * dpi) * (1 - bar_amount);
+    bar.x += bar_inset;
+    bar.w -= bar_inset * 2;
+
+    paint_dock_horizontal_bands(cr, bar, dpi, left, middle, right);
 }
 
 static void paint_root_func(Container *root, Container *c) {
@@ -881,6 +956,15 @@ static std::vector<int> pin_window_ids(Pin *pin) {
     return ids;
 }
 
+static void cancel_hover_timer(Dock *dock, Pin *pin) {
+    if (pin->hover_timer_fd != -1 && dock) {
+        windowing::timer_stop(dock->app, pin->hover_timer_fd);
+        pin->hover_timer_fd = -1;
+    }
+    delete (HoverTimerData *) pin->hover_timer_data;
+    pin->hover_timer_data = nullptr;
+}
+
 static void sync_thumbnails(Dock *dock, Container *icons) {
     for (auto pin_container : icons->children) {
         auto *pin = (Pin *) pin_container->user_data;
@@ -954,27 +1038,34 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             if (window.cid == active_cid)
                 is_active = true;
 
-        if (c->state.mouse_pressing) {
-            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            auto col = color_dock_sel_press_color();
-            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-            cairo_fill(cr);
-        } else if (c->state.mouse_hovering) {
-            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            auto col = color_dock_sel_hover_color();
-            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-            cairo_fill(cr);
-        } else if (is_active) {
-            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            auto col = color_dock_sel_active_color();
-            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-            cairo_fill(cr);
-        } else if (!pin->windows.empty()) {
-            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            auto col = color_dock_sel_active_color();
-            col.a *= .7;
-            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-            cairo_fill(cr);
+        const int windows_count = (int) pin->windows.size();
+        const bool pressed = c->state.mouse_pressing;
+        const bool hovered = c->state.mouse_hovering;
+
+        // Ported from winbar's paint_icon_background: the background pane is
+        // only shown while pressed/hovered, or while one of the pinned windows
+        // is active. It gets a subtle left-to-right shading compared to the
+        // flat rectangle the dock used to draw.
+        if (pressed || hovered || is_active) {
+            RGBA pane_left, pane_middle, pane_right;
+            if (pressed) {
+                auto base = color_dock_sel_press_color();
+                pane_left = darken_dock_color(base, 20);
+                pane_middle = windows_count > 1 ? darken_dock_color(base, 36) : pane_left;
+                pane_right = windows_count > 1 ? darken_dock_color(base, 31) : pane_left;
+            } else if (hovered) {
+                auto base = color_dock_sel_hover_color();
+                pane_left = darken_dock_color(base, 15);
+                pane_middle = windows_count > 1 ? darken_dock_color(base, 34) : pane_left;
+                pane_right = windows_count > 1 ? darken_dock_color(base, 28) : pane_left;
+            } else {
+                auto base = color_dock_sel_active_color();
+                pane_left = darken_dock_color(base, 10);
+                pane_middle = windows_count > 1 ? darken_dock_color(pane_left, 20) : pane_left;
+                pane_right = windows_count > 1 ? darken_dock_color(pane_left, 15) : pane_left;
+            }
+            paint_dock_icon_pane(cr, c->real_bounds, mylar->raw_window->dpi,
+                                 pane_left, pane_middle, pane_right);
         }
         auto none = pin->windows.empty();
         if (!labels || merge_windows.load())
@@ -1018,14 +1109,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             }
         }
 
-        if (is_active || !pin->windows.empty()) {
-            auto bar_h = std::round(2 * mylar->raw_window->dpi);
-            cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - bar_h, c->real_bounds.w, bar_h);
-            auto col = color_dock_sel_accent_color();
-            if (!pin->windows.empty() && !is_active)
-                col.a *= .4;
-            cairo_set_source_rgba(cr, col.r, col.g, col.b, col.a);
-            cairo_fill(cr);
+        if (is_active || windows_count > 0) {
+            auto accent_color = color_dock_sel_accent_color();
+            auto bar_left = accent_color;
+            auto bar_middle = windows_count > 1 ? darken_dock_color(accent_color, 20) : accent_color;
+            auto bar_right = windows_count > 1 ? darken_dock_color(accent_color, 15) : accent_color;
+            paint_dock_highlight_bar(cr, c->real_bounds, mylar->raw_window->dpi, 1,
+                                     bar_left, bar_middle, bar_right);
         }
     };
     ch->when_mouse_enters_container = paint {
@@ -1090,12 +1180,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
     ch->when_mouse_leaves_container = paint {
         Pin *pin = (Pin *) c->user_data;
         auto dock = (Dock *) root->user_data;
-        if (pin->hover_timer_fd != -1 && dock) {
-            windowing::timer_stop(dock->app, pin->hover_timer_fd);
-            pin->hover_timer_fd = -1;
-        }
-        delete (HoverTimerData *) pin->hover_timer_data;
-        pin->hover_timer_data = nullptr;
+        cancel_hover_timer(dock, pin);
         main_thread([]() { dock_thumbnails::close(); });
     };
     ch->when_clicked = paint {
@@ -1190,6 +1275,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         auto data = (Pin *) c->user_data;
         data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
         c->z_index = 1;
+
+        // Dragging replaces hovering: cancel a preview that is still queued to
+        // open, and dismiss one that is already visible so it does not stay
+        // anchored to the icon as it moves across the dock.
+        auto dock = (Dock *) root->user_data;
+        cancel_hover_timer(dock, data);
+        main_thread([]() { dock_thumbnails::open({}); });
     };
     ch->when_drag_end = paint {
         auto data = (Pin *) c->user_data;

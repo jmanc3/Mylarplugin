@@ -957,7 +957,7 @@ WP<CShader> hook_onUseShader(void* thisptr, WP<CShader> prog) {
     ZoneScoped;
 #endif
     auto shader = (*(origUseShader)g_pOnUseShader->m_original)((Render::GL::CHyprOpenGLImpl *) thisptr, prog);
-    if (change_mask) {
+    if (change_mask && shader && shader->program() != 0) {
         GLint loc = glGetUniformLocation(shader->program(), "cornerDisableMask");
         glUniform1i(loc, surface_mask);
 //        bool seen = false;
@@ -2183,7 +2183,7 @@ void HyprIso::create_config_variables() {
     values->dock_sel_active_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_active_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
     values->dock_sel_press_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_press_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
     values->dock_sel_hover_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_hover_color", "", Config::ParserUtils::parseColor("rgba(ffffff44)").value());
-    values->dock_sel_accent_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_accent_color", "", Config::ParserUtils::parseColor("rgba(ffffff88)").value());
+    values->dock_sel_accent_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:dock_sel_accent_color", "", Config::ParserUtils::parseColor("rgba(76b9edff)").value());
     values->sel_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_color", "", Config::ParserUtils::parseColor("rgba(5ce0ff25)").value());
     values->sel_border_color = makeShared<Config::Values::CColorValue>("plugin:mylardesktop:sel_border_color", "", Config::ParserUtils::parseColor("rgba(5fe5fff1)").value());
     values->desktop_font_size = makeShared<Config::Values::CFloatValue>("plugin:mylardesktop:desktop_font_size", "", Hyprlang::FLOAT{14});

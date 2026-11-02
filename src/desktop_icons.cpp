@@ -1499,7 +1499,7 @@ void desktop_icons::start() {
             b.round();
 
             auto col = color_sel_color();
-            float rounding = 9.0f;
+            float rounding = 0.0f;
             auto shadow = b;
             shadow.grow(std::round(1.0f * s));
             render_drop_shadow(rid, 1.0, {0, 0, 0, 1.0f}, std::round(rounding * s), 2.0, shadow);
