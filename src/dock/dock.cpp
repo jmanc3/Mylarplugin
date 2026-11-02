@@ -188,6 +188,9 @@ struct Pin : UserData {
 
     bool animating = false;
     SpringAnimation spring;
+    double hover_amount = 0;
+    double active_amount = 0;
+    long background_animation_time = 0;
     double actual_w = 0;
     long animation_start_time = 0;
 
@@ -1041,12 +1044,18 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         const int windows_count = (int) pin->windows.size();
         const bool pressed = c->state.mouse_pressing;
         const bool hovered = c->state.mouse_hovering;
+        const double animation_seconds = std::clamp((get_current_time_in_ms() - pin->background_animation_time) / 1000.0, 0.0, 0.05);
+        pin->background_animation_time = get_current_time_in_ms();
+        const double animation_step = animation_seconds * 12.0;
+        pin->hover_amount += std::clamp((hovered ? 1.0 : 0.0) - pin->hover_amount, -animation_step, animation_step);
+        pin->active_amount += std::clamp((is_active ? 1.0 : 0.0) - pin->active_amount, -animation_step, animation_step);
+        const double eased_active = pin->active_amount * pin->active_amount * (3.0 - 2.0 * pin->active_amount);
 
         // Ported from winbar's paint_icon_background: the background pane is
         // only shown while pressed/hovered, or while one of the pinned windows
         // is active. It gets a subtle left-to-right shading compared to the
         // flat rectangle the dock used to draw.
-        if (pressed || hovered || is_active) {
+        if (pressed || pin->hover_amount > 0.001 || pin->active_amount > 0.001) {
             RGBA pane_left, pane_middle, pane_right;
             if (pressed) {
                 auto base = color_dock_sel_press_color();
@@ -1058,6 +1067,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 pane_left = darken_dock_color(base, 15);
                 pane_middle = windows_count > 1 ? darken_dock_color(base, 34) : pane_left;
                 pane_right = windows_count > 1 ? darken_dock_color(base, 28) : pane_left;
+            } else if (pin->hover_amount > pin->active_amount) {
+                auto base = color_dock_sel_active_color();
+                auto target_left = darken_dock_color(color_dock_sel_hover_color(), 15);
+                auto target_middle = windows_count > 1 ? darken_dock_color(color_dock_sel_hover_color(), 34) : target_left;
+                auto target_right = windows_count > 1 ? darken_dock_color(color_dock_sel_hover_color(), 28) : target_left;
+                pane_left = target_left; pane_middle = target_middle; pane_right = target_right;
+                (void)base;
             } else {
                 auto base = color_dock_sel_active_color();
                 pane_left = darken_dock_color(base, 10);
@@ -1109,12 +1125,12 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             }
         }
 
-        if (is_active || windows_count > 0) {
+        if (windows_count > 0) {
             auto accent_color = color_dock_sel_accent_color();
             auto bar_left = accent_color;
             auto bar_middle = windows_count > 1 ? darken_dock_color(accent_color, 20) : accent_color;
             auto bar_right = windows_count > 1 ? darken_dock_color(accent_color, 15) : accent_color;
-            paint_dock_highlight_bar(cr, c->real_bounds, mylar->raw_window->dpi, 1,
+            paint_dock_highlight_bar(cr, c->real_bounds, mylar->raw_window->dpi, std::max(pin->hover_amount, eased_active),
                                      bar_left, bar_middle, bar_right);
         }
     };
@@ -1700,7 +1716,13 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     bool needs_refresh = false;
     for (auto c: icons->children) {
         auto *data = (Pin *) c->user_data;
-        if (data->animating) {
+        if (data->animating || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
+            std::abs(data->active_amount - ([&] {
+                for (const auto &window : data->windows)
+                    if (window.cid == active_cid)
+                        return 1.0;
+                return 0.0;
+            })()) > 0.001) {
             needs_refresh = true;
             break;
         }
