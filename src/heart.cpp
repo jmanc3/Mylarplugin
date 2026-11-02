@@ -698,7 +698,7 @@ void apply_restore_info(int id) {
                     hypriso->move_resize(id, b.x, b.y, b.w, b.h);
                 }
             }
-            if (info.remember_maximized && info.remembered_snap_type != (int) SnapPosition::NONE)
+            if (info.remember_maximized && info.remembered_snap_type == (int) SnapPosition::MAX)
                 drag::snap_window(get_monitor(id), id, info.remembered_snap_type);
             return;
         }
