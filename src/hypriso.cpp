@@ -1180,6 +1180,10 @@ bool HyprIso::requested_client_side_decorations(int cid) {
 }
 
 void on_open_window(PHLWINDOW w) {
+    for (auto hw : hyprwindows) {
+        if (hw->w == w)
+            return;
+    }
     for (auto m : State::monitorState()->monitors()) {
         on_open_monitor(m);
     }
@@ -4956,8 +4960,12 @@ void HyprIso::end() {
     ZoneScoped;
 #endif
     eventListeners.clear();
+    for (auto window : hyprwindows)
+        delete window;
+    hyprwindows.clear();
     for (auto monitor : hyprmonitors)
-        monitor->callback_notified = false;
+        delete monitor;
+    hyprmonitors.clear();
     stop_wake_main_thread();
     g_pHyprRenderer->context().m_pass.removeAllOfType("CRectPassElement");
     g_pHyprRenderer->context().m_pass.removeAllOfType("CBorderPassElement");

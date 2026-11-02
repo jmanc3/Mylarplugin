@@ -196,6 +196,7 @@ struct Pin : UserData {
 
     int hover_timer_fd = -1;
     void *hover_timer_data = nullptr;
+    bool suppress_hover_preview = false;
 
     ~Pin() {
         if (icon_surf)
@@ -1139,6 +1140,8 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         auto dock = (Dock *) root->user_data;
         if (!dock)
             return;
+        if (pin->suppress_hover_preview)
+            return;
 
         // The cursor returned to the icon, so keep any visible preview alive.
         // If a preview is already showing, switch it to this icon immediately
@@ -1197,6 +1200,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         Pin *pin = (Pin *) c->user_data;
         auto dock = (Dock *) root->user_data;
         cancel_hover_timer(dock, pin);
+        pin->suppress_hover_preview = false;
         main_thread([]() { dock_thumbnails::close(); });
     };
     ch->when_clicked = paint {
@@ -1205,8 +1209,25 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         auto mylar = dock->window;
         auto cr = mylar->raw_window->cr;
 
-        // Clicking the icon dismisses any hover preview.
-        main_thread([]() { dock_thumbnails::open({}); });
+        const auto windows_count = pin->windows.size();
+        if (c->state.mouse_button_pressed == BTN_LEFT) {
+            cancel_hover_timer(dock, pin);
+            if (windows_count > 1) {
+                auto ids = pin_window_ids(pin);
+                auto icon = pin_thumbnail_bounds(c, dock);
+                auto source = c->uuid;
+                main_thread([ids = std::move(ids), icon, source = std::move(source)]() {
+                    dock_thumbnails::open(ids, icon, source);
+                });
+            } else {
+                // Suppress hover scheduling until the pointer leaves and
+                // re-enters, including when this click dismisses an open preview.
+                pin->suppress_hover_preview = true;
+                main_thread([]() { dock_thumbnails::open({}); });
+            }
+        } else {
+            main_thread([]() { dock_thumbnails::open({}); });
+        }
 
         if (pin->windows.empty() && c->state.mouse_button_pressed == BTN_LEFT) {
             launch_command(pin->command);

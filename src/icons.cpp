@@ -91,7 +91,7 @@ struct OptionsData {
 };
 
 // A background rescan must not change the live lookup thread's search paths.
-static thread_local std::vector<std::string> icon_search_paths;
+static std::vector<std::string> icon_search_paths;
 struct Range {
     unsigned long start  = -1;
     unsigned long length = -1;
@@ -395,7 +395,8 @@ static void load_data() {
 }
 
 void update_paths() {
-    icon_search_paths.clear();
+    static std::once_flag paths_initialized;
+    std::call_once(paths_initialized, []() {
 
     // Setup search paths for icons
     //
@@ -429,6 +430,7 @@ void update_paths() {
         }
     }
     icon_search_paths.emplace_back("/usr/share/pixmaps");
+    });
 }
 
 void generate_cache() {
@@ -899,7 +901,6 @@ void unload_icons() {
     std::shared_ptr<const IconCache> empty = std::make_shared<IconCache>();
     active_cache.store(std::move(empty));
     icons_loaded = false;
-    icon_search_paths.clear();
 }
 
 std::string c3ic_fix_desktop_file_icon(const std::string& given_name, const std::string& given_wm_class, const std::string& given_path, const std::string& given_icon) {
