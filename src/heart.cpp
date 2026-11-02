@@ -1028,7 +1028,11 @@ static void on_monitor_closed(int id) {
 
 static void on_activated(int id) {
     Container *c = get_cid_container(id);
-    if (!c) return;
+    if (!c) {
+        if (id == -1)
+            dock::on_activated(id);
+        return;
+    }
     static bool leave = false;
     if (leave)
         return;

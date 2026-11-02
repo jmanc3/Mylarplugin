@@ -15,6 +15,7 @@
 #include "show_desktop.h"
 
 #include <assert.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <ranges>
@@ -667,8 +668,24 @@ void create_titlebar(Container *root, Container *parent) {
     min->when_mouse_down = consume_event;
     min->when_mouse_up = consume_event;
     min->when_clicked = paint {
-         auto client = first_above_of(c, TYPE::CLIENT);
-         hypriso->set_hidden(*datum<int>(client, "cid"), true, true);
+        auto client = first_above_of(c, TYPE::CLIENT);
+        auto cid = *datum<int>(client, "cid");
+        hypriso->set_hidden(cid, true, true);
+
+        auto order = get_window_stacking_order();
+        std::reverse(order.begin(), order.end());
+        bool focused_next = false;
+        for (auto candidate : order) {
+            if (candidate == cid || hypriso->is_hidden(candidate) || !hypriso->alt_tabbable(candidate))
+                continue;
+
+            hypriso->bring_to_front(candidate);
+            focused_next = true;
+            break;
+        }
+
+        if (!focused_next)
+            hypriso->all_lose_focus();
     };
     auto max = titlebar_parent->child(FILL_SPACE, FILL_SPACE);
     max->when_paint = paint {

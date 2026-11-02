@@ -9351,6 +9351,8 @@ void HyprIso::all_lose_focus() {
     prev = Desktop::focusState()->window();
     g_pSeatManager->setPointerFocus(nullptr, {});
     Desktop::focusState()->fullWindowFocus(nullptr, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
+    if (on_activated)
+        on_activated(-1);
 }
 
 void HyprIso::all_gain_focus() {

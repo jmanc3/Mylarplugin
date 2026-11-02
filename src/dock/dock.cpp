@@ -1257,6 +1257,21 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 } else {
                     if (active_cid == cid) {
                         hypriso->set_hidden(cid, true, true);
+
+                        auto order = get_window_stacking_order();
+                        std::reverse(order.begin(), order.end());
+                        bool focused_next = false;
+                        for (auto candidate : order) {
+                            if (candidate == cid || hypriso->is_hidden(candidate) || !hypriso->alt_tabbable(candidate))
+                                continue;
+
+                            hypriso->bring_to_front(candidate);
+                            focused_next = true;
+                            break;
+                        }
+
+                        if (!focused_next)
+                            hypriso->all_lose_focus();
                     } else {
                         hypriso->bring_to_front(cid);
                     }
