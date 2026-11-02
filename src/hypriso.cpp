@@ -10014,7 +10014,18 @@ void hook_onPopupDestroy(void* thisptr) {
     (*(origPopupDestroy)g_pOnPopupDestroy->m_original)((Desktop::View::CPopup *) thisptr);
 }
 
-// 0.56.x creates popups through the window/layer/resource overloads hooked above.
+// CPopup::create(SP<IPopupBackend>, WP<CPopup>) creates nested popups.
+inline CFunctionHook* g_pPopupCreate = nullptr;
+typedef SP<Desktop::View::CPopup> (*origPopupCreate)(SP<Desktop::View::IPopupBackend>, WP<Desktop::View::CPopup>);
+SP<Desktop::View::CPopup> hook_onPopupCreate(SP<Desktop::View::IPopupBackend> backend, WP<Desktop::View::CPopup> pOwner) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto popup = (*(origPopupCreate)g_pPopupCreate->m_original)(backend, pOwner);
+    if (popup)
+        popup_created(popup);
+    return popup;
+}
 
 void hook_popup_creation_and_destruction() {
     //return;
@@ -10034,6 +10045,10 @@ void hook_popup_creation_and_destruction() {
                 } else if (m.demangled.find("CXDGPopupResource") != std::string::npos) {
                     g_pOnPopupSubpopupCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupSubpopupCreate);
                     g_pOnPopupSubpopupCreate->hook();
+                    hooked++;
+                } else if (m.demangled.find("IPopupBackend") != std::string::npos) {
+                    g_pPopupCreate = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupCreate);
+                    g_pPopupCreate->hook();
                     hooked++;
                 }
             }
