@@ -74,7 +74,7 @@ struct SWorkspaceTiling {
 
 struct ConfigSettings {
     int version = 2;
-    std::string touchpad_acceleration_curve = "Custom";
+    std::string touchpad_acceleration_curve = "Adaptive";
     std::string primary_mouse_button = "Left";
     float cursor_speed = .5;
     bool natural_scrolling_mouse = false;
