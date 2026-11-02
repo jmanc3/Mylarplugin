@@ -2213,10 +2213,13 @@ void heart::begin() {
             later(200, [](Timer *) {
                 dbus_start(DBUS_BUS_SYSTEM);
                 dbus_start(DBUS_BUS_SESSION);
-                audio_start();
             });
         });
-
+        
+        later(200, [](Timer *) {
+            audio_start();
+        });
+ 
         later_immediate([](Timer*) {
             on_any_container_close = any_container_closed;
             create_actual_root();
