@@ -46,6 +46,7 @@ sudo pacman -S git gcc cmake make pkg-config pango cairo librsvg libxkbcommon db
 Download latest release.
 
 ```bash
+git clone --depth 1 https://github.com/jmanc3/Mylarplugin
 cd Mylarplugin
 make release
 sudo make install
@@ -58,7 +59,7 @@ Now you can load the plugin on Hyprland by running `hyprctl plugin load /full/qu
 To auto start it on login with Hyprland, add the following to `$HOME/.config/hypr/hyprland.lua`
 
 ```lua
-hl.exec_cmd("sleep 3s; hyprctl plugin load /full/qualified/path/to/mylar-desktop.so")
+hl.exec_cmd("hyprctl plugin load /full/qualified/path/to/mylar-desktop.so")
 ```
 
 ## Hyprpm install method
