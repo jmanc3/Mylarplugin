@@ -26,6 +26,7 @@
 #include <hyprland/src/workspace/AbstractWorkspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
+#include <hyprland/src/desktop/state/WindowFadeout.hpp>
 #include <hyprland/src/desktop/view/types/GeometricMovableAnimated.hpp>
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -2444,6 +2445,29 @@ void HyprIso::apply_workspace_settings() {
         sync_monitor_workspaces(focused->m_activeWorkspace);
 }
 
+// unmapWindow emits window.close before it refocuses, and the focus path may
+// raise another window above the closing one. Remember the pre-raise slot so
+// the fadeout keeps the stacking position the window had when it was closed.
+struct SClosingWindowZIndex {
+    WP<Desktop::View::CWindow> window;
+    int                        zIndex = 0;
+};
+
+static std::unordered_map<Desktop::View::CWindow*, SClosingWindowZIndex> closingWindowZIndices;
+
+static void rememberClosingWindowZIndex(PHLWINDOW window) {
+    if (!window)
+        return;
+
+    const auto& WINDOWS = Desktop::windowState()->windows();
+    const auto  IT      = std::ranges::find(WINDOWS, window);
+    if (IT == WINDOWS.end())
+        return;
+
+    std::erase_if(closingWindowZIndices, [](const auto& entry) { return entry.second.window.expired(); });
+    closingWindowZIndices[window.get()] = SClosingWindowZIndex{.window = window, .zIndex = static_cast<int>(std::distance(WINDOWS.begin(), IT))};
+}
+
 void HyprIso::create_callbacks() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -2467,6 +2491,7 @@ void HyprIso::create_callbacks() {
             on_open_window(w);
     }));
     eventListeners.emplace_back(Event::bus()->m_events.window.close.listen([this](PHLWINDOW w) {
+        rememberClosingWindowZIndex(w);
         if (hypriso->on_window_closed)
             on_close_window(w);
     }));
@@ -4334,8 +4359,8 @@ static bool interleavedAboveFloating = false;
 // regular renderer only groups them by plane, which paints every closing window
 // above all live windows. Schedule them against the window list so a closing
 // window stays between the same neighbours it had while it was alive. The index
-// is a snapshot from close time, so this is best-effort if the stack also
-// changes while the fadeout is playing.
+// is captured before close refocusing can reorder the stack, so this is
+// best-effort if the stack also changes while the fadeout is playing.
 enum eWindowFadeoutBand : uint8_t {
     WINDOW_FADEOUT_BAND_REGULAR,
     WINDOW_FADEOUT_BAND_PINNED,
@@ -4606,6 +4631,25 @@ static void hook_renderWorkspaceWindows(Render::IHyprRenderer* thisptr, Render::
 
 static CFunctionHook* g_pRenderWorkspaceWindowsHook = nullptr;
 static CFunctionHook* g_pInterleavedBlurHook        = nullptr;
+static CFunctionHook* g_pWindowFadeoutCreateHook    = nullptr;
+
+static SP<Desktop::CWindowFadeout> hook_windowFadeoutCreate(PHLWINDOW window, SP<Render::IFramebuffer> snapshot, float sourceAlpha,
+                                                           SP<Render::IFramebuffer> workspaceSnapshot) {
+    using Original = SP<Desktop::CWindowFadeout> (*)(PHLWINDOW, SP<Render::IFramebuffer>, float, SP<Render::IFramebuffer>);
+    auto fadeout   = rc<Original>(g_pWindowFadeoutCreateHook->m_original)(window, snapshot, sourceAlpha, workspaceSnapshot);
+
+    if (!window)
+        return fadeout;
+
+    const auto IT = closingWindowZIndices.find(window.get());
+    if (IT != closingWindowZIndices.end()) {
+        if (fadeout && IT->second.window.lock() == window)
+            fadeout->m_zIndex = IT->second.zIndex;
+        closingWindowZIndices.erase(IT);
+    }
+
+    return fadeout;
+}
 
 static bool           hook_shouldUseNewBlurOptimizations(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLLS pLayer, PHLWINDOW pWindow) {
     static auto PBLURNEWOPTIMIZE = CConfigValue<Config::INTEGER>("decoration:blur:new_optimizations");
@@ -4654,6 +4698,7 @@ static void hook_interleaved_rendering() {
         "renderWorkspaceWindows", ", Render::eSceneMode)", rc<const void*>(&hook_renderWorkspaceWindows));
     g_pInterleavedBlurHook = create_interleaved_stacking_hook(
         "shouldUseNewBlurOptimizations", "Render::IHyprRenderer::shouldUseNewBlurOptimizations(Render::CRenderContext&, ", rc<const void*>(&hook_shouldUseNewBlurOptimizations));
+    g_pWindowFadeoutCreateHook = create_interleaved_stacking_hook("create", "Desktop::CWindowFadeout::create(", rc<const void*>(&hook_windowFadeoutCreate));
 }
 
 static void hook_fullscreen_focus() {
@@ -5095,6 +5140,7 @@ void HyprIso::end() {
     ZoneScoped;
 #endif
     eventListeners.clear();
+    closingWindowZIndices.clear();
     for (auto window : hyprwindows)
         delete window;
     hyprwindows.clear();
