@@ -26,7 +26,6 @@
 #include <hyprland/src/workspace/AbstractWorkspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/ViewHitTester.hpp>
-#include <hyprland/src/desktop/state/WindowFadeout.hpp>
 #include <hyprland/src/desktop/view/types/GeometricMovableAnimated.hpp>
 #include <hyprutils/animation/AnimatedVariable.hpp>
 #include <hyprutils/utils/ScopeGuard.hpp>
@@ -138,6 +137,7 @@
 #include <hyprland/src/helpers/time/Time.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <mutex>
 #include <vector>
 #include <memory>
@@ -150,6 +150,7 @@
 //#include <hyprland/protocols/kde-server-decoration.hpp>
 //#include <hyprland/protocols/wlr-layer-shell-unstable-v1.hpp>
 
+#include <hyprland/src/desktop/state/FadingOutState.hpp>
 #include <hyprland/src/render/scene/SceneSelection.hpp>
 #include <hyprland/src/render/scene/MonitorScene.hpp>
 #include <hyprland/src/render/SceneResources.hpp>
@@ -4329,24 +4330,143 @@ static void hook_rawWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW pWindow
 static Render::IHyprRenderer* interleavedBlurRenderer = nullptr;
 static bool interleavedAboveFloating = false;
 
+// Window fadeouts keep the z-index the window had when it started closing. The
+// regular renderer only groups them by plane, which paints every closing window
+// above all live windows. Schedule them against the window list so a closing
+// window stays between the same neighbours it had while it was alive. The index
+// is a snapshot from close time, so this is best-effort if the stack also
+// changes while the fadeout is playing.
+enum eWindowFadeoutBand : uint8_t {
+    WINDOW_FADEOUT_BAND_REGULAR,
+    WINDOW_FADEOUT_BAND_PINNED,
+    WINDOW_FADEOUT_BAND_OVER_FULLSCREEN,
+};
+
+static bool windowFadeoutBelongsToBand(const SP<Desktop::IFadeout>& fadeout, Render::eSceneMode mode, PHLMONITOR monitor, PHLWORKSPACE workspace, Render::CRenderContext& ctx,
+                                       eWindowFadeoutBand band) {
+    if (!fadeout || fadeout->monitor() != monitor)
+        return false;
+
+    const auto SOURCE = fadeout->source();
+    if (SOURCE.type != Desktop::eFadeoutSource::WINDOW || !ctx.shouldRenderContent(SOURCE.noScreenShare))
+        return false;
+
+    const auto PLANE = Render::sceneFadeoutPlane(mode, fadeout->plane(), SOURCE.pinned);
+    switch (band) {
+        case WINDOW_FADEOUT_BAND_REGULAR:
+            if (SOURCE.pinned || (PLANE != Desktop::FADEOUT_PLANE_WINDOW_TILED && PLANE != Desktop::FADEOUT_PLANE_WINDOW_FLOATING))
+                return false;
+            break;
+        case WINDOW_FADEOUT_BAND_PINNED:
+            if (!SOURCE.pinned || (PLANE != Desktop::FADEOUT_PLANE_WINDOW_FLOATING && PLANE != Desktop::FADEOUT_PLANE_WINDOW_PINNED))
+                return false;
+            break;
+        case WINDOW_FADEOUT_BAND_OVER_FULLSCREEN:
+            if (PLANE != Desktop::FADEOUT_PLANE_WINDOW_OVER_FULLSCREEN)
+                return false;
+            break;
+    }
+
+    if (mode == Render::eSceneMode::MONITOR)
+        return !fadeout->workspace() || fadeout->workspace() == workspace;
+
+    return Render::sceneSelectsFadeout(mode, SOURCE.type, SOURCE.workspace && SOURCE.workspace == workspace, SOURCE.pinned);
+}
+
+static std::vector<SP<Desktop::IFadeout>> collectWindowFadeouts(Render::eSceneMode mode, PHLMONITOR monitor, PHLWORKSPACE workspace, Render::CRenderContext& ctx,
+                                                                eWindowFadeoutBand band) {
+    std::vector<SP<Desktop::IFadeout>> result;
+
+    for (auto const& fadeout : Desktop::fadingOutState()->fadeouts()) {
+        if (windowFadeoutBelongsToBand(fadeout, mode, monitor, workspace, ctx, band))
+            result.emplace_back(fadeout);
+    }
+
+    std::ranges::sort(result, {}, [](const auto& fadeout) { return fadeout->zIndex(); });
+    return result;
+}
+
+// Mirrors IHyprRenderer::renderFadeouts for one fadeout, so its pass elements
+// can be emitted at a specific point in the window stack.
+static void renderWindowFadeout(Render::CRenderContext& ctx, PHLMONITOR monitor, Render::eSceneMode mode, const SP<Desktop::IFadeout>& fadeout) {
+    if (!monitor || !fadeout)
+        return;
+
+    const auto FB = fadeout->framebuffer(mode);
+    if (!FB || !FB->getTexture())
+        return;
+
+    const auto EFFECTS = fadeout->effects();
+
+    if (EFFECTS.dimAroundAlpha > 0.F) {
+        CRectPassElement::SRectData data;
+        data.box   = {0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y};
+        data.color = CHyprColor(0, 0, 0, EFFECTS.dimAroundAlpha);
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(data));
+    }
+
+    if (EFFECTS.preBlur) {
+        CRectPassElement::SRectData data;
+        data.box           = EFFECTS.preBlur->box;
+        data.color         = CHyprColor(0, 0, 0, 0);
+        data.blur          = true;
+        data.blurA         = EFFECTS.preBlur->alpha;
+        data.round         = EFFECTS.preBlur->round;
+        data.roundingPower = EFFECTS.preBlur->roundingPower;
+        data.xray          = EFFECTS.preBlur->xray;
+        Render::IHyprRenderer::addPassElement(ctx, makeUnique<CRectPassElement>(data));
+    }
+
+    CRegion                      fakeDamage{0, 0, monitor->m_transformedSize.x, monitor->m_transformedSize.y};
+
+    CTexPassElement::SRenderData data;
+    data.tex                   = FB->getTexture();
+    data.box                   = fadeout->renderBox();
+    data.a                     = fadeout->alpha();
+    data.damage                = fakeDamage;
+    data.blur                  = EFFECTS.textureBlur.enabled;
+    data.blurA                 = EFFECTS.textureBlur.alpha;
+    data.forceBlurBlend        = EFFECTS.textureBlur.forceBlend;
+    data.blurShapeInvalid      = true;
+    data.ignoreAlpha           = EFFECTS.textureBlur.ignoreAlpha;
+    data.blockBlurOptimization = EFFECTS.textureBlur.blockBlurOptimization;
+
+    Render::IHyprRenderer::addPassElement(ctx, makeUnique<CTexPassElement>(std::move(data)));
+}
+
+static void flushWindowFadeouts(const std::vector<SP<Desktop::IFadeout>>& fadeouts, size_t& next, int maxZ, Render::CRenderContext& ctx, PHLMONITOR monitor,
+                                Render::eSceneMode mode) {
+    while (next < fadeouts.size() && fadeouts[next]->zIndex() <= maxZ)
+        renderWindowFadeout(ctx, monitor, mode, fadeouts[next++]);
+}
+
 static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace,
                                                   const Time::steady_tp& time, Render::eSceneMode mode) {
     using namespace Desktop::View;
     using namespace Render;
-    const bool SPECIAL            = pWorkspace->type() == Workspace::eWorkspaceType::SPECIAL;
-    const auto PREVIOUS_RENDERER  = interleavedBlurRenderer;
-    const bool WAS_ABOVE_FLOATING = interleavedAboveFloating;
+    const bool                    SPECIAL            = pWorkspace->type() == Workspace::eWorkspaceType::SPECIAL;
+    const auto                    PREVIOUS_RENDERER  = interleavedBlurRenderer;
+    const bool                    WAS_ABOVE_FLOATING = interleavedAboveFloating;
     Hyprutils::Utils::CScopeGuard restoreBlurState([PREVIOUS_RENDERER, WAS_ABOVE_FLOATING] {
-        interleavedBlurRenderer = PREVIOUS_RENDERER;
+        interleavedBlurRenderer  = PREVIOUS_RENDERER;
         interleavedAboveFloating = WAS_ABOVE_FLOATING;
     });
-    interleavedBlurRenderer = thisptr;
+    interleavedBlurRenderer  = thisptr;
     interleavedAboveFloating = false;
 
     Event::bus()->m_events.render.stage.emit({RENDER_PRE_WINDOWS, pMonitor, ctx});
 
+    auto   regularFadeouts = collectWindowFadeouts(mode, pMonitor, pWorkspace, ctx, WINDOW_FADEOUT_BAND_REGULAR);
+    auto   pinnedFadeouts = mode == eSceneMode::MONITOR ? collectWindowFadeouts(mode, pMonitor, pWorkspace, ctx, WINDOW_FADEOUT_BAND_PINNED) : std::vector<SP<Desktop::IFadeout>>{};
+    auto   overFullscreenFadeouts = collectWindowFadeouts(mode, pMonitor, pWorkspace, ctx, WINDOW_FADEOUT_BAND_OVER_FULLSCREEN);
+    size_t regularFadeoutIndex    = 0;
+    size_t overFullscreenIndex    = 0;
+
     // Windows fading beneath fullscreen retain their regular stacking order.
+    int windowIndex = 0;
     for (auto const& w : Desktop::windowState()->windows()) {
+        flushWindowFadeouts(regularFadeouts, regularFadeoutIndex, windowIndex++, ctx, pMonitor, mode);
+
         if (!thisptr->shouldRenderWindowInScene(w, pMonitor, pWorkspace, mode))
             continue;
 
@@ -4377,11 +4497,15 @@ static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr
         thisptr->renderWindow(ctx, w, pMonitor, w->presentation().renderPresentation(mode), time, true, RENDER_PASS_ALL);
         interleavedAboveFloating = interleavedAboveFloating || mw_is_floating(w);
     }
-    thisptr->renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_TILED, pWorkspace, mode);
-    thisptr->renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_FLOATING, pWorkspace, mode);
+    flushWindowFadeouts(regularFadeouts, regularFadeoutIndex, std::numeric_limits<int>::max(), ctx, pMonitor, mode);
+    for (auto const& fadeout : pinnedFadeouts)
+        renderWindowFadeout(ctx, pMonitor, mode, fadeout);
 
     // Fullscreen windows and eligible floating windows share the regular stacking order.
+    windowIndex = 0;
     for (auto const& w : Desktop::windowState()->windows()) {
+        flushWindowFadeouts(overFullscreenFadeouts, overFullscreenIndex, windowIndex++, ctx, pMonitor, mode);
+
         if (mode != eSceneMode::MONITOR && w->isFloating() && mw_pinned(w))
             continue;
 
@@ -4428,27 +4552,34 @@ static void hook_renderWorkspaceWindowsFullscreen(Render::IHyprRenderer* thisptr
         thisptr->renderWindow(ctx, w, pMonitor, w->presentation().renderPresentation(mode), time, true, RENDER_PASS_ALL);
         interleavedAboveFloating = interleavedAboveFloating || mw_is_floating(w);
     }
-    thisptr->renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_OVER_FULLSCREEN, pWorkspace, mode);
+    flushWindowFadeouts(overFullscreenFadeouts, overFullscreenIndex, std::numeric_limits<int>::max(), ctx, pMonitor, mode);
 }
 
-static void hook_renderWorkspaceWindows(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace,
-                                        const Time::steady_tp& time, Render::eSceneMode mode) {
+static void hook_renderWorkspaceWindows(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, const Time::steady_tp& time,
+                                        Render::eSceneMode mode) {
     using namespace Desktop::View;
     using namespace Render;
-    const bool SPECIAL            = pWorkspace->type() == Workspace::eWorkspaceType::SPECIAL;
-    const auto PREVIOUS_RENDERER  = interleavedBlurRenderer;
-    const bool WAS_ABOVE_FLOATING = interleavedAboveFloating;
+    const bool                    SPECIAL            = pWorkspace->type() == Workspace::eWorkspaceType::SPECIAL;
+    const auto                    PREVIOUS_RENDERER  = interleavedBlurRenderer;
+    const bool                    WAS_ABOVE_FLOATING = interleavedAboveFloating;
     Hyprutils::Utils::CScopeGuard restoreBlurState([PREVIOUS_RENDERER, WAS_ABOVE_FLOATING] {
-        interleavedBlurRenderer = PREVIOUS_RENDERER;
+        interleavedBlurRenderer  = PREVIOUS_RENDERER;
         interleavedAboveFloating = WAS_ABOVE_FLOATING;
     });
-    interleavedBlurRenderer = thisptr;
+    interleavedBlurRenderer  = thisptr;
     interleavedAboveFloating = false;
 
     Event::bus()->m_events.render.stage.emit({RENDER_PRE_WINDOWS, pMonitor, ctx});
 
+    auto   regularFadeouts = collectWindowFadeouts(mode, pMonitor, pWorkspace, ctx, WINDOW_FADEOUT_BAND_REGULAR);
+    auto   pinnedFadeouts = mode == eSceneMode::MONITOR ? collectWindowFadeouts(mode, pMonitor, pWorkspace, ctx, WINDOW_FADEOUT_BAND_PINNED) : std::vector<SP<Desktop::IFadeout>>{};
+    size_t regularFadeoutIndex = 0;
+
     // The window list is ordered bottom to top, regardless of layout mode.
+    int windowIndex = 0;
     for (auto const& w : Desktop::windowState()->windows()) {
+        flushWindowFadeouts(regularFadeouts, regularFadeoutIndex, windowIndex++, ctx, pMonitor, mode);
+
         if (w->isHidden() || !mw_is_mapped(w) || mw_pinned(w))
             continue;
 
@@ -4468,15 +4599,15 @@ static void hook_renderWorkspaceWindows(Render::IHyprRenderer* thisptr, Render::
         thisptr->renderWindow(ctx, w, pMonitor, w->presentation().renderPresentation(mode), time, true, RENDER_PASS_ALL);
         interleavedAboveFloating = interleavedAboveFloating || mw_is_floating(w);
     }
-    thisptr->renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_TILED, pWorkspace, mode);
-    thisptr->renderFadeouts(ctx, pMonitor, Desktop::FADEOUT_PLANE_WINDOW_FLOATING, pWorkspace, mode);
+    flushWindowFadeouts(regularFadeouts, regularFadeoutIndex, std::numeric_limits<int>::max(), ctx, pMonitor, mode);
+    for (auto const& fadeout : pinnedFadeouts)
+        renderWindowFadeout(ctx, pMonitor, mode, fadeout);
 }
 
 static CFunctionHook* g_pRenderWorkspaceWindowsHook = nullptr;
-static CFunctionHook* g_pInterleavedBlurHook = nullptr;
-static CFunctionHook* g_pWindowFadeoutCreateHook = nullptr;
+static CFunctionHook* g_pInterleavedBlurHook        = nullptr;
 
-static bool hook_shouldUseNewBlurOptimizations(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLLS pLayer, PHLWINDOW pWindow) {
+static bool           hook_shouldUseNewBlurOptimizations(Render::IHyprRenderer* thisptr, Render::CRenderContext& ctx, PHLLS pLayer, PHLWINDOW pWindow) {
     static auto PBLURNEWOPTIMIZE = CConfigValue<Config::INTEGER>("decoration:blur:new_optimizations");
     static auto PBLURXRAY        = CConfigValue<Config::INTEGER>("decoration:blur:xray");
 
@@ -4501,14 +4632,6 @@ static bool hook_shouldUseNewBlurOptimizations(Render::IHyprRenderer* thisptr, R
     return false;
 }
 
-static SP<Desktop::CWindowFadeout> hook_windowFadeoutCreate(PHLWINDOW window, SP<Render::IFramebuffer> snapshot, float sourceAlpha, SP<Render::IFramebuffer> workspaceSnapshot) {
-    using Original = SP<Desktop::CWindowFadeout> (*)(PHLWINDOW, SP<Render::IFramebuffer>, float, SP<Render::IFramebuffer>);
-    auto fadeout = rc<Original>(g_pWindowFadeoutCreateHook->m_original)(window, snapshot, sourceAlpha, workspaceSnapshot);
-    if (fadeout && fadeout->m_plane == Desktop::FADEOUT_PLANE_WINDOW_TILED)
-        fadeout->m_plane = Desktop::FADEOUT_PLANE_WINDOW_FLOATING;
-    return fadeout;
-}
-
 static CFunctionHook* create_interleaved_stacking_hook(const std::string& name, const std::string& signature, const void* replacement) {
     const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, name);
     for (const auto& method : METHODS) {
@@ -4531,8 +4654,6 @@ static void hook_interleaved_rendering() {
         "renderWorkspaceWindows", ", Render::eSceneMode)", rc<const void*>(&hook_renderWorkspaceWindows));
     g_pInterleavedBlurHook = create_interleaved_stacking_hook(
         "shouldUseNewBlurOptimizations", "Render::IHyprRenderer::shouldUseNewBlurOptimizations(Render::CRenderContext&, ", rc<const void*>(&hook_shouldUseNewBlurOptimizations));
-    g_pWindowFadeoutCreateHook = create_interleaved_stacking_hook(
-        "create", "Desktop::CWindowFadeout::create(", rc<const void*>(&hook_windowFadeoutCreate));
 }
 
 static void hook_fullscreen_focus() {
