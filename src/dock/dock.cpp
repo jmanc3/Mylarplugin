@@ -2864,7 +2864,13 @@ static void fill_root(Container *root) {
             dock->volume->root->wanted_bounds.h = FILL_SPACE;
             auto scroll = make_newscrollpane_as_child(dock->volume->root, ScrollPaneSettings(dpi), [](Container *root) {
                 auto dock = ((Dock *) root->user_data);
-                return DrawContext({dock->volume->raw_window->cr, dock->volume->raw_window->dpi, [dock]() {
+                if (!dock || !dock->volume || !dock->volume->raw_window)
+                    return DrawContext{};
+
+                auto window = dock->volume->raw_window;
+                return DrawContext({window->cr, window->dpi, [dock]() {
+                    if (!dock || !dock->volume || !dock->volume->raw_window)
+                        return;
                     windowing::redraw(dock->volume->raw_window);
                 }});
             });
