@@ -60,3 +60,21 @@ To auto start it on login with Hyprland, add the following to `$HOME/.config/hyp
 ```lua
 hl.exec_cmd("sleep 3s; hyprctl plugin load /full/qualified/path/to/mylar-desktop.so")
 ```
+
+## Hyprpm install method
+
+Install with `hyprpm`:
+
+```bash
+hyprpm add https://github.com/jmanc3/Mylarplugin
+hyprpm enable mylar-desktop
+```
+
+To load the plugin automatically when Hyprland starts, add this to ~/.config/hypr/hyprland.lua:
+
+```lua
+hl.on("hyprland.start", function()
+    hl.exec_cmd("hyprpm reload -n")
+end)
+```
+
