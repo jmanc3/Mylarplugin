@@ -39,16 +39,16 @@ Mylarplugin implements Mylardesktop on Hyprland
 
 First install build dependencies
 
-```
+```bash
 sudo pacman -S git gcc cmake make pkg-config pango cairo librsvg libxkbcommon dbus
 ```
 
 Download latest release.
 
-```
+```bash
 cd Mylarplugin
 make release
-sudo make install # for resources
+sudo make install
 ```
 
 That will generate `mylar-desktop.so` inside of the `out` folder.
