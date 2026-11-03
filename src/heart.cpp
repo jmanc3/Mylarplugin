@@ -2330,6 +2330,7 @@ void heart::end() {
     
     audio_stop();
     audio_join();
+    audio_stop_blip();
     if (latest_file_watch != -1)
         remove_watch(latest_file_watch);
     desktop_icons::stop();

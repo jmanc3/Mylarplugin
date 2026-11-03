@@ -1,3 +1,24 @@
+static std::unordered_map<Container *, int> volume_drag_blip_timers;
+
+static void schedule_volume_drag_blip(Dock *dock, Container *slider) {
+    volume_drag_blip_timers[slider] = windowing::timer(dock->app, 380, [dock, slider](void *) {
+        volume_drag_blip_timers[slider] = -1;
+        if (!slider->state.mouse_dragging)
+            return;
+        audio_play_blip();
+        schedule_volume_drag_blip(dock, slider);
+    }, nullptr);
+}
+
+static void stop_volume_drag_blip(Dock *dock, Container *slider) {
+    auto timer = volume_drag_blip_timers.find(slider);
+    if (timer == volume_drag_blip_timers.end())
+        return;
+    if (timer->second != -1)
+        windowing::timer_stop(dock->app, timer->second);
+    volume_drag_blip_timers.erase(timer);
+}
+
 static void set_volume(const std::vector<std::string> &uuids, float scalar, bool is_muted) {
     if (scalar < 0)
         scalar = 0;
@@ -65,13 +86,19 @@ static Container *fill_out_volume_slider(Container *c) {
         
     };
 
+    c->when_drag_end_is_click = false;
+
     c->when_clicked = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         set_volume(audio_data->uuids, scalar, audio_data->muted);
+        audio_play_blip();
     };
     c->when_drag_start = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        stop_volume_drag_blip(dock, c);
+        schedule_volume_drag_blip(dock, c);
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
@@ -84,10 +111,13 @@ static Container *fill_out_volume_slider(Container *c) {
         set_volume(audio_data->uuids, scalar, audio_data->muted);
     };
     c->when_drag_end = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        stop_volume_drag_blip(dock, c);
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         set_volume(audio_data->uuids, scalar, audio_data->muted);
+        audio_play_blip();
     };
     
     return nullptr;
@@ -282,6 +312,8 @@ static std::string make_unmerged_title(const AudioClient &client) {
 static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &clients) {
     std::unordered_map<int, std::vector<AudioClient *>> clients_by_pid;
     for (auto &client : clients) {
+        if (client.title.find("blip.wav") != std::string::npos)
+            continue;
         if (client.pid > 0) {
             clients_by_pid[client.pid].push_back(&client);
         }
@@ -292,6 +324,8 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
     std::unordered_set<std::string> emitted_uuids;
 
     for (auto &client : clients) {
+        if (client.title.find("blip.wav") != std::string::npos)
+            continue;
         if (client.pid > 0) {
             auto &group = clients_by_pid[client.pid];
             if (group.size() > 1) {

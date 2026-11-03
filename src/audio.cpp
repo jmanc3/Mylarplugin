@@ -18,12 +18,17 @@
 #include <pulse/mainloop-api.h>
 #include <alsa/asoundlib.h>
 #include <iostream>
+#include <algorithm>
 #include <cstring>
 #include <cmath>
 #include <climits>
 #include <cerrno>
 #include <cstdlib>
 #include <condition_variable>
+#include <filesystem>
+#include <sys/wait.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include <pipewire/pipewire.h>
 #include <pipewire/extensions/metadata.h>
@@ -73,6 +78,55 @@ static std::string default_sink_name;
 static std::thread::id audio_thread_id;
 
 static void (*audio_change_callback)() = nullptr;
+static std::mutex blip_mutex;
+static std::condition_variable blip_condition;
+static std::string pending_blip_path;
+static bool blip_requested = false;
+static bool blip_worker_started = false;
+static bool blip_stop_requested = false;
+static std::thread blip_worker_thread;
+
+static void blip_playback_worker() {
+    std::vector<pid_t> player_pids;
+    std::unique_lock<std::mutex> lock(blip_mutex);
+
+    while (true) {
+        blip_condition.wait(lock, []() { return blip_requested || blip_stop_requested; });
+        if (blip_stop_requested)
+            break;
+        auto path = pending_blip_path;
+        blip_requested = false;
+
+        player_pids.erase(std::remove_if(player_pids.begin(), player_pids.end(), [](pid_t pid) {
+            int status;
+            auto result = waitpid(pid, &status, WNOHANG);
+            return result == pid || (result < 0 && errno != EINTR);
+        }), player_pids.end());
+
+        const char *player = nullptr;
+        switch (backend) {
+            case AudioBackend::PULSEAUDIO: player = "paplay"; break;
+            case AudioBackend::PIPEWIRE: player = "pw-play"; break;
+            case AudioBackend::ALSA: player = "aplay"; break;
+            default: continue;
+        }
+
+        auto player_pid = fork();
+        if (player_pid == 0) {
+            execlp(player, player, path.c_str(), static_cast<char *>(nullptr));
+            _exit(127);
+        }
+        if (player_pid > 0)
+            player_pids.push_back(player_pid);
+    }
+
+    for (auto player_pid : player_pids)
+        kill(player_pid, SIGTERM);
+    lock.unlock();
+    for (auto player_pid : player_pids) {
+        while (waitpid(player_pid, nullptr, 0) < 0 && errno == EINTR) {}
+    }
+}
 
 std::vector<AudioClient *> audio_clients;
 
@@ -1221,6 +1275,33 @@ void audio(const std::function<void()> &callback) {
         free_to_continue = true;
         free_to_continue_condition.notify_all();
     }
+}
+
+void audio_play_blip() {
+    const std::string path = "/usr/share/mylardesktop/audio/blip.wav";
+    if (!std::filesystem::is_regular_file(path))
+        return;
+
+    std::lock_guard<std::mutex> lock(blip_mutex);
+    if (blip_stop_requested)
+        return;
+    pending_blip_path = path;
+    blip_requested = true;
+    if (!blip_worker_started) {
+        blip_worker_started = true;
+        blip_worker_thread = std::thread(blip_playback_worker);
+    }
+    blip_condition.notify_one();
+}
+
+void audio_stop_blip() {
+    {
+        std::lock_guard<std::mutex> lock(blip_mutex);
+        blip_stop_requested = true;
+        blip_condition.notify_one();
+    }
+    if (blip_worker_thread.joinable())
+        blip_worker_thread.join();
 }
 
 void audio_read(const std::function<void()> &callback) {

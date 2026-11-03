@@ -3742,6 +3742,13 @@ hl.monitor({
     position = "auto",
     scale    = "auto",
 })
+
+hl.config({
+   render = {
+      cm_auto_hdr = 0
+   },
+})
+
 )END";
 #else
     base += R"END(
@@ -3756,6 +3763,13 @@ hl.monitor({
     position = "auto",
     scale    = "auto",
 })
+
+hl.config({
+   render = {
+      cm_auto_hdr = 0
+   },
+})
+
 )END";
 #endif
 

@@ -63,6 +63,10 @@ void audio_join();
 
 void audio(const std::function<void()> &callback);
 
+void audio_play_blip();
+
+void audio_stop_blip();
+
 void audio_read(const std::function<void()> &callback);
 
 void meter_watching_start();
