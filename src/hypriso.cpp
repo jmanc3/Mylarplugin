@@ -6776,51 +6776,79 @@ TextureInfo generate_dropshadow_texture(int id, float size, float darken) {
     hyprtextures.push_back(t);
     return t->info;
 }
-
 static SP<Render::ITexture> draw_text(std::string text, int size = 10, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}, int alignment = 0) {
-    // The compositor may have initialized Pango's default map before Mylar
-    // registers its app fonts. Use a map created after font loading instead.
-    PangoFontMap*         fontMap    = pango_cairo_font_map_new();
-    PangoContext*         context    = pango_font_map_create_context(fontMap);
-    PangoLayout*          layout = pango_layout_new(context);
-    PangoFontDescription* pangoFD    = pango_font_description_new();
-    g_object_unref(context);
+    struct TextRenderer {
+        PangoFontMap* fontMap = nullptr;
+        PangoContext* context = nullptr;
+        PangoLayout* layout = nullptr;
+        PangoFontDescription* fontDesc = nullptr;
 
-    pango_font_description_set_family_static(pangoFD, font.c_str());
-    pango_font_description_set_absolute_size(pangoFD, size * PANGO_SCALE);
-    pango_font_description_set_style(pangoFD, PANGO_STYLE_NORMAL);
-    pango_font_description_set_weight(pangoFD, sc<PangoWeight>(PANGO_WEIGHT_NORMAL));
-    pango_layout_set_font_description(layout, pangoFD);
+        std::string currentFont;
+        int currentSize = -1;
+
+        TextRenderer() {
+            fontMap = pango_cairo_font_map_new();
+            context = pango_font_map_create_context(fontMap);
+            layout = pango_layout_new(context);
+            fontDesc = pango_font_description_new();
+        }
+
+        ~TextRenderer() {
+            if (layout) g_object_unref(layout);
+            if (fontDesc) pango_font_description_free(fontDesc);
+            if (context) g_object_unref(context);
+            if (fontMap) g_object_unref(fontMap);
+        }
+
+        void setFont(const std::string& font, int size) {
+            if (currentFont == font && currentSize == size)
+                return;
+
+            currentFont = font;
+            currentSize = size;
+
+            pango_font_description_set_family(fontDesc, font.c_str());
+            pango_font_description_set_absolute_size(fontDesc, std::max(1, size) * PANGO_SCALE);
+            pango_font_description_set_style(fontDesc, PANGO_STYLE_NORMAL);
+            pango_font_description_set_weight(fontDesc, PANGO_WEIGHT_NORMAL);
+
+            pango_layout_set_font_description(layout, fontDesc);
+        }
+    };
+
+    static TextRenderer renderer;
+    auto* layout = renderer.layout;
+
+    renderer.setFont(font, size);
 
     pango_layout_set_text(layout, text.data(), text.size());
+
     if (wrap == -1) {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
+        pango_layout_set_wrap(layout, PANGO_WRAP_NONE);
         pango_layout_set_width(layout, -1);
         pango_layout_set_height(layout, -1);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
     } else {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_wrap(layout, PANGO_WRAP_WORD_CHAR);
         pango_layout_set_width(layout, wrap);
         pango_layout_set_height(layout, h);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_END);
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
     }
-    pango_layout_set_alignment(layout, (PangoAlignment) alignment);
-    
+
+    pango_layout_set_alignment(layout, (PangoAlignment)alignment);
+
     PangoRectangle rectInk = {}, rectLog = {};
     pango_layout_get_pixel_extents(layout, &rectInk, &rectLog);
-    int  textW = std::max(rectLog.width, rectInk.x + rectInk.width);
-    int  textH = std::max(rectLog.height, rectInk.y + rectInk.height);
+
+    int textW = std::max(1, std::max(rectLog.width, rectInk.x + rectInk.width) - std::min(0, rectInk.x));
+    int textH = std::max(1, std::max(rectLog.height, rectInk.y + rectInk.height) - std::min(0, rectInk.y));
 
     auto CAIROSURFACE = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, textW, textH);
-    auto CAIRO        = cairo_create(CAIROSURFACE);
+    auto CAIRO = cairo_create(CAIROSURFACE);
 
     cairo_set_source_rgba(CAIRO, color.r, color.g, color.b, color.a);
-    cairo_move_to(CAIRO, 0, 0);
+    cairo_move_to(CAIRO, -std::min(0, rectInk.x), -std::min(0, rectInk.y));
     pango_cairo_show_layout(CAIRO, layout);
-
-    pango_font_description_free(pangoFD);
-    g_object_unref(layout);
-    g_object_unref(fontMap);
 
     cairo_surface_flush(CAIROSURFACE);
     auto tex = g_pHyprRenderer->createTexture(CAIROSURFACE);
