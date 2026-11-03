@@ -2,7 +2,7 @@
 name = "mylar-desktop"
 authors = "jmanc3"
 commit_pins = [
-    ["efb50993780079460b0cbed1363e2166a2de1d9f", "fc424831a4d37f4efffd2f5ce2d47880e84b327f"], # v0.56.2
+    ["efb50993780079460b0cbed1363e2166a2de1d9f", "9ed34045d9fd7e2b976f0f27a489944816c9c750"], # hyprland, mylarplugin
 ]
 
 [mylar-desktop]
