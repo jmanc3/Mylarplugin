@@ -1,3 +1,39 @@
+#include "dock/dock_applications.h"
+
+#include "dock/dock_internal.h"
+
+#include "settings.h"
+#include "text_editor.h"
+
+#include <dirent.h>
+#include <sstream>
+#include <sys/stat.h>
+#include <unistd.h>
+
+struct Script : UserData {
+    std::string name;
+    std::vector<std::string> keywords;
+    std::vector<std::string> categories;
+    std::string generic_name;
+    std::string lowercase_name;
+    int priority = -1;
+    int historical_ranking = -1;
+    int match_level = 100;
+    std::string full_path;
+    std::shared_ptr<cairo_surface_t> icon_surface;
+    int icon_size = 0;
+
+    std::string path;
+
+    bool path_is_full_command = false;
+
+    bool selected = false;
+};
+
+static std::vector<Script> scripts;
+static std::mutex scripts_mutex;
+static std::shared_future<std::vector<Script>> scripts_refresh;
+
 static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void(std::string)> on_change) {
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     STextEditorOptions options;
@@ -44,7 +80,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     return pad;
 }
 
-void scripts_load(std::vector<Script> &temp_scripts) {
+static void scripts_load(std::vector<Script> &temp_scripts) {
     temp_scripts.clear();
 
     // go through every directory in $PATH environment variable
@@ -157,7 +193,7 @@ static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
     }, nullptr);
 }
 
-static void fill_applications_container(Container *root) {
+void fill_applications_container(Container *root) {
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->applications->raw_window->cr;
@@ -537,4 +573,10 @@ static void fill_applications_container(Container *root) {
             };
         }
     }
+}
+
+void preload_scripts() {
+    std::lock_guard<std::mutex> lock(scripts_mutex);
+    if (!scripts_refresh.valid())
+        scripts_refresh = load_scripts_async();
 }

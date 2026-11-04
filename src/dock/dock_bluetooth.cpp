@@ -1,3 +1,9 @@
+#include "dock/dock_bluetooth.h"
+
+#include "dock/dock_internal.h"
+
+#include "simple_dbus.h"
+
 // D-Bus state belongs to the compositor main thread. The dock threads only see
 // value snapshots captured by their controls and post actions back to that thread.
 struct BluetoothMenuView {
@@ -24,7 +30,7 @@ struct BluetoothMenuView {
 // The compositor publishes values only; the Wayland dock thread owns all UI work.
 static std::atomic<std::shared_ptr<const BluetoothMenuView>> bluetooth_latest_view;
 static unsigned long bluetooth_view_revision = 0;
-static std::atomic<bool> bluetooth_available = false;
+std::atomic<bool> bluetooth_available = false;
 static int bluetooth_menu_count = 0;
 static bool bluetooth_showing_paired = true;
 static bool bluetooth_scan_stopping = false;
@@ -785,7 +791,7 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
     }
 }
 
-static void bluetooth_watch_dock(Dock *dock) {
+void bluetooth_watch_dock(Dock *dock) {
     windowing::timer(dock->app, dock->bluetooth ? 16 : 100, [](void *data) {
         auto dock = static_cast<Dock *>(data);
         if (finished) return;
@@ -825,7 +831,7 @@ static void bluetooth_watch_dock(Dock *dock) {
     }, dock);
 }
 
-static void fill_bluetooth_container(Dock *dock) {
+void fill_bluetooth_container(Dock *dock) {
     auto window = dock->bluetooth;
     dock->bluetooth_prompt.clear();
     dock->bluetooth_input.clear();
@@ -888,4 +894,17 @@ static void fill_bluetooth_container(Dock *dock) {
         }
         bluetooth_refresh();
     });
+}
+
+void bluetooth_start() {
+    on_any_bluetooth_property_changed = bluetooth_refresh;
+    on_bluetooth_request = bluetooth_receive_request;
+    bluetooth_available = bluetooth_running;
+}
+
+void bluetooth_stop() {
+    bluetooth_menu_count = 0;
+    bluetooth_clear_request(true);
+    on_bluetooth_request = nullptr;
+    on_any_bluetooth_property_changed = nullptr;
 }

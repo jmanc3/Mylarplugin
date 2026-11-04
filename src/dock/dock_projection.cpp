@@ -1,4 +1,8 @@
-static void fill_projection_container(Dock *dock) {
+#include "dock/dock_projection.h"
+
+#include "dock/dock_internal.h"
+
+void fill_projection_container(Dock *dock) {
     dock->projection->root->user_data = dock;
     dock->projection->root->wanted_bounds.w = FILL_SPACE;
     dock->projection->root->wanted_bounds.h = FILL_SPACE;
@@ -48,25 +52,25 @@ static void fill_projection_container(Dock *dock) {
 
             float xoff = c->real_bounds.x + 8 * dpi;
 
-            draw_text(cr, 
-                xoff, 
-                c->real_bounds.y + c->real_bounds.h * .5 - bounds_left.h * .5, 
+            draw_text(cr,
+                xoff,
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds_left.h * .5,
                 left, size * dpi, true, set->font, -1, -1, left_color);
-            
+
             xoff += bounds_left.w;
-            
-            draw_text(cr, 
-                xoff, 
-                c->real_bounds.y + c->real_bounds.h * .5 - bounds_right.h * .5, 
+
+            draw_text(cr,
+                xoff,
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds_right.h * .5,
                 right, size * dpi, true, set->font, -1, -1, right_color);
 
             xoff += bounds_right.w;
 
-            draw_text(cr, 
-                xoff + 8 * dpi, 
-                c->real_bounds.y + c->real_bounds.h * .5 - bounds_text.h * .5, 
+            draw_text(cr,
+                xoff + 8 * dpi,
+                c->real_bounds.y + c->real_bounds.h * .5 - bounds_text.h * .5,
                 text, size * dpi, true, set->font, -1, -1, color);
-            
+
             if (c->state.mouse_hovering) {
                 if (c->state.mouse_pressing) {
                     set_argb(cr, RGBA(0, 0, 0, .4));
@@ -85,7 +89,7 @@ static void fill_projection_container(Dock *dock) {
         static float size = 12;
         static float rowh = 20;
         static RGBA color = RGBA(0, 0, 0, 1);
-        for (int i = 0; i < options.size(); i++) {
+        for (std::size_t i = 0; i < options.size(); i++) {
             auto option = options[i];
             auto option_label = label->child(FILL_SPACE, FILL_SPACE);
             option_label->parent_bounds_limit_input_bounds = false;
@@ -113,12 +117,12 @@ static void fill_projection_container(Dock *dock) {
 
 
                 auto b = draw_text(cr, 0, 0, option, size * dpi, false, set->font, -1, -1, color);
-                draw_text(cr, 
-                    center_x(c, b.w), center_y(c, b.h), 
+                draw_text(cr,
+                    center_x(c, b.w), center_y(c, b.h),
                     option, size * dpi, true, set->font, -1, -1, color);
             };
         }
-        
+
         label->pre_layout = [get_window, options](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
             auto mylar = get_window(root);
@@ -127,14 +131,14 @@ static void fill_projection_container(Dock *dock) {
             int lines = 1;
             float xoff = c->real_bounds.x;
             float layout_yoff = c->real_bounds.y;
-            for (int i = 0; i < options.size(); i++) {
+            for (std::size_t i = 0; i < options.size(); i++) {
                 auto bounds_text = draw_text(cr, 0, 0, options[i], size * dpi, false, set->font, -1, -1, color);
                 if ((xoff + bounds_text.w) > (b.w + c->real_bounds.x)) {
                     xoff = c->real_bounds.x;
                     lines++;
-                    layout_yoff += rowh * dpi;  
+                    layout_yoff += rowh * dpi;
                 }
-                
+
                 auto option_label = c->children[i];
                 float visual_y = layout_yoff + (rowh * .5) * dpi - bounds_text.h * .5;
                 visual_y -= 0 * dpi;
@@ -149,7 +153,7 @@ static void fill_projection_container(Dock *dock) {
     };
 
     dock->app->update_monitor_information();
-    
+
     static std::vector<std::string> mons;
     mons.clear();
     //mons.push_back("All");
@@ -177,4 +181,3 @@ static void fill_projection_container(Dock *dock) {
         });
     }, [](Container *c) { return ((Dock *) c->user_data)->projection; });
 }
-

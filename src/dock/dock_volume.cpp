@@ -1,3 +1,11 @@
+#include "dock/dock_volume.h"
+
+#include "dock/dock_internal.h"
+
+float volume_level = 100;
+bool is_master_muted = false;
+long last_time_volume_adjusted = 0;
+
 static std::unordered_map<Container *, int> volume_drag_blip_timers;
 
 static void schedule_volume_drag_blip(Dock *dock, Container *slider) {
@@ -37,7 +45,6 @@ static void set_volume(const std::vector<std::string> &uuids, float scalar, bool
             }
         }
     });
-    
 }
 
 static void set_volume(std::string uuid, float scalar, bool is_muted) {
@@ -45,7 +52,7 @@ static void set_volume(std::string uuid, float scalar, bool is_muted) {
 }
 
 struct AudioData : UserData {
-    std::string title; 
+    std::string title;
     std::string icon;
     float level = 100;
     bool muted = false;
@@ -60,19 +67,45 @@ struct AudioData : UserData {
     cairo_surface_t *icon_surface = nullptr;
 };
 
-static void paint_debug_us(Container *root, Container *c) {
-    auto dock = (Dock *) root->user_data;
-    auto cr = dock->volume->raw_window->cr;
-    auto audio_data = (AudioData *) c->user_data;
-    auto b = c->real_bounds;
-    b.shrink(2);
-    set_rect(cr, b);
-    set_argb(cr, {1, 0, 1, 1});
-    cairo_fill(cr);
+struct VolumeRow {
+    std::string id;
+    std::string title;
+    std::string icon;
+    float level = 0;
+    bool muted = false;
+    int pid = -1;
+    bool merged = false;
+    int indent_level = 0;
+    std::vector<std::string> uuids;
+};
+
+static int audio_container = 3824729;
+static std::unordered_set<int> expanded_audio_pids;
+
+static constexpr float volume_row_h = 65.0f;
+
+int volume_popup_height_for_rows(size_t row_count) {
+    auto rows = std::max<size_t>(1, row_count);
+    return (int) std::round(volume_row_h * (float) rows);
 }
 
-static int audio_container = 3824729; 
-static std::unordered_set<int> expanded_audio_pids;
+std::vector<AudioClient> snapshot_audio_clients() {
+    std::vector<AudioClient> clients;
+    audio_read([&]() {
+        clients.reserve(audio_clients.size());
+        for (auto client : audio_clients) {
+            client->is_master = client->is_master_volume();
+            clients.push_back(*client);
+        }
+    });
+    return clients;
+}
+
+static void resize_volume_popup_for_rows(Dock *dock, size_t row_count) {
+    if (!dock || !dock->volume || !dock->volume->raw_window)
+        return;
+    windowing::set_popup_size(dock->volume->raw_window, volume_popup_w, volume_popup_height_for_rows(row_count));
+}
 
 static Container *fill_out_volume_slider(Container *c) {
     c->when_paint = [](Container *root, Container *c) {
@@ -81,9 +114,8 @@ static Container *fill_out_volume_slider(Container *c) {
         auto dpi = dock->volume->raw_window->dpi;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        
+
         paint_slider(root, c, cr, dpi, audio_data->level);
-        
     };
 
     c->when_drag_end_is_click = false;
@@ -119,7 +151,7 @@ static Container *fill_out_volume_slider(Container *c) {
         set_volume(audio_data->uuids, scalar, audio_data->muted);
         audio_play_blip();
     };
-    
+
     return nullptr;
 }
 
@@ -131,7 +163,7 @@ static Container *add_volume_option(Container *parent) {
 
     static float total_h = volume_row_h;
     static float top_h = 30;
-    
+
     line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds.h = total_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
@@ -162,7 +194,7 @@ static Container *add_volume_option(Container *parent) {
         resize_volume_popup_for_rows(dock, visible_row_count);
         dock::change_in_audio();
     };
-    label_icon->when_paint = [](Container *root, Container *c) { 
+    label_icon->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->volume->raw_window->cr;
         auto audio_c = first_above_of(c, audio_container);
@@ -172,7 +204,7 @@ static Container *add_volume_option(Container *parent) {
         if (std::abs(audio_data->old_dpi - dpi) > EPSILON) {
             audio_data->old_dpi = dpi;
             if (audio_data->icon_surface) {
-                cairo_surface_destroy(audio_data->icon_surface); 
+                cairo_surface_destroy(audio_data->icon_surface);
                 audio_data->icon_surface = nullptr;
             }
             audio_data->attempted_to_load_icon_once = false;
@@ -181,7 +213,7 @@ static Container *add_volume_option(Container *parent) {
             audio_data->attempted_to_load_icon_once = true;
             auto icon = audio_data->icon;
             auto full = one_shot_icon(24 * dpi, {icon, to_lower(icon), c3ic_fix_wm_class(icon), to_lower(icon)});
-            if (!full.empty()) 
+            if (!full.empty())
                 load_icon_full_path(&audio_data->icon_surface, full, 24 * dpi);
         }
 
@@ -189,13 +221,12 @@ static Container *add_volume_option(Container *parent) {
         if (audio_data->icon_surface) {
             auto width = cairo_image_surface_get_width(audio_data->icon_surface);
             auto height = cairo_image_surface_get_height(audio_data->icon_surface);
-            cairo_set_source_surface(cr, audio_data->icon_surface, 
+            cairo_set_source_surface(cr, audio_data->icon_surface,
                 c->real_bounds.x + 3 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - height * .5);
             cairo_paint(cr);
             x_off += width + 6 * dpi;
         }
 
-        //paint_debug_us(root, c);
         auto label = audio_data->title;
         if (audio_data->merged) {
             if (expanded_audio_pids.find(audio_data->pid) != expanded_audio_pids.end()) {
@@ -212,7 +243,7 @@ static Container *add_volume_option(Container *parent) {
             label, 12 * dpi, true, icon_font,
             (c->real_bounds.w - 14 * dpi - x_off) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
-    
+
     auto volume_slider_parent = line->child(::hbox, FILL_SPACE, FILL_SPACE);
     volume_slider_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds.h = (total_h - top_h) * ((Dock *) root->user_data)->volume->raw_window->dpi * .87;
@@ -223,10 +254,8 @@ static Container *add_volume_option(Container *parent) {
         float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
         c->wanted_bounds.w = (total_h - top_h) * dpi * 1.1;
     };
-    left_volume_icon->when_clicked = paint {
+    left_volume_icon->when_clicked = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        //windowing::set_popup_size(dock->volume->raw_window, 100, 300);
-        
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         auto muted = audio_data->muted;
@@ -234,11 +263,11 @@ static Container *add_volume_option(Container *parent) {
         audio([uuids, muted]() {
             for (auto c : audio_clients) {
                 if (std::find(uuids.begin(), uuids.end(), c->uuid) != uuids.end())
-                   c->set_mute(!muted);
+                    c->set_mute(!muted);
             }
         });
     };
-    left_volume_icon->when_paint = paint {
+    left_volume_icon->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->volume->raw_window->cr;
         auto dpi = dock->volume->raw_window->dpi;
@@ -247,14 +276,14 @@ static Container *add_volume_option(Container *parent) {
 
         bool is_muted = audio_data->muted;
         int val = (int) std::round(audio_data->level * 100);
-        
+
         if (!is_muted) {
             std::string background_bars = "\uE995";
             RGBA color = {.4, .4, .4, .4};
             auto b = draw_text(cr, 0, 0, background_bars, 14 * dpi, false, icon_font);
             draw_text(cr, center_x(c, b.w), center_y(c, b.h), background_bars, 14 * dpi, true, icon_font, -1, -1, color);
         }
-        
+
         std::string text;
         if (is_muted) {
             text = "\uE74F";
@@ -267,12 +296,12 @@ static Container *add_volume_option(Container *parent) {
         } else {
             text = "\uE995";
         }
-        
+
         RGBA color = {0, 0, 0, 1};
         auto b = draw_text(cr, 0, 0, text, 14 * dpi, false, icon_font);
         draw_text(cr, center_x(c, b.w), center_y(c, b.h), text, 14 * dpi, true, icon_font, -1, -1, color);
     };
-    
+
     auto slider = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     fill_out_volume_slider(slider);
     auto right_volume_text = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
@@ -280,7 +309,7 @@ static Container *add_volume_option(Container *parent) {
         float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
         c->wanted_bounds.w = (total_h - top_h) * dpi * 1.2;
     };
-    right_volume_text->when_paint = paint {
+    right_volume_text->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->volume->raw_window->cr;
         auto dpi = dock->volume->raw_window->dpi;
@@ -298,7 +327,6 @@ static Container *add_volume_option(Container *parent) {
     right_pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds.w = b.h * .2;
     };
-    
 
     return line;
 }
@@ -394,7 +422,12 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
     return rows;
 }
 
-static void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
+int volume_popup_height_for_clients(const std::vector<AudioClient> &clients) {
+    auto copy = clients;
+    return volume_popup_height_for_rows(build_volume_rows(copy).size());
+}
+
+void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
     root->type = ::vbox;
 
     auto rows = build_volume_rows(clients);
@@ -485,4 +518,3 @@ static void fill_volume_root(std::vector<AudioClient> clients, Container *root) 
         }
     }
 }
-

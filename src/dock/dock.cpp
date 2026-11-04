@@ -1,4 +1,16 @@
 #include "dock/dock.h"
+
+#include "dock/dock_applications.h"
+#include "dock/dock_battery.h"
+#include "dock/dock_bluetooth.h"
+#include "dock/dock_brightness.h"
+#include "dock/dock_extra.h"
+#include "dock/dock_projection.h"
+#include "dock/dock_tiling.h"
+#include "dock/dock_ui.h"
+#include "dock/dock_volume.h"
+#include "dock/dock_wifi.h"
+
 #include "pango_font_cache.h"
 
 #include "container.h"
@@ -63,36 +75,10 @@ static bool labels = true;
 static int pixel_spacing = 1;
 static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
-static RGBA accent = RGBA(.0, .52, .9, 1);
-static RGBA border_color = RGBA(0.7, 0.7, 0.7, 1.0);
 
 static std::vector<std::thread> dock_threads;
 
 static void write_saved_pins_to_file(Container *icons);
-
-struct Script : UserData {
-    std::string name;
-    std::vector<std::string> keywords;
-    std::vector<std::string> categories;
-    std::string generic_name;
-    std::string lowercase_name;
-    int priority = -1;
-    int historical_ranking = -1;
-    int match_level = 100;
-    std::string full_path;
-    std::shared_ptr<cairo_surface_t> icon_surface;
-    int icon_size = 0;
-
-    std::string path;
-
-    bool path_is_full_command = false;
-
-    bool selected = false;
-};
-
-static std::vector<Script> scripts;
-static std::mutex scripts_mutex;
-static std::shared_future<std::vector<Script>> scripts_refresh;
 
 class Window {
 public:
@@ -221,56 +207,6 @@ struct Windows {
     std::vector<int> to_be_removed;
 };
 
-struct STilingMenuState {
-    bool is_tiling = false;
-    bool all_workspaces = true;
-    bool new_workspace_is_tiling = false;
-    bool border_hint = true;
-    int window_gap = 8;
-};
-
-struct Dock : UserData {
-    RawApp *app = nullptr;
-    MylarWindow *window = nullptr;
-
-    MylarWindow *applications = nullptr;
-
-    MylarWindow *volume = nullptr;
-
-    MylarWindow *extra = nullptr;
-
-    MylarWindow *brightness = nullptr;
-
-    MylarWindow *battery = nullptr;
-    MylarWindow *date_menu = nullptr;
-
-    int date_view_month = 0;
-    int date_view_year = 0;
-    int selected_date_day = 0;
-    int selected_date_month = 0;
-    int selected_date_year = 0;
-
-    MylarWindow *wifi = nullptr;
-
-    MylarWindow *bluetooth = nullptr;
-    std::string bluetooth_input;
-    std::string bluetooth_prompt;
-    unsigned long bluetooth_revision = 0;
-
-    MylarWindow *tiling = nullptr;
-    STilingMenuState tiling_settings;
-
-    MylarWindow *projection = nullptr;
-
-    Windows *collection = nullptr;
-    bool first_fill = true;
-    bool thumbnails_dirty = false;
-    int startup_audio_update_count = 0;
-    RawWindowSettings creation_settings;
-
-    //bool vertical = false;
-};
-
 static std::vector<Dock *> docks;
 
 // Read compositor state on the main thread, before the dock thread groups windows.
@@ -291,85 +227,8 @@ static int active_cid = -1;
 // {"anchors":[{"x":0,"y":1},{"x":2,"y":1}],"controls":[{"x":0.9860918958926828,"y":-0.9725501058797109}]}
 std::vector<float> throb = { 0.000, 0.066, 0.129, 0.190, 0.248, 0.305, 0.359, 0.411, 0.461, 0.508, 0.553, 0.596, 0.637, 0.675, 0.711, 0.745, 0.776, 0.806, 0.833, 0.858, 0.881, 0.901, 0.920, 0.936, 0.949, 0.961, 0.970, 0.978, 0.983, 0.986, 0.986, 0.985, 0.981, 0.975, 0.967, 0.957, 0.944, 0.930, 0.913, 0.894, 0.873, 0.849, 0.824, 0.796, 0.766, 0.735, 0.701, 0.664, 0.626, 0.585, 0.543, 0.498, 0.451, 0.402, 0.351, 0.298, 0.243, 0.185, 0.125, 0.064, 0.000 };
 
-float get_icon_size(float dpi) {
-    return 28 * dpi;
-}
-
-static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
-                                                           float dpi,
-                                                           int popup_w,
-                                                           int popup_h) {
-    const int icon_x = (int) std::round(icon->real_bounds.x / dpi);
-    const int icon_y = (int) std::round(icon->real_bounds.y / dpi);
-    const int icon_w = std::max(1, (int) std::round(icon->real_bounds.w / dpi));
-    const int icon_h = std::max(1, (int) std::round(icon->real_bounds.h / dpi));
-
-    RawWindowSettings settings;
-    settings.pos.w = popup_w;
-    settings.pos.h = popup_h;
-    settings.name = "Popup";
-    settings.popup.use_explicit_anchor_rect = true;
-    settings.popup.anchor_rect_x = icon_x;
-    settings.popup.anchor_rect_y = icon_y;
-    settings.popup.anchor_rect_w = icon_w;
-    settings.popup.anchor_rect_h = icon_h;
-    settings.popup.anchor = RawWindowSettings::PopupAnchor::BOTTOM;
-    settings.popup.gravity = RawWindowSettings::PopupGravity::BOTTOM;
-    settings.popup.use_offset = true;
-    settings.popup.offset_y = -8;
-    settings.popup.constraint_adjustment =
-        RawWindowSettings::POPUP_CONSTRAINT_SLIDE_X |
-        RawWindowSettings::POPUP_CONSTRAINT_SLIDE_Y |
-        RawWindowSettings::POPUP_CONSTRAINT_FLIP_X |
-        RawWindowSettings::POPUP_CONSTRAINT_FLIP_Y;
-    return settings;
-}
-
-static float volume_level = 100;
-static bool is_master_muted = false;
-static float brightness_level = 100;
-static std::atomic<bool> finished = false;
-static bool nightlight_on = false;
-
-struct VolumeRow {
-    std::string id;
-    std::string title;
-    std::string icon;
-    float level = 0;
-    bool muted = false;
-    int pid = -1;
-    bool merged = false;
-    int indent_level = 0;
-    std::vector<std::string> uuids;
-};
-
-static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &clients);
-
-static constexpr int volume_popup_w = 330;
-static constexpr float volume_row_h = 65.0f;
-
-static int volume_popup_height_for_rows(size_t row_count) {
-    auto rows = std::max<size_t>(1, row_count);
-    return (int) std::round(volume_row_h * (float) rows);
-}
-
-static std::vector<AudioClient> snapshot_audio_clients() {
-    std::vector<AudioClient> clients;
-    audio_read([&]() {
-        clients.reserve(audio_clients.size());
-        for (auto client : audio_clients) {
-            client->is_master = client->is_master_volume();
-            clients.push_back(*client);
-        }
-    });
-    return clients;
-}
-
-static void resize_volume_popup_for_rows(Dock *dock, size_t row_count) {
-    if (!dock || !dock->volume || !dock->volume->raw_window)
-        return;
-    windowing::set_popup_size(dock->volume->raw_window, volume_popup_w, volume_popup_height_for_rows(row_count));
-}
+float brightness_level = 100;
+std::atomic<bool> finished = false;
 
 struct BrightnessData : UserData {
     float value = 50;
@@ -504,35 +363,6 @@ static void paint_root_func(Container *root, Container *c) {
     cairo_fill(cr);
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
-    auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
-
-    //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
-    pango_layout_set_text(layout, text.data(), text.size());
-    pango_layout_set_alignment(layout, (PangoAlignment) align);
-    if (wrap == -1) {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
-        pango_layout_set_width(layout, -1);
-        pango_layout_set_height(layout, -1);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
-    } else {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
-        pango_layout_set_width(layout, wrap * PANGO_SCALE);
-        pango_layout_set_height(layout, h);
-        if (h != -1)
-            pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
-    }
-    set_argb(cr, color);
-    PangoRectangle ink;
-    PangoRectangle logical;
-    pango_layout_get_pixel_extents(layout, &ink, &logical);
-    if (draw) {
-        cairo_move_to(cr, std::round(x), std::round(y));
-        pango_cairo_show_layout(cr, layout);
-    }
-    return Bounds(ink.width, ink.height, logical.width, logical.height);
-}
-
 static void paint_label(Container *root, Container *c, std::string text) {
     auto mylar = (MylarWindow*)root->user_data;
     auto cr = mylar->raw_window->cr;
@@ -543,60 +373,6 @@ static void paint_label(Container *root, Container *c, std::string text) {
     draw_text(cr,
         c->real_bounds.x + 12 * dpi,
         c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, set->font, -1, 0, {0, 0, 0, 1},  false);
-}
-
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1}) {
-    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
-    //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
-    pango_layout_set_text(layout, text.data(), text.size());
-    if (wrap == -1) {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
-        pango_layout_set_width(layout, -1);
-        pango_layout_set_height(layout, -1);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
-    } else {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
-        pango_layout_set_width(layout, wrap);
-        pango_layout_set_height(layout, h);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
-    }
-    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
-    PangoRectangle ink;
-    PangoRectangle logical;
-    pango_layout_get_pixel_extents(layout, &ink, &logical);
-    if (draw) {
-        cairo_move_to(cr, std::round(x), std::round(y));
-        pango_cairo_show_layout(cr, layout);
-    }
-    return Bounds(ink.width, ink.height, logical.width, logical.height);
-}
-
-Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1) {
-    if (!cr)
-        return {0, 0, 0, 0};
-    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
-    //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
-    pango_layout_set_text(layout, text.data(), text.size());
-    if (wrap == -1) {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
-        pango_layout_set_width(layout, -1);
-        pango_layout_set_height(layout, -1);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_NONE);
-    } else {
-        pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_WORD_CHAR);
-        pango_layout_set_width(layout, wrap);
-        pango_layout_set_height(layout, h);
-        pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
-    }
-    cairo_set_source_rgba(cr, 1, 1, 1, 1);
-    PangoRectangle ink;
-    PangoRectangle logical;
-    pango_layout_get_pixel_extents(layout, &ink, &logical);
-    if (draw) {
-        cairo_move_to(cr, std::round(center_x(c, logical.width)), std::round(center_y(c, logical.height)));
-        pango_cairo_show_layout(cr, layout);
-    }
-    return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
 static void paint_button_bg(Container *root, Container *c) {
@@ -623,7 +399,7 @@ static std::string get_date() {
     return s;
 }
 
-static float get_brightness() {
+float get_brightness() {
     float current = 50;
     float max = 100;
     {
@@ -650,9 +426,7 @@ static float get_brightness() {
     return (current / max) * 100;
 }
 
-static long last_time_volume_adjusted = 0;
-
-static void set_brightness(float amount) {
+void set_brightness(float amount) {
     brightness_level = amount;
     static bool queued = false;
     static bool latest = amount;
@@ -1769,491 +1543,6 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     }
 }
 
-static void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height,
-                     double radius, double stroke_width) {
-    // Ensure the stroke width does not exceed the bounds
-    double half_stroke = stroke_width / 2.0;
-    double adjusted_radius = std::fmin(radius, std::fmin(width, height) / 2.0);
-    double inner_width = width - stroke_width;
-    double inner_height = height - stroke_width - 1;
-
-    if (inner_width <= 0 || inner_height <= 0) {
-        // Cannot draw if the stroke width exceeds or equals the bounds
-        return;
-    }
-
-    // Adjusted bounds to ensure the stroke remains inside
-    double adjusted_x = x + half_stroke;
-    double adjusted_y = y + half_stroke;
-
-    // Begin path for rounded rectangle
-    cairo_new_path(cr);
-
-    // Move to the start of the top-right corner
-    cairo_move_to(cr, adjusted_x + adjusted_radius, adjusted_y);
-
-    // Top side
-    cairo_line_to(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y);
-
-    // Top-right corner
-    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
-              adjusted_radius, -M_PI / 2, 0);
-
-    // Right side
-    cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - adjusted_radius);
-
-    // Bottom-right corner
-    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
-              adjusted_radius, 0, M_PI / 2);
-
-    // Bottom side
-    cairo_line_to(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height);
-
-    // Bottom-left corner
-    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
-              adjusted_radius, M_PI / 2, M_PI);
-
-    // Left side
-    cairo_line_to(cr, adjusted_x, adjusted_y + adjusted_radius);
-
-    // Top-left corner
-    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
-              adjusted_radius, M_PI, 3 * M_PI / 2);
-
-    // Close the path
-    cairo_close_path(cr);
-
-    // Set stroke width and stroke
-    cairo_set_line_width(cr, stroke_width);
-}
-
-static void paint_popup_background(cairo_t *cr, const Bounds &bounds, double dpi,
-                                   RGBA background = {1, 1, 1, 1}, RGBA outline = border_color) {
-    if (bounds.w <= 0 || bounds.h <= 0)
-        return;
-    // The compositor shadow takes an integer pixel radius; use the same rounding here.
-    const double radius = std::min(std::round(dock::popup_corner_radius * dpi), std::floor(std::min(bounds.w, bounds.h) * .5));
-    const double stroke = std::min(dpi, std::min(bounds.w, bounds.h));
-    auto path = [&](double inset) {
-        const double r = std::max(0.0, radius - inset);
-        const double left = bounds.x + inset;
-        const double top = bounds.y + inset;
-        const double right = bounds.x + bounds.w - inset;
-        const double bottom = bounds.y + bounds.h - inset;
-        cairo_new_path(cr);
-        cairo_arc(cr, right - r, top + r, r, -M_PI / 2, 0);
-        cairo_arc(cr, right - r, bottom - r, r, 0, M_PI / 2);
-        cairo_arc(cr, left + r, bottom - r, r, M_PI / 2, M_PI);
-        cairo_arc(cr, left + r, top + r, r, M_PI, 3 * M_PI / 2);
-        cairo_close_path(cr);
-    };
-    cairo_save(cr);
-    set_argb(cr, background);
-    path(0);
-    cairo_fill(cr);
-    set_argb(cr, outline);
-    cairo_set_line_width(cr, stroke);
-    // Inset the stroke and its radius equally so its outer edge matches the fill.
-    path(stroke * .5);
-    cairo_stroke(cr);
-    cairo_restore(cr);
-}
-
-#include "dock_bluetooth.inl"
-
-#include "dock_applications.inl"
-static void fill_projection_container(Dock *dock);
-
-static void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value) {
-    static constexpr float dotr = 17;
-    static constexpr float thickness = 8;
-    float final_thickness = std::round(thickness * dpi);
-    float final_dotr = std::round(dotr * dpi);
-    {
-        auto b = c->real_bounds;
-        b.y += b.h * .5 - final_thickness * .5;
-        b.h = final_thickness;
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
-        set_argb(cr, {0, 0, 0, .1});
-        cairo_fill(cr);
-    }
-
-    {
-        auto b = c->real_bounds;
-        b.x += b.w * value - final_dotr * .5;
-        b.w = final_dotr;
-        b.y += b.h * .5 - final_dotr * .5;
-        b.h = final_dotr;
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
-        set_argb(cr, {1, 1, 1, 1});
-        cairo_fill(cr);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
-        auto bigger = b;
-        bigger.scale_from_center(1.4);
-        bool dot_intersected = bounds_contains(bigger, root->mouse_current_x, root->mouse_current_y);
-        if ((c->state.mouse_hovering || c->state.mouse_pressing) && dot_intersected) {
-            b.scale_from_center(.7);
-        } else {
-            b.scale_from_center(.55);
-        }
-        set_argb(cr, {0, 0, 0, .1});
-        cairo_stroke(cr);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
-        set_argb(cr, accent);
-        cairo_fill(cr);
-    }
-}
-
-Container *make_self_sizing_slider(Container *root,
-                            std::function<std::string (Container *)> left_text,
-                            std::function<std::string (Container *)> right_text,
-                            std::function<void (Container *, float)> on_value_change,
-                            std::function<float (Container *)> get_value,
-                            std::function<MylarWindow * (Dock *)> get_window) {
-    static float height = 32;
-    auto slider_parent = root->child(::hbox, FILL_SPACE, FILL_SPACE);
-    auto left = slider_parent->child(FILL_SPACE, FILL_SPACE);
-    auto slider = slider_parent->child(FILL_SPACE, FILL_SPACE);
-    auto right = slider_parent->child(FILL_SPACE, FILL_SPACE);
-
-    slider_parent->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        c->wanted_bounds.h = height * dpi;
-    };
-    left->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        c->wanted_bounds.h = height * dpi;
-        c->wanted_bounds.w = height * dpi;
-    };
-    left->when_paint = [left_text, get_window](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        auto left = left_text(c);
-        auto b = draw_text(cr, 0, 0, left, 12 * dpi, false, icon_font);
-        draw_text(cr,
-            c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5,
-            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, left, 12 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
-    };
-    right->pre_layout = [get_window](Container *root, Container *c, const Bounds &b) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        c->wanted_bounds.h = height * dpi;
-        c->wanted_bounds.w = height * dpi * 1.2;
-    };
-    right->when_paint = [right_text, get_window](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        auto right = right_text(c);
-        auto b = draw_text(cr, 0, 0, right, 12 * dpi, false);
-        draw_text(cr,
-            c->real_bounds.x + c->real_bounds.w - b.w,
-            c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, right, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
-    };
-    slider->when_paint = [get_window, get_value](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-
-        paint_slider(root, c, cr, dpi, get_value(c));
-    };
-    slider->when_clicked = [on_value_change](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        on_value_change(c, scalar);
-    };
-    slider->when_drag_start = [on_value_change](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        on_value_change(c, scalar);
-    };
-    slider->when_drag = [on_value_change](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        on_value_change(c, scalar);
-    };
-    slider->when_drag_end = [on_value_change](Container *root, Container *c) {
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        on_value_change(c, scalar);
-    };
-    slider->when_fine_scrolled = [get_value, on_value_change](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
-        auto value = get_value(c) * 100.0f;
-        if (came_from_touchpad) {
-            value += scroll_y * .25;
-        } else {
-            // When changing volume with mouse, round to next, 0, 5, 3, or 7
-            int full = std::round(value);
-            int last_digit;
-            do {
-                if (scroll_y > 0) {
-                    full++;
-                } else if (scroll_y < 0) {
-                    full--;
-                }
-                last_digit = full % 10;
-            } while (!(last_digit == 0 || last_digit == 5));
-
-            value = ((double) full);
-        }
-        if (value > 100)
-           value = 100;
-        if (value < 0)
-           value = 0;
-        on_value_change(c, value * .01);
-    };
-    return slider_parent;
-}
-
-Container *make_self_sizing_label(Container *root, std::string text, int size, std::function<MylarWindow * (Dock *)> get_window) {
-    auto label = root->child(FILL_SPACE, FILL_SPACE);
-    label->pre_layout = [text, size, get_window](Container *root, Container *c, const Bounds &b) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        auto bounds = draw_text(cr, c, text, size * dpi, false);
-        c->wanted_bounds.h = bounds.h;
-    };
-    label->when_paint = [text, size, get_window](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto window = get_window(dock);
-        auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
-        draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, size * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
-    };
-    return label;
-}
-
-#include "dock_extra.inl"
-#include "dock_wifi.inl"
-#include "dock_battery.inl"
-#include "dock_brightness.inl"
-
-// -------------------------------------
-// TILING
-// -------------------------------------
-
-static int tiling_workspace(const std::string& monitor_name) {
-    for (auto monitor : actual_monitors) {
-        const int id = *datum<int>(monitor, "cid");
-        if (hypriso->monitor_name(id) == monitor_name)
-            return hypriso->get_active_workspace_id(id);
-    }
-    return -1;
-}
-
-// Called on the compositor thread while the dock's app mutex is held.
-static void update_tiling_menu(Dock *dock) {
-    dock->tiling_settings = {
-        .is_tiling = hypriso->is_space_tiling_id(tiling_workspace(dock->creation_settings.monitor_name)),
-        .all_workspaces = set->tile_all_workspaces,
-        .new_workspace_is_tiling = set->new_workspace_is_tiling,
-        .border_hint = set->active_window_border_hint,
-        .window_gap = set->tiling_window_gap,
-    };
-    if (dock->tiling)
-        windowing::redraw(dock->tiling->raw_window);
-}
-
-static Container *tiling_row(Container *parent, double height) {
-    auto row = parent->child(::hbox, FILL_SPACE, height);
-    row->pre_layout = [height](Container *root, Container *c, const Bounds&) {
-        const auto dock = static_cast<Dock *>(root->user_data);
-        c->wanted_bounds.h = height * dock->tiling->raw_window->dpi;
-    };
-    return row;
-}
-
-static void paint_tiling_text(Dock *dock, Container *c, const std::string& text, bool right = false, RGBA color = {0, 0, 0, 1}) {
-    const auto cr = dock->tiling->raw_window->cr;
-    const auto dpi = dock->tiling->raw_window->dpi;
-    const auto bounds = draw_text(cr, 0, 0, text, 12 * dpi, false);
-    draw_text(cr, right ? c->real_bounds.right() - bounds.w : c->real_bounds.x,
-        c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5, text, 12 * dpi, true, set->font, -1, -1, color);
-}
-
-static void tiling_label(Container *parent, const std::string& text, double height = 28) {
-    auto row = tiling_row(parent, height);
-    row->when_paint = [text](Container *root, Container *c) {
-        paint_tiling_text(static_cast<Dock *>(root->user_data), c, text);
-    };
-}
-
-static void tiling_toggle(Container *parent, const std::string& text, std::function<bool(const STilingMenuState&)> value,
-                          std::function<void(const std::string&)> change) {
-    auto row = tiling_row(parent, 44);
-    auto label = row->child(FILL_SPACE, FILL_SPACE);
-    label->when_paint = [text](Container *root, Container *c) {
-        paint_tiling_text(static_cast<Dock *>(root->user_data), c, text);
-    };
-    auto toggle = row->child(44, FILL_SPACE);
-    toggle->pre_layout = [](Container *root, Container *c, const Bounds&) {
-        const auto dock = static_cast<Dock *>(root->user_data);
-        c->wanted_bounds.w = 44 * dock->tiling->raw_window->dpi;
-    };
-    toggle->when_paint = [value](Container *root, Container *c) {
-        const auto dock = static_cast<Dock *>(root->user_data);
-        const auto dpi = dock->tiling->raw_window->dpi;
-        const auto cr = dock->tiling->raw_window->cr;
-        const bool enabled = value(dock->tiling_settings);
-        const double x = c->real_bounds.x;
-        const double y = c->real_bounds.y + (c->real_bounds.h - 22 * dpi) * .5;
-        set_argb(cr, enabled ? accent : RGBA(.7, .7, .7, 1));
-        drawRoundedRect(cr, x, y, 44 * dpi, 22 * dpi, 11 * dpi, 1);
-        cairo_fill(cr);
-        set_argb(cr, {1, 1, 1, 1});
-        cairo_arc(cr, x + (enabled ? 33 : 11) * dpi, y + 11 * dpi, 8 * dpi, 0, 2 * M_PI);
-        cairo_fill(cr);
-    };
-    toggle->when_clicked = [change](Container *root, Container *) {
-        const auto dock = static_cast<Dock *>(root->user_data);
-        change(dock->creation_settings.monitor_name);
-    };
-}
-
-static void tiling_segments(Container *parent, const std::string& first, const std::string& second,
-                            std::function<bool(const STilingMenuState&)> first_selected, std::function<void(bool)> change) {
-    auto row = tiling_row(parent, 36);
-    row->pre_layout = [](Container *root, Container *c, const Bounds&) {
-        const auto dpi = static_cast<Dock *>(root->user_data)->tiling->raw_window->dpi;
-        c->wanted_bounds.h = 36 * dpi;
-        c->spacing = 4 * dpi;
-    };
-    for (bool is_first : {true, false}) {
-        auto segment = row->child(FILL_SPACE, FILL_SPACE);
-        segment->when_paint = [first, second, is_first, first_selected](Container *root, Container *c) {
-            const auto dock = static_cast<Dock *>(root->user_data);
-            const auto cr = dock->tiling->raw_window->cr;
-            const auto dpi = dock->tiling->raw_window->dpi;
-            const bool selected = first_selected(dock->tiling_settings) == is_first;
-            set_argb(cr, selected ? RGBA(.91, .96, 1, 1) : RGBA(.95, .95, .95, 1));
-            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 6 * dpi, 1);
-            cairo_fill(cr);
-            const std::string text = (selected ? "\u2713  " : "") + (is_first ? first : second);
-            const auto bounds = draw_text(cr, 0, 0, text, 12 * dpi, false);
-            draw_text(cr, c->real_bounds.x + (c->real_bounds.w - bounds.w) * .5,
-                c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5, text, 12 * dpi, true, set->font, -1, -1,
-                selected ? accent : RGBA(0, 0, 0, 1));
-        };
-        segment->when_clicked = [is_first, change](Container *, Container *) {
-            change(is_first);
-        };
-    }
-}
-
-static void tiling_shortcut(Container *parent, const std::string& action, const std::string& shortcut) {
-    auto row = tiling_row(parent, 30);
-    row->when_paint = [action, shortcut](Container *root, Container *c) {
-        const auto dock = static_cast<Dock *>(root->user_data);
-        paint_tiling_text(dock, c, action);
-        paint_tiling_text(dock, c, shortcut, true, RGBA(.4, .4, .4, 1));
-    };
-}
-
-static void fill_tiling_container(Dock *dock) {
-    auto root = dock->tiling->root;
-    root->when_paint = [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto cr = dock->tiling->raw_window->cr;
-        paint_popup_background(cr, c->real_bounds, dock->tiling->raw_window->dpi);
-    };
-
-    auto parent = root->child(::vbox, FILL_SPACE, FILL_SPACE);
-    parent->pre_layout = [](Container *root, Container *c, const Bounds&) {
-        const auto dpi = static_cast<Dock *>(root->user_data)->tiling->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 12 * dpi, 16 * dpi, 12 * dpi);
-        c->spacing = 6 * dpi;
-    };
-    tiling_toggle(parent, "Automatically tile windows (Alt + Space)", [](const STilingMenuState& state) { return state.is_tiling; },
-        [](const std::string& monitor) {
-            main_thread([monitor]() {
-                const int space = tiling_workspace(monitor);
-                if (space == -1)
-                    return;
-                hypriso->set_space_tiling_id(space, !hypriso->is_space_tiling_id(space));
-            });
-        });
-
-    tiling_label(parent, "Above toggle applies to");
-    tiling_segments(parent, "All workspaces", "Current workspace", [](const STilingMenuState& state) { return state.all_workspaces; },
-        [](bool all) {
-            main_thread([all]() {
-                if (set->tile_all_workspaces == all)
-                    return;
-                set->tile_all_workspaces = all;
-                hypriso->apply_tiling_settings();
-            });
-        });
-
-    tiling_label(parent, "New workspace behavior");
-    tiling_segments(parent, "Tiled", "Floating", [](const STilingMenuState& state) { return state.new_workspace_is_tiling; },
-        [](bool tiled) {
-            main_thread([tiled]() {
-                hypriso->set_new_workspace_tiling(tiled);
-            });
-        });
-
-    auto gap_label = tiling_row(parent, 28);
-    gap_label->when_paint = [](Container *root, Container *c) {
-        const auto dock = static_cast<Dock *>(root->user_data);
-        paint_tiling_text(dock, c, "Window gap while tiling");
-        paint_tiling_text(dock, c, std::to_string(dock->tiling_settings.window_gap), true);
-    };
-    const auto change_gap = [dock](Container *, float value) {
-        const int gap = std::clamp((int) std::round(value * 32.0f), 0, 32);
-        if (dock->tiling_settings.window_gap == gap)
-            return;
-        dock->tiling_settings.window_gap = gap;
-        windowing::redraw(dock->tiling->raw_window);
-        main_thread([gap]() {
-            if (set->tiling_window_gap == gap)
-                return;
-            set->tiling_window_gap = gap;
-            hypriso->apply_tiling_settings();
-        });
-    };
-    auto gap_slider = make_self_sizing_slider(parent,
-        [](Container *) { return "0"; },
-        [](Container *) { return "32"; },
-        change_gap,
-        [dock](Container *) { return dock->tiling_settings.window_gap / 32.0f; },
-        [](Dock *dock) { return dock->tiling; });
-    gap_slider->children[1]->when_fine_scrolled = [change_gap](Container *root, Container *c, double, double scroll_y, bool) {
-        if (scroll_y == 0)
-            return;
-        const auto dock = static_cast<Dock *>(root->user_data);
-        change_gap(c, (dock->tiling_settings.window_gap + (scroll_y > 0 ? 1 : -1)) / 32.0f);
-    };
-
-    tiling_row(parent, 4);
-    tiling_shortcut(parent, "Navigate windows", "Super + arrows");
-    tiling_shortcut(parent, "Move window", "Shift + Super + arrows");
-    tiling_shortcut(parent, "Toggle floating window", "Super + G");
-    tiling_shortcut(parent, "Reposition tiled window", "Alt + Mouse Left Click");
-    tiling_row(parent, 4);
-
-    tiling_toggle(parent, "Active window border hint", [](const STilingMenuState& state) { return state.border_hint; },
-        [](const std::string&) {
-            main_thread([]() {
-                set->active_window_border_hint = !set->active_window_border_hint;
-                hypriso->apply_tiling_settings();
-            });
-        });
-}
-
-// -------------------------------------
-// TILING
-// -------------------------------------
-
 struct DockDateCell : UserData {
     int day = 1;
     int month = 0;
@@ -2848,9 +2137,8 @@ static void fill_root(Container *root) {
             auto dpi = mylar->raw_window->dpi;
 
             auto clients = snapshot_audio_clients();
-            auto rows = build_volume_rows(clients);
             RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, volume_popup_w, volume_popup_height_for_rows(rows.size()));
+                c, dpi, volume_popup_w, volume_popup_height_for_clients(clients));
 
             dock->volume = open_mylar_popup(mylar, settings);
             if (!dock->volume)
@@ -3216,7 +2504,7 @@ void dock_start(std::string monitor_name) {
     windowing::main_loop(dock->app);
     if (docks.size() == 1) {
         finished = true;
-        battery_wakeup.notify_all();
+        battery_stop();
     }
     if (finished) {
         if (auto icons = container_by_name("icons", dock->window->root))
@@ -3250,29 +2538,19 @@ void dock::start(std::string monitor_name) {
     current_alignment = get_dock_alignment();
 
     finished = false;
-    on_any_bluetooth_property_changed = bluetooth_refresh;
-    on_bluetooth_request = bluetooth_receive_request;
-    bluetooth_available = bluetooth_running;
+    bluetooth_start();
 
     std::thread t(dock_start, monitor_name);
     dock_threads.push_back(std::move(t));
 
-    std::lock_guard<std::mutex> lock(scripts_mutex);
-    if (!scripts_refresh.valid())
-        scripts_refresh = load_scripts_async();
+    preload_scripts();
 }
 
 void dock::stop(std::string monitor_name) {
     if (monitor_name.empty()) {
         finished = true;
-        bluetooth_menu_count = 0;
-        bluetooth_clear_request(true);
-        on_bluetooth_request = nullptr;
-        on_any_bluetooth_property_changed = nullptr;
-        battery_wakeup.notify_all();
-
-        if (battery_thread.joinable())
-            battery_thread.join();
+        bluetooth_stop();
+        battery_stop();
 
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
@@ -3575,7 +2853,6 @@ Bounds dock::get_location(std::string name, int cid) {
     return {0, 0, 100, 100};
 }
 
-#include "dock_volume.inl"
 void total_update() {
     main_thread([]() {
         auto clients = snapshot_audio_clients();
@@ -3616,7 +2893,6 @@ void dock::change_in_battery() {
     });
 }
 
-#include "dock_projection.inl"
 static long slept_creation_time;
 
 void dock::throb_slept_button() {

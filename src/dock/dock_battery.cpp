@@ -1,3 +1,13 @@
+#include "dock/dock_battery.h"
+
+#include "dock/dock_internal.h"
+
+#include "dock/dock.h"
+#include "settings.h"
+
+#include <iomanip>
+#include <locale>
+
 struct BatterySample {
     std::time_t timestamp;
     double percentage;
@@ -29,12 +39,12 @@ static BatteryView battery_snapshot() {
     return battery_view;
 }
 
-static BatteryStatus battery_status_snapshot() {
+BatteryStatus battery_status_snapshot() {
     std::lock_guard<std::mutex> lock(battery_mutex);
     return battery_view.status;
 }
 
-static bool has_internal_battery() {
+bool has_internal_battery() {
     std::error_code error;
     std::filesystem::directory_iterator entries("/sys/class/power_supply", error);
     for (; !error && entries != std::filesystem::directory_iterator(); entries.increment(error)) {
@@ -93,7 +103,7 @@ static bool save_battery_history(const std::filesystem::path &path, const std::v
     return !error;
 }
 
-static void request_battery_refresh() {
+void request_battery_refresh() {
     {
         std::lock_guard<std::mutex> lock(battery_mutex);
         battery_refresh_requested = true;
@@ -129,7 +139,7 @@ static void request_battery_action(bool protector) {
     dock::change_in_battery();
 }
 
-static void watch_battery_level() {
+void watch_battery_level() {
     std::lock_guard<std::mutex> lock(battery_mutex);
     if (watching_battery) return;
     if (battery_thread.joinable()) battery_thread.join();
@@ -388,7 +398,7 @@ static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const 
     cairo_restore(cr);
 }
 
-static void fill_battery_container(Dock *dock) {
+void fill_battery_container(Dock *dock) {
     auto root = dock->battery->root;
     root->type = ::vbox;
     root->when_paint = [](Container *root, Container *c) {
@@ -575,4 +585,10 @@ static void fill_battery_container(Dock *dock) {
             message, 8, dock->battery->raw_window->dpi,
             view.action_error.empty() && view.history_error.empty() ? RGBA(.40, .46, .54, 1) : RGBA(.70, .23, .16, 1), c->real_bounds.w);
     };
+}
+
+void battery_stop() {
+    battery_wakeup.notify_all();
+    if (battery_thread.joinable())
+        battery_thread.join();
 }
