@@ -247,7 +247,7 @@ void drag::merge_client_into_existant_groups(int cid, bool create_snap_assist_if
                 }
             }
 
-            if (create_snap_assist_if_needed)
+            if (create_snap_assist_if_needed && create_snap_helper)
                 snap_assist::open(get_monitor(cid), cid);
         }
     }

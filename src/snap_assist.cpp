@@ -770,7 +770,7 @@ void paint_snap_helper(Container *actual_root, Container *c) {
 }
 
 void actual_open(int monitor, int cid) {
-        auto c = get_cid_container(cid);
+    auto c = get_cid_container(cid);
     if (!c)
         return;
 
