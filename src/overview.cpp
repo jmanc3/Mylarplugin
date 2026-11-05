@@ -170,7 +170,9 @@ static Bounds render_bounds(Bounds b, int monitor) {
     const auto mb = bounds_monitor(monitor);
     b.x -= mb.x;
     b.y -= mb.y;
-    return b.scale(scale(monitor));
+    // Snap to physical pixels like the workspace switcher. Fractional
+    // destinations make GL sample between texels even at a native-size draw.
+    return b.scale(scale(monitor)).round();
 }
 
 static void layout_workspace(OverviewWorkspace &workspace, const Bounds &area) {

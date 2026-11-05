@@ -8484,12 +8484,30 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     if (!hw->deco_fb || !hw->deco_fb->isAllocated())
                         return;
                     auto tex = hw->deco_fb->getTexture();
-                    
+
+                    // Snap the destination origin and the texture crop to the
+                    // physical pixel grid. A fractional origin makes GL blend
+                    // adjacent texels across the whole thumbnail, even at 1:1.
+                    Bounds dest = b;
+                    dest.x = std::round(dest.x);
+                    dest.y = std::round(dest.y);
+
+                    const double cropW = std::min(std::round(hw->w_decos_size.w), tex->m_size.x);
+                    const double cropH = std::min(std::round(hw->w_decos_size.h), tex->m_size.y);
+
+                    // At native size the crop and destination must be exactly
+                    // equal, otherwise even a sub-pixel size mismatch turns
+                    // into a full-image resample.
+                    if (std::abs(cropW - dest.w) <= 1.0)
+                        dest.w = cropW;
+                    if (std::abs(cropH - dest.h) <= 1.0)
+                        dest.h = cropH;
+
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-                    if (std::abs(hw->w_decos_size.w - b.w) < 50)
+                    if (std::abs(cropW - dest.w) < 50)
                         tex->minFilter = GL_NEAREST;
                     
-                    auto box = tocbox(b);
+                    auto box = tocbox(dest);
                     Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                     data.a = alpha;
                     data.round = rounding;
@@ -8498,8 +8516,8 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     data.allowCustomUV = true;
                     data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
                     data.primarySurfaceUVBottomRight = Vector2D(
-                        std::min(hw->w_decos_size.w / hw->deco_fb->m_size.x, 1.0),
-                        std::min(hw->w_decos_size.h / hw->deco_fb->m_size.y, 1.0)
+                        std::clamp(cropW / tex->m_size.x, 0.0, 1.0),
+                        std::clamp(cropH / tex->m_size.y, 0.0, 1.0)
                     );
                     
                     set_rounding(cornermask);
@@ -8616,6 +8634,19 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
         Bounds source = hw->w_min_size;
         source.w = std::min(source.w, texture->m_size.x);
         source.h = std::min(source.h, texture->m_size.y);
+        if (source.w <= 0 || source.h <= 0)
+            return;
+
+        // Hyprland rounds window geometry to whole physical pixels when it
+        // renders the snapshot (ElementRenderer: windowBox.scale(scale).round()),
+        // but w_min_size comes from continuous logical geometry. Drawing with
+        // those fractional values makes GL_LINEAR sample between texels, which
+        // blurs the whole thumbnail even at 1:1. Snap the source rectangle to
+        // the physical pixel grid so the native-size draw is an exact copy.
+        source.x = std::round(source.x);
+        source.y = std::round(source.y);
+        source.w = std::min(std::round(source.w), texture->m_size.x);
+        source.h = std::min(std::round(source.h), texture->m_size.y);
         if (source.w <= 0 || source.h <= 0)
             return;
 
