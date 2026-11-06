@@ -945,6 +945,14 @@ void actual_open(int monitor, int cid) {
 void snap_assist::open(int monitor, int cid) {
     if (overview::is_showing())
         return;
+
+    // A new open supersedes whatever is currently on screen. This matters most when
+    // the previous snap assist is still fading out: its completion callback would
+    // otherwise close the helpers we are about to create. Tear it down immediately
+    // (which also advances the lifecycle and invalidates those stale callbacks).
+    if (is_showing())
+        instant_close();
+
     const auto generation = lifecycle;
     later_immediate([monitor, cid, generation](Timer *) {
         if (generation != lifecycle || overview::is_showing())
