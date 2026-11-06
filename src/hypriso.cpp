@@ -5201,6 +5201,20 @@ Bounds tobounds(CBox box) {
     return {box.x, box.y, box.w, box.h};
 }
 
+// Use the renderer's current pass instead of ctx.m_pass directly: when a window is
+// being rendered through a transformer, decorations are drawn into a redirected pass
+// that is later transformed (wobble, motion blur). Adding to ctx.m_pass would put
+// plugin-drawn decorations outside that pass, so they would not follow the window.
+//
+// The renderer applies renderModif to drawn geometry but not to clipBox. The
+// transformed pass is rendered into a canvas offset by CANVASTRANSLATION, so a clip
+// box left in layout coordinates would be offset from the geometry and clip it away.
+// Transform the clip box exactly like the geometry it clips.
+static CBox clip_box_for_current_pass(CBox box) {
+    g_pHyprRenderer->context().m_data.renderModif.applyToBox(box);
+    return box;
+}
+
 void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPower, bool blur, float blurA) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -5229,7 +5243,7 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
         rectdata.roundingPower = roundingPower;
 
         if (clip)
-            g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+            g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
 
         // TODO: who is responsible for cleaning up this damage?
         set_rounding(cornermask); // only top side
@@ -5238,7 +5252,7 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
         if (clip)
             g_pHyprRenderer->context().m_data.clipBox = CBox();
     });
-    g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void border(Bounds box, RGBA color, float size, int cornermask, float round, float roundingPower, bool blur, float blurA) {
@@ -5264,7 +5278,7 @@ void border(Bounds box, RGBA color, float size, int cornermask, float round, flo
         rectdata.roundingPower = roundingPower;
 
         if (clip)
-            g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+            g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
 
         set_rounding(cornermask); // only top side
         Render::GL::g_pHyprOpenGL->renderBorder(g_pHyprRenderer->context(), tocbox(box), CHyprColor(color.r, color.g, color.b, color.a), rectdata);
@@ -5272,7 +5286,7 @@ void border(Bounds box, RGBA color, float size, int cornermask, float round, flo
         if (clip)
             g_pHyprRenderer->context().m_data.clipBox = CBox();
     });
-    g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float size) {
@@ -5970,7 +5984,7 @@ void HyprIso::move(int id, int x, int y) {
     }
 }
 
-void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool follow_monitor) {
+void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool follow_monitor, bool notify_effects) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -5982,6 +5996,7 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool
             if (!target || !target->space())
                 return;
             auto scaling_factor = c->w->m_monitor->m_scale;
+            const CBox previous_full = notify_effects ? c->w->getFullWindowBoundingBox() : CBox{};
 
             {
                 if (instant) {
@@ -6023,15 +6038,17 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool
                         target->assignToSpace(workspace->space());
                 }
             }
+            if (notify_effects)
+                c->w->effects().onPositionUpdate(previous_full, c->w->getFullWindowBoundingBox(), Desktop::View::WINDOW_UPDATE_MOUSE);
             target->damageEntire();
         }
     }
 }
-void HyprIso::move_resize(int id, Bounds b, bool instant, bool follow_monitor) {
+void HyprIso::move_resize(int id, Bounds b, bool instant, bool follow_monitor, bool notify_effects) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    move_resize(id, b.x, b.y, b.w, b.h, instant, follow_monitor);
+    move_resize(id, b.x, b.y, b.w, b.h, instant, follow_monitor, notify_effects);
 }
 
 
@@ -6908,13 +6925,13 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
                 Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                 data.a = a;
                 if (clip)
-                    g_pHyprRenderer->context().m_data.clipBox = cb.intersection(clipbox);
+                    g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(cb.intersection(clipbox));
                     //g_pHyprOpenGL->context().m_data.clipBox = clipbox.intersection(cb);
                 Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), tex, tocbox(b), data);
                 if (clip)
                     g_pHyprRenderer->context().m_data.clipBox = CBox();
             });
-            g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+            Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
             break;
         }
     }
@@ -8245,7 +8262,7 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                 );
                 set_rounding(cornermask);
                 if (clip)
-                    g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+                    g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
 
                 auto before = g_pHyprRenderer->context().m_data.useNearestNeighbor;
                 g_pHyprRenderer->context().m_data.useNearestNeighbor = false;
@@ -8258,7 +8275,7 @@ void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alph
                     g_pHyprRenderer->context().m_data.clipBox = CBox();
                 set_rounding(0);
             });
-            g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+            Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
         }
     }
 };
@@ -8307,14 +8324,14 @@ void HyprIso::draw_wallpaper(int mon, Bounds b, int rounding, float alpha) {
             );
             set_rounding(cornermask);
             if (clip)
-                g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+                g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
             Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), tex, box, data);
             set_rounding(0);
 
             if (clip)
                 g_pHyprRenderer->context().m_data.clipBox = tocbox(Bounds());
         });
-        g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
     }
 };
 
@@ -8452,7 +8469,7 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                         std::min(hw->w_size.h / hw->fb->m_size.y, 1.0)
                     );
                     if (clip)
-                        g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+                        g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
                     g_pHyprRenderer->context().m_data.useNearestNeighbor = false;
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
@@ -8463,7 +8480,7 @@ void HyprIso::draw_thumbnail(int id, Bounds b, int rounding, float roundingPower
                     if (clip)
                         g_pHyprRenderer->context().m_data.clipBox = tocbox(Bounds());
                 });
-                g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+                Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
             }
         }
     }
@@ -8523,13 +8540,13 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     set_rounding(cornermask);
                     const auto previousClip = g_pHyprRenderer->context().m_data.clipBox;
                     if (clip)
-                        g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+                        g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
                     Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), tex, box, data);
                     if (clip)
                         g_pHyprRenderer->context().m_data.clipBox = previousClip;
                     set_rounding(0);
                 });
-                g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+                Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
             }
         }
     }
@@ -8662,7 +8679,7 @@ void HyprIso::draw_raw_min_thumbnail(int id, Bounds b, float scalar) {
         AnyPass::AnyData anydata([texture, source, target, progress](AnyPass*, Render::CRenderContext&) {
             draw_magic_lamp(texture, source, target, progress);
         });
-        g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
         return;
     }
 }
@@ -8710,7 +8727,7 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
                     Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), tex, tocbox(bounds), data);
                     set_rounding(0);
                 });
-                g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+                Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
             }
         }
     }
@@ -9971,14 +9988,14 @@ void draw_texture_matted(TextureInfo info, int x, int y, const std::vector<Matte
         Render::GL::CHyprOpenGLImpl::STextureRenderData data;
         data.a = alpha;
         if (clip)
-            g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+            g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
         Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), 
             alphaFB->getTexture(),
             outbox,
             data
         );
     });
-    g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROUNDINGBASE, float ROUNDINGPOWER, CBox fullBox, int range, bool sharp) {
@@ -10050,7 +10067,7 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
 
         g_pHyprRenderer->context().m_data.damage = saveDamage;
     });
-    g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
 }
 
 void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, float ROUNDINGPOWER, Bounds fullB, float size) {
@@ -11502,7 +11519,7 @@ void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
             }
             set_rounding(cornermask);
             if (clip)
-                g_pHyprRenderer->context().m_data.clipBox = tocbox(clipbox);
+                g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(tocbox(clipbox));
             tex->bind();
             tex->setTexParameter(GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             tex->setTexParameter(GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -11513,7 +11530,7 @@ void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
             if (clip)
                 g_pHyprRenderer->context().m_data.clipBox = tocbox(Bounds());
         });
-        g_pHyprRenderer->context().m_pass.add(makeUnique<AnyPass>(std::move(anydata)));
+        Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
     }
 }
 

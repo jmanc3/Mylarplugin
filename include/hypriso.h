@@ -410,8 +410,10 @@ struct HyprIso {
     void move(int id, int x, int y);
     // Geometry changes preserve workspace ownership. Only interactive drags
     // opt into following the destination monitor's active workspace.
-    void move_resize(int id, int x, int y, int w, int h, bool instant = true, bool follow_monitor = false);
-    void move_resize(int id, Bounds b, bool instant = true, bool follow_monitor = false);
+    // notify_effects feeds the previous/current geometry to the window effects
+    // controller so effects like wobble see plugin-driven moves.
+    void move_resize(int id, int x, int y, int w, int h, bool instant = true, bool follow_monitor = false, bool notify_effects = false);
+    void move_resize(int id, Bounds b, bool instant = true, bool follow_monitor = false, bool notify_effects = false);
 
     float fps(int monitor_id);
     

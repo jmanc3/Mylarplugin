@@ -99,7 +99,9 @@ void drag::motion(int cid) {
     auto new_bounds = data->bounds_start;
     new_bounds.x += diff_x;
     new_bounds.y += diff_y;
-    hypriso->move_resize(cid, new_bounds, true, true);
+    // notify_effects keeps window effects (wobble) in sync with plugin-driven drags,
+    // which bypass the core drag controller that normally reports position updates.
+    hypriso->move_resize(cid, new_bounds, true, true, true);
     { // damage 
         Bounds b = bounds_full_client(cid);
         static Bounds p = b;
