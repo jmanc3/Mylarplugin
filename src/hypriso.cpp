@@ -7809,7 +7809,12 @@ void ourRenderWindow(Render::CRenderContext& ctx, PHLWINDOW pWindow, PHLMONITOR 
     // render window decorations first, if not fullscreen full
     if (mode == Render::RENDER_PASS_ALL || mode == Render::RENDER_PASS_MAIN) {
 
-        const bool              TRANSFORMEDWINDOW = mw_has_active_transformers(pWindow);
+        // Snapshots never apply the transforms themselves (drawTransformedWindow
+        // disables them for standalone/renderingSnapshot). Routing the decorations
+        // through the offscreen transformed canvas would still clip them to that
+        // canvas, which made titlebars flicker when a transformer was active during
+        // a capture. Render snapshots directly instead.
+        const bool              TRANSFORMEDWINDOW = !standalone && !ctx.m_renderingSnapshot && mw_has_active_transformers(pWindow);
         UP<Render::CRenderPass> transformedPass;
         UP<Render::CScopeGuard> passRedirect;
         const bool              windowBlur         = renderdata.blur;
@@ -8044,7 +8049,15 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
         return {};
     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
-    
+
+    // beginRender() does not emit render.preChecks, so the plugin would otherwise
+    // lay out the decorations using whichever monitor was last rendered live. A
+    // capture of a window on another monitor (or with a different scale) would
+    // then place its titlebar outside the snapshot framebuffer.
+    const auto previousRenderingMonitor = rendering_monitor;
+    rendering_monitor = m;
+    defer(rendering_monitor = previousRenderingMonitor);
+
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
 
     const auto snapshotExtents = snapshot_extents(w);
@@ -8095,7 +8108,16 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
         // g_pDecorationPositioner->forceRecalcFor(w);
         // g_pDecorationPositioner->onWindowUpdate(w);
 
-        ourRenderWindow(g_pHyprRenderer->context(), w, m, w->presentation().renderPresentation(), Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
+        // The snapshot places the window at its resting position at the framebuffer
+        // origin, and the titlebar is positioned from that same resting position via
+        // the decoration offset. Live workspace/floating animation offsets would move
+        // the window body away from its titlebar and out of the snapshot canvas.
+        auto presentation                     = w->presentation().renderPresentation();
+        presentation.workspaceOffset          = {};
+        presentation.floatingOffset           = {};
+        presentation.workspaceOffsetAnimating = false;
+
+        ourRenderWindow(g_pHyprRenderer->context(), w, m, presentation, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
 
         // Shadow passes resolve their geometry when the render pass is submitted.
         // Complete it while the window is still positioned at the snapshot origin.
