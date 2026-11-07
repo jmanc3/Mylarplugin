@@ -456,8 +456,51 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
             for (auto& workspace : settings->workspace_tiling)
                 workspace.is_tiling = settings->is_tiling;
     }
-    
-    #undef bind
+
+    if (save) {
+        for (const auto& monitor : settings->monitors) {
+            if (monitor.output.empty())
+                continue;
+            out << "monitor = " << std::quoted(monitor.output) << " " << monitor.disabled << " " << std::quoted(monitor.mode) << " " << std::quoted(monitor.scale) << " "
+                << monitor.transform << " " << std::quoted(monitor.position) << " " << std::quoted(monitor.mirror) << " " << monitor.bitdepth << " " << std::quoted(monitor.cm)
+                << " " << std::quoted(monitor.sdr_eotf) << " " << monitor.vrr << " " << std::quoted(monitor.icc) << " " << monitor.reserved_area << " "
+                << monitor.supports_wide_color << " " << monitor.supports_hdr << " " << monitor.sdrbrightness << " " << monitor.sdrsaturation << " " << monitor.sdr_min_luminance
+                << " " << monitor.sdr_max_luminance << " " << monitor.min_luminance << " " << monitor.max_luminance << " " << monitor.max_avg_luminance << "\n";
+        }
+    } else {
+        settings->monitors.clear();
+        for (const auto& line : lines) {
+            std::istringstream entry(line);
+            std::string        key;
+            char               separator = '\0';
+            MylarMonitor       monitor;
+            int                disabled = 0;
+            if (!(entry >> key >> separator) || key != "monitor" || separator != '=')
+                continue;
+            if (!(entry >> std::quoted(monitor.output) >> disabled >> std::quoted(monitor.mode) >> std::quoted(monitor.scale) >> monitor.transform >>
+                  std::quoted(monitor.position) >> std::quoted(monitor.mirror) >> monitor.bitdepth >> std::quoted(monitor.cm) >> std::quoted(monitor.sdr_eotf) >> monitor.vrr >>
+                  std::quoted(monitor.icc) >> monitor.reserved_area >> monitor.supports_wide_color >> monitor.supports_hdr >> monitor.sdrbrightness >> monitor.sdrsaturation >>
+                  monitor.sdr_min_luminance >> monitor.sdr_max_luminance >> monitor.min_luminance >> monitor.max_luminance >> monitor.max_avg_luminance))
+                continue;
+            entry >> std::ws;
+            if (!entry.eof() || monitor.output.empty() || (disabled != 0 && disabled != 1))
+                continue;
+            monitor.disabled            = disabled == 1;
+            monitor.transform           = std::clamp(monitor.transform, 0, 7);
+            monitor.bitdepth            = monitor.bitdepth == 10 ? 10 : 8;
+            monitor.vrr                 = std::clamp(monitor.vrr, -1, 3);
+            monitor.reserved_area       = std::max(monitor.reserved_area, 0);
+            monitor.supports_wide_color = std::clamp(monitor.supports_wide_color, -1, 1);
+            monitor.supports_hdr        = std::clamp(monitor.supports_hdr, -1, 1);
+            auto existing               = std::ranges::find(settings->monitors, monitor.output, &MylarMonitor::output);
+            if (existing != settings->monitors.end())
+                *existing = monitor;
+            else
+                settings->monitors.push_back(monitor);
+        }
+    }
+
+#undef bind
 }
 
 static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
@@ -1374,9 +1417,7 @@ struct MonitorOption {
     float scale = 1.0;
     int transform = 0;
 
-    std::string wanted_mode_line;
-    float wanted_scale;
-    int wanted_transform = 0;
+    MylarMonitor             config;
 };
 
 static void make_screen_positioner(Container *parent, std::vector<MonitorOption *> &options, std::function<void (std::string)> on_clicked) {
@@ -1510,44 +1551,72 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
     }
 }
 
-static void current_to_wanted(MonitorOption *m) {
-    m->wanted_mode_line = fz("{}x{}@{:.2f}", m->w, m->h, m->fps);
-    m->wanted_scale = m->scale;
-    m->wanted_transform = m->transform;
+static void make_reset_textfield(Container* parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value,
+                                 std::string reset_value, std::function<void(std::string)> on_change);
+
+static bool monitor_int_from_text(const std::string& text, int& value) {
+    try {
+        size_t    parsed = 0;
+        const int result = std::stoi(text, &parsed);
+        if (parsed != text.size())
+            return false;
+        value = result;
+        return true;
+    } catch (...) { return false; }
 }
 
-static void fill_display_settings(Container *root);
+static bool monitor_float_from_text(const std::string& text, float& value) {
+    try {
+        size_t      parsed = 0;
+        const float result = std::stof(text, &parsed);
+        if (parsed != text.size())
+            return false;
+        value = result;
+        return true;
+    } catch (...) { return false; }
+}
 
-static void apply_wanted(MonitorOption *m) {
-    std::string wanted_scale = std::to_string(m->wanted_scale); 
-    if (m->wanted_scale == -1) {
-        wanted_scale = "auto";
-    }
-    std::ostringstream ss;
-        ss << "hl.monitor({ output = \"" << m->name << "\", mode = \"" << m->wanted_mode_line << "\", position = \"auto\", "
-        << "scale = " << wanted_scale
-        << ", transform = " << m->wanted_transform
-        << " })";
+static void commit_monitor_config(const MylarMonitor& config) {
+    main_thread([config]() {
+        auto existing = std::ranges::find(set->monitors, config.output, &MylarMonitor::output);
+        if (existing != set->monitors.end())
+            *existing = config;
+        else
+            set->monitors.push_back(config);
 
-    auto str = ss.str();
-    main_thread([str, m]() {
-        MylarMonitor mon;
-        mon.name = m->name;
-        mon.lua_config = str;
-
-        bool found = false;
-        for (auto &hm : set->monitors) {
-            if (hm.name == m->name) {
-                found = true;
-                hm.lua_config = str;
-            }
-        }
-            
-        if (!found)
-            set->monitors.push_back(mon);
-        
+        settings::load_save_settings(true, set);
         hypriso->reload();
     });
+}
+
+static void add_monitor_int_field(Container* parent, std::string title, std::string description, std::string icon, int initial_value, int reset_value, int min_value, int max_value,
+                                  std::function<void(int)> on_change) {
+    make_reset_textfield(parent, std::move(title), std::move(description), std::move(icon), false, std::to_string(initial_value), std::to_string(reset_value),
+                         [min_value, max_value, on_change = std::move(on_change)](std::string value) {
+                             int parsed = 0;
+                             if (!monitor_int_from_text(trim(value), parsed)) {
+                                 notify("Invalid value");
+                                 return;
+                             }
+                             on_change(std::clamp(parsed, min_value, max_value));
+                         });
+}
+
+static void add_monitor_float_field(Container* parent, std::string title, std::string description, std::string icon, float initial_value, float reset_value,
+                                    float min_value, float max_value, std::function<void(float)> on_change) {
+    make_reset_textfield(parent, std::move(title), std::move(description), std::move(icon), false, fz("{}", initial_value), fz("{}", reset_value),
+                         [min_value, max_value, on_change = std::move(on_change)](std::string value) {
+                             float parsed = 0;
+                             if (!monitor_float_from_text(trim(value), parsed)) {
+                                 notify("Invalid value");
+                                 return;
+                             }
+                             if (!std::isfinite(parsed)) {
+                                 notify("Invalid value");
+                                 return;
+                             }
+                             on_change(std::clamp(parsed, min_value, max_value));
+                         });
 }
 
 static void change_display_options(MonitorOption *m) {
@@ -1562,66 +1631,221 @@ static void change_display_options(MonitorOption *m) {
             padded_right->children.erase(padded_right->children.begin() + i);
         }
     }
-    
-    auto p = make_vert_space(padded_right, 20);
-    p->name = "removable";
-    
-    p = make_section_title(padded_right, fz(" {}", m->name));
-    p->name = "removable";
-    
-    p = make_vert_space(padded_right, 10);
-    p->name = "removable";
-    
-    auto res = fz("{}x{}@{:.2f}Hz", m->w, m->h, m->fps);
-    p = make_dropdown_option(padded_right, "Resolution", "Adjust the resolution of your display", "\uE7F4", res, m->option, [m](std::string selected) {
-        current_to_wanted(m); 
-        
-        m->wanted_mode_line = selected;
-        m->wanted_mode_line.pop_back();
-        m->wanted_mode_line.pop_back();
-       
-        apply_wanted(m);
-    });
-    p->name = "removable";
-    p = make_vert_space(padded_right, 4);
-    p->name = "removable";
 
-    std::vector<std::string> scales = {"Automatic"};
-    int count = 10;
-    for (int i = 0; i <= count; i++) {
-        int add = i * count;
-        int amount = 100 + add;
-        scales.push_back(fz("{}%", amount));
-    }
-    
-    res = fz("{}%", std::round(m->scale * 100));
-    p = make_dropdown_option(padded_right, "Scale", "Change the size of text, apps, and other items", "\ue93a", res, scales, [m](std::string selected) {
-        current_to_wanted(m); 
-        if (selected == "Automatic") {
-            m->wanted_scale = -1;
+    const size_t first_new = padded_right->children.size();
+
+    auto         commit = [m]() { commit_monitor_config(m->config); };
+
+    make_vert_space(padded_right, 20);
+
+    make_section_title(padded_right, fz(" {}", m->name));
+
+    make_vert_space(padded_right, 10);
+
+    make_bool(padded_right, "Disabled", "Turn this monitor off without disconnecting it", m->config.disabled, [m, commit](bool value) {
+        m->config.disabled = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    std::vector<std::string> modes = {"Preferred", "High refresh rate", "High resolution", "Maximum width"};
+    modes.insert(modes.end(), m->option.begin(), m->option.end());
+
+    std::string selected_mode = m->config.mode;
+    if (selected_mode == "preferred")
+        selected_mode = "Preferred";
+    else if (selected_mode == "highrr")
+        selected_mode = "High refresh rate";
+    else if (selected_mode == "highres")
+        selected_mode = "High resolution";
+    else if (selected_mode == "maxwidth")
+        selected_mode = "Maximum width";
+    else if (selected_mode.contains('@') && !selected_mode.ends_with("Hz"))
+        selected_mode += "Hz";
+
+    make_dropdown_option(padded_right, "Mode", "Resolution and refresh rate", "\uE7F4", selected_mode, modes, [m, commit](std::string selected) {
+        if (selected == "Preferred")
+            m->config.mode = "preferred";
+        else if (selected == "High refresh rate")
+            m->config.mode = "highrr";
+        else if (selected == "High resolution")
+            m->config.mode = "highres";
+        else if (selected == "Maximum width")
+            m->config.mode = "maxwidth";
+        else {
+            if (selected.ends_with("Hz"))
+                selected.resize(selected.size() - 2);
+            m->config.mode = selected;
+        }
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "Scale", "Scale factor, or \"auto\"", "\ue93a", false, m->config.scale, "auto", [m, commit](std::string value) {
+        value           = trim(value);
+        if (value.empty() || value == "auto") {
+            m->config.scale = "auto";
         } else {
-            selected.pop_back();
-            float f = stof(selected);
-            m->wanted_scale = f / 100.0f;
+            float scale = 0;
+            if (!monitor_float_from_text(value, scale) || !std::isfinite(scale) || scale < 0.3f) {
+                notify("Scale must be auto or a number from 0.3 to 6");
+                return;
+            }
+            m->config.scale = fz("{}", std::min(scale, 6.0f));
         }
-        apply_wanted(m);
+        commit();
     });
-    p->name = "removable";
-    
-    p = make_vert_space(padded_right, 4);
-    p->name = "removable";
 
-    std::vector<std::string> orientations= {"Landscape", "Vertical"};
-    p = make_dropdown_option(padded_right, "Orientation", "Change the rotation of display", "\uE7AD", "Landscape", orientations, [m](std::string selected) {
-        current_to_wanted(m); 
-        if (selected == "Landscape") {
-            m->wanted_transform = 0;
-        } else if (selected == "Vertical") {
-            m->wanted_transform = 1;
-        }
-        apply_wanted(m);
+    make_vert_space(padded_right, 4);
+
+    const std::vector<std::string> transforms = {"Normal (0°)", "Rotate 90°", "Rotate 180°", "Rotate 270°", "Flipped", "Flipped + 90°", "Flipped + 180°", "Flipped + 270°"};
+    const int transform_index = std::clamp(m->config.transform, 0, 7);
+    make_dropdown_option(padded_right, "Transform", "Rotation and reflection applied to the display", "\uE7AD", transforms[transform_index], transforms,
+                         [m, commit, transforms](std::string selected) {
+                             auto found = std::ranges::find(transforms, selected);
+                             if (found == transforms.end())
+                                 return;
+                             m->config.transform = static_cast<int>(std::distance(transforms.begin(), found));
+                             commit();
+                         });
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "Position", "Position such as \"1920x0\" or \"auto\"", "\uE7F4", false, m->config.position, "auto", [m, commit](std::string value) {
+        value              = trim(value);
+        m->config.position = value.empty() ? "auto" : value;
+        commit();
     });
-    p->name = "removable";
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "Mirror", "Monitor output to mirror, leave empty for none", "\uE7F4", false, m->config.mirror, "", [m, commit](std::string value) {
+        m->config.mirror = trim(value);
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    make_dropdown_option(padded_right, "Bit depth", "Color bit depth", "\ue93a", std::to_string(m->config.bitdepth), {"8", "10"}, [m, commit](std::string selected) {
+        m->config.bitdepth = selected == "10" ? 10 : 8;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    const std::vector<std::string> cm_options = {"auto", "srgb", "wide", "edid", "hdr", "hdredid", "dcip3", "dp3", "adobe"};
+    make_dropdown_option(padded_right, "Color management", "Color management preset", "\ue93a", m->config.cm, cm_options, [m, commit](std::string selected) {
+        m->config.cm = selected;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    const std::vector<std::string> eotf_options = {"default", "auto", "srgb", "gamma22", "gamma22force"};
+    make_dropdown_option(padded_right, "SDR EOTF", "Transfer function used for SDR content", "\ue93a", m->config.sdr_eotf, eotf_options, [m, commit](std::string selected) {
+        m->config.sdr_eotf = selected;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    const std::vector<std::string> vrr_options = {"-1", "0", "1", "2", "3"};
+    make_dropdown_option(padded_right, "VRR", "Variable refresh rate mode (-1 default, 0 off, 1 on, 2 fullscreen, 3 fullscreen only)", "\ue93a", std::to_string(m->config.vrr),
+                         vrr_options, [m, commit](std::string selected) {
+                             int parsed = 0;
+                             if (!monitor_int_from_text(selected, parsed))
+                                 return;
+                             m->config.vrr = std::clamp(parsed, -1, 3);
+                             commit();
+                         });
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "ICC profile", "Path to an ICC profile, leave empty for none", "\ue93a", false, m->config.icc, "", [m, commit](std::string value) {
+        m->config.icc = trim(value);
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_int_field(padded_right, "Reserved area", "Reserved area in pixels", "\ue93a", m->config.reserved_area, 0, 0, INT_MAX, [m, commit](int value) {
+        m->config.reserved_area = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    const std::vector<std::string> support_options = {"Auto", "Force enable", "Force disable"};
+    make_dropdown_option(padded_right, "Supports wide color", "Override wide color gamut support detection", "\ue93a",
+                         m->config.supports_wide_color == 1 ? "Force enable" : (m->config.supports_wide_color == -1 ? "Force disable" : "Auto"), support_options,
+                         [m, commit](std::string selected) {
+                             m->config.supports_wide_color = selected == "Force enable" ? 1 : (selected == "Force disable" ? -1 : 0);
+                             commit();
+                         });
+
+    make_vert_space(padded_right, 4);
+
+    make_dropdown_option(padded_right, "Supports HDR", "Override HDR support detection", "\ue93a",
+                         m->config.supports_hdr == 1 ? "Force enable" : (m->config.supports_hdr == -1 ? "Force disable" : "Auto"), support_options,
+                         [m, commit](std::string selected) {
+                             m->config.supports_hdr = selected == "Force enable" ? 1 : (selected == "Force disable" ? -1 : 0);
+                             commit();
+                         });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_float_field(padded_right, "SDR brightness", "SDR brightness multiplier (0–10)", "\ue93a", m->config.sdrbrightness, 1.0f, 0.0f, 10.0f, [m, commit](float value) {
+        m->config.sdrbrightness = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_float_field(padded_right, "SDR saturation", "SDR saturation multiplier (0–10)", "\ue93a", m->config.sdrsaturation, 1.0f, 0.0f, 10.0f, [m, commit](float value) {
+        m->config.sdrsaturation = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_float_field(padded_right, "SDR min luminance", "Minimum SDR luminance", "\ue93a", m->config.sdr_min_luminance, 0.2f, 0.0f, 10000.0f, [m, commit](float value) {
+        m->config.sdr_min_luminance = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_int_field(padded_right, "SDR max luminance", "Maximum SDR luminance", "\ue93a", m->config.sdr_max_luminance, 80, INT_MIN, INT_MAX, [m, commit](int value) {
+        m->config.sdr_max_luminance = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_float_field(padded_right, "Min luminance", "Minimum luminance override (-1 uses automatic)", "\ue93a", m->config.min_luminance, -1.0f, -1.0f, 10000.0f, [m, commit](float value) {
+        m->config.min_luminance = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_int_field(padded_right, "Max luminance", "Maximum luminance override", "\ue93a", m->config.max_luminance, -1, INT_MIN, INT_MAX, [m, commit](int value) {
+        m->config.max_luminance = value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    add_monitor_int_field(padded_right, "Max average luminance", "Maximum average luminance override", "\ue93a", m->config.max_avg_luminance, -1, INT_MIN, INT_MAX,
+                          [m, commit](int value) {
+                              m->config.max_avg_luminance = value;
+                              commit();
+                          });
+
+    for (size_t i = first_new; i < padded_right->children.size(); i++)
+        padded_right->children[i]->name = "removable";
 }
 
 static void fill_display_settings(Container *root) {
@@ -1705,6 +1929,19 @@ static void fill_display_settings(Container *root) {
         }
     }
 
+    for (auto o : options) {
+        auto existing = std::ranges::find(set->monitors, o->name, &MylarMonitor::output);
+        if (existing != set->monitors.end()) {
+            o->config = *existing;
+            continue;
+        }
+
+        o->config.output    = o->name;
+        o->config.mode      = fz("{}x{}@{:.2f}", o->w, o->h, o->fps);
+        o->config.scale     = fz("{}", o->scale);
+        o->config.transform = o->transform;
+    }
+
     if (options.size() > 0) {
         make_screen_positioner(padded_right, options, [options](std::string monitor_name) {
             for (auto o : options) {
@@ -1724,8 +1961,6 @@ static void fill_display_settings(Container *root) {
     }
 
 }
-
-static void make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change);
 
 static void fill_desktop_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);

@@ -62,8 +62,29 @@ struct MylarMonitorRule {
 };
 
 struct MylarMonitor {
-    std::string name;
-    std::string lua_config;
+    // Mirrors the Hyprland Lua monitor rule fields.
+    std::string output;
+    bool        disabled  = false;
+    std::string mode      = "preferred";
+    std::string scale     = "auto";
+    int         transform = 0;
+    std::string position  = "auto";
+    std::string mirror;
+    int         bitdepth = 8;
+    std::string cm       = "srgb";
+    std::string sdr_eotf = "default";
+    int         vrr      = 0;
+    std::string icc;
+    int         reserved_area       = 0;
+    int         supports_wide_color = 0;
+    int         supports_hdr        = 0;
+    float       sdrbrightness       = 1.0f;
+    float       sdrsaturation       = 1.0f;
+    float       sdr_min_luminance   = 0.2f;
+    int         sdr_max_luminance   = 80;
+    float       min_luminance       = -1.0f;
+    int         max_luminance       = -1;
+    int         max_avg_luminance   = -1;
 };
 
 struct SWorkspaceTiling {
@@ -112,7 +133,6 @@ struct ConfigSettings {
     int tiling_window_gap = 8;
     std::vector<SWorkspaceTiling> workspace_tiling;
 
-    std::vector<MylarMonitorRule> monitor_rules;
     std::vector<MylarMonitor> monitors;
 };
 
