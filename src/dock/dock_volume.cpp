@@ -56,6 +56,7 @@ struct AudioData : UserData {
     std::string icon;
     float level = 100;
     bool muted = false;
+    bool is_master = false;
     std::string uuid;
     std::vector<std::string> uuids;
     int pid = -1;
@@ -68,6 +69,7 @@ struct AudioData : UserData {
 };
 
 struct VolumeRow {
+    bool is_master = false;
     std::string id;
     std::string title;
     std::string icon;
@@ -125,15 +127,21 @@ static Container *fill_out_volume_slider(Container *c) {
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         set_volume(audio_data->uuids, scalar, audio_data->muted);
-        audio_play_blip();
+        
+        if (audio_data->is_master)
+            audio_play_blip();
     };
     c->when_drag_start = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        stop_volume_drag_blip(dock, c);
-        schedule_volume_drag_blip(dock, c);
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
+        
+        if (audio_data->is_master) {
+            stop_volume_drag_blip(dock, c);
+            schedule_volume_drag_blip(dock, c);
+        }
+        
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         set_volume(audio_data->uuids, scalar, audio_data->muted);
     };
     c->when_drag = [](Container *root, Container *c) {
@@ -144,12 +152,16 @@ static Container *fill_out_volume_slider(Container *c) {
     };
     c->when_drag_end = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        stop_volume_drag_blip(dock, c);
-        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
+
+        if (audio_data->is_master)
+            stop_volume_drag_blip(dock, c);
+        float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
+
         set_volume(audio_data->uuids, scalar, audio_data->muted);
-        audio_play_blip();
+        if (audio_data->is_master)
+            audio_play_blip();
     };
 
     return nullptr;
@@ -371,6 +383,7 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
                 std::string subtitle_for_group;
                 for (auto grouped_client : group) {
                     merged.uuids.push_back(grouped_client->uuid);
+                    merged.is_master = merged.is_master || grouped_client->is_master_volume();
                     merged.level += grouped_client->get_volume();
                     merged.muted = merged.muted && grouped_client->is_muted();
                     if (merged.icon.empty() && !grouped_client->icon_name.empty()) {
@@ -396,6 +409,7 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
                         child.level = grouped_client->get_volume();
                         child.muted = grouped_client->is_muted();
                         child.pid = grouped_client->pid;
+                        child.is_master = grouped_client->is_master_volume();
                         child.indent_level = 1;
                         child.uuids.push_back(grouped_client->uuid);
                         rows.push_back(std::move(child));
@@ -415,6 +429,7 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
         single.level = client.get_volume();
         single.muted = client.is_muted();
         single.pid = client.pid;
+        single.is_master = client.is_master_volume();
         single.uuids.push_back(client.uuid);
         rows.push_back(std::move(single));
     }
@@ -479,7 +494,7 @@ void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
 
     auto current = get_current_time_in_ms();
     for (auto client : clients) {
-        if (client.is_master && (current - last_time_volume_adjusted) > 100) {
+        if (client.is_master_volume() && (current - last_time_volume_adjusted) > 100) {
             volume_level = std::round(client.get_volume() * 100);
             is_master_muted = client.is_muted();
         }
@@ -497,6 +512,7 @@ void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
         audio_data->pid = row->pid;
         audio_data->icon = row->icon;
         audio_data->muted = row->muted;
+        audio_data->is_master = row->is_master;
         audio_data->title = row->title;
         audio_data->merged = row->merged;
         audio_data->indent_level = row->indent_level;
