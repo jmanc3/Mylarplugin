@@ -6984,11 +6984,16 @@ void draw_texture(TextureInfo info, int x, int y, float a, float clip_w) {
 }
 
 static bool cursor_hidden_for_desktop_fade = false;
+static bool cursor_hidden_for_screenshot_draw = false;
 static CFunctionHook* desktop_fade_cursor_mode_hook = nullptr;
 static CFunctionHook* desktop_fade_cursor_animation_hook = nullptr;
 
+static bool cursor_should_be_hidden() {
+    return cursor_hidden_for_desktop_fade || cursor_hidden_for_screenshot_draw;
+}
+
 static void hook_desktop_fade_cursor_mode(Render::IHyprRenderer* renderer) {
-    if (cursor_hidden_for_desktop_fade) {
+    if (cursor_should_be_hidden()) {
         renderer->setCursorHidden(true);
         return;
     }
@@ -6999,7 +7004,7 @@ static void hook_desktop_fade_cursor_mode(Render::IHyprRenderer* renderer) {
 
 static void hook_desktop_fade_cursor_animation(Pointer::Cursor::CCursorManager* cursor) {
     // Animated cursor frames can otherwise reinstall a hidden hardware cursor.
-    if (cursor_hidden_for_desktop_fade)
+    if (cursor_should_be_hidden())
         return;
 
     using Original = void (*)(Pointer::Cursor::CCursorManager*);
@@ -7025,27 +7030,27 @@ static CFunctionHook* create_desktop_fade_cursor_hook(const std::string& name, c
     return nullptr;
 }
 
-void set_cursor_hidden_for_desktop_fade(bool hidden) {
-    if (cursor_hidden_for_desktop_fade == hidden)
-        return;
+static bool ensure_desktop_fade_cursor_hooks() {
+    if (desktop_fade_cursor_mode_hook)
+        return true;
 
-    if (hidden && !desktop_fade_cursor_mode_hook) {
-        desktop_fade_cursor_mode_hook = create_desktop_fade_cursor_hook(
-            "ensureCursorRenderingMode", "Render::IHyprRenderer::ensureCursorRenderingMode()", rc<const void*>(&hook_desktop_fade_cursor_mode));
-        if (!desktop_fade_cursor_mode_hook)
-            return;
+    desktop_fade_cursor_mode_hook = create_desktop_fade_cursor_hook(
+        "ensureCursorRenderingMode", "Render::IHyprRenderer::ensureCursorRenderingMode()", rc<const void*>(&hook_desktop_fade_cursor_mode));
+    if (!desktop_fade_cursor_mode_hook)
+        return false;
 
-        desktop_fade_cursor_animation_hook = create_desktop_fade_cursor_hook(
-            "tickAnimatedCursor", "Pointer::Cursor::CCursorManager::tickAnimatedCursor()", rc<const void*>(&hook_desktop_fade_cursor_animation));
-        if (!desktop_fade_cursor_animation_hook) {
-            HyprlandAPI::removeFunctionHook(globals->api, desktop_fade_cursor_mode_hook);
-            desktop_fade_cursor_mode_hook = nullptr;
-            return;
-        }
+    desktop_fade_cursor_animation_hook = create_desktop_fade_cursor_hook(
+        "tickAnimatedCursor", "Pointer::Cursor::CCursorManager::tickAnimatedCursor()", rc<const void*>(&hook_desktop_fade_cursor_animation));
+    if (!desktop_fade_cursor_animation_hook) {
+        HyprlandAPI::removeFunctionHook(globals->api, desktop_fade_cursor_mode_hook);
+        desktop_fade_cursor_mode_hook = nullptr;
+        return false;
     }
 
-    cursor_hidden_for_desktop_fade = hidden;
+    return true;
+}
 
+static void update_cursor_hidden_state() {
     // ensureCursorRenderingMode() can update the hardware cursor, which starts a
     // nested render pass and clears the renderer's current monitor. This is
     // called from the initial fade-in paint callback, so doing it inline leaves
@@ -7061,6 +7066,28 @@ void set_cursor_hidden_for_desktop_fade(bool hidden) {
     // Repaint immediately when starting, finishing, or skipping the fade.
     for (const auto& monitor : State::monitorState()->monitors())
         g_pHyprRenderer->damageMonitor(monitor);
+}
+
+void set_cursor_hidden_for_desktop_fade(bool hidden) {
+    if (cursor_hidden_for_desktop_fade == hidden)
+        return;
+
+    if (hidden && !ensure_desktop_fade_cursor_hooks())
+        return;
+
+    cursor_hidden_for_desktop_fade = hidden;
+    update_cursor_hidden_state();
+}
+
+void set_cursor_hidden_for_screenshot_draw(bool hidden) {
+    if (cursor_hidden_for_screenshot_draw == hidden)
+        return;
+
+    if (hidden && !ensure_desktop_fade_cursor_hooks())
+        return;
+
+    cursor_hidden_for_screenshot_draw = hidden;
+    update_cursor_hidden_state();
 }
 
 void center_cursor_on_monitor(int monitor) {
@@ -7764,6 +7791,14 @@ void ourRenderWindow(Render::CRenderContext& ctx, PHLWINDOW pWindow, PHLMONITOR 
         return;
 
     TRACY_GPU_ZONE("RenderWindow");
+
+    // auto modes = Fullscreen::controller()->getFullscreenModes(pWindow);
+    // auto client = modes.client;
+    // auto internal = modes.internal;
+    // auto fullscreen = (client == Fullscreen::FSMODE_FULLSCREEN && internal == Fullscreen::FSMODE_FULLSCREEN);
+    // if (pWindow->metadata().appID() == "mpv" && fullscreen) {
+    //     return;
+    // }
 
     const auto  WORKSPACEOFFSET = presentation.workspaceOffset;
     const auto  FLOATINGOFFSET  = presentation.floatingOffset;

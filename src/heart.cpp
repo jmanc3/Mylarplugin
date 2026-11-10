@@ -54,6 +54,8 @@
 #include <thread>
 
 static bool META_PRESSED = false;
+static bool SHIFT_PRESSED = false;
+static bool CTRL_PRESSED = false;
 static float zoom_factor = 1.0;
 static long zoom_nicely_ended_time = 0;
 static bool zoom_needs_speed_update = true;
@@ -234,7 +236,8 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
     bool current_was_mouse = source == WL_POINTER_AXIS_SOURCE_WHEEL;
     auto current = get_current_time_in_ms();
     auto time_since = (current - zoom_nicely_ended_time);
-    if (IS_META_PRESSED() && time_since > 1000) {
+    const bool draw_zoom_allowed = !screenshot_tool::is_drawing() || SHIFT_PRESSED;
+    if (IS_META_PRESSED() && time_since > 1000 && draw_zoom_allowed) {
         auto dtdt = (delta * .05);
         if (!current_was_mouse) {
             dtdt *= .35; // slow down on touchpads
@@ -368,6 +371,11 @@ void toggle_layout() {
 }
 
 static bool on_key_press(int id, int key, int state, bool update_mods) {
+    if (key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT)
+        SHIFT_PRESSED = state;
+    if (key == KEY_LEFTCTRL || key == KEY_RIGHTCTRL)
+        CTRL_PRESSED = state;
+
     bool consume = quick_shortcut_menu::on_key_press(id, key, state, update_mods);
     if (consume)
         return consume;
@@ -1906,6 +1914,10 @@ void add_hyprctl_dispatchers() {
         screenshot_tool::open();
         return 0;
     });
+    hypriso->add_hyprctl_dispatcher("screenshot_tool_draw", [](lua_State *) {
+        screenshot_tool::open(true);
+        return 0;
+    });
     hypriso->add_hyprctl_dispatcher("snap_left", [](lua_State *) {
         do_snap(SnapPosition::LEFT);
         return 0;
@@ -2870,6 +2882,14 @@ void heart::set_force_meta_open(bool state) {
 void heart::set_zoom(float zoom) {
     zoom_factor = zoom;
     hypriso->set_zoom_factor(zoom);
+}
+
+bool heart::shift_pressed() {
+    return SHIFT_PRESSED;
+}
+
+bool heart::ctrl_pressed() {
+    return CTRL_PRESSED;
 }
 
 

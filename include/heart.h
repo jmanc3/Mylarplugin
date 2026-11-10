@@ -376,6 +376,8 @@ namespace heart {
 
     void set_force_meta_open(bool state);
     void set_zoom(float zoom);
+    bool shift_pressed();
+    bool ctrl_pressed();
 }
 
 #endif // heart_h_INCLUDED

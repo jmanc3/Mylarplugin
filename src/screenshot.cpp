@@ -5,10 +5,100 @@
 #include <algorithm>
 #include <cmath>
 #include <linux/input-event-codes.h>
+#include <vector>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 static bool showing = true;
-static int mode = 0; // 1 rectangle, 2 window, 3 colorpick
+static int mode = 0; // 1 rectangle, 2 window, 3 colorpick, 4 draw
+static constexpr float DRAW_BRUSH_MIN = 2.0f;
+static constexpr float DRAW_BRUSH_MAX = 40.0f;
+static constexpr float DRAW_BRUSH_DEFAULT = 5.0f;
+
+struct DrawPoint {
+    float x = 0;
+    float y = 0;
+};
+
+using DrawStroke = std::vector<DrawPoint>;
+using DrawStrokes = std::vector<DrawStroke>;
+
+static DrawStrokes draw_strokes;
+static bool draw_active = false;
+static bool draw_erasing = false;
+static float draw_brush_size = DRAW_BRUSH_DEFAULT;
+static int draw_bubble_corner = 0;
+static std::vector<DrawStrokes> draw_undo;
+static std::vector<DrawStrokes> draw_redo;
+static constexpr size_t DRAW_HISTORY_LIMIT = 100;
+
+static void draw_begin_action() {
+    draw_undo.push_back(draw_strokes);
+    if (draw_undo.size() > DRAW_HISTORY_LIMIT)
+        draw_undo.erase(draw_undo.begin());
+    draw_redo.clear();
+}
+
+static void draw_undo_action() {
+    if (draw_undo.empty())
+        return;
+
+    draw_redo.push_back(std::move(draw_strokes));
+    draw_strokes = std::move(draw_undo.back());
+    draw_undo.pop_back();
+}
+
+static void draw_redo_action() {
+    if (draw_redo.empty())
+        return;
+
+    draw_undo.push_back(std::move(draw_strokes));
+    draw_strokes = std::move(draw_redo.back());
+    draw_redo.pop_back();
+}
+
+static void draw_erase_at(float x, float y) {
+    const float radius = std::max(1.0f, draw_brush_size * .5f);
+    const float radius2 = radius * radius;
+    DrawStrokes result;
+
+    for (const auto &stroke : draw_strokes) {
+        if (stroke.empty())
+            continue;
+
+        DrawStroke piece;
+        auto flush = [&]() {
+            if (piece.empty())
+                return;
+            result.push_back(std::move(piece));
+            piece.clear();
+        };
+        auto sample = [&](float px, float py) {
+            const float dx = px - x;
+            const float dy = py - y;
+            if (dx * dx + dy * dy <= radius2)
+                flush();
+            else
+                piece.push_back({px, py});
+        };
+
+        sample(stroke[0].x, stroke[0].y);
+        for (size_t i = 1; i < stroke.size(); i++) {
+            const auto &a = stroke[i - 1];
+            const auto &b = stroke[i];
+            const float dx = b.x - a.x;
+            const float dy = b.y - a.y;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+            const int steps = std::max(1, (int) std::ceil(dist));
+            for (int j = 1; j <= steps; j++) {
+                const float t = (float) j / (float) steps;
+                sample(a.x + dx * t, a.y + dy * t);
+            }
+        }
+        flush();
+    }
+
+    draw_strokes = std::move(result);
+}
 
 Container *label(Container *parent, std::string icon, std::string text) {
     static float label_h = 20;
@@ -77,6 +167,13 @@ void actual_open_screenshot_tool() {
     rect_selection = Bounds();
     static bool rect_showing = false;
     rect_showing = false;
+    draw_strokes.clear();
+    draw_active = false;
+    draw_erasing = false;
+    draw_brush_size = DRAW_BRUSH_DEFAULT;
+    draw_bubble_corner = 0;
+    draw_undo.clear();
+    draw_redo.clear();
     
     auto select_box = tool->child(::hbox, FILL_SPACE, FILL_SPACE);
     select_box->when_paint = [](Container *actual_root, Container *c) {
@@ -85,6 +182,8 @@ void actual_open_screenshot_tool() {
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         
         if (stage != (int) STAGE::RENDER_PRE_CURSOR)
+            return;
+        if (mode == 4)
             return;
         renderfix
         auto mb = bounds_monitor(rid);
@@ -277,7 +376,7 @@ void actual_open_screenshot_tool() {
     };
     select_box->when_mouse_leaves_container = [](Container *actual_root, Container *c) {
         consume_event(actual_root, c);
-        if (mode >= 1)
+        if (mode >= 1 && mode != 4)
             setCursorImageUntilUnset("crosshair");
     };
     select_box->when_drag_start = [selection_drag_type_for_point, cursor_from_selection_drag](Container *actual_root, Container *c) {
@@ -335,6 +434,20 @@ void actual_open_screenshot_tool() {
             setCursorImageUntilUnset("crosshair");
         }; 
     }
+    {
+        auto ch = label(type, "\uE790", "Draw");
+        ch->when_clicked = paint {
+            showing = true;
+            mode = 4;
+            rect_showing = false;
+            rect_selection = Bounds();
+            draw_active = false;
+            draw_erasing = false;
+            draw_bubble_corner = 0;
+            unsetCursorImage();
+            set_cursor_hidden_for_screenshot_draw(true);
+        };
+    }
     
     //label(type, "\uF408", "Freeform");
     
@@ -370,13 +483,13 @@ void actual_open_screenshot_tool() {
             final_w, final_h);
         type->real_bounds = type->wanted_bounds;
         layout(actual_root, type, type->real_bounds);
-        type->exists = showing && mode != 1 && mode != 3;
+        type->exists = showing && mode != 1 && mode != 3 && mode != 4;
 
         auto select_box = c->children[1];
         auto fixed = fixed_box(rect_selection.x, rect_selection.y, rect_selection.w, rect_selection.h);
         select_box->wanted_bounds = fixed;
         select_box->real_bounds = fixed;
-        select_box->exists = true;
+        select_box->exists = mode != 4;
         if (rect_showing) {
             layout(actual_root, select_box, select_box->real_bounds);
         }
@@ -450,8 +563,82 @@ void actual_open_screenshot_tool() {
                 border(pixelBounds, {0, 0, 0, 1}, 1);
             }
             */
-            if (mode != 1 && mode != 3)
+            if (mode != 1 && mode != 3 && mode != 4)
                 rect(c->real_bounds, {0, 0, 0, .1});
+
+            if (mode == 4) {
+                auto mb = bounds_monitor(rid);
+
+                auto to_render = [&](float x, float y) {
+                    return Bounds{(x - mb.x) * s, (y - mb.y) * s, 0, 0};
+                };
+                auto diameter = std::max(1.0f, draw_brush_size * s);
+                auto stamp = [&](float x, float y) {
+                    auto p = to_render(x, y);
+                    Bounds b{p.x - diameter * .5f, p.y - diameter * .5f, diameter, diameter};
+                    b.round();
+                    rect(b, {1, 0, 0, 1}, 0, b.w * .5f);
+                };
+
+                for (const auto &stroke : draw_strokes) {
+                    if (stroke.empty())
+                        continue;
+                    stamp(stroke[0].x, stroke[0].y);
+                    for (size_t i = 1; i < stroke.size(); i++) {
+                        const auto &a = stroke[i - 1];
+                        const auto &b = stroke[i];
+                        const float dx = b.x - a.x;
+                        const float dy = b.y - a.y;
+                        const float dist = std::sqrt(dx * dx + dy * dy);
+                        const int steps = std::max(1, (int) std::ceil(dist / std::max(1.0f, draw_brush_size * .25f)));
+                        for (int j = 1; j <= steps; j++) {
+                            const float t = (float) j / (float) steps;
+                            stamp(a.x + dx * t, a.y + dy * t);
+                        }
+                    }
+                }
+
+                if (rid == hypriso->monitor_from_cursor()) {
+                    auto p = to_render(actual_root->mouse_current_x, actual_root->mouse_current_y);
+                    Bounds preview{p.x - diameter * .5f, p.y - diameter * .5f, diameter, diameter};
+                    preview.round();
+                    rect(preview, {1, 0, 0, .18}, 0, preview.w * .5f);
+                    border(preview, {1, 1, 1, .9}, std::max(1.0f, s), 0, preview.w * .5f);
+                }
+
+                if (rid == hypriso->monitor_from_cursor()) {
+                    const float margin = 18.0f * s;
+                    auto text = gen_text_texture(set->font, "Drawing", 14.0f * s, {.96, .97, 1, .96});
+                    Bounds bubble{0, 0, (float) text.w + 26.0f * s, std::max((float) text.h + 14.0f * s, 32.0f * s)};
+                    bubble.round();
+
+                    auto place_bubble = [&](int corner) {
+                        const float x = (corner == 0 || corner == 1) ? (mb.w * s - bubble.w - margin) : margin;
+                        const float y = (corner == 1 || corner == 2) ? (mb.h * s - bubble.h - margin) : margin;
+                        bubble.x = std::round(x);
+                        bubble.y = std::round(y);
+                    };
+                    place_bubble(draw_bubble_corner);
+
+                    auto mou = mouse();
+                    Bounds hit = bubble;
+                    hit.grow(16.0f * s);
+                    const double mx = (mou.x - mb.x) * s;
+                    const double my = (mou.y - mb.y) * s;
+                    if (mx >= hit.x && mx <= hit.x + hit.w && my >= hit.y && my <= hit.y + hit.h) {
+                        draw_bubble_corner = (draw_bubble_corner + 1) % 4;
+                        place_bubble(draw_bubble_corner);
+                    }
+
+                    rect(bubble, {.08, .08, .1, .84}, 0, bubble.h * .5f, 2, true);
+                    border(bubble, {1, 1, 1, .16}, std::max(1.0f, s), 0, bubble.h * .5f, 2);
+                    if (text.id != -1) {
+                        draw_texture(text, {bubble.x + (bubble.w - text.w) * .5, bubble.y + (bubble.h - text.h) * .5,
+                                            (double) text.w, (double) text.h});
+                        free_text_texture(text.id);
+                    }
+                }
+            }
         }
 
         hypriso->damage_entire(rid);
@@ -466,7 +653,41 @@ void actual_open_screenshot_tool() {
         c->automatically_paint_children = false;
     };
     tool->when_drag_end_is_click = false;
+    tool->when_mouse_down = [](Container *actual_root, Container *c) {
+        consume_event(actual_root, c);
+        if (mode != 4)
+            return;
+
+        if (c->state.mouse_button_pressed == BTN_LEFT) {
+            draw_begin_action();
+            draw_erasing = false;
+            draw_active = true;
+            draw_strokes.push_back({});
+            draw_strokes.back().push_back({(float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y});
+        } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
+            draw_begin_action();
+            draw_active = false;
+            draw_erasing = true;
+            draw_erase_at((float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y);
+        }
+        damage_all();
+    };
+    tool->when_fine_scrolled = [](Container *actual_root, Container *c, double scroll_x, double scroll_y, bool came_from_touchpad) {
+        consume_event(actual_root, c);
+        if (mode != 4)
+            return;
+        if (heart::shift_pressed())
+            return; // Shift + scroll zooms instead of resizing the brush.
+        draw_brush_size = std::clamp(draw_brush_size + (float) scroll_y * .1f, DRAW_BRUSH_MIN, DRAW_BRUSH_MAX);
+        damage_all();
+    };
     tool->when_clicked = paint {
+        if (mode == 4) {
+            consume_event(actual_root, c);
+            draw_active = false;
+            draw_erasing = false;
+            return;
+        }
         if (mode == 2) {
             auto cid = hypriso->window_from_mouse();
             hypriso->bring_to_front(cid);
@@ -496,6 +717,24 @@ void actual_open_screenshot_tool() {
         });
     };
     tool->when_drag_start = [](Container *actual_root, Container *c) {
+        if (mode == 4) {
+            consume_event(actual_root, c);
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                draw_erasing = true;
+                draw_active = false;
+                draw_erase_at((float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y);
+                damage_all();
+                return;
+            }
+            if (!draw_active && c->state.mouse_button_pressed == BTN_LEFT) {
+                draw_begin_action();
+                draw_active = true;
+                draw_erasing = false;
+                draw_strokes.push_back({});
+                draw_strokes.back().push_back({(float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y});
+            }
+            return;
+        }
         if (mode == 0) {
             mode = 1;
             setCursorImageUntilUnset("crosshair");
@@ -507,6 +746,15 @@ void actual_open_screenshot_tool() {
         }
     };
     tool->when_drag = [](Container *actual_root, Container *c) {
+        if (mode == 4) {
+            consume_event(actual_root, c);
+            if (draw_erasing)
+                draw_erase_at((float) actual_root->mouse_current_x, (float) actual_root->mouse_current_y);
+            else if (draw_active && !draw_strokes.empty())
+                draw_strokes.back().push_back({(float) actual_root->mouse_current_x, (float) actual_root->mouse_current_y});
+            damage_all();
+            return;
+        }
         if (mode == 1) {
             rect_selection = Bounds(rect_selection.x, rect_selection.y, 
                                     actual_root->mouse_current_x, actual_root->mouse_current_y);
@@ -514,6 +762,17 @@ void actual_open_screenshot_tool() {
         }
     };
     tool->when_drag_end = [](Container *actual_root, Container *c) {
+        if (mode == 4) {
+            consume_event(actual_root, c);
+            if (draw_erasing)
+                draw_erase_at((float) actual_root->mouse_current_x, (float) actual_root->mouse_current_y);
+            else if (draw_active && !draw_strokes.empty())
+                draw_strokes.back().push_back({(float) actual_root->mouse_current_x, (float) actual_root->mouse_current_y});
+            draw_active = false;
+            draw_erasing = false;
+            damage_all();
+            return;
+        }
         if (mode == 1) {
             rect_selection = Bounds(rect_selection.x, rect_selection.y, 
                                     actual_root->mouse_current_x, actual_root->mouse_current_y);
@@ -524,9 +783,29 @@ void actual_open_screenshot_tool() {
         actual_root->consumed_event = true;
         
         if (key == KEY_ESC && !pressed) {
-            later_immediate([](Timer *) {
-                screenshot_tool::close();
-            });
+            if (mode == 4 && !draw_strokes.empty()) {
+                draw_begin_action();
+                draw_strokes.clear();
+                draw_active = false;
+                draw_erasing = false;
+                damage_all();
+            } else {
+                later_immediate([](Timer *) {
+                    screenshot_tool::close();
+                });
+            }
+        }
+        if (mode == 4 && pressed && heart::ctrl_pressed()) {
+            if (key == KEY_Z) {
+                if (heart::shift_pressed())
+                    draw_redo_action();
+                else
+                    draw_undo_action();
+                damage_all();
+            } else if (key == KEY_Y) {
+                draw_redo_action();
+                damage_all();
+            }
         }
         if (key == KEY_ENTER) {
             if (mode == 1 && !pressed && rect_showing) {
@@ -556,19 +835,23 @@ void actual_open_screenshot_tool() {
     };
 }
 
-void screenshot_tool::open() {
+void screenshot_tool::open(bool draw) {
     showing = true;
-    mode = 0;
+    mode = draw ? 4 : 0;
     
     screenshot_tool::close();
     heart::set_force_meta_open(true);
-    later(300, [](Timer *) {
+    later(300, [draw](Timer *) {
         for (auto m : actual_monitors) {
             int monitor = *datum<int>(m, "cid");
             hypriso->screenshot_monitor(monitor);
         }
         hypriso->whitelist_on = true;
         actual_open_screenshot_tool();
+        if (draw) {
+            unsetCursorImage();
+            set_cursor_hidden_for_screenshot_draw(true);
+        }
         damage_all();
     });
 }
@@ -576,6 +859,7 @@ void screenshot_tool::open() {
 void screenshot_tool::close() {
     if (!overview::is_showing())
         hypriso->whitelist_on = false;
+    set_cursor_hidden_for_screenshot_draw(false);
     unsetCursorImage();
     
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
@@ -587,4 +871,15 @@ void screenshot_tool::close() {
     }
     heart::set_force_meta_open(false);
     heart::set_zoom(1.0);
+}
+
+bool screenshot_tool::is_drawing() {
+    if (mode != 4)
+        return false;
+
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::SCREENSHOT_TOOL)
+            return true;
+    }
+    return false;
 }
