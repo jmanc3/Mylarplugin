@@ -32,8 +32,14 @@ void load_in_fonts() {
 
     FcInit();
     FcConfig *now = FcConfigGetCurrent();
-    const FcChar8 *file = (const FcChar8 *) font_directory.c_str();
-    FcBool fontAddStatus = FcConfigAppFontAddDir(now, file);
+    // Add each file rather than the directory: FcConfigAppFontAddDir trusts the on-disk
+    // cache, which is keyed on the directory's mtime, so a font overwritten in place by
+    // `make install` keeps its stale charset (missing glyphs render as tofu).
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(font_directory, ec)) {
+        if (!entry.is_regular_file(ec)) continue;
+        FcConfigAppFontAddFile(now, (const FcChar8 *) entry.path().c_str());
+    }
     FcConfigBuildFonts(now);
 }
 

@@ -40,6 +40,12 @@
 #include <sys/un.h>
 #include <unistd.h>
 #include <cerrno>
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <set>
+#include <sstream>
 
 #ifdef TRACY_ENABLE
 
@@ -3782,4 +3788,1073 @@ bool dbus_set_battery_protector(bool enabled, std::string &error) {
         }
     }
     return true;
+}
+
+/*************************************************
+ *
+ * NetworkManager Wi-Fi (ported from winbar's wifi_backend.cpp)
+ *
+ *************************************************/
+
+// The menu worker owns its own private connection so blocking NetworkManager
+// calls never stall the compositor's signal connection.
+using WifiVariant = std::unique_ptr<GVariant, decltype(&g_variant_unref)>;
+
+static constexpr auto nm_service = "org.freedesktop.NetworkManager";
+static constexpr auto nm_path = "/org/freedesktop/NetworkManager";
+
+struct WpaSocket;
+
+struct WifiBus {
+    GDBusConnection *connection = nullptr;
+    // wpa_supplicant control sockets by interface (used when NetworkManager is absent).
+    std::map<std::string, std::shared_ptr<WpaSocket>> wpa;
+    // Interfaces the user switched off with DISCONNECT. wpa_state=DISCONNECTED alone is
+    // ambiguous: it is also reported transiently between connection attempts.
+    std::set<std::string> wpa_off;
+    // SELECT_NETWORK disables every other network; these get re-enabled afterwards.
+    std::map<std::string, std::vector<std::string>> wpa_restore;
+    // GET_CAPABILITY key_mgmt per interface.
+    std::map<std::string, std::string> wpa_key_mgmt;
+};
+
+static WifiBus *nm_open() {
+    auto bus = new WifiBus;
+    auto address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SYSTEM, nullptr, nullptr);
+    if (address) {
+        bus->connection = g_dbus_connection_new_for_address_sync(address,
+            GDBusConnectionFlags(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT |
+                                 G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION),
+            nullptr, nullptr, nullptr);
+        g_free(address);
+    }
+    return bus;
+}
+
+static void nm_close(WifiBus *bus) {
+    if (!bus) return;
+    if (bus->connection) {
+        g_dbus_connection_close_sync(bus->connection, nullptr, nullptr);
+        g_object_unref(bus->connection);
+    }
+    delete bus;
+}
+
+static void wifi_reconnect_if_needed(WifiBus *bus) {
+    if (bus->connection && !g_dbus_connection_is_closed(bus->connection)) return;
+    if (bus->connection) g_object_unref(bus->connection);
+    bus->connection = nullptr;
+    auto fresh = nm_open();
+    bus->connection = fresh->connection;
+    fresh->connection = nullptr;
+    delete fresh;
+}
+
+static WifiVariant wifi_call(WifiBus *bus, const char *path, const char *interface, const char *method,
+                             GVariant *args, const GVariantType *type, std::string *error = nullptr,
+                             const char *service = nm_service, int timeout = 4000) {
+    // Consume the floating argument even when the bus is unavailable.
+    WifiVariant parameters(args ? g_variant_ref_sink(args) : nullptr, g_variant_unref);
+    wifi_reconnect_if_needed(bus);
+    if (!bus->connection) {
+        if (error) *error = "Cannot connect to the system bus.";
+        return {nullptr, g_variant_unref};
+    }
+    GError *failure = nullptr;
+    auto reply = g_dbus_connection_call_sync(bus->connection, service, path, interface, method,
+        parameters.get(), type, G_DBUS_CALL_FLAGS_NO_AUTO_START, timeout, nullptr, &failure);
+    if (failure) {
+        if (error) {
+            if (g_error_matches(failure, G_DBUS_ERROR, G_DBUS_ERROR_ACCESS_DENIED) ||
+                std::string(failure->message).find("uthoriz") != std::string::npos ||
+                std::string(failure->message).find("ermission") != std::string::npos) {
+                *error = "Permission denied by NetworkManager.";
+            } else {
+                g_dbus_error_strip_remote_error(failure);
+                *error = failure->message;
+            }
+        }
+        g_error_free(failure);
+    }
+    return {reply, g_variant_unref};
+}
+
+static WifiVariant wifi_properties(WifiBus *bus, const char *path, const char *interface) {
+    auto reply = wifi_call(bus, path, "org.freedesktop.DBus.Properties", "GetAll",
+        g_variant_new("(s)", interface), G_VARIANT_TYPE("(a{sv})"));
+    return {reply ? g_variant_get_child_value(reply.get(), 0) : nullptr, g_variant_unref};
+}
+
+static std::string wifi_lookup_string(GVariant *dict, const char *key, const GVariantType *type = G_VARIANT_TYPE_STRING) {
+    WifiVariant value(g_variant_lookup_value(dict, key, type), g_variant_unref);
+    return value ? g_variant_get_string(value.get(), nullptr) : "";
+}
+
+static std::string wifi_lookup_bytes(GVariant *dict, const char *key) {
+    WifiVariant value(g_variant_lookup_value(dict, key, G_VARIANT_TYPE_BYTESTRING), g_variant_unref);
+    if (!value) return "";
+    gsize size = 0;
+    auto data = static_cast<const char *>(g_variant_get_fixed_array(value.get(), &size, 1));
+    return data ? std::string(data, size) : "";
+}
+
+static std::vector<std::string> wifi_lookup_paths(GVariant *dict, const char *key) {
+    std::vector<std::string> paths;
+    WifiVariant value(g_variant_lookup_value(dict, key, G_VARIANT_TYPE_OBJECT_PATH_ARRAY), g_variant_unref);
+    if (!value) return paths;
+    GVariantIter iter;
+    g_variant_iter_init(&iter, value.get());
+    const char *path;
+    while (g_variant_iter_next(&iter, "&o", &path))
+        paths.emplace_back(path);
+    return paths;
+}
+
+static bool wifi_service_running(WifiBus *bus) {
+    auto reply = wifi_call(bus, "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner",
+        g_variant_new("(s)", nm_service), G_VARIANT_TYPE("(b)"), nullptr, "org.freedesktop.DBus");
+    gboolean running = false;
+    if (reply) g_variant_get(reply.get(), "(b)", &running);
+    return running;
+}
+
+static void wifi_classify_security(WifiAccessPoint &ap, guint32 flags, guint32 wpa, guint32 rsn) {
+    // Mapping follows NetworkManager's 802-11-wireless-security key-mgmt docs:
+    // open = no security setting, "owe", "none" (static WEP), "wpa-psk" (WPA/WPA2 and
+    // WPA2+WPA3 transition), "sae" (WPA3 only), "wpa-eap"/"wpa-eap-suite-b-192".
+    const guint32 both = wpa | rsn;
+    ap.secured = false;
+    ap.enterprise = false;
+    ap.key_mgmt.clear();
+    ap.security.clear();
+    if (both & (NM_802_11_AP_SEC_KEY_MGMT_802_1X | NM_802_11_AP_SEC_KEY_MGMT_EAP_SUITE_B_192)) {
+        ap.secured = ap.enterprise = true;
+        ap.key_mgmt = "wpa-eap";
+        ap.security = "802.1X";
+    } else if (rsn & NM_802_11_AP_SEC_KEY_MGMT_SAE) {
+        ap.secured = true;
+        bool transition = rsn & NM_802_11_AP_SEC_KEY_MGMT_PSK;
+        ap.key_mgmt = transition ? "wpa-psk" : "sae";
+        ap.security = transition ? "WPA2/WPA3" : "WPA3";
+    } else if (both & NM_802_11_AP_SEC_KEY_MGMT_PSK) {
+        ap.secured = true;
+        ap.key_mgmt = "wpa-psk";
+        bool wpa1 = wpa & NM_802_11_AP_SEC_KEY_MGMT_PSK, wpa2 = rsn & NM_802_11_AP_SEC_KEY_MGMT_PSK;
+        ap.security = wpa1 && wpa2 ? "WPA/WPA2" : wpa2 ? "WPA2" : "WPA";
+    } else if (rsn & NM_802_11_AP_SEC_KEY_MGMT_OWE) {
+        // Enhanced Open: encrypted, but no password.
+        ap.key_mgmt = "owe";
+        ap.security = "OWE";
+    } else if (flags & NM_802_11_AP_FLAGS_PRIVACY) {
+        // Privacy without WPA/RSN key management is static WEP.
+        ap.secured = true;
+        ap.key_mgmt = "none";
+        ap.security = "WEP";
+    }
+    // Anything else, including the open half of an OWE transition network
+    // (KEY_MGMT_OWE_TM only), is a plain open network: omit the security setting.
+}
+
+// SSID -> saved connection profile paths.
+static std::map<std::string, std::vector<std::string>> wifi_saved_connections(WifiBus *bus, const std::string &interface) {
+    std::map<std::string, std::vector<std::string>> saved;
+    auto reply = wifi_call(bus, "/org/freedesktop/NetworkManager/Settings",
+        "org.freedesktop.NetworkManager.Settings", "ListConnections", nullptr, G_VARIANT_TYPE("(ao)"));
+    if (!reply) return saved;
+    WifiVariant paths(g_variant_get_child_value(reply.get(), 0), g_variant_unref);
+    GVariantIter iter;
+    g_variant_iter_init(&iter, paths.get());
+    const char *path;
+    while (g_variant_iter_next(&iter, "&o", &path)) {
+        auto settings = wifi_call(bus, path, "org.freedesktop.NetworkManager.Settings.Connection", "GetSettings",
+            nullptr, G_VARIANT_TYPE("(a{sa{sv}})"));
+        if (!settings) continue;
+        WifiVariant groups(g_variant_get_child_value(settings.get(), 0), g_variant_unref);
+        WifiVariant connection(g_variant_lookup_value(groups.get(), "connection", G_VARIANT_TYPE_VARDICT), g_variant_unref);
+        WifiVariant wireless(g_variant_lookup_value(groups.get(), "802-11-wireless", G_VARIANT_TYPE_VARDICT), g_variant_unref);
+        if (!connection || !wireless) continue;
+        if (wifi_lookup_string(connection.get(), "type") != "802-11-wireless") continue;
+        // Hotspot and mesh profiles share the SSID but would start an access point.
+        auto mode = wifi_lookup_string(wireless.get(), "mode");
+        if (!mode.empty() && mode != "infrastructure") continue;
+        auto bound = wifi_lookup_string(connection.get(), "interface-name");
+        if (!bound.empty() && bound != interface) continue;
+        auto ssid = wifi_lookup_bytes(wireless.get(), "ssid");
+        if (!ssid.empty()) saved[ssid].emplace_back(path);
+    }
+    return saved;
+}
+
+static WifiStatus nm_read(WifiBus *bus, const std::string &device_path) {
+    WifiStatus status;
+    if (!bus || !wifi_service_running(bus)) return status;
+    auto manager = wifi_properties(bus, nm_path, nm_service);
+    if (!manager) return status;
+    status.service_running = true;
+    status.backend = "NetworkManager";
+    gboolean enabled = false, hardware = true;
+    guint32 state = 0;
+    g_variant_lookup(manager.get(), "WirelessEnabled", "b", &enabled);
+    g_variant_lookup(manager.get(), "WirelessHardwareEnabled", "b", &hardware);
+    g_variant_lookup(manager.get(), "State", "u", &state);
+    status.wireless_enabled = enabled;
+    status.hardware_enabled = hardware;
+    status.state = state;
+    guint32 connectivity = 0;
+    g_variant_lookup(manager.get(), "Connectivity", "u", &connectivity);
+    status.connectivity = connectivity;
+    status.portal_uri = wifi_lookup_string(manager.get(), "ConnectivityCheckUri");
+
+    auto devices = wifi_call(bus, nm_path, nm_service, "GetDevices", nullptr, G_VARIANT_TYPE("(ao)"));
+    if (!devices) return status;
+    WifiVariant paths(g_variant_get_child_value(devices.get(), 0), g_variant_unref);
+    GVariantIter iter;
+    g_variant_iter_init(&iter, paths.get());
+    const char *path;
+    std::vector<std::string> access_point_paths;
+    while (g_variant_iter_next(&iter, "&o", &path)) {
+        auto device = wifi_properties(bus, path, "org.freedesktop.NetworkManager.Device");
+        if (!device) continue;
+        guint32 type = 0;
+        g_variant_lookup(device.get(), "DeviceType", "u", &type);
+        if (type != 2) continue; // NM_DEVICE_TYPE_WIFI
+        WifiDevice entry;
+        entry.path = path;
+        entry.interface = wifi_lookup_string(device.get(), "Interface");
+        guint32 device_state = 0, reason = 0;
+        g_variant_lookup(device.get(), "State", "u", &device_state);
+        g_variant_lookup(device.get(), "StateReason", "(uu)", &device_state, &reason);
+        entry.state = device_state;
+        entry.state_reason = reason;
+        auto wireless = wifi_properties(bus, path, "org.freedesktop.NetworkManager.Device.Wireless");
+        if (wireless) {
+            gint64 last_scan = -1;
+            g_variant_lookup(wireless.get(), "LastScan", "x", &last_scan);
+            entry.last_scan = last_scan;
+            entry.active_access_point = wifi_lookup_string(wireless.get(), "ActiveAccessPoint", G_VARIANT_TYPE_OBJECT_PATH);
+            if (entry.active_access_point == "/") entry.active_access_point.clear();
+        }
+        bool chosen = status.device_path.empty() || entry.path == device_path;
+        if (chosen && wireless) {
+            status.device_path = entry.path;
+            access_point_paths = wifi_lookup_paths(wireless.get(), "AccessPoints");
+        }
+        status.devices.push_back(std::move(entry));
+    }
+    if (status.device_path.empty() || !status.wireless_enabled) return status;
+
+    const WifiDevice *device = nullptr;
+    for (const auto &d : status.devices)
+        if (d.path == status.device_path) device = &d;
+    auto saved = wifi_saved_connections(bus, device ? device->interface : "");
+    std::map<std::string, WifiAccessPoint> by_ssid;
+    for (const auto &ap_path : access_point_paths) {
+        auto properties = wifi_properties(bus, ap_path.c_str(), "org.freedesktop.NetworkManager.AccessPoint");
+        if (!properties) continue;
+        WifiAccessPoint ap;
+        ap.path = ap_path;
+        ap.ssid = wifi_lookup_bytes(properties.get(), "Ssid");
+        if (ap.ssid.empty()) continue; // Hidden networks need manual setup.
+        ap.bssid = wifi_lookup_string(properties.get(), "HwAddress");
+        guchar strength = 0;
+        guint32 flags = 0, wpa = 0, rsn = 0, frequency = 0;
+        g_variant_lookup(properties.get(), "Strength", "y", &strength);
+        g_variant_lookup(properties.get(), "Frequency", "u", &frequency);
+        g_variant_lookup(properties.get(), "Flags", "u", &flags);
+        g_variant_lookup(properties.get(), "WpaFlags", "u", &wpa);
+        g_variant_lookup(properties.get(), "RsnFlags", "u", &rsn);
+        ap.strength = strength;
+        ap.frequency = frequency;
+        ap.active = device && device->active_access_point == ap_path;
+        wifi_classify_security(ap, flags, wpa, rsn);
+        if (auto found = saved.find(ap.ssid); found != saved.end()) ap.saved_connections = found->second;
+        auto [existing, inserted] = by_ssid.try_emplace(ap.ssid, ap);
+        if (!inserted && !existing->second.active && (ap.active || ap.strength > existing->second.strength))
+            existing->second = ap;
+    }
+    for (auto &[ssid, ap] : by_ssid)
+        status.access_points.push_back(std::move(ap));
+    std::sort(status.access_points.begin(), status.access_points.end(), [](const WifiAccessPoint &a, const WifiAccessPoint &b) {
+        if (a.active != b.active) return a.active;
+        bool a_saved = !a.saved_connections.empty(), b_saved = !b.saved_connections.empty();
+        if (a_saved != b_saved) return a_saved;
+        if (a.strength != b.strength) return a.strength > b.strength;
+        return a.ssid < b.ssid;
+    });
+    return status;
+}
+
+static bool nm_scan(WifiBus *bus, const std::string &device_path, std::string &error) {
+    if (!bus || device_path.empty()) return false;
+    GVariantBuilder options;
+    g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
+    auto reply = wifi_call(bus, device_path.c_str(), "org.freedesktop.NetworkManager.Device.Wireless", "RequestScan",
+        g_variant_new("(a{sv})", &options), G_VARIANT_TYPE("()"), &error);
+    return bool(reply);
+}
+
+static bool nm_set_enabled(WifiBus *bus, bool enabled, std::string &error) {
+    if (!bus) return false;
+    // winbar toggled all networking with Enable(); WirelessEnabled leaves wired links alone.
+    auto reply = wifi_call(bus, nm_path, "org.freedesktop.DBus.Properties", "Set",
+        g_variant_new("(ssv)", nm_service, "WirelessEnabled", g_variant_new_boolean(enabled)),
+        G_VARIANT_TYPE("()"), &error);
+    return bool(reply);
+}
+
+static bool nm_connect(WifiBus *bus, const std::string &device_path, const WifiAccessPoint &ap,
+                       const std::string &password, std::string &active_connection,
+                       std::string &created_connection, std::string &error) {
+    active_connection.clear();
+    created_connection.clear();
+    if (!bus || device_path.empty()) return false;
+    if (!ap.saved_connections.empty()) {
+        auto reply = wifi_call(bus, nm_path, nm_service, "ActivateConnection",
+            g_variant_new("(ooo)", ap.saved_connections.front().c_str(), device_path.c_str(), ap.path.c_str()),
+            G_VARIANT_TYPE("(o)"), &error, nm_service, 10000);
+        if (!reply) return false;
+        const char *active = nullptr;
+        g_variant_get(reply.get(), "(&o)", &active);
+        active_connection = active ? active : "";
+        return true;
+    }
+
+    auto add = [](GVariantBuilder *group, const char *key, GVariant *value) {
+        g_variant_builder_add(group, "{sv}", key, value);
+    };
+    GVariantBuilder settings;
+    g_variant_builder_init(&settings, G_VARIANT_TYPE("a{sa{sv}}"));
+    GVariantBuilder connection;
+    g_variant_builder_init(&connection, G_VARIANT_TYPE_VARDICT);
+    add(&connection, "id", g_variant_new_string(ap.ssid.c_str()));
+    add(&connection, "type", g_variant_new_string("802-11-wireless"));
+    g_variant_builder_add(&settings, "{s@a{sv}}", "connection", g_variant_builder_end(&connection));
+    GVariantBuilder wireless;
+    g_variant_builder_init(&wireless, G_VARIANT_TYPE_VARDICT);
+    add(&wireless, "ssid", g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, ap.ssid.data(), ap.ssid.size(), 1));
+    g_variant_builder_add(&settings, "{s@a{sv}}", "802-11-wireless", g_variant_builder_end(&wireless));
+    if (!ap.key_mgmt.empty()) {
+        GVariantBuilder security;
+        g_variant_builder_init(&security, G_VARIANT_TYPE_VARDICT);
+        add(&security, "key-mgmt", g_variant_new_string(ap.key_mgmt.c_str()));
+        if (ap.key_mgmt == "wpa-psk" || ap.key_mgmt == "sae") {
+            add(&security, "psk", g_variant_new_string(password.c_str()));
+            add(&security, "psk-flags", g_variant_new_uint32(0)); // Stored by NetworkManager.
+        } else if (ap.key_mgmt == "none") {
+            // NMWepKeyType: 1 = key (5/13 ASCII or 10/26 hex), 2 = passphrase (MD5 hashed).
+            auto size = password.size();
+            bool hex = std::all_of(password.begin(), password.end(), [](unsigned char c) { return std::isxdigit(c) != 0; });
+            bool key = size == 5 || size == 13 || ((size == 10 || size == 26) && hex);
+            add(&security, "auth-alg", g_variant_new_string("open"));
+            add(&security, "wep-key0", g_variant_new_string(password.c_str()));
+            add(&security, "wep-key-type", g_variant_new_uint32(key ? 1 : 2));
+            add(&security, "wep-key-flags", g_variant_new_uint32(0));
+        }
+        g_variant_builder_add(&settings, "{s@a{sv}}", "802-11-wireless-security", g_variant_builder_end(&security));
+    }
+    auto reply = wifi_call(bus, nm_path, nm_service, "AddAndActivateConnection",
+        g_variant_new("(@a{sa{sv}}oo)", g_variant_builder_end(&settings), device_path.c_str(), ap.path.c_str()),
+        G_VARIANT_TYPE("(oo)"), &error, nm_service, 10000);
+    if (!reply) return false;
+    const char *created = nullptr, *active = nullptr;
+    g_variant_get(reply.get(), "(&o&o)", &created, &active);
+    created_connection = created ? created : "";
+    active_connection = active ? active : "";
+    return true;
+}
+
+static bool nm_disconnect(WifiBus *bus, const std::string &device_path, std::string &error) {
+    if (!bus || device_path.empty()) return false;
+    auto reply = wifi_call(bus, device_path.c_str(), "org.freedesktop.NetworkManager.Device", "Disconnect",
+        nullptr, G_VARIANT_TYPE("()"), &error);
+    return bool(reply);
+}
+
+static bool nm_forget(WifiBus *bus, const std::vector<std::string> &connections, std::string &error) {
+    if (!bus) return false;
+    bool ok = true;
+    for (const auto &path : connections) {
+        auto reply = wifi_call(bus, path.c_str(), "org.freedesktop.NetworkManager.Settings.Connection", "Delete",
+            nullptr, G_VARIANT_TYPE("()"), &error);
+        ok &= bool(reply);
+    }
+    return ok;
+}
+
+static unsigned nm_active_state(WifiBus *bus, const std::string &active_connection) {
+    if (!bus || active_connection.empty()) return 0;
+    auto reply = wifi_call(bus, active_connection.c_str(), "org.freedesktop.DBus.Properties", "Get",
+        g_variant_new("(ss)", "org.freedesktop.NetworkManager.Connection.Active", "State"), G_VARIANT_TYPE("(v)"));
+    if (!reply) return 0;
+    WifiVariant value(g_variant_get_child_value(reply.get(), 0), g_variant_unref);
+    WifiVariant inner(g_variant_get_variant(value.get()), g_variant_unref);
+    return g_variant_is_of_type(inner.get(), G_VARIANT_TYPE_UINT32) ? g_variant_get_uint32(inner.get()) : 0;
+}
+
+/*************************************************
+ *
+ * wpa_supplicant control interface (ported from winbar's wpa_ctrl backend)
+ *
+ *************************************************/
+
+// Minimal replacement for wpa_ctrl.c: the control interface is a unix datagram
+// socket per interface. Commands are sent and answered synchronously; we poll
+// from the worker instead of attaching for unsolicited events.
+static const char *wpa_socket_dirs[] = {"/var/run/wpa_supplicant", "/run/wpa_supplicant"};
+
+struct WpaSocket {
+    int fd = -1;
+    std::string local_path;
+
+    ~WpaSocket() {
+        if (fd != -1) close(fd);
+        if (!local_path.empty()) unlink(local_path.c_str());
+    }
+};
+
+static std::shared_ptr<WpaSocket> wpa_open(const std::string &interface, std::string &error) {
+    static std::atomic<int> counter = 0;
+    auto socket_path = std::string();
+    for (auto dir : wpa_socket_dirs) {
+        auto candidate = std::string(dir) + "/" + interface;
+        if (std::filesystem::exists(candidate)) {
+            socket_path = candidate;
+            break;
+        }
+    }
+    if (socket_path.empty()) {
+        error = "wpa_supplicant is not managing " + interface + ".";
+        return nullptr;
+    }
+    auto result = std::make_shared<WpaSocket>();
+    result->fd = socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (result->fd == -1) {
+        error = "Couldn't create a wpa_supplicant control socket.";
+        return nullptr;
+    }
+    sockaddr_un local = {};
+    local.sun_family = AF_UNIX;
+    result->local_path = "/tmp/mylar_wpa_" + std::to_string(getpid()) + "_" + std::to_string(counter++);
+    unlink(result->local_path.c_str());
+    std::snprintf(local.sun_path, sizeof(local.sun_path), "%s", result->local_path.c_str());
+    if (bind(result->fd, reinterpret_cast<sockaddr *>(&local), sizeof(local)) != 0) {
+        result->local_path.clear();
+        error = "Couldn't bind a wpa_supplicant control socket.";
+        return nullptr;
+    }
+    sockaddr_un remote = {};
+    remote.sun_family = AF_UNIX;
+    std::snprintf(remote.sun_path, sizeof(remote.sun_path), "%s", socket_path.c_str());
+    if (connect(result->fd, reinterpret_cast<sockaddr *>(&remote), sizeof(remote)) != 0) {
+        error = errno == EACCES || errno == EPERM ?
+            "Permission denied by wpa_supplicant. Add your user to its control group." :
+            "Couldn't reach wpa_supplicant on " + interface + ".";
+        return nullptr;
+    }
+    return result;
+}
+
+static bool wpa_request(WifiBus *bus, const std::string &interface, const std::string &command,
+                        std::string &reply, std::string *error = nullptr) {
+    reply.clear();
+    std::string open_error;
+    auto &socket = bus->wpa[interface];
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (!socket) socket = wpa_open(interface, open_error);
+        if (!socket) break;
+        if (send(socket->fd, command.data(), command.size(), MSG_NOSIGNAL) < 0) {
+            socket.reset(); // wpa_supplicant restarted; reopen once.
+            continue;
+        }
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (true) {
+            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) break;
+            pollfd pfd = {socket->fd, POLLIN, 0};
+            if (poll(&pfd, 1, remaining) <= 0) break;
+            std::string buffer(16384, '\0');
+            auto received = recv(socket->fd, buffer.data(), buffer.size(), 0);
+            if (received < 0) break;
+            buffer.resize(received);
+            // Unsolicited event messages start with "<level>"; we never attach, but skip them anyway.
+            if (!buffer.empty() && buffer[0] == '<') continue;
+            reply = std::move(buffer);
+            return true;
+        }
+        socket.reset();
+        if (error) *error = "wpa_supplicant did not answer \"" + command.substr(0, command.find(' ')) + "\".";
+        return false;
+    }
+    if (error) *error = open_error;
+    return false;
+}
+
+static bool wpa_ok(WifiBus *bus, const std::string &interface, const std::string &command, std::string &error) {
+    std::string reply;
+    if (!wpa_request(bus, interface, command, reply, &error)) return false;
+    if (reply.starts_with("FAIL")) {
+        error = "wpa_supplicant rejected \"" + command.substr(0, command.find(' ')) + "\".";
+        return false;
+    }
+    return true;
+}
+
+static std::vector<std::string> wpa_interfaces() {
+    std::vector<std::string> interfaces;
+    for (auto dir : wpa_socket_dirs) {
+        std::error_code error;
+        for (std::filesystem::directory_iterator entries(dir, error), end; !error && entries != end; entries.increment(error)) {
+            auto name = entries->path().filename().string();
+            // Same filter winbar used: skip p2p and other dashed virtual interfaces.
+            if (entries->is_directory() || name.find('-') != std::string::npos) continue;
+            if (std::find(interfaces.begin(), interfaces.end(), name) == interfaces.end()) interfaces.push_back(name);
+        }
+    }
+    std::sort(interfaces.begin(), interfaces.end());
+    return interfaces;
+}
+
+static std::vector<std::string> wpa_split(const std::string &text, char separator) {
+    std::vector<std::string> parts;
+    std::stringstream stream(text);
+    for (std::string part; std::getline(stream, part, separator);) parts.push_back(part);
+    return parts;
+}
+
+static std::string wpa_trim(std::string_view s) {
+    s.remove_prefix(std::min(s.find_first_not_of(" \t\r\v\n"), s.size()));
+    s.remove_suffix(std::min(s.size() - s.find_last_not_of(" \t\r\v\n") - 1, s.size()));
+    return std::string(s);
+}
+
+// Parses a tab separated table whose first line is a " / " separated header.
+static std::vector<std::map<std::string, std::string>> wpa_table(const std::string &reply) {
+    std::vector<std::map<std::string, std::string>> rows;
+    auto lines = wpa_split(reply, '\n');
+    if (lines.empty()) return rows;
+    std::vector<std::string> header;
+    for (const auto &column : wpa_split(lines[0], '/')) header.push_back(wpa_trim(column));
+    for (size_t i = 1; i < lines.size(); ++i) {
+        if (lines[i].empty()) continue;
+        auto cells = wpa_split(lines[i], '\t');
+        std::map<std::string, std::string> row;
+        for (size_t x = 0; x < cells.size() && x < header.size(); ++x) row[header[x]] = cells[x];
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+static std::map<std::string, std::string> wpa_status(WifiBus *bus, const std::string &interface) {
+    std::map<std::string, std::string> status;
+    std::string reply;
+    if (!wpa_request(bus, interface, "STATUS", reply)) return status;
+    for (const auto &line : wpa_split(reply, '\n')) {
+        auto equals = line.find('=');
+        if (equals != std::string::npos) status[line.substr(0, equals)] = line.substr(equals + 1);
+    }
+    return status;
+}
+
+// wpa_supplicant prints SSIDs with printf_encode(); undo it.
+static std::string wpa_decode_ssid(const std::string &text) {
+    std::string out;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\\' || i + 1 >= text.size()) {
+            out += text[i];
+            continue;
+        }
+        char next = text[++i];
+        auto hex = [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; };
+        if (next == 'x' && i + 2 < text.size() && hex(text[i + 1]) && hex(text[i + 2])) {
+            out += static_cast<char>(std::stoi(text.substr(i + 1, 2), nullptr, 16));
+            i += 2;
+        } else if (next == 'n') out += '\n';
+        else if (next == 'r') out += '\r';
+        else if (next == 't') out += '\t';
+        else if (next == 'e') out += '\033';
+        else out += next;
+    }
+    return out;
+}
+
+static std::string wpa_hex(const std::string &bytes) {
+    std::string out;
+    char digits[3];
+    for (unsigned char c : bytes) {
+        std::snprintf(digits, sizeof(digits), "%02x", c);
+        out += digits;
+    }
+    return out;
+}
+
+static std::string wpa_quote(const std::string &text) {
+    // Values containing quotes or control characters are sent hex encoded instead.
+    bool plain = std::all_of(text.begin(), text.end(), [](unsigned char c) { return c >= 32 && c != 127 && c != '"'; });
+    return plain ? "\"" + text + "\"" : wpa_hex(text);
+}
+
+// "wpa:<interface>:<network id>"
+static std::string wpa_network_path(const std::string &interface, const std::string &id) {
+    return "wpa:" + interface + ":" + id;
+}
+
+static bool wpa_parse_network_path(const std::string &path, std::string &interface, std::string &id) {
+    if (!path.starts_with("wpa:")) return false;
+    auto colon = path.rfind(':');
+    if (colon <= 4) return false;
+    interface = path.substr(4, colon - 4);
+    id = path.substr(colon + 1);
+    return !interface.empty() && !id.empty();
+}
+
+static void wpa_classify_security(WifiAccessPoint &ap, const std::string &flags) {
+    // Extends winbar's parse_wifi_flags. Flags look like "[WPA2-PSK+SAE-CCMP][ESS]".
+    auto has = [&flags](const char *text) { return flags.find(text) != std::string::npos; };
+    if (has("-EAP")) {
+        ap.secured = ap.enterprise = true;
+        ap.key_mgmt = "wpa-eap";
+        ap.security = "802.1X";
+    } else if (has("SAE")) {
+        ap.secured = true;
+        bool transition = has("-PSK");
+        ap.key_mgmt = transition ? "wpa-psk" : "sae";
+        ap.security = transition ? "WPA2/WPA3" : "WPA3";
+    } else if (has("-PSK")) {
+        ap.secured = true;
+        ap.key_mgmt = "wpa-psk";
+        bool wpa1 = has("[WPA-PSK"), wpa2 = has("[WPA2-PSK") || has("[RSN-PSK");
+        ap.security = wpa1 && wpa2 ? "WPA/WPA2" : wpa1 ? "WPA" : "WPA2";
+    } else if (has("-OWE")) {
+        // "[OWE-TRANS]" alone marks the open half of a transition network: keep it open.
+        ap.key_mgmt = "owe";
+        ap.security = "OWE";
+    } else if (has("WEP")) {
+        ap.secured = true;
+        ap.key_mgmt = "none";
+        ap.security = "WEP";
+    }
+}
+
+static WifiStatus wpa_read(WifiBus *bus, const std::string &device_path) {
+    WifiStatus status;
+    auto interfaces = wpa_interfaces();
+    if (interfaces.empty()) return status;
+    status.backend = "wpa_supplicant";
+    status.service_running = true;
+    std::map<std::string, std::string> chosen_status;
+    for (const auto &interface : interfaces) {
+        auto info = wpa_status(bus, interface);
+        if (info.empty()) continue;
+        WifiDevice device;
+        device.path = "wpa:" + interface;
+        device.interface = interface;
+        auto state = info["wpa_state"];
+        // Map onto NMDeviceState so the menu only deals with one vocabulary.
+        device.state = state == "COMPLETED" ? 100 : state == "INTERFACE_DISABLED" ? 20 :
+            state == "DISCONNECTED" || state == "INACTIVE" || state == "SCANNING" ? 30 : 50;
+        if (state == "COMPLETED") device.active_access_point = info["bssid"];
+        if (status.device_path.empty() || device.path == device_path) {
+            status.device_path = device.path;
+            chosen_status = info;
+        }
+        status.devices.push_back(std::move(device));
+    }
+    if (status.devices.empty()) {
+        status.service_running = false;
+        return status;
+    }
+    auto state = chosen_status["wpa_state"];
+    auto interface = status.device_path.substr(4);
+    status.wireless_enabled = !bus->wpa_off.contains(interface) && state != "INTERFACE_DISABLED";
+    status.state = state == "COMPLETED" ? 70 : 20;
+    if (!status.wireless_enabled) return status;
+
+    std::string reply;
+    std::map<std::string, std::vector<std::string>> saved;
+    if (wpa_request(bus, interface, "LIST_NETWORKS", reply)) {
+        for (auto &row : wpa_table(reply)) {
+            auto ssid = wpa_decode_ssid(row["ssid"]);
+            if (!ssid.empty() && !row["network id"].empty())
+                saved[ssid].push_back(wpa_network_path(interface, row["network id"]));
+        }
+    }
+    std::map<std::string, WifiAccessPoint> by_ssid;
+    auto add = [&](const std::string &raw_ssid, const std::string &bssid, const std::string &frequency,
+                   const std::string &level, const std::string &flags) {
+        WifiAccessPoint ap;
+        ap.ssid = wpa_decode_ssid(raw_ssid);
+        // Hidden networks show up with an empty or all-NUL SSID; they need manual setup.
+        if (ap.ssid.empty() || ap.ssid.find_first_not_of('\0') == std::string::npos) return;
+        ap.bssid = bssid;
+        ap.path = bssid;
+        try {
+            ap.frequency = std::stoul(frequency);
+            // Signal level is dBm; map -100..-50 onto 0..100 like NetworkManager.
+            ap.strength = std::clamp((std::stoi(level) + 100) * 2, 0, 100);
+        } catch (...) {
+        }
+        ap.active = state == "COMPLETED" && (chosen_status["bssid"] == ap.bssid || chosen_status["ssid"] == raw_ssid);
+        wpa_classify_security(ap, flags);
+        if (auto found = saved.find(ap.ssid); found != saved.end()) ap.saved_connections = found->second;
+        auto [existing, inserted] = by_ssid.try_emplace(ap.ssid, ap);
+        if (!inserted && !existing->second.active && (ap.active || ap.strength > existing->second.strength))
+            existing->second = ap;
+    };
+    // Control replies are capped at 4 KiB, so SCAN_RESULTS gets truncated in crowded
+    // places. Walk the BSS table one entry per request instead. MASK selects
+    // id | bssid | freq | level | flags | ssid | "####" delimiter.
+    constexpr auto mask = " MASK=0x21887";
+    std::string command = std::string("BSS FIRST") + mask;
+    bool walked = false;
+    for (int guard = 0; guard < 1024 && wpa_request(bus, interface, command, reply); ++guard) {
+        if (reply.empty() || reply.starts_with("FAIL") || reply.find('=') == std::string::npos) break;
+        walked = true;
+        std::map<std::string, std::string> fields;
+        for (const auto &line : wpa_split(reply, '\n')) {
+            auto equals = line.find('=');
+            if (equals != std::string::npos) fields[line.substr(0, equals)] = line.substr(equals + 1);
+        }
+        add(fields["ssid"], fields["bssid"], fields["freq"], fields["level"], fields["flags"]);
+        if (fields["id"].empty()) break;
+        command = "BSS NEXT-" + fields["id"] + mask;
+    }
+    if (!walked && wpa_request(bus, interface, "SCAN_RESULTS", reply)) {
+        // Older wpa_supplicant without BSS masks.
+        for (auto &row : wpa_table(reply))
+            add(row["ssid"], row["bssid"], row["frequency"], row["signal level"], row["flags"]);
+    }
+    for (auto &[ssid, ap] : by_ssid)
+        status.access_points.push_back(std::move(ap));
+    std::sort(status.access_points.begin(), status.access_points.end(), [](const WifiAccessPoint &a, const WifiAccessPoint &b) {
+        if (a.active != b.active) return a.active;
+        bool a_saved = !a.saved_connections.empty(), b_saved = !b.saved_connections.empty();
+        if (a_saved != b_saved) return a_saved;
+        if (a.strength != b.strength) return a.strength > b.strength;
+        return a.ssid < b.ssid;
+    });
+    return status;
+}
+
+static bool wpa_has_key_mgmt(WifiBus *bus, const std::string &interface, const std::string &value) {
+    auto &caps = bus->wpa_key_mgmt[interface];
+    if (caps.empty()) {
+        std::string reply;
+        if (wpa_request(bus, interface, "GET_CAPABILITY key_mgmt", reply) && !reply.starts_with("FAIL"))
+            caps = " " + wpa_trim(reply) + " ";
+    }
+    return caps.find(" " + value + " ") != std::string::npos;
+}
+
+static void wpa_restore_networks(WifiBus *bus, const std::string &interface) {
+    auto found = bus->wpa_restore.find(interface);
+    if (found == bus->wpa_restore.end()) return;
+    std::string ignored;
+    // ENABLE_NETWORK doesn't make wpa_supplicant leave a network it is connected to.
+    for (const auto &id : found->second)
+        wpa_ok(bus, interface, "ENABLE_NETWORK " + id, ignored);
+    bus->wpa_restore.erase(found);
+}
+
+static bool wpa_select(WifiBus *bus, const std::string &interface, const std::string &id, std::string &error) {
+    // "Select a network (disable others)": remember which networks were enabled so they
+    // can be re-enabled once this attempt settles, before anything is saved.
+    std::string reply;
+    if (!bus->wpa_restore.contains(interface) && wpa_request(bus, interface, "LIST_NETWORKS", reply)) {
+        std::vector<std::string> enabled;
+        for (auto &row : wpa_table(reply))
+            if (row["network id"] != id && row["flags"].find("DISABLED") == std::string::npos)
+                enabled.push_back(row["network id"]);
+        bus->wpa_restore[interface] = std::move(enabled);
+    }
+    bus->wpa_off.erase(interface);
+    return wpa_ok(bus, interface, "SELECT_NETWORK " + id, error);
+}
+
+static bool wpa_connect(WifiBus *bus, const std::string &device_path, const WifiAccessPoint &ap,
+                        const std::string &password, std::string &active_connection,
+                        std::string &created_connection, std::string &error) {
+    auto interface = device_path.substr(4);
+    std::string id, saved_interface;
+    if (!ap.saved_connections.empty() && wpa_parse_network_path(ap.saved_connections.front(), saved_interface, id)) {
+        if (!wpa_select(bus, interface, id, error)) return false;
+        active_connection = ap.saved_connections.front();
+        return true;
+    }
+    if (ap.key_mgmt == "none" && password.size() != 5 && password.size() != 13 &&
+        !((password.size() == 10 || password.size() == 26) &&
+          std::all_of(password.begin(), password.end(), [](unsigned char c) { return std::isxdigit(c) != 0; }))) {
+        error = "WEP keys must be 5 or 13 characters, or 10 or 26 hex digits.";
+        return false;
+    }
+    std::string reply;
+    if (!wpa_request(bus, interface, "ADD_NETWORK", reply, &error)) return false;
+    id = wpa_trim(reply);
+    if (id.empty() || id.starts_with("FAIL")) {
+        error = "wpa_supplicant couldn't add the network.";
+        return false;
+    }
+    created_connection = wpa_network_path(interface, id);
+    auto set = [&](const std::string &field, const std::string &value) {
+        return wpa_ok(bus, interface, "SET_NETWORK " + id + " " + field + " " + value, error);
+    };
+    // Value syntax per wpa_supplicant.conf: ssid as hex; psk as "passphrase" (8..63,
+    // the parser reads up to the last quote) or 64 unquoted hex digits, where hex means
+    // the raw PSK; sae_password / wep_key0 as "string" or hex bytes; key_mgmt as an
+    // unquoted space-separated list.
+    bool ok = set("ssid", wpa_hex(ap.ssid));
+    if (ap.key_mgmt.empty()) {
+        ok = ok && set("key_mgmt", "NONE");
+    } else if (ap.key_mgmt == "owe") {
+        ok = ok && set("key_mgmt", "OWE") && set("ieee80211w", "2"); // OWE requires PMF.
+    } else if (ap.key_mgmt == "sae") {
+        // "WPA3-Personal-only mode: ieee80211w=2 and key_mgmt=SAE".
+        std::string key_mgmt = wpa_has_key_mgmt(bus, interface, "SAE-EXT-KEY") ? "SAE SAE-EXT-KEY" : "SAE";
+        ok = ok && set("key_mgmt", key_mgmt) && set("sae_password", wpa_quote(password)) &&
+            set("ieee80211w", "2");
+    } else if (ap.key_mgmt == "none") {
+        // Static WEP: key_mgmt=NONE plus wep_key0.
+        bool ascii = password.size() == 5 || password.size() == 13;
+        ok = ok && set("key_mgmt", "NONE") && set("wep_key0", ascii ? wpa_quote(password) : password) &&
+            set("wep_tx_keyidx", "0");
+    } else {
+        // WPA/WPA2, and WPA2/WPA3 transition where SAE reuses psk for the SAE password.
+        std::string key_mgmt = "WPA-PSK";
+        if (wpa_has_key_mgmt(bus, interface, "WPA-PSK-SHA256")) key_mgmt += " WPA-PSK-SHA256";
+        bool transition = ap.security == "WPA2/WPA3" && wpa_has_key_mgmt(bus, interface, "SAE");
+        if (transition) key_mgmt += " SAE";
+        bool raw = password.size() == 64 && std::all_of(password.begin(), password.end(),
+            [](unsigned char c) { return std::isxdigit(c) != 0; });
+        ok = ok && set("key_mgmt", key_mgmt) &&
+            set("psk", raw ? password : "\"" + password + "\"");
+        // PMF optional for RSN networks (needed by SHA256/SAE, harmless otherwise).
+        if (ap.security != "WPA") ok = ok && set("ieee80211w", "1");
+    }
+    ok = ok && wpa_select(bus, interface, id, error);
+    if (!ok) {
+        std::string ignored;
+        wpa_ok(bus, interface, "REMOVE_NETWORK " + id, ignored);
+        wpa_restore_networks(bus, interface);
+        created_connection.clear();
+        return false;
+    }
+    active_connection = created_connection;
+    return true;
+}
+
+static unsigned wpa_active_state(WifiBus *bus, const std::string &active_connection) {
+    std::string interface, id, reply;
+    if (!wpa_parse_network_path(active_connection, interface, id)) return 0;
+    if (!wpa_request(bus, interface, "LIST_NETWORKS", reply)) return 0;
+    for (auto &row : wpa_table(reply)) {
+        if (row["network id"] != id) continue;
+        auto flags = row["flags"];
+        // Wrong keys and failed authentication make wpa_supplicant temp-disable the network.
+        if (flags.find("DISABLED") != std::string::npos) return 4;
+        auto status = wpa_status(bus, interface);
+        if (status["wpa_state"] == "COMPLETED" && status["id"] == id) return 2;
+        return 1;
+    }
+    return 0;
+}
+
+static bool wpa_forget(WifiBus *bus, const std::vector<std::string> &connections, std::string &error) {
+    bool ok = true;
+    std::vector<std::string> touched;
+    for (const auto &path : connections) {
+        std::string interface, id;
+        if (!wpa_parse_network_path(path, interface, id)) continue;
+        ok &= wpa_ok(bus, interface, "REMOVE_NETWORK " + id, error);
+        if (std::find(touched.begin(), touched.end(), interface) == touched.end()) touched.push_back(interface);
+    }
+    for (const auto &interface : touched) {
+        wpa_restore_networks(bus, interface);
+        std::string ignored; // Fails harmlessly when update_config=0.
+        wpa_ok(bus, interface, "SAVE_CONFIG", ignored);
+    }
+    return ok;
+}
+
+/*************************************************
+ *
+ * Wi-Fi backend dispatch (winbar's wifi_* functions)
+ *
+ *************************************************/
+
+static bool wifi_is_wpa(const std::string &device_path) {
+    return device_path.starts_with("wpa:");
+}
+
+WifiBus *wifi_backend_open() {
+    return nm_open();
+}
+
+void wifi_backend_close(WifiBus *bus) {
+    if (bus) {
+        auto pending = bus->wpa_restore;
+        for (const auto &[interface, ids] : pending) wpa_restore_networks(bus, interface);
+        bus->wpa.clear();
+    }
+    nm_close(bus);
+}
+
+static std::string network_sysfs(const std::string &interface, const char *file) {
+    std::string value;
+    std::ifstream(std::string("/sys/class/net/") + interface + "/" + file) >> value;
+    return value;
+}
+
+static bool network_physical(const std::string &interface) {
+    return std::filesystem::exists("/sys/class/net/" + interface + "/device");
+}
+
+static bool network_wireless(const std::string &interface) {
+    return std::filesystem::exists("/sys/class/net/" + interface + "/wireless") ||
+        std::filesystem::exists("/sys/class/net/" + interface + "/phy80211");
+}
+
+static bool network_oper_up(const std::string &interface) {
+    auto state = network_sysfs(interface, "operstate");
+    // PPP and some virtual links report "unknown" while working.
+    return state == "up" || state == "unknown";
+}
+
+NetworkLink default_network_link() {
+    // winbar parsed `route` / `ip route`; read the kernel tables directly instead.
+    std::string best;
+    unsigned long best_metric = ~0ul;
+    {
+        std::ifstream routes("/proc/net/route");
+        std::string line;
+        std::getline(routes, line); // header
+        while (std::getline(routes, line)) {
+            std::istringstream fields(line);
+            std::string interface, destination, gateway, flags, refcnt, use, metric, mask;
+            if (!(fields >> interface >> destination >> gateway >> flags >> refcnt >> use >> metric >> mask)) continue;
+            // Default route: destination and mask 0, RTF_UP set.
+            if (destination != "00000000" || mask != "00000000" || !(std::stoul(flags, nullptr, 16) & 0x1)) continue;
+            auto value = std::stoul(metric);
+            if (value < best_metric) {
+                best_metric = value;
+                best = interface;
+            }
+        }
+    }
+    if (best.empty()) {
+        // IPv6-only networks.
+        std::ifstream routes("/proc/net/ipv6_route");
+        std::string destination, prefix, source, source_prefix, next_hop, metric, refcnt, use, flags, interface;
+        while (routes >> destination >> prefix >> source >> source_prefix >> next_hop >> metric >> refcnt >> use >> flags >> interface) {
+            if (destination != std::string(32, '0') || prefix != "00" || interface == "lo") continue;
+            if (next_hop == std::string(32, '0')) continue; // unreachable / blackhole defaults
+            auto value = std::stoul(metric, nullptr, 16);
+            if (value < best_metric) {
+                best_metric = value;
+                best = interface;
+            }
+        }
+    }
+    NetworkLink link;
+    if (best.empty()) return link;
+    if (!network_physical(best)) {
+        // VPNs, bridges and other virtual links: report the physical link underneath.
+        std::error_code error;
+        std::string wired, wireless;
+        for (std::filesystem::directory_iterator entries("/sys/class/net", error), end; !error && entries != end; entries.increment(error)) {
+            auto name = entries->path().filename().string();
+            if (!network_physical(name) || network_sysfs(name, "operstate") != "up") continue;
+            (network_wireless(name) ? wireless : wired) = name;
+        }
+        if (!wired.empty()) best = wired;
+        else if (!wireless.empty()) best = wireless;
+    }
+    link.interface = best;
+    link.up = network_oper_up(best);
+    link.wired = !network_wireless(best);
+    return link;
+}
+
+WifiStatus wifi_backend_read(WifiBus *bus, const std::string &device_path) {
+    if (!bus) return {};
+    // Prefer NetworkManager when it owns the bus name, exactly like winbar.
+    auto status = nm_read(bus, device_path);
+    if (status.service_running) {
+        bus->wpa.clear();
+    } else {
+        status = wpa_read(bus, device_path);
+    }
+    status.link = default_network_link();
+    return status;
+}
+
+bool wifi_backend_scan(WifiBus *bus, const std::string &device_path, std::string &error) {
+    if (!bus || device_path.empty()) return false;
+    if (wifi_is_wpa(device_path)) {
+        std::string reply;
+        if (!wpa_request(bus, device_path.substr(4), "SCAN", reply, &error)) return false;
+        if (reply.starts_with("FAIL-BUSY")) return true; // A scan is already running.
+        if (reply.starts_with("FAIL")) error = "wpa_supplicant couldn't start a scan.";
+        return !reply.starts_with("FAIL");
+    }
+    return nm_scan(bus, device_path, error);
+}
+
+bool wifi_backend_set_enabled(WifiBus *bus, const std::string &device_path, bool enabled, std::string &error) {
+    if (!bus) return false;
+    if (wifi_is_wpa(device_path)) {
+        // winbar's toggle: DISCONNECT stays put until RECONNECT / REASSOCIATE / SELECT_NETWORK.
+        auto interface = device_path.substr(4);
+        if (!enabled) wpa_restore_networks(bus, interface);
+        if (!wpa_ok(bus, interface, enabled ? "RECONNECT" : "DISCONNECT", error)) return false;
+        if (enabled) bus->wpa_off.erase(interface);
+        else bus->wpa_off.insert(interface);
+        return true;
+    }
+    return nm_set_enabled(bus, enabled, error);
+}
+
+bool wifi_backend_connect(WifiBus *bus, const std::string &device_path, const WifiAccessPoint &ap,
+                          const std::string &password, std::string &active_connection,
+                          std::string &created_connection, std::string &error) {
+    active_connection.clear();
+    created_connection.clear();
+    if (!bus || device_path.empty()) return false;
+    if (wifi_is_wpa(device_path))
+        return wpa_connect(bus, device_path, ap, password, active_connection, created_connection, error);
+    return nm_connect(bus, device_path, ap, password, active_connection, created_connection, error);
+}
+
+bool wifi_backend_disconnect(WifiBus *bus, const std::string &device_path, std::string &error) {
+    if (!bus || device_path.empty()) return false;
+    if (wifi_is_wpa(device_path)) return wpa_ok(bus, device_path.substr(4), "DISCONNECT", error);
+    return nm_disconnect(bus, device_path, error);
+}
+
+bool wifi_backend_forget(WifiBus *bus, const std::vector<std::string> &connections, std::string &error) {
+    if (!bus || connections.empty()) return false;
+    if (connections.front().starts_with("wpa:")) return wpa_forget(bus, connections, error);
+    return nm_forget(bus, connections, error);
+}
+
+unsigned wifi_backend_active_state(WifiBus *bus, const std::string &active_connection) {
+    if (!bus) return 0;
+    if (active_connection.starts_with("wpa:")) return wpa_active_state(bus, active_connection);
+    return nm_active_state(bus, active_connection);
+}
+
+unsigned wifi_backend_check_connectivity(WifiBus *bus) {
+    if (!bus || !wifi_service_running(bus)) return 0;
+    // Blocks until NetworkManager finishes its HTTP probe.
+    auto reply = wifi_call(bus, nm_path, nm_service, "CheckConnectivity", nullptr, G_VARIANT_TYPE("(u)"),
+        nullptr, nm_service, 15000);
+    guint32 connectivity = 0;
+    if (reply) g_variant_get(reply.get(), "(u)", &connectivity);
+    return connectivity;
+}
+
+void wifi_backend_finish(WifiBus *bus, const std::string &active_connection, bool connected) {
+    std::string interface, id;
+    if (!bus || !wpa_parse_network_path(active_connection, interface, id)) return;
+    wpa_restore_networks(bus, interface);
+    std::string ignored; // winbar saved on menu close; persist once the outcome is known.
+    if (connected) wpa_ok(bus, interface, "SAVE_CONFIG", ignored);
 }

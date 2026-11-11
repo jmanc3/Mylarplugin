@@ -432,9 +432,17 @@ enum ScrollShow {
     SNever
 };
 
+enum class EScrollTheme {
+    Light,
+    Dark, // winbar's original palette
+};
+
 class ScrollPaneSettings : public UserData {
   public:
     ScrollPaneSettings(float scale);
+
+    // Mylar's popups are light; pass EScrollTheme::Dark for dark surfaces.
+    EScrollTheme theme = EScrollTheme::Light;
 
     int  right_width        = 12;
     int  right_arrow_height = 12;

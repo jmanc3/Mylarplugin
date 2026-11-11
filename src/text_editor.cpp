@@ -20,6 +20,24 @@ static bool editor_active(Container *c, const STextEditorData &data) {
     return c->active || (data.options.parent_activates && c->parent && c->parent->active);
 }
 
+static constexpr std::string_view password_bullet = "\u2022";
+
+// Password layouts hold one bullet per character, so byte offsets differ between the
+// text and the layout. Every Pango index goes through these two conversions.
+static int layout_index(const STextEditorData &data, int index) {
+    if (!data.options.password)
+        return index;
+    return g_utf8_pointer_to_offset(data.text.data(), data.text.data() + index) * password_bullet.size();
+}
+
+static int text_index(const STextEditorData &data, int index) {
+    if (!data.options.password)
+        return index;
+    long characters = g_utf8_strlen(data.text.data(), data.text.size());
+    long offset = std::clamp<long>(index / static_cast<int>(password_bullet.size()), 0, characters);
+    return g_utf8_offset_to_pointer(data.text.data(), offset) - data.text.data();
+}
+
 static PangoLayout *editor_layout(Container *root, STextEditorData &data) {
     auto window = data.options.window(root);
     if (!data.layout)
@@ -32,7 +50,14 @@ static PangoLayout *editor_layout(Container *root, STextEditorData &data) {
     pango_font_description_free(font);
     pango_layout_set_width(data.layout, -1);
     pango_layout_set_single_paragraph_mode(data.layout, !data.options.multiline);
-    pango_layout_set_text(data.layout, data.text.data(), data.text.size());
+    if (data.options.password) {
+        std::string masked;
+        for (long i = g_utf8_strlen(data.text.data(), data.text.size()); i > 0; --i)
+            masked += password_bullet;
+        pango_layout_set_text(data.layout, masked.data(), masked.size());
+    } else {
+        pango_layout_set_text(data.layout, data.text.data(), data.text.size());
+    }
     pango_cairo_update_layout(window->cr, data.layout);
     return data.layout;
 }
@@ -71,6 +96,15 @@ static ETextGroup token_type(const std::string &text, int position) {
     if (tokens.find(character) != std::string_view::npos)
         return ETextGroup::Token;
     return ETextGroup::Normal;
+}
+
+static int seek_token(const std::string &text, int cursor, ETextMotion motion);
+
+// Word motions would reveal where a password has spaces or symbols; jump to the ends.
+static int seek_word(const STextEditorData &data, int cursor, ETextMotion motion) {
+    if (data.options.password)
+        return motion == ETextMotion::Right ? data.text.size() : 0;
+    return seek_token(data.text, cursor, motion);
 }
 
 static int seek_token(const std::string &text, int cursor, ETextMotion motion) {
@@ -159,6 +193,17 @@ static void erase_selection(STextEditorData &data) {
 
 static void insert_text(STextEditorData &data, const std::string &input, bool coalesce) {
     auto text = filter_text(data, input);
+    if (data.options.max_length > 0) {
+        int selected = data.selecting ? std::abs(data.cursor - data.selection) : 0;
+        int room = std::max(0, data.options.max_length - static_cast<int>(data.text.size()) + selected);
+        if (static_cast<int>(text.size()) > room) {
+            // Cut on a character boundary.
+            int end = room;
+            while (end > 0 && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80)
+                --end;
+            text.resize(end);
+        }
+    }
     if (text.empty())
         return;
     if (!coalesce || has_selection(data) || data.coalescing_edit != 1 || data.cursor != data.last_text_cursor)
@@ -184,7 +229,7 @@ static void keep_cursor_in_view(Container *root, Container *c, STextEditorData &
     if (viewport.w <= 0)
         return;
     PangoRectangle cursor = {};
-    pango_layout_get_cursor_pos(editor_layout(root, data), data.cursor, &cursor, nullptr);
+    pango_layout_get_cursor_pos(editor_layout(root, data), layout_index(data, data.cursor), &cursor, nullptr);
     double x = static_cast<double>(cursor.x) / PANGO_SCALE;
     double margin = std::min(60.0, viewport.w * .25);
     if (x < data.scroll_x + margin)
@@ -212,6 +257,7 @@ static void update_mouse_cursor(Container *root, Container *c, bool selecting) {
     int index = 0;
     int trailing = 0;
     pango_layout_xy_to_index(layout, x * PANGO_SCALE, y * PANGO_SCALE, &index, &trailing);
+    index = text_index(data, index);
     while (trailing-- > 0)
         index = next_character(data.text, index);
     move_cursor(data, index, selecting);
@@ -252,7 +298,7 @@ static void editor_key(Container *root, Container *c, xkb_keysym_t sym, int mods
             return;
         }
         if (key == XKB_KEY_c || key == XKB_KEY_x) {
-            if (!has_selection(data))
+            if (!has_selection(data) || data.options.password)
                 return;
             auto selected = data.text.substr(std::min(data.cursor, data.selection), std::abs(data.cursor - data.selection));
             if (windowing::set_clipboard(data.options.window(root), selected) && key == XKB_KEY_x) {
@@ -300,7 +346,7 @@ static void editor_key(Container *root, Container *c, xkb_keysym_t sym, int mods
         } else if ((backspace && data.cursor > 0) || (!backspace && data.cursor < static_cast<int>(data.text.size()))) {
             if (data.coalescing_edit != group || data.cursor != data.last_text_cursor)
                 record_edit(data);
-            int boundary = control ? seek_token(data.text, data.cursor, backspace ? ETextMotion::Left : ETextMotion::Right) :
+            int boundary = control ? seek_word(data, data.cursor, backspace ? ETextMotion::Left : ETextMotion::Right) :
                 (backspace ? previous_character(data.text, data.cursor) : next_character(data.text, data.cursor));
             int start = std::min(data.cursor, boundary);
             int end = std::max(data.cursor, boundary);
@@ -326,7 +372,7 @@ static void editor_key(Container *root, Container *c, xkb_keysym_t sym, int mods
     if (sym == XKB_KEY_Left || sym == XKB_KEY_Right) {
         bool right = sym == XKB_KEY_Right;
         if (control)
-            cursor = seek_token(data.text, cursor, right ? ETextMotion::Right : ETextMotion::Left);
+            cursor = seek_word(data, cursor, right ? ETextMotion::Right : ETextMotion::Left);
         else if (!shift && has_selection(data))
             cursor = right ? std::max(data.cursor, data.selection) : std::min(data.cursor, data.selection);
         else
@@ -435,8 +481,8 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
     cairo_clip(cr);
     if (has_selection(data)) {
         set_argb(cr, selection_color);
-        int start = std::min(data.cursor, data.selection);
-        int end = std::max(data.cursor, data.selection);
+        int start = layout_index(data, std::min(data.cursor, data.selection));
+        int end = layout_index(data, std::max(data.cursor, data.selection));
         auto iter = pango_layout_get_iter(layout);
         do {
             auto line = pango_layout_iter_get_line_readonly(iter);
@@ -461,7 +507,7 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
     pango_cairo_show_layout(cr, layout);
     if (data.options.editable && editor_active(c, data)) {
         PangoRectangle cursor = {};
-        pango_layout_get_cursor_pos(layout, data.cursor, &cursor, nullptr);
+        pango_layout_get_cursor_pos(layout, layout_index(data, data.cursor), &cursor, nullptr);
         set_rect(cr, Bounds(x + cursor.x / static_cast<double>(PANGO_SCALE),
             y + cursor.y / static_cast<double>(PANGO_SCALE), std::max(1.0f, std::round(window->dpi)),
             cursor.height / static_cast<double>(PANGO_SCALE)));

@@ -20,6 +20,10 @@ struct STextEditorOptions {
     bool editable = true;
     bool bold = false;
     bool parent_activates = false;
+    // Draws one bullet per character and refuses to copy or cut the text.
+    bool password = false;
+    // Maximum text length in bytes (never splitting a character); 0 means unlimited.
+    int max_length = 0;
     int font_size = 13;
     std::function<RawWindow *(Container *)> window;
     std::function<Bounds(Container *, Container *)> viewport;

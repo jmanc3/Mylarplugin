@@ -30,6 +30,9 @@ void drawRoundedRect(cairo_t *cr, double x, double y, double width, double heigh
 
 void paint_popup_background(cairo_t *cr, const Bounds &bounds, double dpi,
                             RGBA background = {1, 1, 1, 1}, RGBA outline = border_color);
+// Intersects the current clip with the inside of the popup's rounded outline.
+// Callers wrap it in cairo_save / cairo_restore.
+void clip_to_popup_background(cairo_t *cr, const Bounds &bounds, double dpi);
 
 void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value);
 

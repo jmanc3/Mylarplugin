@@ -564,6 +564,9 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
             if (!view.scanning && !view.busy) return;
             auto window = bluetooth_window(root);
             double phase = (get_current_time_in_ms() % 2000) / 2000.0;
+            // Dots slide in from the edges; keep them inside the rounded corners.
+            cairo_save(window->cr);
+            clip_to_popup_background(window->cr, root->real_bounds, window->dpi);
             for (int i = 0; i < 5; ++i) {
                 double step = (phase - i * .08) / .6;
                 if (step < 0 || step > 1) continue;
@@ -573,6 +576,7 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
                     c->real_bounds.y + 4 * window->dpi, 2 * window->dpi, 0, 2 * M_PI);
                 cairo_fill(window->cr);
             }
+            cairo_restore(window->cr);
         };
         ScrollPaneSettings settings(dock->bluetooth->raw_window->dpi);
         settings.bottom_show_amount = SNever;

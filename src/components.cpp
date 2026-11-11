@@ -260,6 +260,40 @@ struct Config {
 
 Config *config = new Config;
 
+const SScrollbarColors &scrollbar_colors(EScrollTheme theme) {
+    static const SScrollbarColors light = {
+        .gutter = RGBA("#f1f3f5ff"),
+        .thumb = RGBA("#c4c9d0ff"),
+        .thumb_thin = RGBA("#b3b9c2ff"),
+        .thumb_hovered = RGBA("#a2a9b3ff"),
+        .thumb_pressed = RGBA("#868e99ff"),
+        .button = RGBA("#f1f3f5ff"),
+        .button_hovered = RGBA("#e2e6ebff"),
+        .button_pressed = RGBA("#c4c9d0ff"),
+        .icon = RGBA("#5f6873ff"),
+        .icon_hovered = RGBA("#363c44ff"),
+        .icon_pressed = RGBA("#1f2328ff"),
+    };
+    static const SScrollbarColors dark = [] {
+        SScrollbarColors c = {
+            .gutter = config->color_apps_scrollbar_gutter,
+            .thumb = config->color_apps_scrollbar_default_thumb,
+            .thumb_thin = config->color_apps_scrollbar_default_thumb,
+            .thumb_hovered = config->color_apps_scrollbar_hovered_thumb,
+            .thumb_pressed = config->color_apps_scrollbar_pressed_thumb,
+            .button = config->color_apps_scrollbar_default_button,
+            .button_hovered = config->color_apps_scrollbar_hovered_button,
+            .button_pressed = config->color_apps_scrollbar_pressed_button,
+            .icon = config->color_apps_scrollbar_default_button_icon,
+            .icon_hovered = config->color_apps_scrollbar_hovered_button_icon,
+            .icon_pressed = config->color_apps_scrollbar_pressed_button_icon,
+        };
+        lighten(&c.thumb_thin, 10);
+        return c;
+    }();
+    return theme == EScrollTheme::Dark ? dark : light;
+}
+
 void draw_colored_rect(Container *root, Container *scroll_container, const RGBA &color, const Bounds &bounds) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -371,36 +405,16 @@ paint_arrow(Container *root, Container *container) {
     auto scroll_container = ((ScrollContainer *) container->parent->parent);
     
     auto *data = (ButtonData *) container->user_data;
+    const auto &colors = scrollbar_colors(scroll_container->settings.theme);
     
-    if (container->state.mouse_pressing || container->state.mouse_hovering) {
-        if (container->state.mouse_pressing) {
-            RGBA color = config->color_apps_scrollbar_pressed_button;
-            color.a = scroll_container->scrollbar_openess;
-            draw_colored_rect(root, scroll_container, color, container->real_bounds);
-        } else {
-            RGBA color = config->color_apps_scrollbar_hovered_button;
-            color.a = scroll_container->scrollbar_openess;
-            draw_colored_rect(root, scroll_container, color, container->real_bounds);
-        }
-    } else {
-        RGBA color = config->color_apps_scrollbar_default_button;
-        color.a = scroll_container->scrollbar_openess;
-        draw_colored_rect(root, scroll_container, color, container->real_bounds);
-    }
+    RGBA background = container->state.mouse_pressing ? colors.button_pressed :
+        container->state.mouse_hovering ? colors.button_hovered : colors.button;
+    background.a = scroll_container->scrollbar_openess;
+    draw_colored_rect(root, scroll_container, background, container->real_bounds);
     
-    RGBA color;
-    if (container->state.mouse_pressing || container->state.mouse_hovering) {
-        if (container->state.mouse_pressing) {
-            color = RGBA(config->color_apps_scrollbar_pressed_button_icon);
-            color.a = scroll_container->scrollbar_openess;
-        } else {
-            color = RGBA(config->color_apps_scrollbar_hovered_button_icon);
-            color.a = scroll_container->scrollbar_openess;
-        }
-    } else {
-        color = RGBA(config->color_apps_scrollbar_default_button_icon);
-        color.a = scroll_container->scrollbar_openess;
-    }
+    RGBA color = container->state.mouse_pressing ? colors.icon_pressed :
+        container->state.mouse_hovering ? colors.icon_hovered : colors.icon;
+    color.a = scroll_container->scrollbar_openess;
 
     auto scroll_data = (ScrollData *) scroll_container->user_data;
     auto ctx = scroll_data->func(root);
@@ -425,7 +439,7 @@ paint_scroll_bg(Container *root, Container *container) {
     ZoneScoped;
 #endif
     auto scroll_container = ((ScrollContainer *) container->parent->parent);
-    RGBA color = config->color_apps_scrollbar_gutter;
+    RGBA color = scrollbar_colors(scroll_container->settings.theme).gutter;
     color.a = scroll_container->scrollbar_openess;
     draw_colored_rect(root, scroll_container, color, container->real_bounds);
 }
@@ -460,14 +474,14 @@ paint_right_thumb(Container *root, Container *container) {
     right_bounds.x -= right_bounds.w;
     right_bounds.x -= ((float) small_width) * (1 - scroll_container->scrollbar_openess);
     
-    RGBA color = config->color_apps_scrollbar_default_thumb;
+    const auto &colors = scrollbar_colors(scroll_container->settings.theme);
+    RGBA color = colors.thumb;
     if (container->state.mouse_pressing) {
-        color = config->color_apps_scrollbar_pressed_thumb;
+        color = colors.thumb_pressed;
     } else if (bounds_contains(right_bounds, root->mouse_current_x, root->mouse_current_y)) {
-        color = config->color_apps_scrollbar_hovered_thumb;
+        color = colors.thumb_hovered;
     } else if (right_bounds.w == small_width) {
-        color = config->color_apps_scrollbar_default_thumb;
-        lighten(&color, 10);
+        color = colors.thumb_thin;
     }
     color.a = scroll_container->scrollbar_visible;
     
@@ -503,15 +517,14 @@ paint_bottom_thumb(Container *root, Container *container) {
     bottom_bounds.y -= bottom_bounds.h;
     bottom_bounds.y -= small_width * (1 - scroll_container->scrollbar_openess);
     
-    RGBA color = config->color_apps_scrollbar_default_thumb;
-    
+    const auto &colors = scrollbar_colors(scroll_container->settings.theme);
+    RGBA color = colors.thumb;
     if (container->state.mouse_pressing) {
-        color = config->color_apps_scrollbar_pressed_thumb;
+        color = colors.thumb_pressed;
     } else if (bounds_contains(bottom_bounds, root->mouse_current_x, root->mouse_current_y)) {
-        color = config->color_apps_scrollbar_hovered_thumb;
-    } else if (bottom_bounds.w == small_width) {
-        color = config->color_apps_scrollbar_default_thumb;
-        lighten(&color, 10);
+        color = colors.thumb_hovered;
+    } else if (bottom_bounds.h == small_width) {
+        color = colors.thumb_thin;
     }
     color.a = scroll_container->scrollbar_visible;
 

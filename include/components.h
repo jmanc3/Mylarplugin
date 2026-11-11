@@ -15,6 +15,22 @@ struct DrawContext {
     std::function<void ()> on_needs_frame = nullptr;
 };
 
+struct SScrollbarColors {
+    RGBA gutter;
+    RGBA thumb;
+    RGBA thumb_thin; // collapsed 3px thumb shown while the pointer is away
+    RGBA thumb_hovered;
+    RGBA thumb_pressed;
+    RGBA button;
+    RGBA button_hovered;
+    RGBA button_pressed;
+    RGBA icon;
+    RGBA icon_hovered;
+    RGBA icon_pressed;
+};
+
+const SScrollbarColors &scrollbar_colors(EScrollTheme theme);
+
 struct ScrollData : UserData {
     std::function<DrawContext (Container *root)> func = nullptr;
 };

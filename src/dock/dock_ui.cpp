@@ -163,36 +163,46 @@ void drawRoundedRect(cairo_t *cr, double x, double y, double width, double heigh
     cairo_set_line_width(cr, stroke_width);
 }
 
+// Rounded outline shared by popup painting and clipping. The compositor shadow takes
+// an integer pixel radius; use the same rounding here.
+static void popup_background_path(cairo_t *cr, const Bounds &bounds, double dpi, double inset) {
+    const double radius = std::min(std::round(dock::popup_corner_radius * dpi), std::floor(std::min(bounds.w, bounds.h) * .5));
+    const double r = std::max(0.0, radius - inset);
+    const double left = bounds.x + inset;
+    const double top = bounds.y + inset;
+    const double right = bounds.x + bounds.w - inset;
+    const double bottom = bounds.y + bounds.h - inset;
+    cairo_new_path(cr);
+    cairo_arc(cr, right - r, top + r, r, -M_PI / 2, 0);
+    cairo_arc(cr, right - r, bottom - r, r, 0, M_PI / 2);
+    cairo_arc(cr, left + r, bottom - r, r, M_PI / 2, M_PI);
+    cairo_arc(cr, left + r, top + r, r, M_PI, 3 * M_PI / 2);
+    cairo_close_path(cr);
+}
+
 void paint_popup_background(cairo_t *cr, const Bounds &bounds, double dpi,
                             RGBA background, RGBA outline) {
     if (bounds.w <= 0 || bounds.h <= 0)
         return;
-    // The compositor shadow takes an integer pixel radius; use the same rounding here.
-    const double radius = std::min(std::round(dock::popup_corner_radius * dpi), std::floor(std::min(bounds.w, bounds.h) * .5));
     const double stroke = std::min(dpi, std::min(bounds.w, bounds.h));
-    auto path = [&](double inset) {
-        const double r = std::max(0.0, radius - inset);
-        const double left = bounds.x + inset;
-        const double top = bounds.y + inset;
-        const double right = bounds.x + bounds.w - inset;
-        const double bottom = bounds.y + bounds.h - inset;
-        cairo_new_path(cr);
-        cairo_arc(cr, right - r, top + r, r, -M_PI / 2, 0);
-        cairo_arc(cr, right - r, bottom - r, r, 0, M_PI / 2);
-        cairo_arc(cr, left + r, bottom - r, r, M_PI / 2, M_PI);
-        cairo_arc(cr, left + r, top + r, r, M_PI, 3 * M_PI / 2);
-        cairo_close_path(cr);
-    };
     cairo_save(cr);
     set_argb(cr, background);
-    path(0);
+    popup_background_path(cr, bounds, dpi, 0);
     cairo_fill(cr);
     set_argb(cr, outline);
     cairo_set_line_width(cr, stroke);
     // Inset the stroke and its radius equally so its outer edge matches the fill.
-    path(stroke * .5);
+    popup_background_path(cr, bounds, dpi, stroke * .5);
     cairo_stroke(cr);
     cairo_restore(cr);
+}
+
+void clip_to_popup_background(cairo_t *cr, const Bounds &bounds, double dpi) {
+    if (bounds.w <= 0 || bounds.h <= 0)
+        return;
+    // Stay inside the outline so clipped content never paints over the border.
+    popup_background_path(cr, bounds, dpi, std::min(dpi, std::min(bounds.w, bounds.h)));
+    cairo_clip(cr);
 }
 
 void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value) {

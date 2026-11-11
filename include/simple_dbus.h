@@ -123,6 +123,85 @@ BatteryStatus dbus_read_battery();
 bool dbus_set_battery_saver(bool enabled, std::string &error);
 bool dbus_set_battery_protector(bool enabled, std::string &error);
 
+// Wi-Fi backend (ported from winbar's wifi_backend). NetworkManager is used when it
+// owns its bus name; otherwise wpa_supplicant's control sockets are used directly.
+// Every call blocks with bounded timeouts; use from a worker thread.
+struct WifiAccessPoint {
+    std::string path;
+    std::string ssid;
+    std::string bssid;
+    int strength = 0;
+    unsigned frequency = 0;
+    bool secured = false;
+    bool enterprise = false;
+    bool active = false;
+    // "wpa-psk", "sae", "none" (WEP), "owe", "wpa-eap", or empty for an open network.
+    std::string key_mgmt;
+    // Human readable: "WEP", "WPA", "WPA2", "WPA/WPA2", "WPA2/WPA3", "WPA3", "802.1X", "OWE", or empty.
+    std::string security;
+    std::vector<std::string> saved_connections;
+};
+
+struct WifiDevice {
+    std::string path;
+    std::string interface;
+    // NMDeviceState values (wpa_supplicant states are mapped onto them).
+    unsigned state = 0;
+    unsigned state_reason = 0;
+    long long last_scan = -1;
+    std::string active_access_point;
+};
+
+// The interface carrying the default route, found the way winbar's wifi_state() did
+// (route table + /sys/class/net). Independent of NetworkManager / wpa_supplicant.
+struct NetworkLink {
+    std::string interface;
+    bool up = false;
+    bool wired = false;
+};
+
+// Cheap (a few small file reads); safe to call from any thread.
+NetworkLink default_network_link();
+
+struct WifiStatus {
+    // Filled even when no Wi-Fi backend is running (e.g. a desktop on Ethernet).
+    NetworkLink link;
+    bool service_running = false;
+    // "NetworkManager" or "wpa_supplicant".
+    std::string backend;
+    bool wireless_enabled = false;
+    bool hardware_enabled = true;
+    unsigned state = 0;
+    // NMConnectivityState: 0 unknown, 1 none, 2 captive portal, 3 limited, 4 full.
+    unsigned connectivity = 0;
+    std::string portal_uri;
+    std::vector<WifiDevice> devices;
+    // Access points seen by `device_path`, one entry per SSID (strongest wins).
+    std::string device_path;
+    std::vector<WifiAccessPoint> access_points;
+};
+
+struct WifiBus;
+WifiBus *wifi_backend_open();
+void wifi_backend_close(WifiBus *bus);
+// An empty or unknown device path selects the first wireless device.
+WifiStatus wifi_backend_read(WifiBus *bus, const std::string &device_path);
+bool wifi_backend_scan(WifiBus *bus, const std::string &device_path, std::string &error);
+bool wifi_backend_set_enabled(WifiBus *bus, const std::string &device_path, bool enabled, std::string &error);
+// Activates a saved profile when one exists, otherwise creates one from `password`.
+bool wifi_backend_connect(WifiBus *bus, const std::string &device_path, const WifiAccessPoint &ap,
+                          const std::string &password, std::string &active_connection,
+                          std::string &created_connection, std::string &error);
+bool wifi_backend_disconnect(WifiBus *bus, const std::string &device_path, std::string &error);
+bool wifi_backend_forget(WifiBus *bus, const std::vector<std::string> &connections, std::string &error);
+// NMActiveConnectionState: 1 activating, 2 activated, 3 deactivating, 4 deactivated (0 when gone).
+unsigned wifi_backend_active_state(WifiBus *bus, const std::string &active_connection);
+// Call once a connection attempt settles (connected, failed or abandoned). For
+// wpa_supplicant this re-enables networks SELECT_NETWORK disabled and saves on success.
+void wifi_backend_finish(WifiBus *bus, const std::string &active_connection, bool connected);
+// Asks NetworkManager to re-probe internet access; returns NMConnectivityState (0 without NM).
+unsigned wifi_backend_check_connectivity(WifiBus *bus);
+
 void network_manager_request_scan(std::string device_path);
 
 DBusMessage *get_property(std::string bus_name, std::string path, std::string iface, std::string property_name);

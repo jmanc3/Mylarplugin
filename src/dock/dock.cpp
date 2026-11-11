@@ -2049,25 +2049,21 @@ static void fill_root(Container *root) {
     }
 
     {
-        auto wifi = simple_dock_item(root, ICON("\uE701"));
+        // winbar's tray icon: Wi-Fi or Ethernet depending on the default route.
+        auto wifi = simple_dock_item(root, []() {
+            auto state = network_icon_state();
+            if (state.wired) return std::string(state.up ? "\uE839" : "\uEB55");
+            return std::string(state.up ? "\uE701" : "\uEB5E");
+        });
+        wifi->name = "wifi";
         wifi->when_clicked = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
-            auto mylar = dock->window;
-            auto dpi = mylar->raw_window->dpi;
-
-            RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, volume_popup_w, volume_popup_w * 1.6);
-
-            dock->wifi = open_mylar_popup(mylar, settings);
-            if (!dock->wifi)
-                return;
-            dock->wifi->root->on_closed = [](Container *root) {
-                auto dock = (Dock *) root->user_data;
-                dock->wifi = nullptr;
-            };
+            auto settings = make_icon_anchored_popup_settings(c, dock->window->raw_window->dpi, 376, 520);
+            // The password field needs keyboard input.
+            settings.keyboard_focus_on_click = true;
+            dock->wifi = open_mylar_popup(dock->window, settings);
+            if (!dock->wifi) return;
             dock->wifi->root->user_data = dock;
-            dock->wifi->root->wanted_bounds.w = FILL_SPACE;
-            dock->wifi->root->wanted_bounds.h = FILL_SPACE;
             fill_wifi_container(dock);
             windowing::redraw(dock->wifi->raw_window);
         };
@@ -2515,12 +2511,14 @@ void dock_start(std::string monitor_name) {
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
     bluetooth_watch_dock(dock);
+    wifi_watch_dock(dock);
     total_update();
     schedule_startup_audio_update(dock);
     windowing::main_loop(dock->app);
     if (docks.size() == 1) {
         finished = true;
         battery_stop();
+        wifi_stop();
     }
     if (finished) {
         if (auto icons = container_by_name("icons", dock->window->root))
@@ -2567,6 +2565,7 @@ void dock::stop(std::string monitor_name) {
         finished = true;
         bluetooth_stop();
         battery_stop();
+        wifi_stop();
 
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
