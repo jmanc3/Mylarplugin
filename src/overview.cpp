@@ -1005,6 +1005,8 @@ static bool initialize_overview(int monitor) {
         hypriso->render_whitelist.clear();
         hypriso->whitelist_on = true;
         initialized = true;
+        // No window is focused in overview, even a fullscreen game hiding its cursor.
+        set_input_takeover("overview", true);
         hold_overview_open();
         request_refresh();
     });
@@ -1051,6 +1053,7 @@ void overview_actual_close() {
         hypriso->input_bypass_whitelist = false;
         hypriso->simulateMouseMovement();
     }
+    set_input_takeover("overview", false);
     damage_all();
     request_refresh();
 }

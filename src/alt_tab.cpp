@@ -534,6 +534,7 @@ void alt_tab::show() {
     show_time = get_current_time_in_ms();
     active_index = 0;
     is_showing = true;
+    set_input_takeover("alt_tab", true);
     later_immediate([](Timer *) {
         hypriso->screenshot_all(); 
     });
@@ -654,6 +655,7 @@ void alt_tab::close(bool focus) {
             }
         }
     }
+    set_input_takeover("alt_tab", false);
 }
 
 void alt_tab::move_y(int dir, float off_x) {

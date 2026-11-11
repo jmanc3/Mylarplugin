@@ -13,6 +13,7 @@ static int mode = 0; // 1 rectangle, 2 window, 3 colorpick, 4 draw
 static constexpr float DRAW_BRUSH_MIN = 2.0f;
 static constexpr float DRAW_BRUSH_MAX = 40.0f;
 static constexpr float DRAW_BRUSH_DEFAULT = 5.0f;
+static constexpr float DRAW_ERASE_CURSOR_SCALE = 7.0f;
 
 struct DrawPoint {
     float x = 0;
@@ -30,6 +31,10 @@ static int draw_bubble_corner = 0;
 static std::vector<DrawStrokes> draw_undo;
 static std::vector<DrawStrokes> draw_redo;
 static constexpr size_t DRAW_HISTORY_LIMIT = 100;
+
+static float draw_active_brush_size() {
+    return draw_erasing ? draw_brush_size * DRAW_ERASE_CURSOR_SCALE : draw_brush_size;
+}
 
 static void draw_begin_action() {
     draw_undo.push_back(draw_strokes);
@@ -57,7 +62,7 @@ static void draw_redo_action() {
 }
 
 static void draw_erase_at(float x, float y) {
-    const float radius = std::max(1.0f, draw_brush_size * .5f);
+    const float radius = std::max(1.0f, draw_active_brush_size() * .5f);
     const float radius2 = radius * radius;
     DrawStrokes result;
 
@@ -600,7 +605,8 @@ void actual_open_screenshot_tool() {
 
                 if (rid == hypriso->monitor_from_cursor()) {
                     auto p = to_render(actual_root->mouse_current_x, actual_root->mouse_current_y);
-                    Bounds preview{p.x - diameter * .5f, p.y - diameter * .5f, diameter, diameter};
+                    const float cursor_diameter = std::max(1.0f, draw_active_brush_size() * s);
+                    Bounds preview{p.x - cursor_diameter * .5f, p.y - cursor_diameter * .5f, cursor_diameter, cursor_diameter};
                     preview.round();
                     rect(preview, {1, 0, 0, .18}, 0, preview.w * .5f);
                     border(preview, {1, 1, 1, .9}, std::max(1.0f, s), 0, preview.w * .5f);
@@ -848,6 +854,9 @@ void screenshot_tool::open(bool draw) {
         }
         hypriso->whitelist_on = true;
         actual_open_screenshot_tool();
+        // A fullscreen window may have hidden the cursor. Modes that set
+        // their own cursor take precedence over this left_ptr fallback.
+        set_input_takeover("screenshot", true);
         if (draw) {
             unsetCursorImage();
             set_cursor_hidden_for_screenshot_draw(true);
@@ -871,6 +880,7 @@ void screenshot_tool::close() {
     }
     heart::set_force_meta_open(false);
     heart::set_zoom(1.0);
+    set_input_takeover("screenshot", false);
 }
 
 bool screenshot_tool::is_drawing() {

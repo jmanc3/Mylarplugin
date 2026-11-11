@@ -7123,6 +7123,66 @@ void unsetCursorImage(bool force) {
     //g_pInputManager->unsetCursorImage();
 }
 
+// Swallows key presses that no keybind consumed, so they never reach the
+// focused client. The seat keeps routing each swallowed press's release here
+// too, while keys held before the takeover still release to the client.
+class CTakeoverKeyboardSink : public IKeyboardEventHandler {
+  public:
+    void onKeyboardKey(const IKeyboard::SKeyEvent &event, SP<IKeyboard> keyboard) override {
+        ;
+    }
+};
+
+static std::unordered_set<std::string> input_takeover_owners;
+// Never freed: releases of swallowed presses may arrive after the takeover ends.
+static SP<IKeyboardEventHandler> takeover_keyboard_sink;
+static Hyprutils::Signal::CHyprSignalListener takeover_pointer_focus_listener;
+
+void set_input_takeover(const std::string &owner, bool active) {
+    const bool was_active = !input_takeover_owners.empty();
+    if (active)
+        input_takeover_owners.insert(owner);
+    else
+        input_takeover_owners.erase(owner);
+    const bool is_active = !input_takeover_owners.empty();
+    if (was_active == is_active)
+        return;
+
+    if (!takeover_keyboard_sink)
+        takeover_keyboard_sink = makeShared<CTakeoverKeyboardSink>();
+
+    if (is_active) {
+        // Our overlays are drawn by the compositor, so the window under them
+        // keeps focus, its cursor image and its keyboard. A fullscreen game
+        // usually hides that image and may lock the pointer. Take all of it.
+        // Keyboard focus itself stays, because a fullscreen game may minimize
+        // when it loses focus. Keybinds still run before the sink.
+        // The lowest override group lets SPECIAL_ACTION cursors (crosshair,
+        // resize) still win, and falls back to left_ptr when they are unset.
+        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+        g_pSeatManager->setPointerFocus(nullptr, {});
+        // Switching workspaces refocuses the last window there, and that
+        // refocus gives it pointer focus again, which re-arms a game's pointer
+        // lock and freezes the cursor. Take it back as soon as it is given.
+        // The emit is the last thing setPointerFocus does, and clearing it
+        // emits again so the constraint controller drops the lock.
+        takeover_pointer_focus_listener = g_pSeatManager->m_events.pointerFocusChange.listen([] {
+            if (g_pSeatManager->m_state.pointerFocus)
+                g_pSeatManager->setPointerFocus(nullptr, {});
+        });
+        g_pSeatManager->m_keyboardEventHandlers.push(takeover_keyboard_sink);
+        return;
+    }
+
+    takeover_pointer_focus_listener.reset();
+    g_pSeatManager->m_keyboardEventHandlers.remove(takeover_keyboard_sink);
+    // Restores the client's cursor image, then hands pointer focus (and any
+    // pointer constraint) back to whatever is under the cursor. This path
+    // skips the mouse move event, so our own listeners cannot cancel it.
+    Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+    g_pInputManager->refocusPointer();
+}
+
 int get_monitor(int client) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -11121,7 +11181,11 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     bool renderCursor = true;
 
-    if (pMonitor->m_solitaryClient && (!finalDamage.empty() || *PSOLDAMAGE))
+    // The solitary shortcut renders only the fullscreen window and skips the
+    // monitor scene. With the plugin's whitelisted rendering (overview, show
+    // desktop, snap assist) the fullscreen window is hidden by the whitelist,
+    // so the scene must still run or nothing paints on the monitor at all.
+    if (pMonitor->m_solitaryClient && !hypriso->whitelist_on && (!finalDamage.empty() || *PSOLDAMAGE))
         tis->renderWindow(ctx, pMonitor->m_solitaryClient.lock(), pMonitor, pMonitor->m_solitaryClient->presentation().renderPresentation(), NOW, false,
                      Render::RENDER_PASS_MAIN /* solitary = no popups */);
     else if (!finalDamage.empty()) {

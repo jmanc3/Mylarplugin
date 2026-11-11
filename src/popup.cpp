@@ -50,6 +50,11 @@ void close_now(const std::string& uuid) {
     }
     std::erase(actual_root->children, panel);
     delete panel;
+    const bool any_popup = std::any_of(actual_root->children.begin(), actual_root->children.end(), [](Container *c) {
+        return c->custom_type == (int)TYPE::OUR_POPUP;
+    });
+    if (!any_popup)
+        set_input_takeover("popup", false);
 }
 
 void mark_closing(Container *panel) {
@@ -345,6 +350,9 @@ void popup::open(std::vector<PopOption> root, int x, int y, int cid) {
     if (root.empty())
         return;
     build_menu(root, x, y, hypriso->monitor_from_cursor(), cid);
+    // A menu can open over a fullscreen game (titlebar right click), which
+    // would otherwise keep the hidden cursor, its pointer lock and the keys.
+    set_input_takeover("popup", true);
     if (hypriso->on_mouse_move) {
         const auto m = mouse();
         hypriso->on_mouse_move(0, m.x, m.y);
