@@ -9,7 +9,8 @@ namespace titlebar {
     void on_draw_decos(std::string name, int monitor, int id, float a, int deco_offset_x, int deco_offset_y);
     void on_activated(int id);
 
-    void titlebar_right_click(int cid, bool centered = false);
+    // bottom_y >= 0 places the menu so its bottom edge sits at bottom_y (global logical px).
+    void titlebar_right_click(int cid, bool centered = false, int bottom_y = -1);
 }
 
 struct Container;

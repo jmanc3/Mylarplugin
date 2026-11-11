@@ -123,7 +123,7 @@ static void sleep_cid(int cid) {
     heart::layout_containers();
 }
 
-void titlebar::titlebar_right_click(int cid, bool centered) {
+void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
     auto m = mouse();
     std::vector<PopOption> root;
     {
@@ -334,8 +334,18 @@ void titlebar::titlebar_right_click(int cid, bool centered) {
         root.push_back(pop);        
     }
 
+    int y = m.y;
+    if (bottom_y >= 0) {
+        // Same height calculation popup's build_menu uses.
+        auto s = scale(hypriso->monitor_from_cursor());
+        float height = 0;
+        for (const auto &option : root)
+            height += option.seperator ? 5 * s : 24 * s;
+        y = bottom_y - height;
+    }
+
     if (centered) {
-        popup::open(root, m.x - (277 * .5), m.y, cid);
+        popup::open(root, m.x - (277 * .5), y, cid);
     } else {
         popup::open(root, m.x - 1, m.y + 1, cid);
     }

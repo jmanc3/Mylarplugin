@@ -25,6 +25,7 @@
 #include "hypriso.h"
 #include "icons.h"
 #include "popup.h"
+#include "titlebar.h"
 #include "edit_pin.h"
 #include "audio.h"
 #include "components.h"
@@ -1928,7 +1929,22 @@ static void fill_root(Container *root) {
     if (true) {
         auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
         active_settings->when_clicked = paint {
-            system("hyprctl dispatch \"hl.plugin.mylar.right_click_activate()\"");
+            auto dock = (Dock *) root->user_data;
+            float dpi = dock->window->raw_window->dpi;
+            float yoff = root->mouse_current_y;
+            main_thread([dpi, yoff] {
+                for (auto ch : actual_root->children) {
+                    if (ch->custom_type != (int) TYPE::CLIENT)
+                        continue;
+                    auto cid = *datum<int>(ch, "cid");
+                    if (!hypriso->has_focus(cid))
+                        continue;
+                    // Same gap above the dock as pinned_right_click
+                    auto m = mouse();
+                    titlebar::titlebar_right_click(cid, true, m.y - (yoff / dpi) - 5);
+                    return;
+                }
+            });
         };
     }
 
