@@ -24,6 +24,13 @@ PopupUserData *popup_data(Container *panel) {
     return panel ? (PopupUserData *) panel->user_data : nullptr;
 }
 
+constexpr int kAboveOverlaysZ = 3000;
+
+int paint_stage(Container *panel) {
+    auto *data = popup_data(panel);
+    return data && data->above_overlays ? (int) STAGE::RENDER_PRE_CURSOR : (int) STAGE::RENDER_POST_WINDOWS;
+}
+
 void update_popup_cursor() {
     for (auto *panel : actual_root->children) {
         if (panel->custom_type != (int)TYPE::OUR_POPUP || !panel->exists)
@@ -146,6 +153,27 @@ bool popup::is_open() {
     return false;
 }
 
+void popup::set_above_overlays() {
+    for (auto *panel : actual_root->children) {
+        if (panel->custom_type != (int)TYPE::OUR_POPUP)
+            continue;
+        auto *data = popup_data(panel);
+        if (!data || data->above_overlays)
+            continue;
+        data->above_overlays = true;
+        panel->z_index += kAboveOverlaysZ;
+    }
+    damage_all();
+}
+
+bool popup::contains(int x, int y) {
+    for (auto *panel : actual_root->children) {
+        if (panel->custom_type == (int)TYPE::OUR_POPUP && panel->exists && bounds_contains(panel->real_bounds, x, y))
+            return true;
+    }
+    return false;
+}
+
 namespace {
 
 Container *build_menu(const std::vector<PopOption>& options, int x, int y, int mid, int cid,
@@ -169,6 +197,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
     pud->root_uuid = parent ? popup_data(parent)->root_uuid : p->uuid;
     pud->parent_uuid = parent ? parent->uuid : "";
     pud->owner_row_uuid = owner ? owner->uuid : "";
+    pud->above_overlays = parent && popup_data(parent)->above_overlays;
     p->user_data = pud;
     const auto mb = bounds_reserved_monitor(mid);
     if (parent && x + p->wanted_bounds.w > mb.right())
@@ -211,7 +240,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (stage == (int) STAGE::RENDER_POST_WINDOWS) {
+        if (stage == paint_stage(c)) {
             renderfix
             auto pud = (PopupUserData *) c->user_data;
             auto b = c->real_bounds;
@@ -223,7 +252,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (stage == (int) STAGE::RENDER_POST_WINDOWS) {
+        if (stage == paint_stage(c)) {
             renderfix
             auto b = c->real_bounds;
             b.shrink(1);
@@ -247,7 +276,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
                 if (!root)
                     return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-                if (stage == (int)STAGE::RENDER_POST_WINDOWS) {
+                if (stage == paint_stage(c->parent)) {
                     renderfix
                     auto b = c->real_bounds;
                     b.y += std::floor(b.h * .5);
@@ -266,7 +295,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
             auto root = get_rendering_root();
             if (!root) return;
             auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-            if (stage == (int) STAGE::RENDER_POST_WINDOWS) {
+            if (stage == paint_stage(c->parent)) {
                 renderfix
 
                 auto *child = popup_data(find_popup(popup_data(c->parent)->child_uuid));

@@ -682,6 +682,22 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
             damage_all();
         };
         thumb->when_clicked = paint {
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                consume_event(root, c);
+                const int cid = *datum<int>(c, "cid");
+                later_immediate([cid](Timer *) {
+                    auto &s = state();
+                    if (!s.container)
+                        return;
+                    titlebar::titlebar_right_click(cid);
+                    // The preview paints in RENDER_PRE_CURSOR; lift the menu
+                    // above it so it is not hidden behind the thumbnails.
+                    popup::set_above_overlays();
+                    s.pending_close = false;
+                    s.generation++;
+                });
+                return;
+            }
             if (c->state.mouse_button_pressed != BTN_LEFT)
                 return;
 
@@ -943,6 +959,20 @@ void dock_thumbnails::close() {
         // (keep_open/open), so a stale timer becomes a no-op.
         if (generation != s.generation || s.hovered || !s.container)
             return;
+        // Keep the preview while the pointer is inside a context menu opened
+        // from it (or back over the preview once that menu closes).
+        const auto m = mouse();
+        if (popup::contains((int) m.x, (int) m.y) ||
+            (popup::is_open() && bounds_contains(s.container->real_bounds, (int) m.x, (int) m.y))) {
+            s.pending_close = false;
+            dock_thumbnails::close();
+            return;
+        }
+        if (bounds_contains(s.container->real_bounds, (int) m.x, (int) m.y)) {
+            s.hovered = true;
+            s.pending_close = false;
+            return;
+        }
         destroy_now();
     });
 }

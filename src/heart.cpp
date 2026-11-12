@@ -1282,7 +1282,9 @@ static void on_render(int id, int stage) {
 
                 auto mon_id = zed.monitor_id;
 
-                if (((double) delta) < minimize_anim_time) { 
+                // A window slept from another workspace shouldn't fly into the
+                // dock over the workspace currently being shown.
+                if (((double) delta) < minimize_anim_time && hypriso->is_window_workspace_visible(zed.cid)) {
                     float scalar = ((float) delta) / ((float) minimize_anim_time);
 
                     auto bounds = dock::get_item_location(hypriso->monitor_name(mon_id), "sleep_button");
@@ -2633,6 +2635,18 @@ void heart::layout_containers() {
             }
             *datum<bool>(c, "touched") = true;
         }
+    }
+    // Menus opened from the dock thumbnails must win hit-testing over the
+    // preview they overlap, so move them ahead of it.
+    for (auto c : backup) {
+        if (c->custom_type != (int) TYPE::OUR_POPUP)
+            continue;
+        auto *data = (PopupUserData *) c->user_data;
+        if (!data || !data->above_overlays)
+            continue;
+        auto &children = c->parent->children;
+        children.erase(std::remove(children.begin(), children.end(), c), children.end());
+        children.insert(children.begin(), c);
     }
     for (auto c : backup) {
         if (c->custom_type == (int) TYPE::SCREENSHOT_TOOL) {

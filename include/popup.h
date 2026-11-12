@@ -14,6 +14,8 @@ struct PopupUserData : UserData {
     std::string child_uuid;
     std::string requested_row_uuid;
     bool closing = false;
+    // Paint in RENDER_PRE_CURSOR above overlays such as the dock thumbnails.
+    bool above_overlays = false;
 };
 
 struct PopOption {
@@ -44,4 +46,11 @@ namespace popup {
     // True while any context menu is visible. Used to suppress hover previews
     // while a right-click menu is open.
     bool is_open();
+
+    // Marks every open menu (and submenus opened from it later) to render
+    // above compositor overlays like the dock thumbnail preview.
+    void set_above_overlays();
+
+    // True if (x, y) is inside any visible context menu.
+    bool contains(int x, int y);
 }
