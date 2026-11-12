@@ -103,6 +103,9 @@
 #include <fcntl.h>
 #include <glib-object.h>
 #include <hyprland/src/desktop/view/Popup.hpp>
+#include <hyprland/src/desktop/view/WLSurface.hpp>
+#include <hyprland/src/protocols/core/Compositor.hpp>
+#include <hyprland/src/protocols/core/Subcompositor.hpp>
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/animation/AnimationManager.hpp>
 // #include <hyprland/src/managers/animation/DesktopAnimationManager.hpp>
@@ -7141,6 +7144,52 @@ static std::unordered_set<std::string> input_takeover_owners;
 // Never freed: releases of swallowed presses may arrive after the takeover ends.
 static SP<IKeyboardEventHandler> takeover_keyboard_sink;
 static Hyprutils::Signal::CHyprSignalListener takeover_pointer_focus_listener;
+static Hyprutils::Signal::CHyprSignalListener takeover_keyboard_focus_listener;
+
+// True for a toplevel window's surfaces (its subsurfaces and popups too).
+// Layer surfaces, like the dock and its menus, are not windows.
+static bool surface_owned_by_window(SP<CWLSurfaceResource> surface) {
+    while (surface && surface->m_role && surface->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
+        const auto sub = sc<CSubsurfaceRole *>(surface->m_role.get())->m_subsurface.lock();
+        surface = sub ? sub->m_parent.lock() : nullptr;
+    }
+    const auto hl = Desktop::View::CWLSurface::fromResource(surface);
+    const auto view = hl ? hl->view() : nullptr;
+    if (!view)
+        return false;
+    if (const auto popup = Desktop::View::CPopup::fromView(view))
+        return !!popup->windowOwner();
+    return !!Desktop::View::CWindow::fromView(view);
+}
+
+// The takeover only targets windows, which sit under our compositor-drawn
+// overlays without knowing it. Layer surfaces (the dock) keep working.
+static void update_input_takeover() {
+    const auto pointer = g_pSeatManager->m_state.pointerFocus.lock();
+    // Switching workspaces refocuses the last window there, and that refocus
+    // gives it pointer focus again, which re-arms a game's pointer lock and
+    // freezes the cursor. Take it back as soon as it is given. The emit is
+    // the last thing setPointerFocus does, and clearing it emits again, which
+    // re-enters here and lets the constraint controller drop the lock.
+    if (pointer && surface_owned_by_window(pointer)) {
+        g_pSeatManager->setPointerFocus(nullptr, {});
+        return;
+    }
+    // A fullscreen game usually hides its cursor image, which stays applied
+    // while nothing has pointer focus. A layer surface sets its own cursor.
+    // The lowest override group lets SPECIAL_ACTION cursors (crosshair,
+    // resize) still win, and falls back to left_ptr when they are unset.
+    if (pointer)
+        Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+    else
+        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+    // Keyboard focus itself stays on the window, because a fullscreen game
+    // may minimize when it loses focus. Keybinds still run before the sink.
+    if (surface_owned_by_window(g_pSeatManager->m_state.keyboardFocus.lock()))
+        g_pSeatManager->m_keyboardEventHandlers.push(takeover_keyboard_sink);
+    else
+        g_pSeatManager->m_keyboardEventHandlers.remove(takeover_keyboard_sink);
+}
 
 void set_input_takeover(const std::string &owner, bool active) {
     const bool was_active = !input_takeover_owners.empty();
@@ -7156,29 +7205,14 @@ void set_input_takeover(const std::string &owner, bool active) {
         takeover_keyboard_sink = makeShared<CTakeoverKeyboardSink>();
 
     if (is_active) {
-        // Our overlays are drawn by the compositor, so the window under them
-        // keeps focus, its cursor image and its keyboard. A fullscreen game
-        // usually hides that image and may lock the pointer. Take all of it.
-        // Keyboard focus itself stays, because a fullscreen game may minimize
-        // when it loses focus. Keybinds still run before the sink.
-        // The lowest override group lets SPECIAL_ACTION cursors (crosshair,
-        // resize) still win, and falls back to left_ptr when they are unset.
-        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
-        g_pSeatManager->setPointerFocus(nullptr, {});
-        // Switching workspaces refocuses the last window there, and that
-        // refocus gives it pointer focus again, which re-arms a game's pointer
-        // lock and freezes the cursor. Take it back as soon as it is given.
-        // The emit is the last thing setPointerFocus does, and clearing it
-        // emits again so the constraint controller drops the lock.
-        takeover_pointer_focus_listener = g_pSeatManager->m_events.pointerFocusChange.listen([] {
-            if (g_pSeatManager->m_state.pointerFocus)
-                g_pSeatManager->setPointerFocus(nullptr, {});
-        });
-        g_pSeatManager->m_keyboardEventHandlers.push(takeover_keyboard_sink);
+        takeover_pointer_focus_listener = g_pSeatManager->m_events.pointerFocusChange.listen([] { update_input_takeover(); });
+        takeover_keyboard_focus_listener = g_pSeatManager->m_events.keyboardFocusChange.listen([] { update_input_takeover(); });
+        update_input_takeover();
         return;
     }
 
     takeover_pointer_focus_listener.reset();
+    takeover_keyboard_focus_listener.reset();
     g_pSeatManager->m_keyboardEventHandlers.remove(takeover_keyboard_sink);
     // Restores the client's cursor image, then hands pointer focus (and any
     // pointer constraint) back to whatever is under the cursor. This path

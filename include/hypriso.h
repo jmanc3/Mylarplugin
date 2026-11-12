@@ -652,8 +652,9 @@ void draw_texture(TextureInfo info, Bounds b, float a = 1.0, float clip_w = 0.0)
 
 void setCursorImageUntilUnset(std::string cursor);
 void unsetCursorImage(bool force = false);
-// While any owner is active, the cursor is shown, no client has pointer focus,
-// and key presses not used by a keybind are kept from the focused client.
+// While any owner is active, the cursor is shown, no window has pointer focus,
+// and key presses not used by a keybind are kept from the focused client. It
+// targets windows only; layer surfaces such as the dock keep their input.
 void set_input_takeover(const std::string &owner, bool active);
 void set_cursor_hidden_for_desktop_fade(bool hidden);
 void set_cursor_hidden_for_screenshot_draw(bool hidden);
