@@ -8351,6 +8351,26 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
         presentation.floatingOffset           = {};
         presentation.workspaceOffsetAnimating = false;
 
+        // Live renders go through hook_RenderWindow, which zeroes rounding and
+        // border size for snapped (no_rounding) windows. This snapshot calls
+        // ourRenderWindow directly, so apply the same override here, otherwise
+        // the titlebar/border/shadow keep their rounded corners.
+        const bool noRounding = std::ranges::any_of(hyprwindows, [w](const auto* hw) { return hw->w == w && hw->no_rounding; });
+        static auto PROUNDING = CConfigValue<Config::INTEGER>("decoration:rounding");
+        static auto PBORD     = CConfigValue<Config::INTEGER>("general:border_size");
+        const auto initialRounding   = *PROUNDING;
+        const auto initialBorderSize = *PBORD;
+        if (noRounding) {
+            *PROUNDING.ptr() = 0;
+            *PBORD.ptr()     = 0;
+        }
+        defer({
+            if (noRounding) {
+                *PROUNDING.ptr() = initialRounding;
+                *PBORD.ptr()     = initialBorderSize;
+            }
+        });
+
         ourRenderWindow(g_pHyprRenderer->context(), w, m, presentation, Time::steadyNow(), true, Render::RENDER_PASS_ALL, false, true);
 
         // Shadow passes resolve their geometry when the render pass is submitted.
