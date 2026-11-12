@@ -499,7 +499,8 @@ struct HyprIso {
     void screenshot_wallpaper(int mon);
     
     void screenshot_monitor(int mon);
-    void save_monitor_to_png(int mon, std::string output_path, Bounds region = Bounds());
+    // The PNG is written on a worker thread; on_saved (if any) runs on that thread once it is on disk.
+    void save_monitor_to_png(int mon, std::string output_path, Bounds region = Bounds(), std::function<void()> on_saved = nullptr);
     RGBA colorpick_monitor(int mon, Bounds mouse);
     
     void save_window_to_png(int cid, bool decorations, std::string output_path);
@@ -592,6 +593,8 @@ struct HyprIso {
 
     void generate_mylar_hyprland_config();
     void apply_workspace_settings();
+    // True once Xwayland has finished starting (its window manager is connected).
+    bool xwayland_ready();
 };
 
 extern HyprIso *hypriso;
@@ -741,6 +744,8 @@ void remove_watch(int watch_descriptor);
 
 // On main thread loop
 bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::string name);
+// Stops polling `fd` (registered with poll_descriptor) without closing it.
+void remove_polled_descriptor(int fd);
 
 void make_gesture(int fingerCount, int direction, uint32_t modMask, float deltaScale, bool disableInhibit, std::function<void (Bounds delta)> start, std::function<void (Bounds delta)> update, std::function<void ()> end);
 

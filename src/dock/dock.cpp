@@ -2846,6 +2846,14 @@ void dock::on_activated(int cid) {
     }
 }
 
+void dock::change_in_systray() {
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (d->extra && windowing::has_window(d->extra->raw_window))
+            windowing::redraw(d->extra->raw_window);
+    }
+}
+
 void dock::redraw() {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);

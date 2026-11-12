@@ -3,7 +3,9 @@
 #include "heart.h"
 #include "overview.h"
 #include <algorithm>
+#include <cairo.h>
 #include <cmath>
+#include <cstdlib>
 #include <linux/input-event-codes.h>
 #include <vector>
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -20,14 +22,37 @@ struct DrawPoint {
     float y = 0;
 };
 
-using DrawStroke = std::vector<DrawPoint>;
+struct DrawStroke {
+    std::vector<DrawPoint> points;
+    RGBA color = {1, 0, 0, 1};
+
+    bool empty() const { return points.empty(); }
+    size_t size() const { return points.size(); }
+    const DrawPoint &operator[](size_t i) const { return points[i]; }
+    void push_back(DrawPoint p) { points.push_back(p); }
+    void clear() { points.clear(); }
+};
 using DrawStrokes = std::vector<DrawStroke>;
+
+// The colors offered next to the "Drawing" bubble; red is the default.
+static const RGBA draw_palette[] = {
+    {1, 0, 0, 1},
+    {1, .55, 0, 1},
+    {1, .85, 0, 1},
+    {.12, .75, .25, 1},
+    {.1, .45, 1, 1},
+    {.62, .25, .95, 1},
+};
+static constexpr int DRAW_PALETTE_SIZE = sizeof(draw_palette) / sizeof(draw_palette[0]);
 
 static DrawStrokes draw_strokes;
 static bool draw_active = false;
 static bool draw_erasing = false;
 static float draw_brush_size = DRAW_BRUSH_DEFAULT;
 static int draw_bubble_corner = 0;
+static int draw_color_index = 0;
+static bool draw_picking_color = false; // the current press landed on a color box, so it doesn't draw
+static std::vector<Bounds> draw_color_boxes; // global logical bounds of the color boxes, from the last paint
 static std::vector<DrawStrokes> draw_undo;
 static std::vector<DrawStrokes> draw_redo;
 static constexpr size_t DRAW_HISTORY_LIMIT = 100;
@@ -71,10 +96,11 @@ static void draw_erase_at(float x, float y) {
             continue;
 
         DrawStroke piece;
+        piece.color = stroke.color;
         auto flush = [&]() {
             if (piece.empty())
                 return;
-            result.push_back(std::move(piece));
+            result.push_back(piece);
             piece.clear();
         };
         auto sample = [&](float px, float py) {
@@ -103,6 +129,81 @@ static void draw_erase_at(float x, float y) {
     }
 
     draw_strokes = std::move(result);
+}
+
+static int draw_color_box_at(float x, float y) {
+    for (int i = 0; i < (int) draw_color_boxes.size(); i++) {
+        auto b = draw_color_boxes[i];
+        if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h)
+            return i;
+    }
+    return -1;
+}
+
+static void draw_start_stroke(float x, float y) {
+    draw_begin_action();
+    draw_active = true;
+    draw_erasing = false;
+    draw_strokes.push_back({});
+    draw_strokes.back().color = draw_palette[draw_color_index];
+    draw_strokes.back().push_back({x, y});
+}
+
+// Paints the strokes onto a PNG of the monitor (the drawing only exists on screen otherwise).
+static void draw_strokes_onto_png(const std::string &path, const DrawStrokes &strokes, Bounds monitor, float scale, float brush) {
+    if (strokes.empty())
+        return;
+    auto surface = cairo_image_surface_create_from_png(path.c_str());
+    if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(surface);
+        return;
+    }
+    auto cr = cairo_create(surface);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_set_line_width(cr, std::max(1.0f, brush * scale));
+    for (const auto &stroke : strokes) {
+        if (stroke.empty())
+            continue;
+        cairo_set_source_rgba(cr, stroke.color.r, stroke.color.g, stroke.color.b, stroke.color.a);
+        cairo_new_path(cr);
+        cairo_move_to(cr, (stroke[0].x - monitor.x) * scale, (stroke[0].y - monitor.y) * scale);
+        // A lone point still leaves a dot thanks to the round caps.
+        cairo_line_to(cr, (stroke[0].x - monitor.x) * scale, (stroke[0].y - monitor.y) * scale);
+        for (size_t i = 1; i < stroke.size(); i++)
+            cairo_line_to(cr, (stroke[i].x - monitor.x) * scale, (stroke[i].y - monitor.y) * scale);
+        cairo_stroke(cr);
+    }
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    cairo_surface_write_to_png(surface, path.c_str());
+    cairo_surface_destroy(surface);
+}
+
+// Ctrl+C: copies the selected rectangle (or the whole monitor without one) to the clipboard.
+static void copy_screenshot_to_clipboard(bool has_selection, Bounds selection) {
+    auto rid = hypriso->monitor_from_cursor();
+    auto mb = bounds_monitor(rid);
+    float s = scale(rid);
+    Bounds region;
+    if (has_selection) {
+        region = fixed_box(selection.x, selection.y, selection.w, selection.h);
+        region.x -= mb.x;
+        region.y -= mb.y;
+        region.scale(s);
+        if (region.w < 1 || region.h < 1)
+            region = Bounds();
+    }
+    DrawStrokes strokes;
+    if (mode == 4)
+        strokes = draw_strokes;
+    float brush = draw_brush_size;
+    static const std::string path = "/tmp/mylar-screenshot-clipboard.png";
+    hypriso->save_monitor_to_png(rid, path, region, [strokes = std::move(strokes), mb, s, brush]() {
+        draw_strokes_onto_png(path, strokes, mb, s, brush);
+        system(fz("wl-copy --type image/png < '{}'", path).c_str());
+    });
+    notify("Screenshot copied to clipboard");
 }
 
 Container *label(Container *parent, std::string icon, std::string text) {
@@ -177,6 +278,9 @@ void actual_open_screenshot_tool() {
     draw_erasing = false;
     draw_brush_size = DRAW_BRUSH_DEFAULT;
     draw_bubble_corner = 0;
+    draw_color_index = 0;
+    draw_picking_color = false;
+    draw_color_boxes.clear();
     draw_undo.clear();
     draw_redo.clear();
     
@@ -578,16 +682,18 @@ void actual_open_screenshot_tool() {
                     return Bounds{(x - mb.x) * s, (y - mb.y) * s, 0, 0};
                 };
                 auto diameter = std::max(1.0f, draw_brush_size * s);
+                RGBA stamp_color = draw_palette[draw_color_index];
                 auto stamp = [&](float x, float y) {
                     auto p = to_render(x, y);
                     Bounds b{p.x - diameter * .5f, p.y - diameter * .5f, diameter, diameter};
                     b.round();
-                    rect(b, {1, 0, 0, 1}, 0, b.w * .5f);
+                    rect(b, stamp_color, 0, b.w * .5f);
                 };
 
                 for (const auto &stroke : draw_strokes) {
                     if (stroke.empty())
                         continue;
+                    stamp_color = stroke.color;
                     stamp(stroke[0].x, stroke[0].y);
                     for (size_t i = 1; i < stroke.size(); i++) {
                         const auto &a = stroke[i - 1];
@@ -603,35 +709,37 @@ void actual_open_screenshot_tool() {
                     }
                 }
 
-                if (rid == hypriso->monitor_from_cursor()) {
-                    auto p = to_render(actual_root->mouse_current_x, actual_root->mouse_current_y);
-                    const float cursor_diameter = std::max(1.0f, draw_active_brush_size() * s);
-                    Bounds preview{p.x - cursor_diameter * .5f, p.y - cursor_diameter * .5f, cursor_diameter, cursor_diameter};
-                    preview.round();
-                    rect(preview, {1, 0, 0, .18}, 0, preview.w * .5f);
-                    border(preview, {1, 1, 1, .9}, std::max(1.0f, s), 0, preview.w * .5f);
-                }
+                const bool cursor_here = rid == hypriso->monitor_from_cursor();
 
-                if (rid == hypriso->monitor_from_cursor()) {
+                if (cursor_here) {
                     const float margin = 18.0f * s;
                     auto text = gen_text_texture(set->font, "Drawing", 14.0f * s, {.96, .97, 1, .96});
                     Bounds bubble{0, 0, (float) text.w + 26.0f * s, std::max((float) text.h + 14.0f * s, 32.0f * s)};
                     bubble.round();
 
+                    // Six color boxes in a pill beside the bubble, on the side facing the screen's center.
+                    const float box = std::round(bubble.h - 12.0f * s);
+                    const float box_gap = std::round(6.0f * s);
+                    const float palette_pad = std::round((bubble.h - box) * .5f);
+                    const float palette_gap = std::round(8.0f * s);
+                    Bounds palette{0, 0, palette_pad * 2 + box * DRAW_PALETTE_SIZE + box_gap * (DRAW_PALETTE_SIZE - 1), bubble.h};
+
                     auto place_bubble = [&](int corner) {
-                        const float x = (corner == 0 || corner == 1) ? (mb.w * s - bubble.w - margin) : margin;
+                        const bool right_side = corner == 0 || corner == 1;
+                        const float x = right_side ? (mb.w * s - bubble.w - margin) : margin;
                         const float y = (corner == 1 || corner == 2) ? (mb.h * s - bubble.h - margin) : margin;
                         bubble.x = std::round(x);
                         bubble.y = std::round(y);
+                        palette.x = right_side ? bubble.x - palette_gap - palette.w : bubble.x + bubble.w + palette_gap;
+                        palette.y = bubble.y;
                     };
                     place_bubble(draw_bubble_corner);
 
+                    // Only dodge the mouse once it is right on the bubble, so the color boxes beside it stay reachable.
                     auto mou = mouse();
-                    Bounds hit = bubble;
-                    hit.grow(16.0f * s);
                     const double mx = (mou.x - mb.x) * s;
                     const double my = (mou.y - mb.y) * s;
-                    if (mx >= hit.x && mx <= hit.x + hit.w && my >= hit.y && my <= hit.y + hit.h) {
+                    if (mx >= bubble.x && mx <= bubble.x + bubble.w && my >= bubble.y && my <= bubble.y + bubble.h) {
                         draw_bubble_corner = (draw_bubble_corner + 1) % 4;
                         place_bubble(draw_bubble_corner);
                     }
@@ -643,6 +751,42 @@ void actual_open_screenshot_tool() {
                                             (double) text.w, (double) text.h});
                         free_text_texture(text.id);
                     }
+
+                    rect(palette, {.08, .08, .1, .84}, 0, palette.h * .5f, 2, true);
+                    border(palette, {1, 1, 1, .16}, std::max(1.0f, s), 0, palette.h * .5f, 2);
+                    draw_color_boxes.clear();
+                    for (int i = 0; i < DRAW_PALETTE_SIZE; i++) {
+                        Bounds b{palette.x + palette_pad + i * (box + box_gap), palette.y + palette_pad, box, box};
+                        b.round();
+                        // Remember where the box is in global logical coordinates for clicks.
+                        draw_color_boxes.push_back({mb.x + b.x / s, mb.y + b.y / s, b.w / s, b.h / s});
+                        const bool hovered = mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+                        Bounds swatch = b;
+                        if (!hovered && i != draw_color_index)
+                            swatch.shrink(std::round(2.0f * s));
+                        rect(swatch, draw_palette[i], 0, 4.0f * s);
+                        if (i == draw_color_index) {
+                            Bounds ring = b;
+                            ring.grow(std::round(3.0f * s));
+                            border(ring, {1, 1, 1, .95}, std::max(1.0f, std::round(2.0f * s)), 0, 6.0f * s);
+                        }
+                    }
+                }
+
+                // The brush cursor goes on top. A soft dark shadow and outline keep it visible on white backgrounds.
+                if (cursor_here) {
+                    auto p = to_render(actual_root->mouse_current_x, actual_root->mouse_current_y);
+                    const float cursor_diameter = std::max(1.0f, draw_active_brush_size() * s);
+                    Bounds preview{p.x - cursor_diameter * .5f, p.y - cursor_diameter * .5f, cursor_diameter, cursor_diameter};
+                    preview.round();
+                    shadow(preview, {0, 0, 0, .45}, preview.w * .5f, 2.0f, std::max(4.0f, 6.0f * s));
+                    RGBA fill = draw_erasing ? RGBA(1, 1, 1, .18) : draw_palette[draw_color_index];
+                    fill.a = .18;
+                    rect(preview, fill, 0, preview.w * .5f);
+                    Bounds outer = preview;
+                    outer.grow(std::max(1.0f, s));
+                    border(outer, {0, 0, 0, .6}, std::max(1.0f, s), 0, outer.w * .5f);
+                    border(preview, {1, 1, 1, .95}, std::max(1.0f, s), 0, preview.w * .5f);
                 }
             }
         }
@@ -664,12 +808,17 @@ void actual_open_screenshot_tool() {
         if (mode != 4)
             return;
 
+        draw_picking_color = false;
+        int box = draw_color_box_at(actual_root->mouse_initial_x, actual_root->mouse_initial_y);
+        if (box != -1) {
+            draw_picking_color = true;
+            if (c->state.mouse_button_pressed == BTN_LEFT)
+                draw_color_index = box;
+            damage_all();
+            return;
+        }
         if (c->state.mouse_button_pressed == BTN_LEFT) {
-            draw_begin_action();
-            draw_erasing = false;
-            draw_active = true;
-            draw_strokes.push_back({});
-            draw_strokes.back().push_back({(float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y});
+            draw_start_stroke((float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y);
         } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
             draw_begin_action();
             draw_active = false;
@@ -692,6 +841,7 @@ void actual_open_screenshot_tool() {
             consume_event(actual_root, c);
             draw_active = false;
             draw_erasing = false;
+            draw_picking_color = false;
             return;
         }
         if (mode == 2) {
@@ -725,6 +875,8 @@ void actual_open_screenshot_tool() {
     tool->when_drag_start = [](Container *actual_root, Container *c) {
         if (mode == 4) {
             consume_event(actual_root, c);
+            if (draw_picking_color)
+                return;
             if (c->state.mouse_button_pressed == BTN_RIGHT) {
                 draw_erasing = true;
                 draw_active = false;
@@ -732,13 +884,8 @@ void actual_open_screenshot_tool() {
                 damage_all();
                 return;
             }
-            if (!draw_active && c->state.mouse_button_pressed == BTN_LEFT) {
-                draw_begin_action();
-                draw_active = true;
-                draw_erasing = false;
-                draw_strokes.push_back({});
-                draw_strokes.back().push_back({(float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y});
-            }
+            if (!draw_active && c->state.mouse_button_pressed == BTN_LEFT)
+                draw_start_stroke((float) actual_root->mouse_initial_x, (float) actual_root->mouse_initial_y);
             return;
         }
         if (mode == 0) {
@@ -776,6 +923,7 @@ void actual_open_screenshot_tool() {
                 draw_strokes.back().push_back({(float) actual_root->mouse_current_x, (float) actual_root->mouse_current_y});
             draw_active = false;
             draw_erasing = false;
+            draw_picking_color = false;
             damage_all();
             return;
         }
@@ -800,6 +948,13 @@ void actual_open_screenshot_tool() {
                     screenshot_tool::close();
                 });
             }
+        }
+        if (pressed && key == KEY_C && heart::ctrl_pressed()) {
+            copy_screenshot_to_clipboard(mode == 1 && rect_showing, rect_selection);
+            later_immediate([](Timer *) {
+                screenshot_tool::close();
+            });
+            return;
         }
         if (mode == 4 && pressed && heart::ctrl_pressed()) {
             if (key == KEY_Z) {

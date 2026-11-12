@@ -206,6 +206,8 @@ namespace windowing {
     
     void close_app(RawApp *app);
 
+    // Runs `function` on the app's own thread (safe to call from any thread).
+    void run_on_app(RawApp *app, std::function<void()> function);
     int timer(RawApp *, int ms, std::function<void(void *data)> func, void *data);
     void timer_update(int fd, int ms);
     void timer_stop(RawApp *, int fd);

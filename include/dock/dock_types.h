@@ -56,6 +56,8 @@ struct Dock : UserData {
 
     MylarWindow *projection = nullptr;
 
+    MylarWindow *tray_menu = nullptr;
+
     Windows *collection = nullptr;
     bool first_fill = true;
     bool thumbnails_dirty = false;

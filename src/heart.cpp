@@ -4,6 +4,7 @@
  * 
  */
 
+#include "systray.h"
 #include "heart.h"
 
 #include "container.h"
@@ -2229,6 +2230,7 @@ void heart::begin() {
             later(200, [](Timer *) {
                 dbus_start(DBUS_BUS_SYSTEM);
                 dbus_start(DBUS_BUS_SESSION);
+                systray::start();
             });
         });
         
@@ -2315,6 +2317,9 @@ void heart::begin() {
             create_default_config();
             
             watch_wallpaper_change();
+
+            //if (hyprland_instance_name() != last_hyprland_instance_name())
+                //overview::open(hypriso->monitor_from_cursor());
         });
     });
 }
@@ -2346,6 +2351,7 @@ void heart::end() {
     if (latest_file_watch != -1)
         remove_watch(latest_file_watch);
     desktop_icons::stop();
+    systray::stop();
     dbus_end();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::CLIENT) {

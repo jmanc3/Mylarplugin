@@ -3128,6 +3128,21 @@ void RawApp::print_monitors() {
 }
 
 // returns file descriptor takes the function that will be called after ms time
+void windowing::run_on_app(RawApp *app, std::function<void()> function) {
+    if (!app || !function)
+        return;
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == app->id)
+            ctx = c;
+    if (!ctx)
+        return;
+    std::lock_guard<std::mutex> lock(ctx->functions_mut);
+    ctx->functions_to_call.push_back(std::move(function));
+    ctx->have_functions_to_execute = true;
+    write(ctx->wake_pipe[1], "x", 1);
+}
+
 int windowing::timer(RawApp *app, int ms, std::function<void(void *data)> actual_function, void *data) {
     if (!app)
         return -1;

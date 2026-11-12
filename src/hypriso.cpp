@@ -1192,6 +1192,9 @@ void on_open_window(PHLWINDOW w) {
         if (hw->w == w)
             return;
     }
+    // The system tray's hidden XEmbed containers (see systray.cpp) are not windows to manage.
+    if (mw_is_x11(w) && mw_appid(w) == "mylar-xembed-tray")
+        return;
     for (auto m : State::monitorState()->monitors()) {
         on_open_monitor(m);
     }
@@ -2360,13 +2363,23 @@ static std::vector<PHLWORKSPACE> monitor_workspaces(PHLMONITOR monitor, size_t m
         auto workspace = State::workspaceState()->createNumbered(Workspace::SWorkspaceNumberedID{sc<uint32_t>(next)}, monitor, std::to_string(next));
         if (!workspace)
             break;
+        // Since Hyprland 0.57 a newly created workspace must be marked ready, or workspace.createdLate
+        // never fires and Mylar never tracks it (fixed workspaces then vanish from the overview/switcher).
+        workspace->ready();
         spaces.push_back(workspace);
         ++next;
     }
     return spaces;
 }
 
+static bool updating_workspace_persistence = false;
+
 static void update_workspace_persistence() {
+    // Declared first so it is cleared last, after workspaces created only for this pass are released.
+    struct UpdatingGuard {
+        UpdatingGuard() { updating_workspace_persistence = true; }
+        ~UpdatingGuard() { updating_workspace_persistence = false; }
+    } updating_guard;
     // Track only persistence added by Mylar so user workspace rules survive.
     static std::vector<PHLWORKSPACEREF> persistent_workspaces;
     std::vector<PHLWORKSPACE> wanted;
@@ -2446,6 +2459,10 @@ static void sync_monitor_workspaces(PHLWORKSPACE active) {
         if (index < spaces.size() && monitor->m->m_activeWorkspace != spaces[index])
             monitor->m->changeWorkspace(spaces[index], false, true, true);
     }
+}
+
+bool HyprIso::xwayland_ready() {
+    return g_pXWayland && g_pXWayland->m_wm;
 }
 
 void HyprIso::apply_workspace_settings() {
@@ -2654,6 +2671,16 @@ void HyprIso::create_callbacks() {
     }));
 
     eventListeners.emplace_back(Event::bus()->m_events.workspace.removed.listen([this](PHLWORKSPACEREF sref) {
+        // Hyprland drops persistence it didn't set itself (config reloads, monitor changes), which
+        // destroys Mylar's fixed workspaces. Put them back once, after the removal settles.
+        static bool restore_scheduled = false;
+        if (!set->dynamic_workspaces && !updating_workspace_persistence && !restore_scheduled) {
+            restore_scheduled = true;
+            main_thread([]() {
+                restore_scheduled = false;
+                hypriso->apply_workspace_settings();
+            });
+        }
         if (auto s = sref.get())
             for (int i = hyprspaces.size() - 1; i >= 0; i--) {
                 auto hs = hyprspaces[i];
@@ -10943,6 +10970,7 @@ bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::s
             pf->func(pf);
         if (pf->remove) {
             wl_event_source_remove(pf->source);
+            std::erase(polled, pf);
             delete pf;
         }
         return 0;
@@ -10956,6 +10984,18 @@ bool poll_descriptor(int fd, std::function<void (PF *)> func, void *data, std::s
     polled.push_back(pf);
 
     return pf->source;
+}
+
+void remove_polled_descriptor(int fd) {
+    for (int i = static_cast<int>(polled.size()) - 1; i >= 0; --i) {
+        auto pf = polled[i];
+        if (pf && !pf->is_file_watcher && pf->fd == fd) {
+            if (pf->source)
+                wl_event_source_remove(pf->source);
+            delete pf;
+            polled.erase(polled.begin() + i);
+        }
+    }
 }
 
 float HyprIso::fps(int monitor_id) {
@@ -11530,7 +11570,7 @@ void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_p
     LOG(Log::ERR, "save_monitor_to_png: monitor {} not found", cid);
 }
 
-void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds region) {
+void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds region, std::function<void()> on_saved) {
     for (auto hm : hyprmonitors) {
         if (!hm || hm->id != mon)
             continue;
@@ -11600,7 +11640,7 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds regio
 
         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
 
-        std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, cairoStride, outputPath = std::move(output_path)]() mutable {
+        std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, cairoStride, outputPath = std::move(output_path), on_saved = std::move(on_saved)]() mutable {
             const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
             auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
             std::memset(cairoPixels.get(), 0, cairoPixelsSize);
@@ -11663,6 +11703,8 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds regio
                 LOG(Log::ERR, "save_monitor_to_png: failed to write PNG to {} for monitor {}", outputPath, mon);
                 return;
             }
+            if (on_saved)
+                on_saved();
         });
 
         t.detach();

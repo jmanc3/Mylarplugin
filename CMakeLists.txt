@@ -52,6 +52,9 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     libpulse
     gtk+-3.0
     xcb-ewmh 
+    xcb
+    xcb-damage
+    xcb-composite
     fontconfig
 )
 
