@@ -36,6 +36,7 @@
 
 #include "process.hpp"
 #include "show_desktop.h"
+#include "datetime.h"
 #include <algorithm>
 #include <cairo.h>
 
@@ -392,12 +393,11 @@ static void paint_button_bg(Container *root, Container *c) {
 }
 
 static std::string get_date() {
-    auto now = std::chrono::system_clock::now();
-    auto local = std::chrono::current_zone()->to_local(now);
-
-    std::string s = std::format("{:%I:%M %p — %A}\n{:%B %m/%d/%Y}", local, local);
-
-    return s;
+    auto local = datetime::now_tm();
+    char weekday[32], date[64];
+    std::strftime(weekday, sizeof(weekday), "%A", &local);
+    std::strftime(date, sizeof(date), "%B %m/%d/%Y", &local);
+    return datetime::clock_text(local) + " — " + weekday + "\n" + date;
 }
 
 float get_brightness() {
@@ -1608,14 +1608,9 @@ static void fill_date_menu(Dock *dock) {
         auto dock = static_cast<Dock *>(root->user_data);
         auto cr = dock->date_menu->raw_window->cr;
         const auto dpi = dock->date_menu->raw_window->dpi;
-        const auto now = std::time(nullptr);
-        std::tm local{};
-        localtime_r(&now, &local);
-        char time_text[32], date_text[96];
-        std::strftime(time_text, sizeof(time_text), "%I:%M %p", &local);
-        std::string clock_text = time_text;
-        if (!clock_text.empty() && clock_text[0] == '0')
-            clock_text.erase(0, 1);
+        const auto local = datetime::now_tm();
+        char date_text[96];
+        std::string clock_text = datetime::clock_text(local);
         std::strftime(date_text, sizeof(date_text), "%A, %B %d, %Y", &local);
         draw_text(cr, c->real_bounds.x, c->real_bounds.y + 2 * dpi, clock_text, 27 * dpi, true,
             set->font, -1, -1, {.14, .18, .24, 1});
@@ -2162,19 +2157,7 @@ static void fill_root(Container *root) {
             dock->volume->root->user_data = dock;
             dock->volume->root->wanted_bounds.w = FILL_SPACE;
             dock->volume->root->wanted_bounds.h = FILL_SPACE;
-            auto scroll = make_newscrollpane_as_child(dock->volume->root, ScrollPaneSettings(dpi), [](Container *root) {
-                auto dock = ((Dock *) root->user_data);
-                if (!dock || !dock->volume || !dock->volume->raw_window)
-                    return DrawContext{};
-
-                auto window = dock->volume->raw_window;
-                return DrawContext({window->cr, window->dpi, [dock]() {
-                    if (!dock || !dock->volume || !dock->volume->raw_window)
-                        return;
-                    windowing::redraw(dock->volume->raw_window);
-                }});
-            });
-            scroll->name = "volume_root";
+            build_volume_popup(dock);
             dock->volume->root->when_paint = [](Container *root, Container *c) {
                 auto dock = (Dock *) root->user_data;
                 auto cr = dock->volume->raw_window->cr;

@@ -1,6 +1,9 @@
 #include "dock/dock_volume.h"
 
 #include "dock/dock_internal.h"
+#include "settings.h"
+
+#include <unistd.h>
 
 float volume_level = 100;
 bool is_master_muted = false;
@@ -47,8 +50,21 @@ static void set_volume(const std::vector<std::string> &uuids, float scalar, bool
     });
 }
 
-static void set_volume(std::string uuid, float scalar, bool is_muted) {
-    set_volume(std::vector<std::string>{uuid}, scalar, is_muted);
+// Which mixer node(s) a row's level meter follows.
+struct MeterKey {
+    bool mic = false;
+    uint32_t node_index = UINT32_MAX;        // Microphones: the source index
+    uint32_t pw_node_id = SPA_ID_INVALID;    // PipeWire: the node id of the stream or sink
+    uint32_t pa_index = PA_INVALID_INDEX;    // PulseAudio: the sink input (or sink) index
+    std::string pa_name;                     // PulseAudio: tells a sink apart from a sink input
+};
+
+static MeterKey meter_key_for(const AudioClient &client) {
+    MeterKey key;
+    key.pw_node_id = client.pw_node_id;
+    key.pa_index = (uint32_t) client.index;
+    key.pa_name = client.title;
+    return key;
 }
 
 struct AudioData : UserData {
@@ -63,9 +79,23 @@ struct AudioData : UserData {
     bool merged = false;
     int indent_level = 0;
 
-    bool attempted_to_load_icon_once = false;
+    // Microphone rows (input devices) are driven through the mixer model instead of audio_clients.
+    bool is_mic = false;
+    uint32_t node_index = UINT32_MAX;
+    long last_local_change = 0;
+    float last_sent = -1;
+
+    std::vector<MeterKey> meters;
+    float meter = 0; // Shown level, 0..1 (falls off smoothly)
+
+    std::string loaded_icon;
     float old_dpi = 0.0;
     cairo_surface_t *icon_surface = nullptr;
+
+    ~AudioData() override {
+        if (icon_surface)
+            cairo_surface_destroy(icon_surface);
+    }
 };
 
 struct VolumeRow {
@@ -79,16 +109,48 @@ struct VolumeRow {
     bool merged = false;
     int indent_level = 0;
     std::vector<std::string> uuids;
+    bool is_mic = false;
+    uint32_t node_index = UINT32_MAX;
+    std::vector<MeterKey> meters;
+};
+
+// State of the open popup: which tab is showing and the slide between them.
+struct VolumeMenuData : UserData {
+    int tab = 0;     // 0 = Playback, 1 = Mics
+    float from = 0;  // Slide position when the last tab switch started
+    long anim_start = 0;
+    size_t playback_rows = 1;
+    size_t mic_rows = 0;
+    unsigned long mic_revision = 0;
+    int last_h = -1;
+
+    VolumeMenuData() { audio_mixer_meters(true); }
+    ~VolumeMenuData() override { audio_mixer_meters(false); }
 };
 
 static int audio_container = 3824729;
 static std::unordered_set<int> expanded_audio_pids;
 
-static constexpr float volume_row_h = 65.0f;
+// All in logical pixels (multiplied by dpi when laid out).
+static constexpr float volume_tabs_h = 46.0f;
+static constexpr float volume_list_pad_top = 2.0f;
+static constexpr float volume_list_pad_bottom = 8.0f;
+static constexpr float volume_row_h = 62.0f;
+static constexpr float volume_row_pad_x = 14.0f;
+static constexpr float volume_row_pad_top = 6.0f;
+static constexpr float volume_row_pad_bottom = 4.0f;
+static constexpr float volume_row_top_h = 28.0f;
+static constexpr float volume_icon_col = 24.0f;
+static constexpr float volume_gap = 10.0f;
+static constexpr float volume_value_col = 30.0f;
+static constexpr float volume_indent = 16.0f;
+static constexpr long volume_slide_ms = 240;
+
+static const char *volume_tab_names[] = {"Playback", "Mics"};
 
 int volume_popup_height_for_rows(size_t row_count) {
     auto rows = std::max<size_t>(1, row_count);
-    return (int) std::round(volume_row_h * (float) rows);
+    return (int) std::round(volume_tabs_h + volume_list_pad_top + volume_list_pad_bottom + volume_row_h * (float) rows);
 }
 
 std::vector<AudioClient> snapshot_audio_clients() {
@@ -103,10 +165,58 @@ std::vector<AudioClient> snapshot_audio_clients() {
     return clients;
 }
 
-static void resize_volume_popup_for_rows(Dock *dock, size_t row_count) {
+static VolumeMenuData *volume_menu(Dock *dock) {
+    if (!dock || !dock->volume)
+        return nullptr;
+    if (auto body = container_by_name("volume_body", dock->volume->root))
+        return (VolumeMenuData *) body->user_data;
+    return nullptr;
+}
+
+static float volume_slide_t(VolumeMenuData *menu) {
+    return std::clamp((float) (get_current_time_in_ms() - menu->anim_start) / (float) volume_slide_ms, 0.0f, 1.0f);
+}
+
+static float volume_slide_pos(VolumeMenuData *menu) {
+    float t = volume_slide_t(menu);
+    float e = 1.0f - std::pow(1.0f - t, 3.0f);
+    return menu->from + ((float) menu->tab - menu->from) * e;
+}
+
+static bool volume_sliding(VolumeMenuData *menu) {
+    return volume_slide_t(menu) < 1.0f;
+}
+
+static void volume_popup_update_size(Dock *dock) {
     if (!dock || !dock->volume || !dock->volume->raw_window)
         return;
-    windowing::set_popup_size(dock->volume->raw_window, volume_popup_w, volume_popup_height_for_rows(row_count));
+    auto menu = volume_menu(dock);
+    if (!menu)
+        return;
+    // Both pages share the popup, so size it for the taller one; it doesn't jump while sliding.
+    int h = volume_popup_height_for_rows(std::max(menu->playback_rows, menu->mic_rows));
+    if (h == menu->last_h)
+        return;
+    menu->last_h = h;
+    windowing::set_popup_size(dock->volume->raw_window, volume_popup_w, h);
+}
+
+static void volume_row_set_level(AudioData *data, float scalar, bool finished) {
+    scalar = std::clamp(scalar, 0.0f, 1.0f);
+    if (!data->is_mic) {
+        set_volume(data->uuids, scalar, data->muted);
+        return;
+    }
+    data->level = scalar;
+    data->last_local_change = get_current_time_in_ms();
+    if (data->muted) {
+        data->muted = false;
+        audio_mixer_set_mute(AudioNodeKind::Source, data->node_index, false);
+    }
+    if (finished || std::abs(scalar - data->last_sent) > 0.004f) {
+        data->last_sent = scalar;
+        audio_mixer_set_volume(AudioNodeKind::Source, data->node_index, scalar);
+    }
 }
 
 static Container *fill_out_volume_slider(Container *c) {
@@ -117,7 +227,8 @@ static Container *fill_out_volume_slider(Container *c) {
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
 
-        paint_slider(root, c, cr, dpi, audio_data->level);
+        paint_slider(root, c, cr, dpi, std::clamp(audio_data->level, 0.0f, 1.0f),
+                     audio_data->muted ? 0.0f : audio_data->meter);
     };
 
     c->when_drag_end_is_click = false;
@@ -126,8 +237,8 @@ static Container *fill_out_volume_slider(Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        set_volume(audio_data->uuids, scalar, audio_data->muted);
-        
+        volume_row_set_level(audio_data, scalar, true);
+
         if (audio_data->is_master)
             audio_play_blip();
     };
@@ -135,20 +246,20 @@ static Container *fill_out_volume_slider(Container *c) {
         auto dock = (Dock *) root->user_data;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        
+
         if (audio_data->is_master) {
             stop_volume_drag_blip(dock, c);
             schedule_volume_drag_blip(dock, c);
         }
-        
+
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
-        set_volume(audio_data->uuids, scalar, audio_data->muted);
+        volume_row_set_level(audio_data, scalar, false);
     };
     c->when_drag = [](Container *root, Container *c) {
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        set_volume(audio_data->uuids, scalar, audio_data->muted);
+        volume_row_set_level(audio_data, scalar, false);
     };
     c->when_drag_end = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -159,7 +270,7 @@ static Container *fill_out_volume_slider(Container *c) {
             stop_volume_drag_blip(dock, c);
         float scalar = (root->mouse_current_x - c->real_bounds.x) / c->real_bounds.w;
 
-        set_volume(audio_data->uuids, scalar, audio_data->muted);
+        volume_row_set_level(audio_data, scalar, true);
         if (audio_data->is_master)
             audio_play_blip();
     };
@@ -173,22 +284,22 @@ static Container *add_volume_option(Container *parent) {
     auto audio_data = new AudioData;
     line->user_data = audio_data;
 
-    static float total_h = volume_row_h;
-    static float top_h = 30;
-
     line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.h = total_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
+        auto dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.h = volume_row_h * dpi;
+        c->wanted_pad = Bounds(volume_row_pad_x * dpi, volume_row_pad_top * dpi,
+                               volume_row_pad_x * dpi, volume_row_pad_bottom * dpi);
     };
 
     auto label_icon = line->child(FILL_SPACE, FILL_SPACE);
     label_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.h = top_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.h = volume_row_top_h * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
     label_icon->when_clicked = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
-        if (!audio_data->merged || audio_data->pid <= 0)
+        if (audio_data->is_mic || !audio_data->merged || audio_data->pid <= 0)
             return;
 
         auto visible_row_count = audio_c->parent->children.size();
@@ -203,7 +314,10 @@ static Container *add_volume_option(Container *parent) {
             visible_row_count += child_row_count;
         }
 
-        resize_volume_popup_for_rows(dock, visible_row_count);
+        if (auto menu = volume_menu(dock)) {
+            menu->playback_rows = visible_row_count;
+            volume_popup_update_size(dock);
+        }
         dock::change_in_audio();
     };
     label_icon->when_paint = [](Container *root, Container *c) {
@@ -213,31 +327,38 @@ static Container *add_volume_option(Container *parent) {
         auto audio_data = (AudioData *) audio_c->user_data;
         auto dpi = dock->volume->raw_window->dpi;
 
-        if (std::abs(audio_data->old_dpi - dpi) > EPSILON) {
+        if (audio_data->loaded_icon != audio_data->icon || std::abs(audio_data->old_dpi - dpi) > EPSILON) {
+            audio_data->loaded_icon = audio_data->icon;
             audio_data->old_dpi = dpi;
             if (audio_data->icon_surface) {
                 cairo_surface_destroy(audio_data->icon_surface);
                 audio_data->icon_surface = nullptr;
             }
-            audio_data->attempted_to_load_icon_once = false;
-        }
-        if (!audio_data->attempted_to_load_icon_once) {
-            audio_data->attempted_to_load_icon_once = true;
+            // Same fallbacks as the Playback / Input Devices tabs of the settings audio page.
             auto icon = audio_data->icon;
-            auto full = one_shot_icon(24 * dpi, {icon, to_lower(icon), c3ic_fix_wm_class(icon), to_lower(icon)});
+            std::string fallback = audio_data->is_mic ? "audio-input-microphone" : "applications-multimedia";
+            auto full = one_shot_icon(24 * dpi, {icon, to_lower(icon), c3ic_fix_wm_class(icon), fallback,
+                                                 "audio-speakers", "multimedia-volume-control"});
             if (!full.empty())
                 load_icon_full_path(&audio_data->icon_surface, full, 24 * dpi);
         }
 
-        int x_off = 0;
+        double x = c->real_bounds.x + (audio_data->indent_level > 0 ? volume_indent * dpi : 0);
+        double icon_w = volume_icon_col * dpi;
         if (audio_data->icon_surface) {
             auto width = cairo_image_surface_get_width(audio_data->icon_surface);
             auto height = cairo_image_surface_get_height(audio_data->icon_surface);
             cairo_set_source_surface(cr, audio_data->icon_surface,
-                c->real_bounds.x + 3 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - height * .5);
+                std::round(x + icon_w * .5 - width * .5),
+                std::round(c->real_bounds.y + c->real_bounds.h * .5 - height * .5));
             cairo_paint(cr);
-            x_off += width + 6 * dpi;
+        } else {
+            std::string glyph = "";
+            auto b = draw_text(cr, 0, 0, glyph, 14 * dpi, false, icon_font);
+            draw_text(cr, x + icon_w * .5 - b.w * .5, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5,
+                      glyph, 14 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
         }
+        x += icon_w + volume_gap * dpi;
 
         auto label = audio_data->title;
         if (audio_data->merged) {
@@ -246,31 +367,34 @@ static Container *add_volume_option(Container *parent) {
             } else {
                 label = "[+] " + label;
             }
-        } else if (audio_data->indent_level > 0) {
-            label = "  " + label;
         }
+        double text_w = c->real_bounds.x + c->real_bounds.w - x;
         auto bounds = draw_text(cr, c, label, 12 * dpi, false, icon_font);
-        auto b = draw_text(cr,
-            c->real_bounds.x + 7 * dpi + x_off, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
+        draw_text(cr,
+            x, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5,
             label, 12 * dpi, true, icon_font,
-            (c->real_bounds.w - 14 * dpi - x_off) * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
+            text_w * PANGO_SCALE, c->real_bounds.h * PANGO_SCALE, {0, 0, 0, 1});
     };
 
     auto volume_slider_parent = line->child(::hbox, FILL_SPACE, FILL_SPACE);
     volume_slider_parent->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.h = (total_h - top_h) * ((Dock *) root->user_data)->volume->raw_window->dpi * .87;
+        c->spacing = volume_gap * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
 
     auto left_volume_icon = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     left_volume_icon->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
-        c->wanted_bounds.w = (total_h - top_h) * dpi * 1.1;
+        c->wanted_bounds.w = volume_icon_col * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
     left_volume_icon->when_clicked = [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         auto muted = audio_data->muted;
+        if (audio_data->is_mic) {
+            audio_data->muted = !muted;
+            audio_data->last_local_change = get_current_time_in_ms();
+            audio_mixer_set_mute(AudioNodeKind::Source, audio_data->node_index, !muted);
+            return;
+        }
         auto uuids = audio_data->uuids;
         audio([uuids, muted]() {
             for (auto c : audio_clients) {
@@ -290,7 +414,7 @@ static Container *add_volume_option(Container *parent) {
         int val = (int) std::round(audio_data->level * 100);
 
         if (!is_muted) {
-            std::string background_bars = "\uE995";
+            std::string background_bars = "";
             RGBA color = {.4, .4, .4, .4};
             auto b = draw_text(cr, 0, 0, background_bars, 14 * dpi, false, icon_font);
             draw_text(cr, center_x(c, b.w), center_y(c, b.h), background_bars, 14 * dpi, true, icon_font, -1, -1, color);
@@ -298,15 +422,15 @@ static Container *add_volume_option(Container *parent) {
 
         std::string text;
         if (is_muted) {
-            text = "\uE74F";
+            text = "";
         } else if (val == 0) {
-            text = "\uE992";
+            text = "";
         } else if (val < 33) {
-            text = "\uE993";
+            text = "";
         } else if (val < 66) {
-            text = "\uE994";
+            text = "";
         } else {
-            text = "\uE995";
+            text = "";
         }
 
         RGBA color = {0, 0, 0, 1};
@@ -318,8 +442,7 @@ static Container *add_volume_option(Container *parent) {
     fill_out_volume_slider(slider);
     auto right_volume_text = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
     right_volume_text->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        float dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
-        c->wanted_bounds.w = (total_h - top_h) * dpi * 1.2;
+        c->wanted_bounds.w = volume_value_col * ((Dock *) root->user_data)->volume->raw_window->dpi;
     };
     right_volume_text->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -331,13 +454,8 @@ static Container *add_volume_option(Container *parent) {
         std::string level = std::to_string(val);
         RGBA color = {0, 0, 0, 1};
         auto b = draw_text(cr, 0, 0, level, 12 * dpi, false, set->font);
-        auto x = c->real_bounds.x + 17 * dpi;
+        auto x = c->real_bounds.x + c->real_bounds.w - b.w;
         draw_text(cr, x, center_y(c, b.h), level, 12 * dpi, true, set->font, -1, -1, color);
-    };
-
-    auto right_pad = volume_slider_parent->child(FILL_SPACE, FILL_SPACE);
-    right_pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        c->wanted_bounds.w = b.h * .2;
     };
 
     return line;
@@ -383,6 +501,7 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
                 std::string subtitle_for_group;
                 for (auto grouped_client : group) {
                     merged.uuids.push_back(grouped_client->uuid);
+                    merged.meters.push_back(meter_key_for(*grouped_client));
                     merged.is_master = merged.is_master || grouped_client->is_master_volume();
                     merged.level += grouped_client->get_volume();
                     merged.muted = merged.muted && grouped_client->is_muted();
@@ -412,6 +531,7 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
                         child.is_master = grouped_client->is_master_volume();
                         child.indent_level = 1;
                         child.uuids.push_back(grouped_client->uuid);
+                        child.meters.push_back(meter_key_for(*grouped_client));
                         rows.push_back(std::move(child));
                     }
                 }
@@ -431,21 +551,47 @@ static std::vector<VolumeRow> build_volume_rows(std::vector<AudioClient> &client
         single.pid = client.pid;
         single.is_master = client.is_master_volume();
         single.uuids.push_back(client.uuid);
+        single.meters.push_back(meter_key_for(client));
         rows.push_back(std::move(single));
     }
 
     return rows;
 }
 
-int volume_popup_height_for_clients(const std::vector<AudioClient> &clients) {
-    auto copy = clients;
-    return volume_popup_height_for_rows(build_volume_rows(copy).size());
+// Input devices (microphones, line in), without the monitors of output devices. Default first.
+static std::vector<VolumeRow> build_mic_rows(const std::vector<AudioNodeInfo> &nodes) {
+    auto default_source = audio_mixer_default_source();
+    std::vector<VolumeRow> rows;
+    for (auto &n : nodes) {
+        if (n.kind != AudioNodeKind::Source || n.monitor_of != UINT32_MAX)
+            continue;
+        VolumeRow row;
+        row.id = fz("mic:{}", n.index);
+        row.title = n.description.empty() ? n.name : n.description;
+        row.icon = n.icon_name;
+        row.level = (float) n.volume();
+        row.muted = n.mute;
+        row.is_mic = true;
+        row.node_index = n.index;
+        MeterKey key;
+        key.mic = true;
+        key.node_index = n.index;
+        row.meters.push_back(key);
+        if (!n.name.empty() && n.name == default_source)
+            rows.insert(rows.begin(), std::move(row));
+        else
+            rows.push_back(std::move(row));
+    }
+    return rows;
 }
 
-void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
-    root->type = ::vbox;
+int volume_popup_height_for_clients(const std::vector<AudioClient> &clients) {
+    auto copy = clients;
+    return volume_popup_height_for_rows(std::max(build_volume_rows(copy).size(), build_mic_rows(audio_mixer_nodes()).size()));
+}
 
-    auto rows = build_volume_rows(clients);
+static void apply_volume_rows(Container *root, const std::vector<VolumeRow> &rows) {
+    root->type = ::vbox;
 
     std::vector<std::string> row_ids;
     row_ids.reserve(rows.size());
@@ -489,17 +635,7 @@ void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
         root->children = std::move(ordered_children);
     }
 
-    auto dock = (Dock *) root->user_data;
-    resize_volume_popup_for_rows(dock, rows.size());
-
-    auto current = get_current_time_in_ms();
-    for (auto client : clients) {
-        if (client.is_master_volume() && (current - last_time_volume_adjusted) > 100) {
-            volume_level = std::round(client.get_volume() * 100);
-            is_master_muted = client.is_muted();
-        }
-    }
-
+    auto now = get_current_time_in_ms();
     for (auto c : root->children) {
         auto iter = rows_by_id.find(c->uuid);
         if (iter == rows_by_id.end())
@@ -508,14 +644,43 @@ void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
         auto audio_data = (AudioData *) c->user_data;
         audio_data->uuid = row->id;
         audio_data->uuids = row->uuids;
-        audio_data->level = row->level;
         audio_data->pid = row->pid;
         audio_data->icon = row->icon;
-        audio_data->muted = row->muted;
         audio_data->is_master = row->is_master;
         audio_data->title = row->title;
         audio_data->merged = row->merged;
         audio_data->indent_level = row->indent_level;
+        audio_data->is_mic = row->is_mic;
+        audio_data->node_index = row->node_index;
+        audio_data->meters = row->meters;
+        // Keep what the user just set until the sound server catches up.
+        if (now - audio_data->last_local_change > 600) {
+            audio_data->level = row->level;
+            audio_data->muted = row->muted;
+        }
+    }
+}
+
+void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
+    auto rows = build_volume_rows(clients);
+    apply_volume_rows(root, rows);
+
+    // `root` is the content of the playback scroll pane; the popup's top container holds the dock.
+    Container *top = root;
+    while (top->parent)
+        top = top->parent;
+    auto dock = (Dock *) top->user_data;
+    if (auto menu = volume_menu(dock)) {
+        menu->playback_rows = rows.size();
+        volume_popup_update_size(dock);
+    }
+
+    auto current = get_current_time_in_ms();
+    for (auto client : clients) {
+        if (client.is_master_volume() && (current - last_time_volume_adjusted) > 100) {
+            volume_level = std::round(client.get_volume() * 100);
+            is_master_muted = client.is_muted();
+        }
     }
 
     for (auto expanded_pid = expanded_audio_pids.begin(); expanded_pid != expanded_audio_pids.end();) {
@@ -533,4 +698,268 @@ void fill_volume_root(std::vector<AudioClient> clients, Container *root) {
             expanded_pid = expanded_audio_pids.erase(expanded_pid);
         }
     }
+}
+
+static const AudioNodeInfo *find_meter_node(const std::vector<AudioNodeInfo> &nodes, const MeterKey &key) {
+    if (key.mic) {
+        for (auto &n : nodes)
+            if (n.kind == AudioNodeKind::Source && n.index == key.node_index)
+                return &n;
+        return nullptr;
+    }
+    if (key.pw_node_id != SPA_ID_INVALID) {
+        for (auto &n : nodes)
+            if ((n.kind == AudioNodeKind::SinkInput || n.kind == AudioNodeKind::Sink) && n.index == key.pw_node_id)
+                return &n;
+        return nullptr;
+    }
+    if (key.pa_index == PA_INVALID_INDEX)
+        return nullptr;
+    // Sinks and sink inputs have separate index spaces; a sink also has to match by name.
+    for (auto &n : nodes)
+        if (n.kind == AudioNodeKind::Sink && n.index == key.pa_index && n.name == key.pa_name)
+            return &n;
+    for (auto &n : nodes)
+        if (n.kind == AudioNodeKind::SinkInput && n.index == key.pa_index)
+            return &n;
+    return nullptr;
+}
+
+// Peaks are linear amplitude; show them on a 60 dB scale (like the settings page) so quiet audio is visible.
+static float volume_meter_level(float peak) {
+    if (peak <= 0.0001f)
+        return 0;
+    return std::clamp(1.0f + 20.0f * std::log10(peak) / 60.0f, 0.0f, 1.0f);
+}
+
+// Returns true when a shown meter changed.
+static bool update_meters(Container *scroll, const std::vector<AudioNodeInfo> &nodes) {
+    if (!scroll)
+        return false;
+    bool changed = false;
+    for (auto c : ((ScrollContainer *) scroll)->content->children) {
+        auto data = (AudioData *) c->user_data;
+        float target = 0;
+        for (auto &key : data->meters)
+            if (auto n = find_meter_node(nodes, key))
+                if (n->peak_supported)
+                    target = std::max(target, volume_meter_level(n->peak));
+        float shown = target >= data->meter ? target : std::max(target, data->meter - 0.05f);
+        if (std::abs(shown - data->meter) > 0.001f)
+            changed = true;
+        data->meter = shown;
+    }
+    return changed;
+}
+
+// Returns true when the microphone list was rebuilt.
+static bool refresh_mics(Dock *dock, VolumeMenuData *menu, const std::vector<AudioNodeInfo> &nodes, bool force) {
+    auto revision = audio_mixer_revision();
+    if (!force && revision == menu->mic_revision)
+        return false;
+    menu->mic_revision = revision;
+    auto scroll = (ScrollContainer *) container_by_name("volume_mics", dock->volume->root);
+    if (!scroll)
+        return false;
+    auto rows = build_mic_rows(nodes);
+    apply_volume_rows(scroll->content, rows);
+    menu->mic_rows = rows.size();
+    volume_popup_update_size(dock);
+    return true;
+}
+
+static void volume_watch(Dock *dock, MylarWindow *window, bool fast) {
+    windowing::timer(dock->app, fast ? 16 : 33, [dock, window](void *) {
+        if (finished)
+            return;
+        RawWindow *popup_to_redraw = nullptr;
+        bool sliding = false;
+        {
+            std::lock_guard<std::mutex> lock(dock->app->mutex);
+            if (dock->volume != window)
+                return; // Popup closed; stop polling.
+            auto menu = volume_menu(dock);
+            if (!menu)
+                return;
+            auto nodes = audio_mixer_nodes();
+            bool redraw = refresh_mics(dock, menu, nodes, false);
+            redraw |= update_meters(container_by_name("volume_root", window->root), nodes);
+            redraw |= update_meters(container_by_name("volume_mics", window->root), nodes);
+            sliding = volume_sliding(menu);
+            // One more frame after the slide ends so it settles exactly on the page.
+            redraw |= sliding || volume_slide_pos(menu) != menu->from;
+            if (!sliding)
+                menu->from = (float) menu->tab;
+            if (redraw)
+                popup_to_redraw = window->raw_window;
+        }
+        if (popup_to_redraw)
+            windowing::redraw_now(popup_to_redraw);
+        volume_watch(dock, window, sliding);
+    }, nullptr);
+}
+
+static Container *make_volume_page(Container *body, float dpi, const std::string &scroll_name) {
+    auto page = body->child(::vbox, FILL_SPACE, FILL_SPACE);
+    page->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.w = b.w;
+        c->wanted_pad = Bounds(0, volume_list_pad_top * dpi, 0, volume_list_pad_bottom * dpi);
+    };
+    auto scroll = make_newscrollpane_as_child(page, ScrollPaneSettings(dpi), [](Container *root) {
+        auto dock = ((Dock *) root->user_data);
+        if (!dock || !dock->volume || !dock->volume->raw_window)
+            return DrawContext{};
+
+        auto window = dock->volume->raw_window;
+        return DrawContext({window->cr, window->dpi, [dock]() {
+            if (!dock || !dock->volume || !dock->volume->raw_window)
+                return;
+            windowing::redraw(dock->volume->raw_window);
+        }});
+    });
+    scroll->name = scroll_name;
+    return page;
+}
+
+void build_volume_popup(Dock *dock) {
+    auto window = dock->volume;
+    auto root = window->root;
+    root->type = ::vbox;
+
+    auto menu = new VolumeMenuData;
+
+    // Segmented "Playback | Mics" switcher with a pill that slides along with the pages.
+    auto tabs = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+    tabs->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.h = volume_tabs_h * dpi;
+        c->wanted_pad = Bounds(volume_row_pad_x * dpi, 12 * dpi, volume_row_pad_x * dpi, 2 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    auto segment = tabs->child(::hbox, FILL_SPACE, FILL_SPACE);
+    segment->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_pad = Bounds(3 * dpi, 3 * dpi, 3 * dpi, 3 * dpi);
+    };
+    segment->when_paint = [menu](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        auto dpi = dock->volume->raw_window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(cr, {0, 0, 0, .06});
+        cairo_fill(cr);
+
+        auto inner = c->children_bounds;
+        double tab_w = inner.w / 2.0;
+        Bounds pill(inner.x + tab_w * volume_slide_pos(menu), inner.y, tab_w, inner.h);
+        drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 6 * dpi, 1.0);
+        set_argb(cr, {1, 1, 1, 1});
+        cairo_fill(cr);
+        drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 6 * dpi, 1.0);
+        set_argb(cr, {0, 0, 0, .1});
+        cairo_set_line_width(cr, 1.0);
+        cairo_stroke(cr);
+    };
+    for (int i = 0; i < 2; i++) {
+        auto tab = segment->child(FILL_SPACE, FILL_SPACE);
+        tab->when_paint = [menu, i](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto cr = dock->volume->raw_window->cr;
+            auto dpi = dock->volume->raw_window->dpi;
+            bool selected = menu->tab == i;
+            float alpha = selected ? .9f : (c->state.mouse_hovering ? .75f : .55f);
+            RGBA color = {0, 0, 0, alpha};
+            auto b = draw_text(cr, 0, 0, volume_tab_names[i], 11 * dpi, false, set->font);
+            draw_text(cr, center_x(c, b.w), center_y(c, b.h), volume_tab_names[i], 11 * dpi, true, set->font,
+                      -1, -1, color);
+        };
+        tab->when_clicked = [menu, i](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            if (menu->tab == i)
+                return;
+            menu->from = volume_slide_pos(menu);
+            menu->tab = i;
+            menu->anim_start = get_current_time_in_ms();
+            if (i == 1)
+                refresh_mics(dock, menu, audio_mixer_nodes(), true);
+            windowing::redraw(dock->volume->raw_window);
+        };
+    }
+
+    // Gear: opens Settings on the Audio page (or focuses it and switches there if already open).
+    auto gear = tabs->child(FILL_SPACE, FILL_SPACE);
+    gear->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        // Square, as tall as the segmented switcher.
+        auto dpi = ((Dock *) root->user_data)->volume->raw_window->dpi;
+        c->wanted_bounds.w = (volume_tabs_h - 14) * dpi;
+    };
+    gear->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        auto dpi = dock->volume->raw_window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        float alpha = c->state.mouse_pressing ? .14f : (c->state.mouse_hovering ? .1f : .06f);
+        set_argb(cr, {0, 0, 0, alpha});
+        cairo_fill(cr);
+        std::string glyph = "";
+        auto t = draw_text(cr, 0, 0, glyph, 13 * dpi, false, icon_font);
+        draw_text(cr, center_x(c, t.w), center_y(c, t.h), glyph, 13 * dpi, true, icon_font, -1, -1, {0, 0, 0, .8});
+    };
+    gear->when_clicked = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        windowing::close_window(dock->volume->raw_window);
+        main_thread([]() {
+            settings::start("Audio");
+            // Already open: un-minimize and raise it. (A new window is focused on its own.)
+            auto pid = getpid();
+            for (auto cid : get_window_stacking_order()) {
+                if (hypriso->get_pid(cid) != pid || hypriso->class_name(cid) != "preferences-system")
+                    continue;
+                if (hypriso->is_hidden(cid))
+                    hypriso->set_hidden(cid, false);
+                hypriso->bring_to_front(cid);
+            }
+        });
+    };
+
+    // Both pages side by side; the negative left pad scrolls the row to the active one.
+    auto body = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+    body->name = "volume_body";
+    body->user_data = menu;
+    body->pre_layout = [menu](Container *root, Container *c, const Bounds &b) {
+        double offset = std::round(volume_slide_pos(menu) * b.w);
+        c->wanted_pad = Bounds(-offset, 0, offset, 0);
+    };
+    body->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = dock->volume->raw_window;
+        cairo_save(window->cr);
+        clip_to_popup_background(window->cr, root->real_bounds, window->dpi);
+        cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cairo_clip(window->cr);
+    };
+    body->after_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        cairo_restore(dock->volume->raw_window->cr);
+    };
+
+    auto dpi = window->raw_window->dpi;
+    make_volume_page(body, dpi, "volume_root");
+    auto mics = make_volume_page(body, dpi, "volume_mics");
+    mics->when_paint = [menu](Container *root, Container *c) {
+        if (menu->mic_rows > 0)
+            return;
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->volume->raw_window->cr;
+        auto dpi = dock->volume->raw_window->dpi;
+        std::string text = "No microphones found";
+        auto b = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font);
+        draw_text(cr, center_x(c, b.w), center_y(c, b.h), text, 11 * dpi, true, set->font, -1, -1, {0, 0, 0, .55});
+    };
+
+    refresh_mics(dock, menu, audio_mixer_nodes(), true);
+    volume_watch(dock, window, false);
 }

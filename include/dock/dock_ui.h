@@ -34,7 +34,8 @@ void paint_popup_background(cairo_t *cr, const Bounds &bounds, double dpi,
 // Callers wrap it in cairo_save / cairo_restore.
 void clip_to_popup_background(cairo_t *cr, const Bounds &bounds, double dpi);
 
-void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value);
+// `meter` (0..1) draws a live level inside the filled part of the track, up to the knob.
+void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value, float meter = 0);
 
 Container *make_self_sizing_slider(Container *root,
                                    std::function<std::string(Container *)> left_text,

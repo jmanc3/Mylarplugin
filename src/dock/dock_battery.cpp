@@ -255,9 +255,9 @@ static std::string battery_clock(std::time_t timestamp, bool include_day = false
     std::tm local{};
     localtime_r(&timestamp, &local);
     char text[64];
-    std::strftime(text, sizeof(text), include_day ? "%a %I:%M %p" : "%I:%M %p", &local);
+    std::strftime(text, sizeof(text), set->clock_24h ? (include_day ? "%a %H:%M" : "%H:%M") : (include_day ? "%a %I:%M %p" : "%I:%M %p"), &local);
     std::string result = text;
-    if (!include_day && result[0] == '0') result.erase(0, 1);
+    if (!set->clock_24h && !include_day && result[0] == '0') result.erase(0, 1);
     return result;
 }
 

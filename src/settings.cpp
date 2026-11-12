@@ -12,7 +12,9 @@
 #include "client/windowing.h"
 #include "dock/dock.h"
 #include "dock/dock_wifi.h"
+#include "audio.h"
 #include "events.h"
+#include "datetime.h"
 #include <chrono>
 #include <csetjmp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
@@ -411,6 +413,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "dock_merge_windows", &settings->dock_merge_windows);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(bool, "dark_theme", &settings->dark_theme);
+    bind(bool, "clock_24h", &settings->clock_24h);
     bind(bool, "hotcorners", &settings->hotcorners);
     bind(bool, "app_switcher_current_workspace_only", &settings->app_switcher_current_workspace_only);
     bind(bool, "dynamic_workspaces", &settings->dynamic_workspaces);
@@ -1084,6 +1087,75 @@ static Container *make_vert_space(Container *parent, float amount) {
     return pad;
 }
 
+// Text and glyph helpers shared by the Wi-Fi, Audio pages and drop-down menus.
+static RawWindow *swifi_window(Container *root) {
+    return ((MylarWindow *) root->user_data)->raw_window;
+}
+
+static void swifi_redraw(Container *root) {
+    windowing::redraw(swifi_window(root));
+}
+
+static RGBA swifi_mix(RGBA a, RGBA b, double t) {
+    return RGBA(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
+
+static RGBA swifi_dim(RGBA color) {
+    color.a *= .5;
+    return color;
+}
+
+static void swifi_text(Container *root, Bounds b, const std::string &text, double size, RGBA color,
+                       bool centered = false, bool bold = false) {
+    auto window = swifi_window(root);
+    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+        bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_text(font, text.c_str(), -1);
+    pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
+    pango_layout_set_height(font, std::max(1.0, b.h) * PANGO_SCALE);
+    pango_layout_set_wrap(font, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_END);
+    pango_layout_set_alignment(font, centered ? PANGO_ALIGN_CENTER : PANGO_ALIGN_LEFT);
+    int width, height;
+    pango_layout_get_pixel_size(font, &width, &height);
+    cairo_save(window->cr);
+    cairo_rectangle(window->cr, b.x, b.y, b.w, b.h);
+    cairo_clip(window->cr);
+    set_argb(window->cr, color);
+    cairo_move_to(window->cr, b.x, b.y + std::max(0.0, (b.h - height) * .5));
+    pango_cairo_show_layout(window->cr, font);
+    cairo_restore(window->cr);
+    pango_layout_set_alignment(font, PANGO_ALIGN_LEFT);
+}
+
+static double swifi_text_width(Container *root, const std::string &text, double size) {
+    auto window = swifi_window(root);
+    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi, PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_width(font, -1);
+    pango_layout_set_height(font, -1);
+    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_text(font, text.c_str(), -1);
+    int width = 0, height = 0;
+    pango_layout_get_pixel_size(font, &width, &height);
+    return width;
+}
+
+static void swifi_glyph(cairo_t *cr, double x, double y, const char *glyph, double size, RGBA color, bool path = false) {
+    auto layout = get_cached_pango_font(cr, icon_font, size, PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_height(layout, -1);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_alignment(layout, PANGO_ALIGN_LEFT);
+    pango_layout_set_text(layout, glyph, -1);
+    cairo_move_to(cr, x, y);
+    if (path) {
+        pango_cairo_layout_path(cr, layout);
+        return;
+    }
+    set_argb(cr, color);
+    pango_cairo_show_layout(cr, layout);
+}
+
 static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
                                                            float dpi,
                                                            int popup_w,
@@ -1114,140 +1186,224 @@ static RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
     return settings;
 }
 
+/*
+ * Drop-down menus: a button showing the current choice and a popup listing the options.
+ * Long lists scroll; the current choice is marked with an accent bar and scrolled into view.
+ */
+
+struct DropdownOption {
+    std::string id;
+    std::string label;
+};
+
+struct DropdownMenuData : UserData {
+    float scroll = 0;
+    float overflow = 0;
+    int selected_index = -1;
+    bool scrolled_to_selection = false;
+};
+
+static MylarWindow *dropdown_popup = nullptr;
+static constexpr int dropdown_row_h = 32;
+static constexpr int dropdown_max_visible_rows = 12;
+
+static void close_dropdown_menu() {
+    if (!dropdown_popup)
+        return;
+    auto popup = dropdown_popup;
+    dropdown_popup = nullptr;
+    std::erase(popups, popup);
+    windowing::timer(settings_app, 1, [](void *data) {
+        windowing::close_window((RawWindow *) data);
+    }, popup->raw_window);
+}
+
+static void open_dropdown_menu(Container *root, Container *anchor, std::vector<DropdownOption> options,
+                               std::string selected, std::function<void(std::string)> on_pick) {
+    auto mylar = (MylarWindow *) root->user_data;
+    if (options.empty() || dropdown_popup || mylar->popup_window)
+        return;
+    auto dpi = mylar->raw_window->dpi;
+    double widest = 0;
+    for (auto &option : options)
+        widest = std::max(widest, swifi_text_width(root, option.label, 11) / dpi);
+    int w = (int) std::clamp(std::max(widest + 40, anchor->real_bounds.w / dpi), 200.0, 460.0);
+    int visible = std::min<int>((int) options.size(), dropdown_max_visible_rows);
+    int h = visible * dropdown_row_h + 8;
+    auto popup = open_mylar_popup(mylar, make_icon_anchored_popup_settings(anchor, dpi, w, h));
+    if (!popup)
+        return;
+    dropdown_popup = popup;
+    popups.push_back(popup);
+
+    // The root holds the MylarWindow; the scrolling state lives on the list inside it.
+    popup->root->skip_delete = true;
+    popup->root->user_data = popup;
+    popup->root->wanted_bounds.w = FILL_SPACE;
+    popup->root->wanted_bounds.h = FILL_SPACE;
+    popup->root->on_closed = [popup](Container *) {
+        if (dropdown_popup == popup)
+            dropdown_popup = nullptr;
+        std::erase(popups, popup);
+    };
+    popup->root->when_paint = [](Container *root, Container *c) {
+        auto window = ((MylarWindow *) root->user_data)->raw_window;
+        auto b = c->real_bounds;
+        set_argb(window->cr, theme.popup_background);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
+        cairo_fill(window->cr);
+        set_argb(window->cr, theme.dropdown_border);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
+        cairo_stroke(window->cr);
+    };
+
+    auto list = popup->root->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    auto menu = new DropdownMenuData;
+    for (size_t i = 0; i < options.size(); i++)
+        if (options[i].id == selected)
+            menu->selected_index = (int) i;
+    list->user_data = menu;
+    list->receive_events_even_if_obstructed = true;
+    list->pre_layout = [menu](Container *root, Container *c, const Bounds &b) {
+        // No wanted_pad: a fullycustom container gets its children_bounds passed back into
+        // pre_layout, so a pad would shrink `b` and count twice, making every list overflow.
+        // The 4px inset is applied by hand instead.
+        auto dpi = ((MylarWindow *) root->user_data)->raw_window->dpi;
+        const double inset = 4 * dpi;
+        c->wanted_pad = Bounds(0, 0, 0, 0);
+        for (auto ch : c->children)
+            ch->wanted_bounds.h = dropdown_row_h * dpi;
+        c->type = ::vbox;
+        layout(root, c, b);
+        c->type = ::fullycustom;
+        double content = c->children.size() * dropdown_row_h * dpi + inset * 2;
+        menu->overflow = (float) std::max(0.0, std::floor(content - b.h));
+        if (!menu->scrolled_to_selection && b.h > 1) {
+            menu->scrolled_to_selection = true;
+            if (menu->selected_index >= 0)
+                menu->scroll = -(float) ((menu->selected_index + .5) * dropdown_row_h * dpi + inset - b.h * .5);
+        }
+        menu->scroll = std::clamp(menu->scroll, -menu->overflow, 0.0f);
+        for (auto ch : c->children) {
+            ch->real_bounds.x += inset;
+            ch->real_bounds.w -= inset * 2;
+            modify_all(ch, 0, inset + menu->scroll);
+        }
+    };
+    list->when_fine_scrolled = [menu](Container *root, Container *, double, double scroll_y, bool) {
+        auto window = ((MylarWindow *) root->user_data)->raw_window;
+        menu->scroll = std::clamp(menu->scroll + (float) (scroll_y * 3 * window->dpi), -menu->overflow, 0.0f);
+        windowing::redraw(window);
+    };
+    list->when_paint = [](Container *root, Container *c) {
+        auto window = ((MylarWindow *) root->user_data)->raw_window;
+        cairo_save(window->cr);
+        auto b = c->real_bounds;
+        cairo_rectangle(window->cr, b.x, b.y + 2 * window->dpi, b.w, b.h - 4 * window->dpi);
+        cairo_clip(window->cr);
+    };
+    list->after_paint = [menu](Container *root, Container *c) {
+        auto window = ((MylarWindow *) root->user_data)->raw_window;
+        cairo_restore(window->cr);
+        if (menu->overflow <= 0)
+            return;
+        // Thin scroll indicator.
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        double content = b.h + menu->overflow;
+        double thumb_h = std::max(24.0 * dpi, b.h * b.h / content);
+        double y = b.y + (-menu->scroll / menu->overflow) * (b.h - thumb_h);
+        RGBA color = theme.text_secondary;
+        color.a *= .4;
+        set_argb(window->cr, color);
+        drawRoundedRect(window->cr, b.x + b.w - 5 * dpi, y, 3 * dpi, thumb_h, 1.5 * dpi, 1.0);
+        cairo_fill(window->cr);
+    };
+
+    for (size_t i = 0; i < options.size(); i++) {
+        auto ch = list->child(FILL_SPACE, dropdown_row_h);
+        bool is_selected = (int) i == menu->selected_index;
+        auto label = options[i].label;
+        ch->when_paint = [label, is_selected](Container *root, Container *c) {
+            auto window = ((MylarWindow *) root->user_data)->raw_window;
+            auto cr = window->cr;
+            auto dpi = window->dpi;
+            auto b = c->real_bounds;
+            if (c->state.mouse_pressing || c->state.mouse_hovering) {
+                set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
+                drawRoundedRect(cr, b.x, b.y, b.w, b.h, 6 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            if (is_selected) {
+                set_argb(cr, theme.accent);
+                drawRoundedRect(cr, b.x + 4 * dpi, b.y + b.h * .3, 3 * dpi, b.h * .4, 1.5 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            swifi_text(root, Bounds(b.x + 16 * dpi, b.y, b.w - 24 * dpi, b.h), label, 11, theme.text, false, is_selected);
+        };
+        auto id = options[i].id;
+        ch->when_clicked = [id, on_pick](Container *, Container *) {
+            if (on_pick)
+                on_pick(id);
+            close_dropdown_menu();
+        };
+    }
+    windowing::redraw(popup->raw_window);
+}
+
+static double dropdown_button_width(Container *root, const std::string &label) {
+    auto dpi = swifi_window(root)->dpi;
+    return std::clamp(swifi_text_width(root, label, 11) + 46 * dpi, 120.0 * dpi, 250.0 * dpi);
+}
+
+static void paint_dropdown_button(Container *root, Container *c, const std::string &label) {
+    auto window = swifi_window(root);
+    auto cr = window->cr;
+    auto dpi = window->dpi;
+    double h = std::min<double>(30 * dpi, c->real_bounds.h);
+    Bounds b(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
+    set_argb(cr, c->state.mouse_pressing ? theme.dropdown_pressed :
+        c->state.mouse_hovering ? theme.dropdown_hover : theme.dropdown_background);
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+    cairo_fill(cr);
+    set_argb(cr, theme.dropdown_border);
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+    cairo_stroke(cr);
+    swifi_text(root, Bounds(b.x + 10 * dpi, b.y, b.w - 38 * dpi, b.h), label, 11, theme.text);
+    swifi_glyph(cr, b.x + b.w - 24 * dpi, b.y + b.h * .5 - 6 * dpi, "", 10 * dpi, theme.text);
+}
+
 static void make_dropdown(Container *parent, std::string text_, std::vector<std::string> options, std::function<void(std::string)> func) {
-    static float pad_amount = 11;
-    static float vron_pad_amount = pad_amount * 1.7;
-    static float text_height = 9;
-    static float option_height = 11;
-    static float chevron_height = 10;
-    static std::string chevron = "\uE70D";
-    auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     struct TextData : UserData {
         std::string text;
     };
+    auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     auto text_data = new TextData;
     text_data->text = text_;
     pad->user_data = text_data;
-    pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
+    pad->pre_layout = [](Container *root, Container *c, const Bounds &) {
         auto td = (TextData *) c->user_data;
-        text_height = 11 * dpi;
-        pad_amount = 11 * dpi;
-        Bounds bounds = draw_text(cr, chevron_height, 0, td->text, text_height, false, set->font, -1, -1, theme.text, true);
-        Bounds vron = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, theme.text, true);
-        
-        c->wanted_bounds.w = bounds.w + pad_amount * 2 + vron_pad_amount + vron.w;
-        c->wanted_bounds.h = bounds.h + (pad_amount * 2 * .8);
+        c->wanted_bounds.w = dropdown_button_width(root, td->text);
+        c->wanted_bounds.h = 34 * swifi_window(root)->dpi;
     };
     pad->when_paint = [](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        auto td = (TextData *) c->user_data;
-        if (c->state.mouse_pressing) {
-            set_argb(cr, theme.dropdown_pressed);
-        } else if (c->state.mouse_hovering) {
-            set_argb(cr, theme.dropdown_hover);
-        } else {
-            set_argb(cr, theme.dropdown_background);
-        }
-        auto b = c->real_bounds;
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * settings_control_rounding, 1.0); 
-        cairo_fill(cr);
-        set_argb(cr, theme.dropdown_border);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, dpi * settings_control_rounding, 1.0); 
-        cairo_stroke(cr);
-        
-        Bounds bounds = draw_text(cr, 0, 0, td->text, text_height, false, set->font, -1, -1, theme.text, false);
-        draw_text(cr, 
-            c->real_bounds.x + pad_amount, 
-            c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, 
-            td->text, text_height, true, set->font, -1, -1, theme.text, false);
-
-        auto vron_bounds = draw_text(cr, 0, 0, chevron, chevron_height, false, icon_font, -1, -1, theme.text, false);
-        draw_text(cr, 
-            c->real_bounds.x - pad_amount - vron_bounds.w + c->real_bounds.w, 
-            c->real_bounds.y + c->real_bounds.h * .5 - vron_bounds.h * .5, 
-             chevron, chevron_height, true, icon_font, -1, -1, theme.text, false);
+        paint_dropdown_button(root, c, ((TextData *) c->user_data)->text);
     };
-    static MylarWindow *popup = nullptr; 
-    popup = nullptr;
     pad->when_clicked = [func, options](Container *root, Container *c) {
-        auto dock = (MylarWindow*)root->user_data;
-        auto cr = dock->raw_window->cr;
-        auto dpi = dock->raw_window->dpi;
         auto td = (TextData *) c->user_data;
-        
-        RawWindowSettings settings = make_icon_anchored_popup_settings(
-            c, dpi, 300, (std::max(1, (int) options.size()) * 25) * dpi);
-
-        popup = open_mylar_popup(dock, settings);
-        if (!popup)
-            return;
-        popups.push_back(popup);
-        popup->root->when_paint = [](Container *root, Container *c) {
-            auto popup = (MylarWindow *) root->user_data;
-            auto cr = popup->raw_window->cr;
-            set_argb(cr, theme.popup_background);
-            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
-            cairo_fill(cr);
-        };
-        for (auto m : options) {
-            auto ch = popup->root->child(FILL_SPACE, FILL_SPACE);
-            ch->when_paint = [m](Container *root, Container *c) {
-                auto popup = (MylarWindow *) root->user_data;
-                auto cr = popup->raw_window->cr;
-                auto dpi = popup->raw_window->dpi;
-                
-                if (c->state.mouse_pressing) {
-                    set_argb(cr, theme.popup_pressed);
-                    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
-                } else if (c->state.mouse_hovering) {
-                    set_argb(cr, theme.popup_hover);
-                    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
-                } else {
-                    set_argb(cr, theme.popup_background);
-                    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * popup->raw_window->dpi, 1.0);
-                }
-                cairo_fill(cr);
-                
-                Bounds b = draw_text(cr, 0, 0, m, option_height * dpi, false, set->font, -1, -1, theme.text, false);
-                draw_text(cr, 5 * dpi, center_y(c, b.h), m, option_height * dpi, true, set->font, -1, -1, theme.text, false);
-            };
-            ch->when_clicked = [td, m, func](Container *root, Container *c) {
-                if (func)
-                    func(m);
-                if (!popup)
-                    return;
-                td->text = m;
-                windowing::timer(settings_app, 1, [](void *data) {
-                    auto rw = (RawWindow *) data;
-                    windowing::close_window(rw);
-                    popup = nullptr;
-                }, popup->raw_window);
-            };
-        }    
-        popup->root->skip_delete = true;
-        popup->root->user_data = popup;
-        popup->root->type = ::vbox;
-        popup->root->wanted_bounds.w = FILL_SPACE;
-        popup->root->wanted_bounds.h = FILL_SPACE;
-        windowing::redraw(popup->raw_window);
+        std::vector<DropdownOption> menu_options;
+        for (auto &option : options)
+            menu_options.push_back({option, option});
+        open_dropdown_menu(root, c, menu_options, td->text, [td, func](std::string picked) {
+            td->text = picked;
+            if (func)
+                func(picked);
+        });
     };
-    pad->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        if (!pressed || !popup)
-            return;
-        if (sym == XKB_KEY_Escape) {
-            windowing::timer(settings_app, 1, [](void *data) {
-                auto rw = (RawWindow *) data;
-                windowing::close_window(rw);
-                popup = nullptr;
-            }, popup->raw_window); 
-        }
+    pad->when_key_event = [](Container *, Container *, int, bool pressed, xkb_keysym_t sym, int, bool, std::string) {
+        if (pressed && sym == XKB_KEY_Escape)
+            close_dropdown_menu();
     };
-   
 }
 
 static Container *make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::string selected, std::vector<std::string> options, std::function<void(std::string)> on_change) {
@@ -2579,74 +2735,6 @@ SettingsWifiPage::~SettingsWifiPage() {
         settings_wifi_release();
 }
 
-static RawWindow *swifi_window(Container *root) {
-    return ((MylarWindow *) root->user_data)->raw_window;
-}
-
-static void swifi_redraw(Container *root) {
-    windowing::redraw(swifi_window(root));
-}
-
-static RGBA swifi_mix(RGBA a, RGBA b, double t) {
-    return RGBA(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
-}
-
-static RGBA swifi_dim(RGBA color) {
-    color.a *= .5;
-    return color;
-}
-
-static void swifi_text(Container *root, Bounds b, const std::string &text, double size, RGBA color,
-                       bool centered = false, bool bold = false) {
-    auto window = swifi_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
-        bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
-    pango_layout_set_text(font, text.c_str(), -1);
-    pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
-    pango_layout_set_height(font, std::max(1.0, b.h) * PANGO_SCALE);
-    pango_layout_set_wrap(font, PANGO_WRAP_WORD_CHAR);
-    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_END);
-    pango_layout_set_alignment(font, centered ? PANGO_ALIGN_CENTER : PANGO_ALIGN_LEFT);
-    int width, height;
-    pango_layout_get_pixel_size(font, &width, &height);
-    cairo_save(window->cr);
-    cairo_rectangle(window->cr, b.x, b.y, b.w, b.h);
-    cairo_clip(window->cr);
-    set_argb(window->cr, color);
-    cairo_move_to(window->cr, b.x, b.y + std::max(0.0, (b.h - height) * .5));
-    pango_cairo_show_layout(window->cr, font);
-    cairo_restore(window->cr);
-    pango_layout_set_alignment(font, PANGO_ALIGN_LEFT);
-}
-
-static double swifi_text_width(Container *root, const std::string &text, double size) {
-    auto window = swifi_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi, PANGO_WEIGHT_NORMAL, false);
-    pango_layout_set_width(font, -1);
-    pango_layout_set_height(font, -1);
-    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
-    pango_layout_set_text(font, text.c_str(), -1);
-    int width = 0, height = 0;
-    pango_layout_get_pixel_size(font, &width, &height);
-    return width;
-}
-
-static void swifi_glyph(cairo_t *cr, double x, double y, const char *glyph, double size, RGBA color, bool path = false) {
-    auto layout = get_cached_pango_font(cr, icon_font, size, PANGO_WEIGHT_NORMAL, false);
-    pango_layout_set_width(layout, -1);
-    pango_layout_set_height(layout, -1);
-    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
-    pango_layout_set_alignment(layout, PANGO_ALIGN_LEFT);
-    pango_layout_set_text(layout, glyph, -1);
-    cairo_move_to(cr, x, y);
-    if (path) {
-        pango_cairo_layout_path(cr, layout);
-        return;
-    }
-    set_argb(cr, color);
-    pango_cairo_show_layout(cr, layout);
-}
-
 // Signal strength like the dock menu: the full Wi-Fi glyph drawn faintly, the bars
 // for the current level on top, and the lock badge outlined in the row colour.
 static void swifi_paint_signal(cairo_t *cr, double x, double y, double size, int strength, bool secured,
@@ -3274,6 +3362,1517 @@ static void fill_wifi_settings(Container *root) {
     swifi_watch(page->generation);
 }
 
+/*************************************************
+ *
+ * Audio page (pavucontrol-like: Playback, Recording, Output Devices, Input Devices, Configuration)
+ *
+ *************************************************/
+
+static const char *saudio_tab_names[] = {"Playback", "Recording", "Output Devices", "Input Devices", "Configuration"};
+static int settings_audio_tab = 0;
+
+struct SettingsAudioRow : UserData {
+    bool is_card = false;
+    AudioNodeInfo node;
+    AudioCardInfo card;
+    float shown_peak = 0;
+    bool dragging = false;
+    double drag_value = 0;
+    double last_sent = -1;
+    long last_local_change = 0;
+    bool hovered = false;
+    std::string loaded_icon;
+    float loaded_dpi = 0;
+    cairo_surface_t *icon = nullptr;
+
+    ~SettingsAudioRow() override {
+        if (icon)
+            cairo_surface_destroy(icon);
+    }
+};
+
+struct SettingsAudioPage : UserData {
+    unsigned generation = 0;
+    unsigned long revision = 0;
+    std::string backend;
+    std::vector<AudioNodeInfo> nodes;
+    std::vector<AudioCardInfo> cards;
+    std::string default_sink;
+    std::string default_source;
+    bool show_monitors = false;
+    Container *list = nullptr;
+    ~SettingsAudioPage() override;
+};
+
+// The live page, if the Audio tab is showing. Only touched on the settings thread.
+static SettingsAudioPage *settings_audio = nullptr;
+static unsigned settings_audio_generation = 0;
+
+static void settings_audio_release() {
+    if (!settings_audio)
+        return;
+    settings_audio = nullptr;
+    audio_mixer_meters(false);
+}
+
+SettingsAudioPage::~SettingsAudioPage() {
+    if (settings_audio == this)
+        settings_audio_release();
+}
+
+static bool saudio_is_stream(const AudioNodeInfo &n) {
+    return n.kind == AudioNodeKind::SinkInput || n.kind == AudioNodeKind::SourceOutput;
+}
+
+static const AudioNodeInfo *saudio_node(AudioNodeKind kind, uint32_t index) {
+    if (!settings_audio || index == UINT32_MAX)
+        return nullptr;
+    for (auto &n : settings_audio->nodes)
+        if (n.kind == kind && n.index == index)
+            return &n;
+    return nullptr;
+}
+
+static bool saudio_is_default(const AudioNodeInfo &n) {
+    if (n.name.empty())
+        return false;
+    if (n.kind == AudioNodeKind::Sink)
+        return n.name == settings_audio->default_sink;
+    if (n.kind == AudioNodeKind::Source)
+        return n.name == settings_audio->default_source;
+    return false;
+}
+
+static std::string saudio_device_label(const AudioNodeInfo &n) {
+    auto kind = n.kind == AudioNodeKind::SinkInput ? AudioNodeKind::Sink : AudioNodeKind::Source;
+    if (auto device = saudio_node(kind, n.device))
+        return device->description;
+    if (n.kind == AudioNodeKind::SourceOutput)
+        if (auto sink = saudio_node(AudioNodeKind::Sink, n.device))
+            return "Monitor of " + sink->description;
+    return n.device == UINT32_MAX ? "Not connected" : "Unknown device";
+}
+
+static std::string saudio_port_label(const AudioNodeInfo &n) {
+    for (auto &port : n.ports)
+        if (port.name == n.active_port)
+            return port.description;
+    return n.active_port.empty() ? "No port" : n.active_port;
+}
+
+static std::string saudio_profile_label(const AudioCardInfo &c) {
+    for (auto &profile : c.profiles)
+        if (profile.name == c.active_profile)
+            return profile.description;
+    return c.active_profile.empty() ? "Off" : c.active_profile;
+}
+
+static double saudio_shown_volume(SettingsAudioRow *data) {
+    if (data->dragging || get_current_time_in_ms() - data->last_local_change < 600)
+        return data->drag_value;
+    return data->node.volume();
+}
+
+// Peaks are linear amplitude; show them on a 60 dB scale like a VU meter so speech is visible.
+static float saudio_meter_level(float peak) {
+    if (peak <= 0.0001f)
+        return 0;
+    return std::clamp(1.0f + 20.0f * std::log10(peak) / 60.0f, 0.0f, 1.0f);
+}
+
+static std::string saudio_row_key(const AudioNodeInfo &n) {
+    return std::to_string((int) n.kind) + ":" + std::to_string(n.index);
+}
+
+// --- Drop-down menus (output device of a stream, port of a device, profile of a card) ---
+
+enum class SAudioMenu { Port, Device, Profile };
+
+static bool saudio_menu_visible(SettingsAudioRow *data, SAudioMenu menu) {
+    switch (menu) {
+        case SAudioMenu::Port: return !data->is_card && !saudio_is_stream(data->node) && !data->node.ports.empty();
+        case SAudioMenu::Device: return !data->is_card && saudio_is_stream(data->node);
+        case SAudioMenu::Profile: return data->is_card && !data->card.profiles.empty();
+    }
+    return false;
+}
+
+static std::string saudio_menu_label(SettingsAudioRow *data, SAudioMenu menu) {
+    switch (menu) {
+        case SAudioMenu::Port: return saudio_port_label(data->node);
+        case SAudioMenu::Device: return saudio_device_label(data->node);
+        case SAudioMenu::Profile: return saudio_profile_label(data->card);
+    }
+    return "";
+}
+
+static std::vector<DropdownOption> saudio_menu_options(SettingsAudioRow *data, SAudioMenu menu, std::string *selected) {
+    std::vector<DropdownOption> options;
+    if (menu == SAudioMenu::Port) {
+        *selected = data->node.active_port;
+        for (auto &port : data->node.ports)
+            options.push_back({port.name, port.description + (port.available ? "" : " (unplugged)")});
+    } else if (menu == SAudioMenu::Device) {
+        *selected = std::to_string(data->node.device);
+        auto kind = data->node.kind == AudioNodeKind::SinkInput ? AudioNodeKind::Sink : AudioNodeKind::Source;
+        for (auto &n : settings_audio->nodes)
+            if (n.kind == kind)
+                options.push_back({std::to_string(n.index), n.description});
+    } else {
+        *selected = data->card.active_profile;
+        for (auto &profile : data->card.profiles)
+            options.push_back({profile.name, profile.description + (profile.available ? "" : " (unavailable)")});
+    }
+    return options;
+}
+
+static void saudio_menu_pick(SettingsAudioRow *data, SAudioMenu menu, const std::string &id) {
+    if (menu == SAudioMenu::Port) {
+        audio_mixer_set_port(data->node.kind, data->node.index, id);
+    } else if (menu == SAudioMenu::Device) {
+        audio_mixer_move_stream(data->node.kind, data->node.index, (uint32_t) std::stoul(id));
+    } else {
+        audio_mixer_set_card_profile(data->card.index, id);
+    }
+}
+
+static Container *saudio_dropdown(Container *parent, SettingsAudioRow *data, SAudioMenu menu) {
+    auto dd = parent->child(0, FILL_SPACE);
+    dd->pre_layout = [data, menu](Container *root, Container *c, const Bounds &) {
+        c->exists = saudio_menu_visible(data, menu);
+        if (c->exists)
+            c->wanted_bounds.w = dropdown_button_width(root, saudio_menu_label(data, menu));
+    };
+    dd->when_paint = [data, menu](Container *root, Container *c) {
+        paint_dropdown_button(root, c, saudio_menu_label(data, menu));
+    };
+    dd->when_clicked = [data, menu](Container *root, Container *c) {
+        std::string selected;
+        auto options = saudio_menu_options(data, menu, &selected);
+        open_dropdown_menu(root, c, options, selected, [data, menu](std::string id) {
+            if (settings_audio)
+                saudio_menu_pick(data, menu, id);
+        });
+    };
+    return dd;
+}
+
+// --- Rows ---
+
+static void saudio_set_volume_from_mouse(Container *root, Container *c, SettingsAudioRow *data, bool finished) {
+    if (!data->node.has_volume)
+        return;
+    auto dpi = swifi_window(root)->dpi;
+    double r = 8 * dpi;
+    auto b = c->real_bounds;
+    double scalar = std::clamp((root->mouse_current_x - (b.x + r)) / std::max(1.0, b.w - 2 * r), 0.0, 1.0);
+    data->drag_value = scalar;
+    data->dragging = !finished;
+    data->last_local_change = get_current_time_in_ms();
+    if (finished || std::abs(scalar - data->last_sent) > 0.004) {
+        data->last_sent = scalar;
+        audio_mixer_set_volume(data->node.kind, data->node.index, scalar);
+    }
+    swifi_redraw(root);
+}
+
+static Container *saudio_row(Container *parent) {
+    auto row = parent->child(::vbox, FILL_SPACE, 106);
+    auto data = new SettingsAudioRow;
+    row->user_data = data;
+    row->receive_events_even_if_obstructed = true;
+    row->when_mouse_enters_container = [data](Container *root, Container *) {
+        data->hovered = true;
+        swifi_redraw(root);
+    };
+    row->when_mouse_leaves_container = [data](Container *root, Container *) {
+        data->hovered = false;
+        swifi_redraw(root);
+    };
+    row->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(0, 8 * dpi, 16 * dpi, 8 * dpi);
+    };
+    row->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->cr, data->hovered ? theme.row_hover : theme.row_background);
+        cairo_fill(window->cr);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->cr, theme.row_border);
+        cairo_stroke(window->cr);
+    };
+
+    auto header = row->child(::hbox, FILL_SPACE, 46);
+    header->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = (data->is_card ? 54 : 46) * dpi;
+        c->spacing = 8 * dpi;
+    };
+
+    auto icon = header->child(56, FILL_SPACE);
+    icon->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 56 * swifi_window(root)->dpi;
+    };
+    icon->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        std::string wanted = data->is_card ? data->card.icon_name : data->node.icon_name;
+        if (data->loaded_icon != wanted || std::abs(data->loaded_dpi - dpi) > 0.001) {
+            data->loaded_icon = wanted;
+            data->loaded_dpi = dpi;
+            if (data->icon) {
+                cairo_surface_destroy(data->icon);
+                data->icon = nullptr;
+            }
+            std::string fallback = data->is_card || data->node.kind == AudioNodeKind::Sink ? "audio-card" :
+                data->node.kind == AudioNodeKind::Source ? "audio-input-microphone" :
+                data->node.kind == AudioNodeKind::SinkInput ? "applications-multimedia" : "audio-input-microphone";
+            auto full = one_shot_icon(32 * dpi, {wanted, to_lower(wanted), c3ic_fix_wm_class(wanted), fallback,
+                                                 "audio-speakers", "multimedia-volume-control"});
+            if (!full.empty())
+                load_icon_full_path(&data->icon, full, 32 * dpi);
+        }
+        if (data->icon) {
+            auto h = cairo_image_surface_get_height(data->icon);
+            cairo_set_source_surface(cr, data->icon, std::round(c->real_bounds.x + 16 * dpi),
+                                     std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
+            bool paused = !data->is_card && saudio_is_stream(data->node) && data->node.corked;
+            cairo_paint_with_alpha(cr, paused ? .6 : 1.0);
+        } else {
+            swifi_glyph(cr, c->real_bounds.x + 19 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - 10 * dpi,
+                        "\uE995", 18 * dpi, theme.text);
+        }
+    };
+
+    auto titles = header->child(FILL_SPACE, FILL_SPACE);
+    titles->when_paint = [data](Container *root, Container *c) {
+        auto dpi = swifi_window(root)->dpi;
+        auto b = c->real_bounds;
+        std::string title, subtitle;
+        if (data->is_card) {
+            title = data->card.description;
+            subtitle = data->card.name;
+        } else if (saudio_is_stream(data->node)) {
+            title = data->node.app_name.empty() ? data->node.description : data->node.app_name;
+            if (!data->node.app_name.empty() && data->node.description != data->node.app_name)
+                subtitle = data->node.description;
+            if (data->node.corked)
+                subtitle += subtitle.empty() ? "Paused" : " · Paused";
+        } else {
+            title = data->node.description;
+            if (data->node.monitor_of != UINT32_MAX) {
+                if (auto sink = saudio_node(AudioNodeKind::Sink, data->node.monitor_of))
+                    subtitle = "Monitor of " + sink->description;
+                else
+                    subtitle = "Monitor";
+            } else {
+                subtitle = data->node.name;
+            }
+        }
+        if (subtitle.empty()) {
+            swifi_text(root, Bounds(b.x, b.y, b.w, b.h), title, 12, theme.text);
+        } else {
+            swifi_text(root, Bounds(b.x, b.y + b.h * .5 - 21 * dpi, b.w, 22 * dpi), title, 12, theme.text);
+            swifi_text(root, Bounds(b.x, b.y + b.h * .5 + 1 * dpi, b.w, 20 * dpi), subtitle, 10, theme.text_secondary);
+        }
+    };
+
+    saudio_dropdown(header, data, SAudioMenu::Port);
+    saudio_dropdown(header, data, SAudioMenu::Device);
+    saudio_dropdown(header, data, SAudioMenu::Profile);
+
+    // "Default" toggle for output/input devices (pavucontrol's "Set as fallback").
+    auto default_button = header->child(0, FILL_SPACE);
+    default_button->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->exists = !data->is_card && !saudio_is_stream(data->node);
+        bool is_default = saudio_is_default(data->node);
+        c->wanted_bounds.w = swifi_text_width(root, is_default ? "Default" : "Set as default", 11) +
+                             (is_default ? 46 : 24) * dpi;
+    };
+    default_button->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        bool is_default = saudio_is_default(data->node);
+        double h = 30 * dpi;
+        Bounds b(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
+        if (is_default) {
+            set_argb(cr, swifi_mix(theme.row_background, theme.accent, .25));
+        } else {
+            set_argb(cr, c->state.mouse_pressing ? theme.button_pressed :
+                c->state.mouse_hovering ? theme.button_hover : theme.button_background);
+        }
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+        cairo_fill(cr);
+        if (is_default) {
+            // Check mark glyph followed by the label.
+            swifi_glyph(cr, b.x + 12 * dpi, b.y + b.h * .5 - 6 * dpi, "\uE73E", 11 * dpi, theme.accent);
+            swifi_text(root, Bounds(b.x + 30 * dpi, b.y, b.w - 38 * dpi, b.h), "Default", 11, theme.text, true);
+        } else {
+            swifi_text(root, b, "Set as default", 11, theme.text, true);
+        }
+    };
+    default_button->when_clicked = [data](Container *root, Container *) {
+        if (saudio_is_default(data->node))
+            return;
+        audio_mixer_set_default(data->node.kind, data->node.index);
+        // Optimistic: show it right away, the server confirms shortly.
+        if (data->node.kind == AudioNodeKind::Sink)
+            settings_audio->default_sink = data->node.name;
+        else
+            settings_audio->default_source = data->node.name;
+        swifi_redraw(root);
+    };
+
+    // Mute button, volume slider and percentage.
+    auto line = row->child(::hbox, FILL_SPACE, 30);
+    line->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        c->exists = !data->is_card;
+        c->wanted_bounds.h = 30 * swifi_window(root)->dpi;
+    };
+    auto mute = line->child(56, FILL_SPACE);
+    mute->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 56 * swifi_window(root)->dpi;
+    };
+    mute->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        double size = 30 * dpi;
+        Bounds circle(b.x + 13 * dpi, b.y + (b.h - size) * .5, size, size);
+        if (c->state.mouse_hovering || c->state.mouse_pressing) {
+            set_argb(cr, c->state.mouse_pressing ? theme.button_pressed : theme.button_hover);
+            drawRoundedRect(cr, circle.x, circle.y, circle.w, circle.h, size * .5, 1.0);
+            cairo_fill(cr);
+        }
+        double gx = circle.x + 8 * dpi;
+        double gy = circle.y + circle.h * .5 - 7.5 * dpi;
+        auto color = data->node.mute ? theme.text_secondary : theme.text;
+        bool input = data->node.kind == AudioNodeKind::Source || data->node.kind == AudioNodeKind::SourceOutput;
+        if (input) {
+            // Microphone / microphone off.
+            swifi_glyph(cr, gx, gy, data->node.mute ? "\uEC54" : "\uE720", 14 * dpi, color);
+            return;
+        }
+        int val = (int) std::round(saudio_shown_volume(data) * 100);
+        const char *glyph = data->node.mute ? "\uE74F" : val == 0 ? "\uE992" : val < 33 ? "\uE993" : val < 66 ? "\uE994" : "\uE995";
+        RGBA faint = theme.text;
+        faint.a *= .3;
+        if (!data->node.mute)
+            swifi_glyph(cr, gx, gy, "\uE995", 14 * dpi, faint);
+        swifi_glyph(cr, gx, gy, glyph, 14 * dpi, color);
+    };
+    mute->when_clicked = [data](Container *root, Container *) {
+        data->node.mute = !data->node.mute;
+        audio_mixer_set_mute(data->node.kind, data->node.index, data->node.mute);
+        swifi_redraw(root);
+    };
+
+    auto slider = line->child(FILL_SPACE, FILL_SPACE);
+    slider->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        double r = 8 * dpi;
+        double value = std::clamp(saudio_shown_volume(data), 0.0, 1.0);
+        double track_h = 6 * dpi;
+        double x0 = b.x + r;
+        double w = std::max(1.0, b.w - 2 * r);
+        double y = b.y + b.h * .5 - track_h * .5;
+        RGBA fill = data->node.mute || !data->node.has_volume ? theme.text_secondary : theme.accent;
+        set_argb(cr, theme.slider_track);
+        drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
+        cairo_fill(cr);
+        if (value > 0) {
+            set_argb(cr, fill);
+            drawRoundedRect(cr, x0, y, std::max(track_h, w * value), track_h, track_h * .5, 1.0);
+            cairo_fill(cr);
+        }
+        double cx = x0 + w * value;
+        Bounds thumb(cx - r, b.y + b.h * .5 - r, r * 2, r * 2);
+        set_argb(cr, theme.slider_thumb);
+        drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, r, 1.0);
+        cairo_fill(cr);
+        set_argb(cr, theme.slider_track);
+        drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, r, 1.0);
+        cairo_stroke(cr);
+        thumb.shrink((c->state.mouse_hovering || data->dragging ? 4 : 5) * dpi);
+        set_argb(cr, fill);
+        drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, thumb.w * .5, 1.0);
+        cairo_fill(cr);
+    };
+    slider->when_mouse_down = [data](Container *root, Container *c) {
+        saudio_set_volume_from_mouse(root, c, data, false);
+    };
+    slider->when_drag = slider->when_mouse_down;
+    slider->when_drag_end = [data](Container *root, Container *c) {
+        saudio_set_volume_from_mouse(root, c, data, true);
+    };
+    slider->when_mouse_up = slider->when_drag_end;
+
+    auto percent = line->child(64, FILL_SPACE);
+    percent->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 64 * swifi_window(root)->dpi;
+    };
+    percent->when_paint = [data](Container *root, Container *c) {
+        auto b = c->real_bounds;
+        auto dpi = swifi_window(root)->dpi;
+        auto text = std::to_string((int) std::round(saudio_shown_volume(data) * 100)) + "%";
+        swifi_text(root, Bounds(b.x + 10 * dpi, b.y, b.w - 10 * dpi, b.h), text, 11,
+                   data->node.mute ? theme.text_secondary : theme.text);
+    };
+
+    // Level meter under the slider: shows whether the device/stream is actually producing sound.
+    auto meter_line = row->child(::hbox, FILL_SPACE, 14);
+    meter_line->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        c->exists = !data->is_card;
+        c->wanted_bounds.h = 14 * swifi_window(root)->dpi;
+    };
+    auto meter_left = meter_line->child(56, FILL_SPACE);
+    meter_left->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 56 * swifi_window(root)->dpi;
+    };
+    auto meter = meter_line->child(FILL_SPACE, FILL_SPACE);
+    meter->when_paint = [data](Container *root, Container *c) {
+        if (!data->node.peak_supported)
+            return;
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        double r = 8 * dpi;
+        double h = 4 * dpi;
+        double x0 = b.x + r;
+        double w = std::max(1.0, b.w - 2 * r);
+        double y = b.y + 2 * dpi;
+        RGBA track = theme.slider_track;
+        track.a *= .5;
+        auto pill = [cr](double px, double py, double pw, double ph) {
+            double rad = ph * .5;
+            cairo_new_path(cr);
+            cairo_arc(cr, px + pw - rad, py + rad, rad, -M_PI / 2, M_PI / 2);
+            cairo_arc(cr, px + rad, py + rad, rad, M_PI / 2, 3 * M_PI / 2);
+            cairo_close_path(cr);
+        };
+        set_argb(cr, track);
+        pill(x0, y, w, h);
+        cairo_fill(cr);
+        double level = saudio_meter_level(data->shown_peak);
+        if (level <= 0.001)
+            return;
+        RGBA green = set->dark_theme ? RGBA(.35, .80, .50, 1) : RGBA(.15, .62, .32, 1);
+        RGBA fill = data->node.mute ? theme.text_secondary : green;
+        if (level > .92 && !data->node.mute)
+            fill = RGBA(.90, .55, .20, 1);
+        set_argb(cr, fill);
+        // Keep the round end at the peak; at low levels the pill's left end is clipped by the track.
+        double fill_w = w * level;
+        double pill_w = std::max(h, fill_w);
+        cairo_save(cr);
+        pill(x0, y, w, h);
+        cairo_clip(cr);
+        pill(x0 + fill_w - pill_w, y, pill_w, h);
+        cairo_fill(cr);
+        cairo_restore(cr);
+    };
+    auto meter_right = meter_line->child(64, FILL_SPACE);
+    meter_right->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 64 * swifi_window(root)->dpi;
+    };
+
+    return row;
+}
+
+static bool saudio_row_wanted(SettingsAudioPage *page, const AudioNodeInfo &n) {
+    switch (settings_audio_tab) {
+        case 0: return n.kind == AudioNodeKind::SinkInput;
+        case 1: return n.kind == AudioNodeKind::SourceOutput;
+        case 2: return n.kind == AudioNodeKind::Sink;
+        case 3: return n.kind == AudioNodeKind::Source && (page->show_monitors || n.monitor_of == UINT32_MAX);
+    }
+    return false;
+}
+
+// Rebuilds the rows of the current tab from the latest snapshot. Rows are keyed so that a slider
+// being dragged keeps its state while updates stream in.
+static void saudio_apply(SettingsAudioPage *page) {
+    auto content = page->list;
+    std::vector<std::string> keys;
+    if (settings_audio_tab == 4) {
+        for (auto &card : page->cards)
+            keys.push_back("card:" + std::to_string(card.index));
+    } else {
+        for (auto &n : page->nodes)
+            if (saudio_row_wanted(page, n))
+                keys.push_back(saudio_row_key(n));
+    }
+    std::unordered_set<std::string> wanted(keys.begin(), keys.end());
+    std::unordered_map<std::string, Container *> rows;
+    std::erase_if(content->children, [&wanted, &rows](Container *row) {
+        if (wanted.contains(row->name)) {
+            rows.emplace(row->name, row);
+            return false;
+        }
+        delete row;
+        return true;
+    });
+    auto row_for = [&](const std::string &key) {
+        auto found = rows.find(key);
+        if (found != rows.end())
+            return found->second;
+        auto row = saudio_row(content);
+        content->children.pop_back(); // Re-inserted below in order.
+        row->name = key;
+        return row;
+    };
+    std::vector<Container *> ordered;
+    if (settings_audio_tab == 4) {
+        for (auto &card : page->cards) {
+            auto row = row_for("card:" + std::to_string(card.index));
+            auto data = (SettingsAudioRow *) row->user_data;
+            data->is_card = true;
+            data->card = card;
+            ordered.push_back(row);
+        }
+    } else {
+        for (auto &n : page->nodes) {
+            if (!saudio_row_wanted(page, n))
+                continue;
+            auto row = row_for(saudio_row_key(n));
+            auto data = (SettingsAudioRow *) row->user_data;
+            data->is_card = false;
+            data->node = n;
+            ordered.push_back(row);
+        }
+    }
+    content->children = std::move(ordered);
+}
+
+// Pulls the latest mixer state; returns true when something visible changed.
+static bool saudio_refresh(SettingsAudioPage *page) {
+    bool redraw = false;
+    auto revision = audio_mixer_revision();
+    auto nodes = audio_mixer_nodes();
+    auto backend = audio_backend_name();
+    if (revision != page->revision || backend != page->backend) {
+        page->revision = revision;
+        page->backend = backend;
+        page->nodes = nodes;
+        page->cards = audio_mixer_cards();
+        page->default_sink = audio_mixer_default_sink();
+        page->default_source = audio_mixer_default_source();
+        saudio_apply(page);
+        redraw = true;
+    }
+    // Peaks change constantly and aren't part of the revision; update them every tick.
+    std::unordered_map<std::string, float> peaks;
+    for (auto &n : nodes)
+        peaks[saudio_row_key(n)] = n.peak;
+    for (auto row : page->list->children) {
+        auto data = (SettingsAudioRow *) row->user_data;
+        if (data->is_card)
+            continue;
+        float peak = 0;
+        if (data->node.kind == AudioNodeKind::SourceOutput) {
+            // Recording streams show the level of the source they record from.
+            AudioNodeInfo source;
+            source.kind = AudioNodeKind::Source;
+            source.index = data->node.device;
+            auto it = peaks.find(saudio_row_key(source));
+            if (it == peaks.end()) {
+                source.kind = AudioNodeKind::Sink; // PipeWire: recording a sink's output directly.
+                it = peaks.find(saudio_row_key(source));
+            }
+            if (it != peaks.end())
+                peak = it->second;
+        } else {
+            auto it = peaks.find(saudio_row_key(data->node));
+            if (it != peaks.end())
+                peak = it->second;
+        }
+        for (auto &n : nodes)
+            if (n.kind == data->node.kind && n.index == data->node.index)
+                data->node.peak_supported = n.peak_supported;
+        float decayed = std::max(0.0f, data->shown_peak * .82f - .002f);
+        float shown = std::max(peak, decayed);
+        if (std::abs(saudio_meter_level(shown) - saudio_meter_level(data->shown_peak)) > 0.002)
+            redraw = true;
+        data->shown_peak = shown;
+        if (data->dragging || get_current_time_in_ms() - data->last_local_change < 700)
+            redraw = true;
+    }
+    return redraw;
+}
+
+static void saudio_watch(unsigned generation) {
+    windowing::timer(settings_app, 33, [generation](void *) {
+        if (!settings_app || !settings_mylar)
+            return;
+        bool redraw = false;
+        {
+            std::lock_guard<std::mutex> lock(settings_app->mutex);
+            auto page = settings_audio;
+            if (!page || page->generation != generation)
+                return; // Page left or rebuilt; stop polling.
+            redraw = saudio_refresh(page);
+        }
+        if (redraw)
+            windowing::redraw(settings_mylar->raw_window);
+        saudio_watch(generation);
+    }, nullptr);
+}
+
+static void fill_audio_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Audio");
+    make_vert_space(padded_right, 4);
+
+    auto status = padded_right->child(FILL_SPACE, 20);
+    status->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 20 * swifi_window(root)->dpi;
+    };
+    status->when_paint = [](Container *root, Container *c) {
+        auto backend = settings_audio ? settings_audio->backend : "";
+        std::string text = backend.empty() ? "Not connected to a sound server" : "Using " + backend;
+        swifi_text(root, c->real_bounds, text, 10, theme.text_secondary);
+    };
+    make_vert_space(padded_right, 12);
+
+    // The five pavucontrol tabs.
+    auto tabs = padded_right->child(::hbox, FILL_SPACE, 40);
+    tabs->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 40 * dpi;
+        c->wanted_pad = Bounds(4 * dpi, 4 * dpi, 4 * dpi, 4 * dpi);
+        c->spacing = 4 * dpi;
+    };
+    tabs->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        set_argb(window->cr, theme.segment_background);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 10 * window->dpi, 1.0);
+        cairo_fill(window->cr);
+    };
+    for (int i = 0; i < 5; i++) {
+        auto tab = tabs->child(FILL_SPACE, FILL_SPACE);
+        tab->when_paint = [i](Container *root, Container *c) {
+            auto window = swifi_window(root);
+            auto cr = window->cr;
+            auto dpi = window->dpi;
+            auto b = c->real_bounds;
+            bool selected = settings_audio_tab == i;
+            if (selected || c->state.mouse_hovering) {
+                set_argb(cr, selected ? theme.segment_selected : swifi_mix(theme.segment_background, theme.segment_selected, .5));
+                drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            swifi_text(root, b, saudio_tab_names[i], 11, selected ? theme.text : theme.text_secondary, true);
+        };
+        tab->when_clicked = [i](Container *root, Container *) {
+            if (settings_audio_tab == i || !settings_audio)
+                return;
+            settings_audio_tab = i;
+            if (auto right = container_by_name("settings_right", root))
+                ((RightData *) right->user_data)->scroll = 0;
+            saudio_apply(settings_audio);
+            swifi_redraw(root);
+        };
+    }
+    make_vert_space(padded_right, 12);
+
+    auto list = padded_right->child(::vbox, FILL_SPACE, 0);
+    auto page = new SettingsAudioPage;
+    page->list = list;
+    page->generation = ++settings_audio_generation;
+    list->user_data = page;
+    list->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->spacing = 6 * dpi;
+        double h = 0;
+        for (auto row : c->children) {
+            auto data = (SettingsAudioRow *) row->user_data;
+            row->wanted_bounds.h = (data->is_card ? 70 : 106) * dpi;
+            h += row->wanted_bounds.h;
+        }
+        if (c->children.empty())
+            h = 120 * dpi;
+        else
+            h += c->spacing * (c->children.size() - 1);
+        c->wanted_bounds.h = h;
+    };
+    list->when_paint = [](Container *root, Container *c) {
+        if (!c->children.empty())
+            return;
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        static const char *empty_messages[] = {
+            "No application is currently playing audio.",
+            "No application is currently recording audio.",
+            "No output devices available.",
+            "No input devices available.",
+            "No sound cards available.",
+        };
+        std::string message = settings_audio && settings_audio->backend.empty()
+            ? "Connecting to the sound server…" : empty_messages[settings_audio_tab];
+        auto b = c->real_bounds;
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->cr, theme.row_background);
+        cairo_fill(window->cr);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->cr, theme.row_border);
+        cairo_stroke(window->cr);
+        b.x += 30 * dpi;
+        b.w -= 60 * dpi;
+        swifi_text(root, b, message, 11, theme.text_secondary, true);
+    };
+
+    // Input Devices: monitors of output devices are hidden unless asked for.
+    auto footer = padded_right->child(::hbox, FILL_SPACE, 0);
+    footer->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        bool any_monitor = false;
+        if (settings_audio)
+            for (auto &n : settings_audio->nodes)
+                any_monitor |= n.kind == AudioNodeKind::Source && n.monitor_of != UINT32_MAX;
+        c->exists = settings_audio_tab == 3 && any_monitor;
+        c->wanted_bounds.h = 46 * dpi;
+        c->wanted_pad = Bounds(0, 12 * dpi, 0, 0);
+    };
+    footer->child(FILL_SPACE, FILL_SPACE);
+    swifi_card_button(footer, []() {
+        return settings_audio && settings_audio->show_monitors ? std::string("Hide monitor sources")
+                                                               : std::string("Show monitor sources");
+    }, []() { return settings_audio != nullptr; }, []() {
+        settings_audio->show_monitors = !settings_audio->show_monitors;
+        saudio_apply(settings_audio);
+    });
+
+    // The previous page (if any) was deleted above and stopped its meters.
+    settings_audio = page;
+    saudio_refresh(page);
+    audio_mixer_meters(true);
+    saudio_watch(page->generation);
+}
+
+/*************************************************
+ *
+ * Time & Date page (modelled on GNOME's Date & Time panel)
+ *
+ *************************************************/
+
+struct SettingsDateTimeState {
+    std::mutex mutex;
+    datetime::Status status;
+    bool loaded = false;
+    bool busy = false;
+    unsigned generation = 0;
+};
+static SettingsDateTimeState sdt;
+
+static void sdt_invalidate() {
+    std::lock_guard lock(sdt.mutex);
+    sdt.generation++;
+}
+
+static datetime::Status sdt_snapshot(bool *loaded = nullptr, bool *busy = nullptr) {
+    std::lock_guard lock(sdt.mutex);
+    if (loaded)
+        *loaded = sdt.loaded;
+    if (busy)
+        *busy = sdt.busy;
+    return sdt.status;
+}
+
+static void sdt_refresh_async() {
+    std::thread([]() {
+        datetime::timezones(); // Parse the zone tables off the UI thread.
+        auto status = datetime::query_status();
+        std::lock_guard lock(sdt.mutex);
+        sdt.status = status;
+        sdt.loaded = true;
+    }).detach();
+}
+
+// Runs a privileged change on a worker thread (it may wait on a polkit prompt), then re-reads the state.
+static void sdt_run_async(std::function<std::string()> job) {
+    {
+        std::lock_guard lock(sdt.mutex);
+        if (sdt.busy)
+            return;
+        sdt.busy = true;
+    }
+    std::thread([job]() {
+        auto error = job();
+        auto status = datetime::query_status();
+        {
+            std::lock_guard lock(sdt.mutex);
+            sdt.status = status;
+            sdt.loaded = true;
+            sdt.busy = false;
+        }
+        main_thread([error]() {
+            if (!error.empty())
+                notify(error);
+            dock::redraw();
+        });
+    }).detach();
+}
+
+// Keeps the clock text fresh and picks up worker results while the page is showing.
+static void sdt_watch(unsigned generation) {
+    windowing::timer(settings_app, 500, [generation](void *) {
+        if (!settings_app || !settings_mylar)
+            return;
+        {
+            std::lock_guard lock(sdt.mutex);
+            if (sdt.generation != generation)
+                return;
+        }
+        windowing::redraw(settings_mylar->raw_window);
+        sdt_watch(generation);
+    }, nullptr);
+}
+
+static void sdt_paint_switch(cairo_t *cr, double x, double y, double dpi, bool on, bool enabled) {
+    double w = 42 * dpi, h = 24 * dpi;
+    RGBA track = on ? theme.accent : theme.toggle_border;
+    if (!enabled)
+        track.a *= .45;
+    drawRoundedRect(cr, x, y, w, h, h * .5, 1.0);
+    set_argb(cr, track);
+    cairo_fill(cr);
+    double knob = h - 6 * dpi;
+    double kx = on ? x + w - knob - 3 * dpi : x + 3 * dpi;
+    RGBA knob_color = on ? theme.toggle_knob_on : theme.toggle_knob_off;
+    if (!on)
+        knob_color = RGBA(1, 1, 1, 1);
+    if (!enabled)
+        knob_color.a *= .6;
+    drawRoundedRect(cr, kx, y + 3 * dpi, knob, knob, knob * .5, 1.0);
+    set_argb(cr, knob_color);
+    cairo_fill(cr);
+}
+
+struct SdtRowSpec {
+    float height = 52;
+    std::function<std::string()> title;
+    std::function<std::string()> subtitle;
+    std::function<std::string()> value;      // Text on the right, if any
+    std::function<bool()> enabled;
+    std::function<int()> accessory;          // 0 none, 1 chevron, 2 dropdown arrow, 3 switch
+    std::function<bool()> switch_on;
+    std::function<void(Container *root, Container *anchor)> on_click;
+};
+
+// A row in a group of connected rounded rows, drawn like the Shortcuts list.
+static Container *sdt_row(Container *parent, SdtRowSpec spec, bool is_first, bool is_last) {
+    auto spec_ptr = std::make_shared<SdtRowSpec>(std::move(spec));
+    auto row = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
+    row->receive_events_even_if_obstructed = true;
+    row->child(FILL_SPACE, FILL_SPACE);
+    auto anchor = row->child(FILL_SPACE, FILL_SPACE);
+
+    row->pre_layout = [spec_ptr](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = spec_ptr->height * dpi;
+        double w = 0;
+        if (spec_ptr->value)
+            w += swifi_text_width(root, spec_ptr->value(), 12) + 12 * dpi;
+        int accessory = spec_ptr->accessory ? spec_ptr->accessory() : 0;
+        w += accessory == 3 ? 42 * dpi : accessory ? 14 * dpi : 0;
+        c->children[1]->wanted_bounds.w = w + 18 * dpi;
+    };
+    row->when_paint = [spec_ptr, is_first, is_last](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        bool enabled = !spec_ptr->enabled || spec_ptr->enabled();
+        bool clickable = enabled && spec_ptr->on_click;
+
+        auto b = c->real_bounds;
+        const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
+        b.y -= overlap;
+        b.h += 2.0 * overlap;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 0, is_first, is_first, is_last, is_last);
+        RGBA bg = theme.row_background;
+        if (clickable && (c->state.mouse_hovering || c->state.mouse_pressing))
+            bg = theme.row_hover;
+        set_argb(cr, bg);
+        cairo_fill(cr);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_border);
+        cairo_set_line_width(cr, std::floor(1.0 * dpi));
+        cairo_stroke(cr);
+
+        RGBA primary = theme.text;
+        RGBA secondary = theme.text_secondary;
+        if (!enabled) {
+            primary.a *= .5;
+            secondary.a *= .5;
+        }
+
+        double pad = 16 * dpi;
+        b = c->real_bounds;
+        std::string title = spec_ptr->title();
+        std::string subtitle = spec_ptr->subtitle ? spec_ptr->subtitle() : "";
+        auto tb = draw_text(cr, 0, 0, title, 12 * dpi, false, set->font, -1, -1, primary, false);
+        if (subtitle.empty()) {
+            draw_text(cr, b.x + pad, b.y + b.h * .5 - tb.h * .5, title, 12 * dpi, true, set->font, -1, -1, primary, false);
+        } else {
+            auto sb = draw_text(cr, 0, 0, subtitle, 10 * dpi, false, set->font, -1, -1, secondary, false);
+            double total = tb.h + 2 * dpi + sb.h;
+            double y = b.y + b.h * .5 - total * .5;
+            draw_text(cr, b.x + pad, y, title, 12 * dpi, true, set->font, -1, -1, primary, false);
+            draw_text(cr, b.x + pad, y + tb.h + 2 * dpi, subtitle, 10 * dpi, true, set->font, -1, -1, secondary, false);
+        }
+
+        double right = b.x + b.w - pad;
+        int accessory = spec_ptr->accessory ? spec_ptr->accessory() : 0;
+        if (accessory == 3) {
+            right -= 42 * dpi;
+            sdt_paint_switch(cr, right, b.y + b.h * .5 - 12 * dpi, dpi, spec_ptr->switch_on && spec_ptr->switch_on(), enabled);
+            right -= 12 * dpi;
+        } else if (accessory == 1) {
+            auto cb = draw_text(cr, 0, 0, "›", 16 * dpi, false, set->font, -1, -1, secondary, false);
+            right -= cb.w;
+            draw_text(cr, right, b.y + b.h * .5 - cb.h * .5 - 1 * dpi, "›", 16 * dpi, true, set->font, -1, -1, secondary, false);
+            right -= 10 * dpi;
+        } else if (accessory == 2) {
+            right -= 10 * dpi;
+            swifi_glyph(cr, right, b.y + b.h * .5 - 6 * dpi, "", 10 * dpi, primary);
+            right -= 10 * dpi;
+        }
+        if (spec_ptr->value) {
+            auto value = spec_ptr->value();
+            auto vb = draw_text(cr, 0, 0, value, 12 * dpi, false, set->font, -1, -1, secondary, false);
+            draw_text(cr, right - vb.w, b.y + b.h * .5 - vb.h * .5, value, 12 * dpi, true, set->font, -1, -1,
+                accessory == 2 ? primary : secondary, false);
+        }
+    };
+    row->when_clicked = [spec_ptr, anchor](Container *root, Container *c) {
+        bool enabled = !spec_ptr->enabled || spec_ptr->enabled();
+        if (enabled && spec_ptr->on_click)
+            spec_ptr->on_click(root, anchor);
+    };
+    return row;
+}
+
+// Opens an empty popup below `anchor` that behaves like the drop-down menus (one at a time, closes on Esc).
+static MylarWindow *sdt_open_popup(Container *root, Container *anchor, int w, int h) {
+    auto mylar = (MylarWindow *) root->user_data;
+    if (dropdown_popup || mylar->popup_window)
+        return nullptr;
+    auto settings = make_icon_anchored_popup_settings(anchor, mylar->raw_window->dpi, w, h);
+    // Without this, key presses that land on the settings window aren't forwarded to the
+    // popup, so the time zone search field never receives typing.
+    settings.keyboard_focus_on_click = true;
+    auto popup = open_mylar_popup(mylar, settings);
+    if (!popup)
+        return nullptr;
+    dropdown_popup = popup;
+    popups.push_back(popup);
+    popup->root->skip_delete = true;
+    popup->root->user_data = popup;
+    popup->root->wanted_bounds.w = FILL_SPACE;
+    popup->root->wanted_bounds.h = FILL_SPACE;
+    popup->root->on_closed = [popup](Container *) {
+        if (dropdown_popup == popup)
+            dropdown_popup = nullptr;
+        std::erase(popups, popup);
+    };
+    popup->root->when_paint = [](Container *root, Container *c) {
+        auto window = ((MylarWindow *) root->user_data)->raw_window;
+        auto b = c->real_bounds;
+        set_argb(window->cr, theme.popup_background);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
+        cairo_fill(window->cr);
+        set_argb(window->cr, theme.dropdown_border);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
+        cairo_stroke(window->cr);
+    };
+    popup->root->when_key_event = [](Container *, Container *, int, bool pressed, xkb_keysym_t sym, int, bool, std::string) {
+        if (pressed && sym == XKB_KEY_Escape)
+            close_dropdown_menu();
+    };
+    return popup;
+}
+
+static Container *sdt_fixed(Container *parent, int type, float h) {
+    auto c = parent->child(type, FILL_SPACE, FILL_SPACE);
+    c->pre_layout = [h](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = h * dpi;
+        c->spacing = 8 * dpi;
+    };
+    return c;
+}
+
+static Container *sdt_popup_button(Container *parent, std::string label, bool primary, std::function<void()> on_click) {
+    auto button = parent->child(FILL_SPACE, FILL_SPACE);
+    button->pre_layout = [label](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = swifi_text_width(root, label, 11) + 32 * swifi_window(root)->dpi;
+    };
+    button->when_paint = [label, primary](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        RGBA bg = primary ? theme.accent : theme.dropdown_background;
+        if (c->state.mouse_pressing)
+            bg = primary ? swifi_mix(theme.accent, RGBA(0, 0, 0, 1), .15) : theme.dropdown_pressed;
+        else if (c->state.mouse_hovering)
+            bg = primary ? swifi_mix(theme.accent, RGBA(1, 1, 1, 1), .12) : theme.dropdown_hover;
+        set_argb(window->cr, bg);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, settings_control_rounding * window->dpi, 1.0);
+        cairo_fill(window->cr);
+        if (!primary) {
+            set_argb(window->cr, theme.dropdown_border);
+            drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, settings_control_rounding * window->dpi, 1.0);
+            cairo_stroke(window->cr);
+        }
+        swifi_text(root, b, label, 11, primary ? RGBA(1, 1, 1, 1) : theme.text, true, primary);
+    };
+    button->when_clicked = [on_click](Container *, Container *) {
+        on_click();
+    };
+    return button;
+}
+
+struct SdtDraft {
+    int year = 2000, month = 0, day = 1, hour = 0, minute = 0, second = 0;
+};
+
+static int sdt_days_in_month(int year, int month) {
+    static const int days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return month == 1 && leap ? 29 : days[month];
+}
+
+// A value with − and + halves; the mouse wheel also steps it.
+static void sdt_spin(Container *parent, std::function<std::string()> label, std::function<void(int)> step) {
+    auto cell = parent->child(FILL_SPACE, FILL_SPACE);
+    cell->when_paint = [label](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        set_argb(cr, theme.field_background);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+        cairo_fill(cr);
+        set_argb(cr, theme.field_border);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+        cairo_stroke(cr);
+        double third = b.w / 4;
+        if (c->state.mouse_hovering) {
+            bool left = root->mouse_current_x < b.x + third;
+            bool right = root->mouse_current_x > b.x + b.w - third;
+            if (left || right) {
+                set_argb(cr, c->state.mouse_pressing ? theme.dropdown_pressed : theme.dropdown_hover);
+                drawRoundedRect(cr, left ? b.x + 2 * dpi : b.x + b.w - third + 1 * dpi, b.y + 2 * dpi, third - 3 * dpi, b.h - 4 * dpi,
+                    (settings_control_rounding - 1) * dpi, 1.0);
+                cairo_fill(cr);
+            }
+        }
+        swifi_text(root, Bounds(b.x, b.y, third, b.h), "−", 12, theme.text_secondary, true);
+        swifi_text(root, Bounds(b.x + b.w - third, b.y, third, b.h), "+", 12, theme.text_secondary, true);
+        swifi_text(root, Bounds(b.x + third, b.y, b.w - third * 2, b.h), label(), 11, theme.text, true);
+    };
+    cell->when_clicked = [step](Container *root, Container *c) {
+        auto b = c->real_bounds;
+        double third = b.w / 4;
+        if (root->mouse_current_x < b.x + third)
+            step(-1);
+        else if (root->mouse_current_x > b.x + b.w - third)
+            step(1);
+    };
+    cell->when_fine_scrolled = [step](Container *root, Container *, double, double scroll_y, bool) {
+        if (scroll_y > 0)
+            step(1);
+        else if (scroll_y < 0)
+            step(-1);
+        swifi_redraw(root);
+    };
+}
+
+static void sdt_caption(Container *parent, std::string text) {
+    auto c = parent->child(FILL_SPACE, FILL_SPACE);
+    c->when_paint = [text](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, text, 10, theme.text_secondary, true);
+    };
+}
+
+// GNOME's date & time dialog: day, month, year, hour, minute (and AM/PM in 12-hour mode).
+static void sdt_open_datetime_dialog(Container *root, Container *anchor) {
+    auto popup = sdt_open_popup(root, anchor, 360, 240);
+    if (!popup)
+        return;
+    auto draft = std::make_shared<SdtDraft>();
+    auto now = datetime::now_tm();
+    draft->year = now.tm_year + 1900;
+    draft->month = now.tm_mon;
+    draft->day = now.tm_mday;
+    draft->hour = now.tm_hour;
+    draft->minute = now.tm_min;
+    draft->second = now.tm_sec;
+    bool twenty_four = set->clock_24h;
+
+    auto body = popup->root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    body->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 14 * dpi, 16 * dpi, 14 * dpi);
+        c->spacing = 4 * dpi;
+    };
+    auto title = sdt_fixed(body, ::hbox, 26);
+    title->when_paint = [](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, "Date & Time", 12, theme.text, false, true);
+    };
+
+    auto clamp_day = [draft]() {
+        draft->day = std::clamp(draft->day, 1, sdt_days_in_month(draft->year, draft->month));
+    };
+    auto captions1 = sdt_fixed(body, ::hbox, 18);
+    sdt_caption(captions1, "Day");
+    sdt_caption(captions1, "Month");
+    sdt_caption(captions1, "Year");
+    auto row1 = sdt_fixed(body, ::hbox, 34);
+    sdt_spin(row1, [draft]() { return std::to_string(draft->day); }, [draft](int d) {
+        int n = sdt_days_in_month(draft->year, draft->month);
+        draft->day = (draft->day - 1 + d + n) % n + 1;
+    });
+    sdt_spin(row1, [draft]() {
+        static const char *months[] = {"January", "February", "March", "April", "May", "June", "July",
+                                       "August", "September", "October", "November", "December"};
+        return std::string(months[draft->month]);
+    }, [draft, clamp_day](int d) {
+        draft->month = (draft->month + d + 12) % 12;
+        clamp_day();
+    });
+    sdt_spin(row1, [draft]() { return std::to_string(draft->year); }, [draft, clamp_day](int d) {
+        draft->year = std::clamp(draft->year + d, 1970, 9999);
+        clamp_day();
+    });
+
+    auto captions2 = sdt_fixed(body, ::hbox, 18);
+    sdt_caption(captions2, "Hour");
+    sdt_caption(captions2, "Minute");
+    if (!twenty_four)
+        sdt_caption(captions2, "");
+    auto row2 = sdt_fixed(body, ::hbox, 34);
+    sdt_spin(row2, [draft, twenty_four]() {
+        if (twenty_four) {
+            char buf[8];
+            std::snprintf(buf, sizeof(buf), "%02d", draft->hour);
+            return std::string(buf);
+        }
+        int h = draft->hour % 12;
+        return std::to_string(h == 0 ? 12 : h);
+    }, [draft, twenty_four](int d) {
+        if (twenty_four)
+            draft->hour = (draft->hour + d + 24) % 24;
+        else
+            draft->hour = (draft->hour / 12) * 12 + (draft->hour % 12 + d + 12) % 12;
+    });
+    sdt_spin(row2, [draft]() {
+        char buf[8];
+        std::snprintf(buf, sizeof(buf), "%02d", draft->minute);
+        return std::string(buf);
+    }, [draft](int d) {
+        draft->minute = (draft->minute + d + 60) % 60;
+    });
+    if (!twenty_four) {
+        sdt_spin(row2, [draft]() { return std::string(draft->hour < 12 ? "AM" : "PM"); }, [draft](int) {
+            draft->hour = (draft->hour + 12) % 24;
+        });
+    }
+
+    body->child(FILL_SPACE, FILL_SPACE);
+    auto buttons = sdt_fixed(body, ::hbox, 30);
+    buttons->child(FILL_SPACE, FILL_SPACE);
+    sdt_popup_button(buttons, "Cancel", false, []() { close_dropdown_menu(); });
+    sdt_popup_button(buttons, "Set", true, [draft]() {
+        auto when = datetime::local_to_unix(draft->year, draft->month, draft->day, draft->hour, draft->minute, draft->second);
+        close_dropdown_menu();
+        sdt_run_async([when]() { return datetime::set_time(when); });
+    });
+    windowing::redraw(popup->raw_window);
+}
+
+struct SdtZoneRow {
+    const datetime::TimezoneEntry *entry;
+    std::string abbreviation;
+};
+
+struct SdtZoneList : UserData {
+    std::vector<SdtZoneRow> all;
+    std::vector<const SdtZoneRow *> shown;
+    std::string current;
+    float scroll = 0;
+    float overflow = 0;
+    bool scrolled_to_current = false;
+};
+
+static constexpr int sdt_zone_row_h = 40;
+
+static std::string sdt_lower(std::string s) {
+    for (auto &ch : s)
+        ch = (char) std::tolower((unsigned char) ch);
+    return s;
+}
+
+static void sdt_filter_zones(SdtZoneList *list, const std::string &query) {
+    auto q = sdt_lower(query);
+    list->shown.clear();
+    for (auto &row : list->all) {
+        if (q.empty() || sdt_lower(row.entry->city).find(q) != std::string::npos ||
+            sdt_lower(row.entry->country).find(q) != std::string::npos ||
+            sdt_lower(row.entry->id).find(q) != std::string::npos || sdt_lower(row.abbreviation) == q)
+            list->shown.push_back(&row);
+    }
+    list->scroll = 0;
+}
+
+static void sdt_pick_zone(const std::string &id) {
+    close_dropdown_menu();
+    sdt_run_async([id]() { return datetime::set_timezone(id); });
+}
+
+// GNOME's time zone dialog: a search field over the tz database's locations.
+static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
+    auto popup = sdt_open_popup(root, anchor, 400, 440);
+    if (!popup)
+        return;
+    auto data = new SdtZoneList;
+    data->current = sdt_snapshot().timezone;
+    for (auto &entry : datetime::timezones())
+        data->all.push_back({&entry, datetime::timezone_abbreviation(entry.id)});
+    sdt_filter_zones(data, "");
+
+    auto body = popup->root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    body->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(10 * dpi, 10 * dpi, 10 * dpi, 6 * dpi);
+        c->spacing = 8 * dpi;
+    };
+
+    auto list = body->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    list->user_data = data;
+    list->receive_events_even_if_obstructed = true;
+    list->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto data = (SdtZoneList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        double content = data->shown.size() * sdt_zone_row_h * dpi;
+        data->overflow = (float) std::max(0.0, content - b.h);
+        if (!data->scrolled_to_current && b.h > 1) {
+            data->scrolled_to_current = true;
+            for (size_t i = 0; i < data->shown.size(); i++)
+                if (data->shown[i]->entry->id == data->current)
+                    data->scroll = -(float) ((i + .5) * sdt_zone_row_h * dpi - b.h * .5);
+        }
+        data->scroll = std::clamp(data->scroll, -data->overflow, 0.0f);
+    };
+    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool) {
+        auto data = (SdtZoneList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        data->scroll = std::clamp(data->scroll + (float) (scroll_y * 3 * dpi), -data->overflow, 0.0f);
+        swifi_redraw(root);
+    };
+    // Rows are painted directly (hundreds of zones), hit-testing by position.
+    list->when_paint = [](Container *root, Container *c) {
+        auto data = (SdtZoneList *) c->user_data;
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        cairo_save(cr);
+        cairo_rectangle(cr, b.x, b.y, b.w, b.h);
+        cairo_clip(cr);
+        double row_h = sdt_zone_row_h * dpi;
+        int first = std::max(0, (int) std::floor(-data->scroll / row_h));
+        for (int i = first; i < (int) data->shown.size(); i++) {
+            double y = b.y + data->scroll + i * row_h;
+            if (y > b.y + b.h)
+                break;
+            auto row = data->shown[i];
+            Bounds rb(b.x, y, b.w - 8 * dpi, row_h);
+            bool hovered = c->state.mouse_hovering && root->mouse_current_y >= y && root->mouse_current_y < y + row_h;
+            if (hovered) {
+                set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
+                drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            bool current = row->entry->id == data->current;
+            if (current) {
+                set_argb(cr, theme.accent);
+                drawRoundedRect(cr, rb.x + 4 * dpi, rb.y + rb.h * .3, 3 * dpi, rb.h * .4, 1.5 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            double abbrev_w = swifi_text_width(root, row->abbreviation, 10) + 8 * dpi;
+            swifi_text(root, Bounds(rb.x + 16 * dpi, rb.y + 3 * dpi, rb.w - 32 * dpi - abbrev_w, rb.h * .5),
+                row->entry->city, 11, theme.text, false, current);
+            swifi_text(root, Bounds(rb.x + 16 * dpi, rb.y + rb.h * .5 - 2 * dpi, rb.w - 32 * dpi - abbrev_w, rb.h * .5),
+                row->entry->country, 9, theme.text_secondary);
+            swifi_text(root, Bounds(rb.x + rb.w - abbrev_w - 10 * dpi, rb.y, abbrev_w, rb.h),
+                row->abbreviation, 10, theme.text_secondary);
+        }
+        if (data->shown.empty())
+            swifi_text(root, b, "No matching time zones", 11, theme.text_secondary, true);
+        cairo_restore(cr);
+        if (data->overflow > 0) {
+            double content = b.h + data->overflow;
+            double thumb_h = std::max(24.0 * dpi, b.h * b.h / content);
+            double ty = b.y + (-data->scroll / data->overflow) * (b.h - thumb_h);
+            RGBA color = theme.text_secondary;
+            color.a *= .4;
+            set_argb(cr, color);
+            drawRoundedRect(cr, b.x + b.w - 4 * dpi, ty, 3 * dpi, thumb_h, 1.5 * dpi, 1.0);
+            cairo_fill(cr);
+        }
+    };
+    list->when_clicked = [](Container *root, Container *c) {
+        auto data = (SdtZoneList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        int i = (int) std::floor((root->mouse_current_y - c->real_bounds.y - data->scroll) / (sdt_zone_row_h * dpi));
+        if (i >= 0 && i < (int) data->shown.size())
+            sdt_pick_zone(data->shown[i]->entry->id);
+    };
+
+    // The search field goes above the list.
+    auto field = make_field(body, false, "", [data](std::string text) {
+        sdt_filter_zones(data, text);
+    });
+    std::rotate(body->children.begin(), body->children.end() - 1, body->children.end());
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key, data](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+                                            int mods, bool is_text, std::string text) {
+        if (pressed && sym == XKB_KEY_Escape) {
+            close_dropdown_menu();
+            return;
+        }
+        if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+            if (!data->shown.empty())
+                sdt_pick_zone(data->shown[0]->entry->id);
+            return;
+        }
+        if (edit_key)
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+    };
+    set_active(popup->root, {field}, popup->root, true, false);
+    windowing::redraw(popup->raw_window);
+}
+
+static void fill_datetime_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Time & Date");
+    make_vert_space(padded_right, 10);
+
+    auto loaded = []() {
+        bool l = false, busy = false;
+        sdt_snapshot(&l, &busy);
+        return l && !busy;
+    };
+
+    // Automatic Date & Time + manual Date & Time.
+    sdt_row(padded_right, {
+        .height = 60,
+        .title = []() { return std::string("Automatic Date & Time"); },
+        .subtitle = []() {
+            bool l = false;
+            auto s = sdt_snapshot(&l);
+            if (l && !s.can_ntp)
+                return std::string("Install chrony or ntpd to set the time from the internet");
+            return std::string("Requires internet access");
+        },
+        .enabled = [loaded]() { return loaded() && sdt_snapshot().can_ntp; },
+        .accessory = []() { return 3; },
+        .switch_on = []() { return sdt_snapshot().ntp; },
+        .on_click = [](Container *, Container *) {
+            bool enable = !sdt_snapshot().ntp;
+            sdt_run_async([enable]() { return datetime::set_ntp(enable); });
+        },
+    }, true, false);
+    sdt_row(padded_right, {
+        .title = []() { return std::string("Date & Time"); },
+        .value = []() { return datetime::long_datetime_text(); },
+        .enabled = [loaded]() { return loaded() && !sdt_snapshot().ntp; },
+        .accessory = []() { return 1; },
+        .on_click = sdt_open_datetime_dialog,
+    }, false, true);
+
+    make_vert_space(padded_right, 20);
+
+    // Automatic Time Zone needs location services (geoclue), which Mylar doesn't provide; like
+    // gnome-control-center built without location services, the switch stays off.
+    sdt_row(padded_right, {
+        .height = 60,
+        .title = []() { return std::string("Automatic Time Zone"); },
+        .subtitle = []() { return std::string("Requires location services enabled and internet access"); },
+        .enabled = []() { return false; },
+        .accessory = []() { return 3; },
+        .switch_on = []() { return false; },
+    }, true, false);
+    sdt_row(padded_right, {
+        .title = []() { return std::string("Time Zone"); },
+        .value = []() {
+            bool l = false;
+            auto s = sdt_snapshot(&l);
+            return l ? datetime::timezone_label(s.timezone) : std::string("…");
+        },
+        .enabled = loaded,
+        .accessory = []() { return 1; },
+        .on_click = sdt_open_timezone_dialog,
+    }, false, true);
+
+    make_vert_space(padded_right, 20);
+
+    sdt_row(padded_right, {
+        .title = []() { return std::string("Time Format"); },
+        .value = []() { return std::string(set->clock_24h ? "24-hour" : "AM / PM"); },
+        .accessory = []() { return 2; },
+        .on_click = [](Container *root, Container *anchor) {
+            open_dropdown_menu(root, anchor, {{"24h", "24-hour"}, {"12h", "AM / PM"}},
+                set->clock_24h ? "24h" : "12h", [](std::string picked) {
+                    bool value = picked == "24h";
+                    set->clock_24h = value;
+                    main_thread([value]() {
+                        set->clock_24h = value;
+                        settings::load_save_settings(true, set);
+                        dock::redraw();
+                    });
+                });
+        },
+    }, true, true);
+
+    unsigned generation;
+    {
+        std::lock_guard lock(sdt.mutex);
+        generation = ++sdt.generation;
+    }
+    sdt_refresh_async();
+    sdt_watch(generation);
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->name = label;
@@ -3302,6 +4901,7 @@ void create_tab_option(Container *parent, std::string label) {
         paint_label(root, c, label);
     };
     c->when_clicked = [label](Container *root, Container *c) {
+        sdt_invalidate();
         if (label == "Mouse & Touchpad") {
             fill_mouse_settings(root, c);
         } else if (label == "Keyboard") {
@@ -3316,6 +4916,10 @@ void create_tab_option(Container *parent, std::string label) {
             fill_multitasking_settings(root);
         } else if (label == "Wifi") {
             fill_wifi_settings(root);
+        } else if (label == "Audio") {
+            fill_audio_settings(root);
+        } else if (label == "Time & Date") {
+            fill_datetime_settings(root);
         }
     };
 }
@@ -3410,6 +5014,8 @@ void actual_start() {
     fill_root(mylar->root);
     mylar->raw_window->on_close = [](RawWindow *w) {
         settings_wifi_release();
+        settings_audio_release();
+        dropdown_popup = nullptr;
         for (auto p : popups) {
             windowing::close_window(p->raw_window);
         }

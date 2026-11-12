@@ -205,7 +205,7 @@ void clip_to_popup_background(cairo_t *cr, const Bounds &bounds, double dpi) {
     cairo_clip(cr);
 }
 
-void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value) {
+void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value, float meter) {
     static constexpr float dotr = 17;
     static constexpr float thickness = 8;
     float final_thickness = std::round(thickness * dpi);
@@ -217,6 +217,27 @@ void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float v
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
         set_argb(cr, {0, 0, 0, .1});
         cairo_fill(cr);
+
+        double meter_w = b.w * std::clamp(value, 0.0f, 1.0f) * std::clamp(meter, 0.0f, 1.0f);
+        if (meter_w > 0.5) {
+            cairo_save(cr);
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
+            cairo_clip(cr);
+            // A pill whose right end sits at the peak; when it is shorter than it is tall,
+            // its left end slides out of the track and is clipped away.
+            double pill_w = std::max(meter_w, (double) b.h);
+            double pill_x = b.x + meter_w - pill_w;
+            double rad = b.h * .5;
+            cairo_new_path(cr);
+            cairo_arc(cr, pill_x + pill_w - rad, b.y + rad, rad, -M_PI / 2, M_PI / 2);
+            cairo_arc(cr, pill_x + rad, b.y + rad, rad, M_PI / 2, 3 * M_PI / 2);
+            cairo_close_path(cr);
+            auto color = accent;
+            color.a = .55;
+            set_argb(cr, color);
+            cairo_fill(cr);
+            cairo_restore(cr);
+        }
     }
 
     {

@@ -16,6 +16,9 @@ std::vector<AudioClient> snapshot_audio_clients();
 
 void fill_volume_root(std::vector<AudioClient> clients, Container *root);
 
+// Builds the Playback / Mics tabs and pages inside dock->volume (which must already be open).
+void build_volume_popup(Dock *dock);
+
 extern float volume_level;
 extern bool is_master_muted;
 extern long last_time_volume_adjusted;

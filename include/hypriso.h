@@ -104,13 +104,14 @@ struct ConfigSettings {
     int repeat_rate = 30;
     int repeat_delay = 450;
     bool meter_animations = false;
-    bool prefer_pipewire_audio_backend = false;
+    bool prefer_pipewire_audio_backend = true;
     bool show_docks = true;
     bool battery_history_enabled = true;
     bool dock_current_workspace_only = true;
     bool dock_merge_windows = false;
     bool draw_wallpaper = true;
     bool dark_theme = true;
+    bool clock_24h = false;
     bool hotcorners = true;
     bool app_switcher_current_workspace_only = false;
     bool dynamic_workspaces = true;
