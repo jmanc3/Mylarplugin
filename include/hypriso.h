@@ -482,6 +482,9 @@ struct HyprIso {
     void screenshot(int id);
     bool screenshot_deco(int id);
     bool rendering_snapshot();
+    // True while a window is rendered with its decorations into a snapshot
+    // framebuffer at its resting position (no workspace/floating offsets).
+    bool capturing_decos();
     void set_animate_to_dock(int id, bool state);
     void screenshot_min(int id);
     void screenshot_space(int mon, int id);

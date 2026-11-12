@@ -606,6 +606,7 @@ std::vector<SleptWindow> slept_windows;
 
 static int deco_offset_x = 0;
 static int deco_offset_y = 0;
+static bool capturing_window_decos = false;
 
 void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
@@ -8253,6 +8254,8 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
     const auto REALPOS = w->position(Desktop::View::IGeometric::GEOMETRIC_CURRENT);
     const auto snapshotPosition = m->position() + snapshotExtents.topLeft;
     const auto decorationOffset = snapshotPosition - REALPOS;
+    capturing_window_decos = true;
+    defer(capturing_window_decos = false);
     deco_offset_x = static_cast<int>(std::round(decorationOffset.x));
     deco_offset_y = static_cast<int>(std::round(decorationOffset.y));
 
@@ -8566,6 +8569,10 @@ void HyprIso::screenshot_space(int mon, int id) {
             break;
         }
     }
+}
+
+bool HyprIso::capturing_decos() {
+    return capturing_window_decos;
 }
 
 bool HyprIso::rendering_snapshot() {

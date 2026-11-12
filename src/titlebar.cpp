@@ -805,9 +805,23 @@ void titlebar::on_draw_decos(std::string name, int monitor, int id, float a, int
     c->exists = true;
 
     c->children[0]->automatically_paint_children = true;
-    modify_all(c, deco_offset_x, deco_offset_y);
-    paint_outline(actual_root, c);
-    modify_all(c, -deco_offset_x, -deco_offset_y);
+    if (hypriso->capturing_decos()) {
+        // The snapshot renders the window body at its resting position, with
+        // the workspace and floating offsets zeroed, but layout_containers
+        // bakes both offsets into the container (and may be stale). A window
+        // on a workspace that slid away keeps a monitor-wide render offset,
+        // which pushed its titlebar out of the captured thumbnail. Lay the
+        // titlebar out from the window's current (snapshot) position instead.
+        const auto live_bounds = c->real_bounds;
+        const auto b = bounds_client(id);
+        ::layout(actual_root, c, Bounds(b.x, std::round(b.y - titlebar_h), b.w, std::round(b.h + titlebar_h)));
+        paint_outline(actual_root, c);
+        ::layout(actual_root, c, live_bounds);
+    } else {
+        modify_all(c, deco_offset_x, deco_offset_y);
+        paint_outline(actual_root, c);
+        modify_all(c, -deco_offset_x, -deco_offset_y);
+    }
     c->children[0]->automatically_paint_children = false;
     
     *datum<bool>(c, "already_painted") = true;
