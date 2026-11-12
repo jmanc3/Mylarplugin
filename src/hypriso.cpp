@@ -1257,7 +1257,10 @@ void on_open_window(PHLWINDOW w) {
     hypriso->on_window_open(hw->id);
 }
 
+void schedule_prune_expired_popups();
+
 void on_close_window(PHLWINDOW w) {
+    schedule_prune_expired_popups();
     HyprWindow *hw = nullptr;
     int target_index = 0;
     for (int i = 0; i < hyprwindows.size(); i++) {
@@ -2261,6 +2264,7 @@ void on_layer_close(PHLLS l) {
             hl = hlt;
         }
     }
+    schedule_prune_expired_popups();
     if (hl) {
         hypriso->on_layer_closed(hl->id);
         delete hl;
@@ -9905,7 +9909,10 @@ struct HyprPopup {
     int id;  
     int parent_id = -1; // Can be CWINDOW, LAYER, or POPUP
     bool owner_is_window = true;
-    SP<Desktop::View::CPopup> p;
+    // Weak on purpose: a strong ref keeps the CPopup (and its backend listeners) alive after
+    // Hyprland drops the owner's popup tree, so a later surface destroy calls onUnmap on a
+    // popup with no owner and trips ASSERT(false) in CPopup::t1ParentCoords().
+    WP<Desktop::View::CPopup> p;
 };
 
 std::vector<HyprPopup *> hyprpopus;
@@ -9916,7 +9923,7 @@ Bounds bounds_popup(int id) {
 #endif
     for (auto hp : hyprpopus) {
         if (hp->id == id) {
-            if (auto p = hp->p) {
+            if (auto p = hp->p.lock()) {
                 if (p->m_mapped && !(p->m_windowOwner.expired() && p->m_layerOwner.expired())) {
                     auto g = p->coordsGlobal();
                     auto s = p->size();
@@ -10338,7 +10345,26 @@ bool get_owner(HyprPopup *hp, SP<Desktop::View::CPopup> popup) {
     return false;
 }
 
+void popup_destroyed(int id);
+
+// Popups freed without going through CPopup::fullyDestroy (e.g. the whole tree being dropped
+// when its window / layer goes away) leave expired entries behind; report and drop them.
+void prune_expired_popups() {
+    std::vector<int> dead;
+    for (auto hp : hyprpopus)
+        if (hp->p.expired())
+            dead.push_back(hp->id);
+    for (auto id : dead)
+        popup_destroyed(id);
+}
+
+void schedule_prune_expired_popups() {
+    g_pEventLoopManager->doLater([] { prune_expired_popups(); });
+}
+
 void popup_created(SP<Desktop::View::CPopup> popup) {
+    prune_expired_popups();
+
     auto* hp = new HyprPopup;
     hp->p = popup;
     hp->id = unique_id++;
@@ -10362,6 +10388,7 @@ void popup_destroyed(int id) {
             }
             delete hp;
             hyprpopus.erase(hyprpopus.begin() + i);
+            return;
         }
     }
 }
@@ -10417,10 +10444,14 @@ void hook_onPopupDestroy(void* thisptr) {
     ZoneScoped;
 #endif
     auto popup = (Desktop::View::CPopup *) thisptr;
+    // popup_destroyed erases from hyprpopus, so don't call it while range-iterating the vector.
+    std::vector<int> ids;
     for (auto hp : hyprpopus)
         if (hp->p.get() == popup)
-            popup_destroyed(hp->id);
-        
+            ids.push_back(hp->id);
+    for (auto id : ids)
+        popup_destroyed(id);
+
     (*(origPopupDestroy)g_pOnPopupDestroy->m_original)((Desktop::View::CPopup *) thisptr);
 }
 
