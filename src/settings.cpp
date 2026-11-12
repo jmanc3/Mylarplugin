@@ -21,6 +21,8 @@
 
 #include <gtk/gtk.h>
 #include <thread>
+#include <atomic>
+#include <mutex>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -340,6 +342,68 @@ void parse(const std::vector<std::string>& lines,
     }
 }
 
+// Monitor changes take effect immediately but stay on trial: unless the user
+// keeps them before the deadline they are rolled back. While a trial runs the
+// settings file keeps holding the last confirmed monitors, so a change that
+// crashes the compositor, or blanks every screen until the session is killed,
+// is gone on the next start.
+static const long display_trial_ms = 15000;
+
+struct DisplayTrial {
+    std::mutex                mutex; // `confirmed` is read by whichever thread saves settings
+    std::vector<MylarMonitor> confirmed;
+    std::atomic<bool>         active     = false;
+    std::atomic<long>         deadline   = 0;
+    std::atomic<bool>         page_stale = false; // the display page shows values that were rolled back
+    unsigned                  generation = 0;     // main thread only, invalidates older timers
+};
+static DisplayTrial display_trial;
+
+// Main thread only.
+static void display_trial_finish(bool keep) {
+    if (!display_trial.active)
+        return;
+    {
+        std::lock_guard lock(display_trial.mutex);
+        if (!keep)
+            set->monitors = display_trial.confirmed;
+        display_trial.confirmed.clear();
+        display_trial.active = false;
+    }
+    display_trial.generation++;
+    settings::load_save_settings(true, set);
+
+    if (!keep) {
+        hypriso->reload();
+        notify("Display settings reverted");
+        // Outputs come back asynchronously, give them a moment before the page re-reads them.
+        later(500, [](Timer*) {
+            display_trial.page_stale = true;
+            if (settings_mylar)
+                windowing::redraw(settings_mylar->raw_window);
+        });
+    }
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+void settings::display_change_begin() {
+    {
+        std::lock_guard lock(display_trial.mutex);
+        // Changes made during a trial extend it, the rollback target stays the last confirmed state.
+        if (!display_trial.active) {
+            display_trial.confirmed = set->monitors;
+            display_trial.active    = true;
+        }
+    }
+    display_trial.deadline  = get_current_time_in_ms() + display_trial_ms;
+    const unsigned generation = ++display_trial.generation;
+    later(display_trial_ms, [generation](Timer*) {
+        if (display_trial.generation == generation)
+            display_trial_finish(false);
+    });
+}
+
 void settings::load_save_settings(bool save, ConfigSettings* settings) {
     const char* home = std::getenv("HOME");
     if (!home) return;
@@ -468,7 +532,10 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     }
 
     if (save) {
-        for (const auto& monitor : settings->monitors) {
+        // An unconfirmed display trial must never reach the disk.
+        std::lock_guard lock(display_trial.mutex);
+        const auto&     monitors = display_trial.active && settings == set ? display_trial.confirmed : settings->monitors;
+        for (const auto& monitor : monitors) {
             if (monitor.output.empty())
                 continue;
             out << "monitor = " << std::quoted(monitor.output) << " " << monitor.disabled << " " << std::quoted(monitor.mode) << " " << std::quoted(monitor.scale) << " "
@@ -1742,6 +1809,11 @@ static bool monitor_float_from_text(const std::string& text, float& value) {
 static void commit_monitor_config(const MylarMonitor& config) {
     main_thread([config]() {
         auto existing = std::ranges::find(set->monitors, config.output, &MylarMonitor::output);
+        if (existing != set->monitors.end() && *existing == config)
+            return;
+
+        settings::display_change_begin();
+        // Starting the trial may not touch set->monitors, `existing` is still valid.
         if (existing != set->monitors.end())
             *existing = config;
         else
@@ -2068,7 +2140,70 @@ static void paint_right_scrollbar(Container *root, Container *c) {
     cairo_fill(cr);
 }
 
+// Shown while a display change is on trial: a countdown plus keep / revert.
+static void make_display_trial_banner(Container *parent) {
+    static const std::string title = "Keep these display settings?";
+    auto description = []() {
+        long seconds = (display_trial.deadline - get_current_time_in_ms() + 999) / 1000;
+        seconds      = std::max(seconds, 0l);
+        return fz("Reverting to the previous settings in {} second{}", seconds, seconds == 1 ? "" : "s");
+    };
+
+    auto p    = make_self_height_sized_parent(parent);
+    p->name   = "display_trial_banner";
+    p->exists = display_trial.active;
+
+    auto left = p->child(FILL_SPACE, FILL_SPACE);
+    left->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        c->real_bounds.h = 70 * mylar->raw_window->dpi;
+    };
+    left->when_paint = [description](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto text = description();
+        auto t = draw_text(cr, 0, 0, title, 12 * dpi, false, set->font, -1, -1, theme.text, false);
+        auto d = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font, -1, -1, theme.text, false);
+        float y = c->real_bounds.y + c->real_bounds.h * .5 - (t.h + d.h) * .5;
+        auto ico = draw_text(cr, 0, 0, "", 16 * dpi, false, icon_font, -1, -1, theme.text, false);
+        draw_text(cr, c->real_bounds.x + 19 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - ico.h * .5, "", 16 * dpi, true, icon_font, -1, -1, theme.accent, false);
+        draw_text(cr, c->real_bounds.x + 60 * dpi, y, title, 12 * dpi, true, set->font, -1, -1, theme.text, false);
+        draw_text(cr, c->real_bounds.x + 60 * dpi, y + t.h, text, 11 * dpi, true, set->font, -1, -1, theme.text_secondary, false);
+    };
+
+    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    right->alignment = container_alignment::ALIGN_CENTER | container_alignment::ALIGN_RIGHT;
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 250 * dpi;
+        c->real_bounds.h = 70 * dpi;
+        c->spacing = 5 * dpi;
+    };
+    right->child(FILL_SPACE, FILL_SPACE);
+    right->parent_bounds_limit_input_bounds = false;
+    make_button(right, "Keep changes", []() { main_thread([]() { display_trial_finish(true); }); });
+    make_button(right, "Revert", []() { main_thread([]() { display_trial_finish(false); }); });
+
+    auto space  = make_vert_space(parent, 10);
+    space->name = "display_trial_space";
+    space->exists = display_trial.active;
+}
+
+// Redraws the countdown while a display change is on trial.
+static void display_trial_watch() {
+    windowing::timer(settings_app, 250, [](void *) {
+        if (!settings_app || !settings_mylar)
+            return;
+        if (display_trial.active)
+            windowing::redraw(settings_mylar->raw_window);
+        display_trial_watch();
+    }, nullptr);
+}
+
 static void fill_display_settings(Container *root) {
+    display_trial.page_stale = false;
     auto right = container_by_name("settings_right", root);
     if (!right)
         return;
@@ -2082,6 +2217,8 @@ static void fill_display_settings(Container *root) {
     make_section_title(padded_right, "Display Settings");
     
     make_vert_space(padded_right, 10);
+
+    make_display_trial_banner(padded_right);
 
     std::vector<MonitorOption *> options;
     auto data = execAndGet(std::string("hyprctl monitors").c_str());
@@ -4959,6 +5096,15 @@ void fill_root(Container *root) {
                 }
             }
         }
+
+        // Only present while the display page is showing.
+        if (container_by_name("display_trial_banner", root)) {
+            if (display_trial.page_stale)
+                fill_display_settings(root);
+            const bool active = display_trial.active;
+            container_by_name("display_trial_banner", root)->exists = active;
+            container_by_name("display_trial_space", root)->exists  = active;
+        }
     };
     
     auto left = left_right->child(::vbox, 300, FILL_SPACE);
@@ -5022,6 +5168,8 @@ void actual_start() {
         popups.clear();
         std::this_thread::sleep_for(std::chrono::milliseconds(40));
     };
+
+    display_trial_watch();
 
     windowing::main_loop(settings_app);
 

@@ -85,6 +85,8 @@ struct MylarMonitor {
     float       min_luminance       = -1.0f;
     int         max_luminance       = -1;
     int         max_avg_luminance   = -1;
+
+    bool operator==(const MylarMonitor&) const = default;
 };
 
 struct SWorkspaceTiling {

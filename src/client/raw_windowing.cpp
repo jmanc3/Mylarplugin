@@ -442,13 +442,27 @@ static void timerfd_stop(int tfd) {
     timerfd_settime(tfd, 0, &ts, nullptr);
 }
 
-static void config_surface(wl_window *win, uint32_t w, uint32_t h) {
+// After a resize the old buffers are gone and the fresh ones are blank. Paint into them
+// right away instead of waiting on a frame callback that was requested for the old size,
+// otherwise the surface shows a transparent buffer until the callback fires.
+// Returns true if a painted buffer was attached and committed.
+static bool paint_after_resize(wl_window *win) {
+    if (win->frame_callback) {
+        wl_callback_destroy(win->frame_callback);
+        win->frame_callback = nullptr;
+    }
+    if (!win->on_render)
+        return false;
+    win->on_render(win);
+    return win->frame_callback != nullptr;
+}
+
+static bool config_surface(wl_window *win, uint32_t w, uint32_t h) {
     wl_window_resize_buffer(win, win->pending_width, win->pending_height);
     if (win->rw && win->rw->on_resize) {
         win->rw->on_resize(win->rw, win->scaled_w, win->scaled_h);
     }
-    if (win->on_render)
-        win->on_render(win);
+    return paint_after_resize(win);
 }
 
 static void handle_surface_configure(void *data,
@@ -458,18 +472,25 @@ static void handle_surface_configure(void *data,
 
     xdg_surface_ack_configure(xdg_surface, serial);
 
+    bool painted = false;
     if (win->pending_width > 0 && win->pending_height > 0 &&
         (win->pending_width != win->logical_width || win->pending_height != win->logical_height)) {
         if (win->configured) {
-            config_surface(win, win->pending_width, win->pending_height);
+            painted = config_surface(win, win->pending_width, win->pending_height);
         }
     }
 
-    if (!win->configured && win->xdg_toplevel) {
+    bool first_configure = !win->configured;
+    if (first_configure && win->xdg_toplevel) {
         xdg_toplevel_set_min_size(win->xdg_toplevel, win->min_width, win->min_height);
     }
     win->configured = true;
-    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+    if (painted)
+        return; // the paint already committed (and carried the ack)
+    // Only attach on the first configure; afterwards a bare commit keeps the last painted
+    // buffer instead of swapping in slot 0, which may be stale or blank.
+    if (first_configure)
+        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 }
@@ -712,7 +733,7 @@ bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_hei
     return true;
 }
 
-static void config_layer_shell(wl_window *win, uint32_t width, uint32_t height);
+static bool config_layer_shell(wl_window *win, uint32_t width, uint32_t height);
 
 static void handle_fractional_scale_preferred_scale(
     void *data,
@@ -890,13 +911,12 @@ struct wl_window *wl_popup_window_create(struct wl_context *ctx,
     return win;
 }
 
-static void config_layer_shell(wl_window *win, uint32_t width, uint32_t height) {
+static bool config_layer_shell(wl_window *win, uint32_t width, uint32_t height) {
     wl_window_resize_buffer(win, width, height);
     if (win->rw)
         if (win->rw->on_resize)
             win->rw->on_resize(win->rw, win->scaled_w, win->scaled_h);
-    if (win->on_render)
-        win->on_render(win);
+    return paint_after_resize(win);
 }
 
 static void configure_layer_shell(void *data,
@@ -907,9 +927,10 @@ static void configure_layer_shell(void *data,
     zwlr_layer_surface_v1_ack_configure(surf, serial);
     struct wl_window *win = (struct wl_window *)data;
     if (win->configured) {
-        config_layer_shell(win, width, height);
-        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
-        wl_surface_commit(win->surface);
+        if (!config_layer_shell(win, width, height)) {
+            wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+            wl_surface_commit(win->surface);
+        }
     }
     win->configured = true;
 }
