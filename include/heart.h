@@ -383,6 +383,10 @@ namespace heart {
     void end();
     void layout_containers();
 
+    // Snapshot where windows sit relative to their monitor, so that after the next monitor
+    // geometry change (scale, mode, ...) they get moved back to the equivalent position.
+    void remember_window_positions();
+
     void set_force_meta_open(bool state);
     void set_zoom(float zoom);
     bool shift_pressed();

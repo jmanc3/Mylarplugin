@@ -2524,6 +2524,10 @@ void HyprIso::create_callbacks() {
     eventListeners.emplace_back(Event::bus()->m_events.monitor.preRemoved.listen([](PHLMONITOR m) {
         on_close_monitor(m);
     }));
+    eventListeners.emplace_back(Event::bus()->m_events.monitor.layoutChanged.listen([]() {
+        if (hypriso->on_monitor_layout_change)
+            hypriso->on_monitor_layout_change();
+    }));
 
     eventListeners.emplace_back(Event::bus()->m_events.window.open.listen([this](PHLWINDOW w) {
         if (hypriso->on_window_open)
@@ -11998,7 +12002,12 @@ static MylarMonitor monitor_config_for_output(const std::string& output) {
     return config;
 }
 
+namespace heart {
+    void remember_window_positions();
+}
+
 static void commit_monitor_change() {
+    heart::remember_window_positions();
     settings::load_save_settings(true, set);
     later(100, [](Timer*) { hypriso->reload(); });
 }

@@ -395,6 +395,9 @@ struct HyprIso {
 
     std::function<void()> on_layer_change = nullptr;
 
+    // Monitor geometry changed (scale, mode, position, enable/disable)
+    std::function<void()> on_monitor_layout_change = nullptr;
+
     std::function<void(int id)> on_monitor_open = nullptr;
     
     std::function<void(int id)> on_monitor_closed = nullptr;

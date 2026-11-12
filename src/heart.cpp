@@ -875,6 +875,135 @@ static void on_layer_change() {
 
 }
 
+struct RememberedWindowPosition {
+    int cid = -1;
+    Bounds old_reserved; // reserved area of the monitor the window was on
+    Bounds outer; // window box including titlebar
+    bool snapped = false;
+    bool has_pre_snap = false;
+    Bounds pre_snap_outer;
+};
+
+static std::vector<RememberedWindowPosition> remembered_window_positions;
+static unsigned remembered_window_positions_generation = 0;
+
+static Bounds client_to_outer(int cid, Bounds b) {
+    if (hypriso->has_decorations(cid)) {
+        b.y -= titlebar_h;
+        b.h += titlebar_h;
+    }
+    return b;
+}
+
+static Bounds outer_to_client(int cid, Bounds b) {
+    if (hypriso->has_decorations(cid)) {
+        b.y += titlebar_h;
+        b.h -= titlebar_h;
+    }
+    return b;
+}
+
+// Keeps the window's size (clamped to fit), and keeps the free space on each side in the same proportion
+static Bounds remap_floating(Bounds b, Bounds from, Bounds to) {
+    auto axis = [](double pos, double size, double from_pos, double from_size, double to_pos, double to_size, double &out_pos, double &out_size) {
+        out_size = std::min(size, to_size);
+        double free_from = from_size - size;
+        double t = free_from > 0 ? (pos - from_pos) / free_from : .5;
+        t = std::clamp(t, 0.0, 1.0);
+        out_pos = std::round(to_pos + t * (to_size - out_size));
+    };
+    Bounds out;
+    axis(b.x, b.w, from.x, from.w, to.x, to.w, out.x, out.w);
+    axis(b.y, b.h, from.y, from.h, to.y, to.h, out.y, out.h);
+    return out;
+}
+
+// Snapped windows keep the same fractions of the reserved area (so custom split ratios survive)
+static Bounds remap_snapped(Bounds b, Bounds from, Bounds to) {
+    double l = (b.x - from.x) / from.w;
+    double t = (b.y - from.y) / from.h;
+    double r = (b.x + b.w - from.x) / from.w;
+    double bo = (b.y + b.h - from.y) / from.h;
+    double nl = std::round(to.x + l * to.w);
+    double nt = std::round(to.y + t * to.h);
+    double nr = std::round(to.x + r * to.w);
+    double nb = std::round(to.y + bo * to.h);
+    return {nl, nt, nr - nl, nb - nt};
+}
+
+void heart::remember_window_positions() {
+    remembered_window_positions.clear();
+    for (auto c : actual_root->children) {
+        if (c->custom_type != (int) TYPE::CLIENT)
+            continue;
+        int cid = *datum<int>(c, "cid");
+        if (!hypriso->is_floating(cid) || hypriso->is_fullscreen(cid))
+            continue;
+        int mon = get_monitor(cid);
+        if (mon == -1)
+            continue;
+        RememberedWindowPosition r;
+        r.cid = cid;
+        r.old_reserved = bounds_reserved_monitor(mon);
+        if (r.old_reserved.w <= 0 || r.old_reserved.h <= 0)
+            continue;
+        r.outer = client_to_outer(cid, bounds_client_final(cid));
+        r.snapped = *datum<bool>(c, "snapped");
+        if (r.snapped) {
+            auto pre = *datum<Bounds>(c, "pre_snap_bounds");
+            if (pre.w > 0 && pre.h > 0) {
+                r.has_pre_snap = true;
+                r.pre_snap_outer = client_to_outer(cid, pre);
+            }
+        }
+        remembered_window_positions.push_back(r);
+    }
+
+    // Monitor reloads happen asynchronously and can emit several layout changes; keep the snapshot
+    // around for a bit, re-applying it is idempotent since it's always computed from the old state.
+    auto generation = ++remembered_window_positions_generation;
+    later(2000, [generation](Timer *) {
+        if (generation == remembered_window_positions_generation)
+            remembered_window_positions.clear();
+    });
+}
+
+static void on_monitor_layout_change() {
+    if (remembered_window_positions.empty())
+        return;
+    later_immediate([](Timer *) {
+        for (auto &r : remembered_window_positions) {
+            auto c = get_cid_container(r.cid);
+            if (!c)
+                continue;
+            if (!hypriso->is_floating(r.cid) || hypriso->is_fullscreen(r.cid))
+                continue;
+            int mon = get_monitor(r.cid);
+            if (mon == -1)
+                continue;
+            Bounds now = bounds_reserved_monitor(mon);
+            if (now.w <= 0 || now.h <= 0)
+                continue;
+
+            if (r.has_pre_snap)
+                *datum<Bounds>(c, "pre_snap_bounds") = outer_to_client(r.cid, remap_floating(r.pre_snap_outer, r.old_reserved, now));
+
+            Bounds target = r.snapped ? remap_snapped(r.outer, r.old_reserved, now) : remap_floating(r.outer, r.old_reserved, now);
+            target = outer_to_client(r.cid, target);
+            if (target.w < 1 || target.h < 1)
+                continue;
+            Bounds current = bounds_client_final(r.cid);
+            if (current.x == target.x && current.y == target.y && current.w == target.w && current.h == target.h)
+                continue;
+            hypriso->move_resize(r.cid, target.x, target.y, target.w, target.h, false);
+            if (r.snapped)
+                hypriso->should_round(r.cid, false);
+        }
+        heart::layout_containers();
+        damage_all();
+    });
+}
+
 static void test_container(Container *m) {
     auto c = m->child(100, 100);
     c->custom_type = (int) TYPE::TEST;
@@ -2266,6 +2395,7 @@ void heart::begin() {
             hypriso->on_layer_open = on_layer_open;
             hypriso->on_layer_closed = on_layer_closed;
             hypriso->on_layer_change = on_layer_change;
+            hypriso->on_monitor_layout_change = on_monitor_layout_change;
             hypriso->on_monitor_open = on_monitor_open;
             hypriso->on_monitor_closed = on_monitor_closed;
             hypriso->on_drag_start_requested = on_drag_start_requested;
@@ -2337,6 +2467,7 @@ void heart::end() {
 #endif
     set_cursor_hidden_for_desktop_fade(false);
     hypriso->on_config_reload = nullptr;
+    hypriso->on_monitor_layout_change = nullptr;
     hypriso->on_resize_ended = nullptr;
     hypriso->on_tiled_drag_started = nullptr;
     hypriso->on_tiled_drag_motion = nullptr;

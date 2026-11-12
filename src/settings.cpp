@@ -386,6 +386,7 @@ static void display_trial_finish(bool keep) {
     settings::load_save_settings(true, set);
 
     if (!keep) {
+        heart::remember_window_positions();
         hypriso->reload();
         notify("Display settings reverted");
         // Outputs come back asynchronously, give them a moment before the page re-reads them.
@@ -2334,6 +2335,7 @@ static void commit_monitor_configs(std::vector<MylarMonitor> configs) {
                 set->monitors.push_back(config);
         }
 
+        heart::remember_window_positions();
         settings::load_save_settings(true, set);
         hypriso->reload();
     });
