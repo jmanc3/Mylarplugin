@@ -653,9 +653,20 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
 #undef bind
 }
 
+// Pango re-lays out the shared layout on every extents query, which is slow when many
+// rows measure their labels each frame. Extents only depend on the text and layout
+// parameters, so remember them; the GL context already caches the rasterized text.
+static std::unordered_map<std::string, Bounds> text_extents_cache;
+
 static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
     auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
-    
+
+    std::string key = fz("{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f", set->font, size, (int) bold, wrap, h, align);
+    key += text;
+    auto cached = text_extents_cache.find(key);
+    if (cached != text_extents_cache.end() && !draw)
+        return cached->second;
+
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     pango_layout_set_alignment(layout, (PangoAlignment) align);
@@ -672,14 +683,20 @@ static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, in
             pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
     set_argb(cr, color);
-    PangoRectangle ink;
-    PangoRectangle logical;
-    pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
         cr->move_to(std::round(x), std::round(y));
         cr->show_layout(layout);
     }
-    return Bounds(ink.width, ink.height, logical.width, logical.height);
+    if (cached != text_extents_cache.end())
+        return cached->second;
+    PangoRectangle ink;
+    PangoRectangle logical;
+    pango_layout_get_pixel_extents(layout, &ink, &logical);
+    if (text_extents_cache.size() > 4096)
+        text_extents_cache.clear();
+    Bounds result(ink.width, ink.height, logical.width, logical.height);
+    text_extents_cache.emplace(std::move(key), result);
+    return result;
 }
 
 static void paint_label(Container *root, Container *c, std::string text) {
