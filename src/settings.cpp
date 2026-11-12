@@ -8,6 +8,7 @@
 #include "heart.h"
 #include "icons.h"
 #include "hypriso.h"
+#include "shortcuts.h"
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock/dock.h"
@@ -229,6 +230,13 @@ struct RightData : UserData {
     float applied_scroll = 0.0;
     float overflow       = 0.0;
     float content_h      = 0.0;
+
+    // Scrollbar state
+    bool bar_hovered      = false;
+    bool bar_dragging     = false;
+    double bar_grab       = 0;     // Mouse offset from the thumb top while dragging
+    long last_interaction = -100000;
+    bool fade_timer       = false;
 };
 
 std::vector<MylarWindow *> popups;
@@ -532,6 +540,67 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     }
 
     if (save) {
+        for (const auto& shortcut : settings->shortcuts)
+            out << "shortcut = " << std::quoted(shortcut.id) << " " << std::quoted(shortcut.keys) << "\n";
+    } else {
+        settings->shortcuts.clear();
+        for (const auto& line : lines) {
+            std::istringstream entry(line);
+            std::string key;
+            char separator = '\0';
+            SShortcutOverride shortcut;
+            if (!(entry >> key >> separator) || key != "shortcut" || separator != '=')
+                continue;
+            if (!(entry >> std::quoted(shortcut.id) >> std::quoted(shortcut.keys)) || shortcut.id.empty())
+                continue;
+            auto existing = std::ranges::find(settings->shortcuts, shortcut.id, &SShortcutOverride::id);
+            if (existing != settings->shortcuts.end())
+                *existing = shortcut;
+            else
+                settings->shortcuts.push_back(shortcut);
+        }
+    }
+
+    if (save) {
+        for (const auto& shortcut : settings->custom_shortcuts)
+            out << "custom_shortcut = " << std::quoted(shortcut.name) << " " << std::quoted(shortcut.command) << " "
+                << std::quoted(shortcut.keys) << "\n";
+    } else {
+        settings->custom_shortcuts.clear();
+        for (const auto& line : lines) {
+            std::istringstream entry(line);
+            std::string key;
+            char separator = '\0';
+            SCustomShortcut shortcut;
+            if (!(entry >> key >> separator) || key != "custom_shortcut" || separator != '=')
+                continue;
+            if (!(entry >> std::quoted(shortcut.name) >> std::quoted(shortcut.command) >> std::quoted(shortcut.keys)))
+                continue;
+            if (shortcut.command.empty())
+                continue;
+            settings->custom_shortcuts.push_back(shortcut);
+        }
+    }
+
+    if (save) {
+        for (const auto& layout : settings->keyboard_layouts)
+            out << "keyboard_layout = " << std::quoted(layout.layout) << " " << std::quoted(layout.variant) << "\n";
+    } else {
+        settings->keyboard_layouts.clear();
+        for (const auto& line : lines) {
+            std::istringstream entry(line);
+            std::string key;
+            char separator = '\0';
+            SKeyboardLayout layout;
+            if (!(entry >> key >> separator) || key != "keyboard_layout" || separator != '=')
+                continue;
+            if (!(entry >> std::quoted(layout.layout) >> std::quoted(layout.variant)) || layout.layout.empty())
+                continue;
+            settings->keyboard_layouts.push_back(layout);
+        }
+    }
+
+    if (save) {
         // An unconfirmed display trial must never reach the disk.
         std::lock_guard lock(display_trial.mutex);
         const auto&     monitors = display_trial.active && settings == set ? display_trial.confirmed : settings->monitors;
@@ -735,6 +804,32 @@ static double swifi_text_width(Container *root, const std::string &text, double 
     int width = 0, height = 0;
     pango_layout_get_pixel_size(font, &width, &height);
     return width;
+}
+
+static double swifi_text_height(Container *root, const std::string &text, double size, bool bold = false) {
+    auto window = swifi_window(root);
+    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+        bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_width(font, -1);
+    pango_layout_set_height(font, -1);
+    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_text(font, text.c_str(), -1);
+    int width = 0, height = 0;
+    pango_layout_get_pixel_size(font, &width, &height);
+    return height;
+}
+
+// A title with a smaller line under it, the pair centered vertically in `b`.
+static void swifi_two_lines(Container *root, Bounds b, const std::string &title, const std::string &subtitle,
+                            bool bold_title = false) {
+    auto dpi = swifi_window(root)->dpi;
+    const double title_size = 12, subtitle_size = 10;
+    double th = swifi_text_height(root, title, title_size, bold_title);
+    double sh = swifi_text_height(root, subtitle, subtitle_size);
+    double gap = 3 * dpi;
+    double y = b.y + std::max(0.0, (b.h - th - gap - sh) * .5);
+    swifi_text(root, Bounds(b.x, y, b.w, th), title, title_size, theme.text, false, bold_title);
+    swifi_text(root, Bounds(b.x, y + th + gap, b.w, sh), subtitle, subtitle_size, theme.text_secondary);
 }
 
 static void swifi_glyph(cairo_t *cr, double x, double y, const char *glyph, double size, RGBA color, bool path = false) {
@@ -2504,26 +2599,102 @@ static void layout_right_page(Container *root, Container *c, const Bounds &b) {
         modify_all(child, 0, d->applied_scroll);
 }
 
-static void paint_right_scrollbar(Container *root, Container *c) {
-    return;
+// The page scrollbar: thin while scrolling, thicker while hovered or dragged,
+// hidden until used and fading out after a moment without interaction.
+static constexpr float rbar_thin       = 3;
+static constexpr float rbar_thick      = 6;
+static constexpr float rbar_hit_w      = 14; // Fits inside the page's right padding
+static constexpr float rbar_margin     = 4;
+static constexpr long  rbar_hold_ms    = 1000;
+static constexpr long  rbar_fade_ms    = 350;
+
+struct RightBarGeometry {
+    double track_y = 0, track_h = 0, thumb_y = 0, thumb_h = 0;
+};
+
+static bool right_bar_geometry(Container *c, double dpi, RightBarGeometry &g) {
     auto d = (RightData *) c->user_data;
-    if (d->overflow <= 0 || d->content_h <= 0)
+    if (!d || d->overflow <= 0 || d->content_h <= 0)
+        return false;
+    auto b    = c->real_bounds;
+    g.track_y = b.y + rbar_margin * dpi;
+    g.track_h = std::max(1.0, b.h - 2 * rbar_margin * dpi);
+    g.thumb_h = std::min(g.track_h, std::max(30.0 * dpi, g.track_h * (b.h / d->content_h)));
+    double t  = -d->applied_scroll / d->overflow;
+    g.thumb_y = g.track_y + t * (g.track_h - g.thumb_h);
+    return true;
+}
+
+static bool right_bar_hit(Container *root, Container *c) {
+    auto dpi = swifi_window(root)->dpi;
+    auto b   = c->real_bounds;
+    return ((RightData *) c->user_data)->overflow > 0 && root->mouse_current_x >= b.x + b.w - rbar_hit_w * dpi &&
+        root->mouse_current_x <= b.x + b.w && root->mouse_current_y >= b.y && root->mouse_current_y <= b.y + b.h;
+}
+
+static void right_bar_touch(Container *c) {
+    ((RightData *) c->user_data)->last_interaction = get_current_time_in_ms();
+}
+
+// Moves the page so the thumb top lands at `thumb_y`.
+static void right_bar_scroll_to(Container *root, Container *c, double thumb_y) {
+    auto d = (RightData *) c->user_data;
+    RightBarGeometry g;
+    if (!right_bar_geometry(c, swifi_window(root)->dpi, g))
         return;
-    auto   mylar   = (MylarWindow *) root->user_data;
-    auto   cr      = mylar->raw_window->cr;
-    auto   dpi     = mylar->raw_window->dpi;
-    auto   track   = c->real_bounds;
-    double w       = 6 * dpi;
-    double x       = track.x + track.w - w - 4 * dpi;
-    double thumb_h = std::min(track.h, std::max(30.0 * dpi, track.h * (track.h / d->content_h)));
-    double t       = -d->applied_scroll / d->overflow;
-    double y       = track.y + t * (track.h - thumb_h);
+    double room = g.track_h - g.thumb_h;
+    double t    = room > 0 ? std::clamp((thumb_y - g.track_y) / room, 0.0, 1.0) : 0.0;
+    d->scroll   = (float) (-t * d->overflow);
+    swifi_redraw(root);
+}
+
+static void paint_right_scrollbar(Container *root, Container *c) {
+    auto d = (RightData *) c->user_data;
+    auto window = swifi_window(root);
+    auto dpi    = window->dpi;
+    RightBarGeometry g;
+    if (!right_bar_geometry(c, dpi, g))
+        return;
+
+    const bool active = d->bar_hovered || d->bar_dragging;
+    const long idle   = get_current_time_in_ms() - d->last_interaction;
+    double alpha      = 1.0;
+    if (!active) {
+        if (idle >= rbar_hold_ms + rbar_fade_ms)
+            alpha = 0;
+        else if (idle > rbar_hold_ms)
+            alpha = 1.0 - (double) (idle - rbar_hold_ms) / rbar_fade_ms;
+    }
+
+    // Keep repainting until the fade finishes.
+    if (!active && alpha > 0 && !d->fade_timer && settings_app) {
+        d->fade_timer = true;
+        int delay     = idle < rbar_hold_ms ? (int) (rbar_hold_ms - idle) + 1 : 16;
+        windowing::timer(settings_app, delay, [](void *data) {
+            ((RightData *) data)->fade_timer = false;
+            if (settings_mylar)
+                windowing::redraw(settings_mylar->raw_window);
+        }, d);
+    }
+    if (alpha <= 0)
+        return;
+
+    double w = (active ? rbar_thick : rbar_thin) * dpi;
+    double x = c->real_bounds.x + c->real_bounds.w - w - rbar_margin * dpi;
+
+    if (active) {
+        RGBA track = theme.text_secondary;
+        track.a *= .12 * alpha;
+        drawRoundedRect(window->cr, x, g.track_y, w, g.track_h, w * .5, 1.0);
+        set_argb(window->cr, track);
+        cairo_fill(window->cr);
+    }
 
     RGBA color = theme.text_secondary;
-    color.a *= .5;
-    drawRoundedRect(cr, x, y, w, thumb_h, w * .5, 1.0);
-    set_argb(cr, color);
-    cairo_fill(cr);
+    color.a *= (d->bar_dragging ? .8 : active ? .65 : .5) * alpha;
+    drawRoundedRect(window->cr, x, g.thumb_y, w, g.thumb_h, w * .5, 1.0);
+    set_argb(window->cr, color);
+    cairo_fill(window->cr);
 }
 
 // Shown while a display change is on trial: a countdown plus keep / revert.
@@ -2921,38 +3092,7 @@ static void reset_conf() {
     }
 }
 
-static void fill_keyboard_settings(Container *root, Container *c) {
-    auto right = container_by_name("settings_right", root);
-    if (!right)
-        return;
-    for (auto child: right->children)
-        delete child;
-    right->children.clear();
-
-    right->pre_layout = layout_right_page;
-    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
-
-    make_section_title(padded_right, "Keyboard Settings");
-    
-    make_vert_space(padded_right, 10);
-
-    bool only_numbers = true;
-    make_reset_textfield(padded_right, "Repeat delay", "Delay before a held key starts repeating, in milliseconds", "\ue916", only_numbers, std::to_string(set->repeat_delay), "600", [](std::string value) {
-        set->repeat_delay = std::atoi(value.c_str());
-        reset_conf();
-    });
-
-    make_vert_space(padded_right, 4); 
-    
-    make_reset_textfield(padded_right, "Repeat rate", "Number of key repeats per second", "\ue8ee", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
-        set->repeat_rate = std::atoi(value.c_str());
-        reset_conf();
-    });
-   
-    make_vert_space(padded_right, 10); 
-    
-    make_section_title(padded_right, "Layouts");
-}
+static void fill_keyboard_settings(Container *root, Container *c, bool reload = true);
 
 static void fill_mouse_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
@@ -3050,91 +3190,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
             });
         }, set->touchpad_acceleration_curve, "\uec49");
 
-}
-
-struct Shortcut {
-    std::string name;
-    std::string shortcut;
-    std::string command;
-};
-
-void make_shortcut_option(Container *root, Shortcut &s, bool is_first = false, bool is_last = false) {
-    static const float height = 56;
-    static const float text_h = 12;
-    static const float round = 8;
-    auto line = root->child(FILL_SPACE, FILL_SPACE);
-    line->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_bounds.h = height * dpi;
-    };
-    line->when_paint = [s, is_first, is_last](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-
-        auto before = c->real_bounds;
-        defer(c->real_bounds = before);
-        const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
-        c->real_bounds.y -= overlap;
-        c->real_bounds.h += 2.0 * overlap;
-
-        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
-                c->real_bounds.w, c->real_bounds.h, round * dpi, 0,
-                is_first, is_first, is_last, is_last);
-        set_argb(cr, theme.row_background); 
-        cairo_fill(cr);
-        
-        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
-                        c->real_bounds.w, c->real_bounds.h, round * dpi,
-                        std::floor(1.0 * dpi),
-                        is_first, is_first, is_last, is_last);
-        set_argb(cr, theme.row_border); 
-        cairo_set_line_width(cr, std::floor(1.0 * dpi)); 
-        cairo_stroke(cr);
-
-        auto tb = draw_text(cr, 0, 0, s.name, text_h * dpi, false, set->font, -1, -1, theme.text, false, 0);
-        auto overflow = ((c->real_bounds.h - tb.h) * .5) * 1.5;
-        draw_text(cr, 
-            c->real_bounds.x + overflow,
-            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
-            s.name, text_h * dpi, true, set->font, -1, -1, theme.text, false, 0);
-        
-        tb = draw_text(cr, 0, 0, s.shortcut, text_h * dpi, false, set->font, -1, -1, theme.text_secondary, false, 0);
-        draw_text(cr, 
-            c->real_bounds.x + c->real_bounds.w - tb.w - overflow,
-            c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
-            s.shortcut, text_h * dpi, true, set->font, -1, -1, theme.text_secondary, false, 0);
-    };
-    line->when_clicked = [s](Container *root, Container *c) {
-        if (!s.command.empty())
-            launch_command(s.command);
-    };
-}
-
-static void fill_shortcuts_settings(Container *root) {
-    auto right = container_by_name("settings_right", root);
-    if (!right)
-        return;
-    for (auto child: right->children)
-        delete child;
-    right->children.clear();
-
-    right->pre_layout = layout_right_page;
-    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
-    
-    make_section_title(padded_right, "Shortcuts");
-    
-    make_vert_space(padded_right, 10);
-
-    std::vector<Shortcut> shortcuts = {
-        {"Show desktop", "Super + D", "hyprctl dispatch hl.plugin.mylar.toggle_desktop_show"},
-        {"Snap Window Left", "CTRL + ALT + Left", "hyprctl dispatch hl.plugin.mylar.snap_left"}
-    };
-    for (int i = 0; i < shortcuts.size(); i++) {
-        make_shortcut_option(padded_right, shortcuts[i], i == 0, i == (shortcuts.size() - 1));
-    }
 }
 
 static void save_multitasking_settings() {
@@ -3661,6 +3716,501 @@ static Container *swifi_card_button(Container *parent, std::function<std::string
         if (enabled()) on_click();
     };
     return button;
+}
+
+/*************************************************
+ *
+ * Shortcuts page
+ *
+ *************************************************/
+
+struct SettingsShortcutRow {
+    ShortcutDefault shortcut; // For custom rows only name is used, keys are the empty default
+    std::string keys;         // Shortcut in effect, empty when unbound
+    bool custom = false;
+    std::string command;      // Custom rows only
+};
+
+// Only touched on the settings thread.
+static std::vector<SettingsShortcutRow> sshortcut_rows;
+static int sshortcut_editing = -1;
+// The combo typed since Edit was pressed, waiting for Set.
+static std::string sshortcut_pending;
+static unsigned sshortcut_generation = 0;
+// The Shortcuts page must be rebuilt from sshortcut_rows (rows were added or removed).
+static bool sshortcut_page_stale = false;
+// Row to start recording for once the page is rebuilt, -1 for none.
+static int sshortcut_edit_after_rebuild = -1;
+
+static void sshortcut_load_rows() {
+    sshortcut_rows.clear();
+    for (const auto &custom : set->custom_shortcuts) {
+        SettingsShortcutRow row;
+        row.shortcut.id = "custom";
+        row.shortcut.name = custom.name;
+        row.keys = custom.keys;
+        row.custom = true;
+        row.command = custom.command;
+        sshortcut_rows.push_back(row);
+    }
+    for (const auto &shortcut : shortcuts::defaults())
+        sshortcut_rows.push_back({shortcut, shortcuts::keys_for(set, shortcut)});
+}
+
+static int sshortcut_index_of(const std::string &id) {
+    for (int i = 0; i < (int) sshortcut_rows.size(); i++)
+        if (!sshortcut_rows[i].custom && sshortcut_rows[i].shortcut.id == id)
+            return i;
+    return -1;
+}
+
+// Row whose shortcut is being typed into a text field, -1 for none.
+static int sshortcut_typing = -1;
+
+// Turns "super+shift + t" into "SUPER + SHIFT + t"; empty when nothing was typed.
+static std::string sshortcut_clean_typed(const std::string &text) {
+    std::string out;
+    std::istringstream stream(text);
+    std::string part;
+    while (std::getline(stream, part, '+')) {
+        part = trim(part);
+        if (part.empty())
+            continue;
+        std::string upper;
+        for (char ch : part)
+            upper += (char) std::toupper((unsigned char) ch);
+        if (upper == "CONTROL")
+            upper = "CTRL";
+        if (upper == "WIN" || upper == "META" || upper == "LOGO" || upper == "MOD4")
+            upper = "SUPER";
+        static const char *modifiers[] = {"CTRL", "ALT", "SHIFT", "SUPER", "SUPER_L", "SUPER_R"};
+        for (auto modifier : modifiers)
+            if (upper == modifier)
+                part = upper;
+        out += (out.empty() ? "" : " + ") + part;
+    }
+    return out;
+}
+
+static void sshortcut_stop_editing() {
+    sshortcut_typing = -1;
+    if (sshortcut_editing == -1)
+        return;
+    sshortcut_editing = -1;
+    sshortcut_pending.clear();
+    sshortcut_generation++;
+    main_thread([]() {
+        shortcuts::capture_stop();
+    });
+}
+
+// The compositor records the combo, since bound keys never reach this window.
+static void sshortcut_start_editing(int index) {
+    sshortcut_stop_editing();
+    sshortcut_editing = index;
+    const unsigned generation = ++sshortcut_generation;
+    main_thread([generation]() {
+        shortcuts::capture_start([generation](std::string keys) {
+            auto app = settings_app;
+            if (!app)
+                return;
+            windowing::run_on_app(app, [generation, keys]() {
+                if (generation != sshortcut_generation || sshortcut_editing == -1)
+                    return;
+                if (keys.empty()) {
+                    // Escape or inactivity, the capture has already stopped.
+                    sshortcut_editing = -1;
+                    sshortcut_pending.clear();
+                    sshortcut_generation++;
+                } else {
+                    sshortcut_pending = keys;
+                }
+                if (settings_mylar)
+                    windowing::redraw(settings_mylar->raw_window);
+            });
+        });
+    });
+}
+
+// Hands the rows to the compositor, which rewrites the Hyprland config and saves.
+static void sshortcut_commit(std::string displaced = "", std::string keys = "") {
+    std::vector<SShortcutOverride> overrides;
+    std::vector<SCustomShortcut> customs;
+    for (const auto &row : sshortcut_rows) {
+        if (row.custom)
+            customs.push_back({row.shortcut.name, row.command, row.keys});
+        else if (row.keys != row.shortcut.keys)
+            overrides.push_back({row.shortcut.id, row.keys});
+    }
+    main_thread([overrides, customs, displaced, keys]() {
+        set->shortcuts = overrides;
+        set->custom_shortcuts = customs;
+        settings::load_save_settings(true, set);
+        hypriso->generate_mylar_hyprland_config();
+        if (!displaced.empty())
+            notify(keys + " was taken from: " + displaced);
+    });
+}
+
+static void sshortcut_apply(int index, const std::string &keys) {
+    std::string displaced;
+    if (!keys.empty()) {
+        // A combo can only drive one action, the latest assignment wins.
+        const auto wanted = shortcuts::normalized(keys);
+        for (int i = 0; i < (int) sshortcut_rows.size(); i++) {
+            auto &row = sshortcut_rows[i];
+            if (i == index || row.keys.empty() || shortcuts::normalized(row.keys) != wanted)
+                continue;
+            row.keys.clear();
+            displaced += (displaced.empty() ? "" : ", ") + row.shortcut.name;
+        }
+    }
+    sshortcut_rows[index].keys = keys;
+    sshortcut_stop_editing();
+    sshortcut_commit(displaced, keys);
+}
+
+static void sshortcut_request_rebuild() {
+    sshortcut_page_stale = true;
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+static void sshortcut_remove(int index) {
+    if (index < 0 || index >= (int) sshortcut_rows.size() || !sshortcut_rows[index].custom)
+        return;
+    sshortcut_stop_editing();
+    sshortcut_rows.erase(sshortcut_rows.begin() + index);
+    sshortcut_commit();
+    sshortcut_request_rebuild();
+}
+
+static void sshortcut_add(const std::string &name, const std::string &command) {
+    sshortcut_stop_editing();
+    SettingsShortcutRow row;
+    row.shortcut.id = "custom";
+    row.shortcut.name = name.empty() ? command : name;
+    row.custom = true;
+    row.command = command;
+    int index = 0;
+    while (index < (int) sshortcut_rows.size() && sshortcut_rows[index].custom)
+        index++;
+    sshortcut_rows.insert(sshortcut_rows.begin() + index, row);
+    sshortcut_commit();
+    // Record the shortcut right away, the row is unbound until Set is pressed.
+    sshortcut_edit_after_rebuild = index;
+    sshortcut_request_rebuild();
+}
+
+static Container *make_placeholder_field(Container *parent, std::string placeholder);
+static std::string sshortcut_field_text(Container *field);
+
+static void make_shortcut_row(Container *parent, int index, bool is_first, bool is_last) {
+    static const float height = 60;
+    static const float round = 8;
+    auto row = parent->child(::hbox, FILL_SPACE, height);
+    // The page container is only viewport tall and moves with the scroll.
+    row->parent_bounds_limit_input_bounds = false;
+    row->pre_layout = [index](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = height * dpi;
+        c->wanted_pad = Bounds(20 * dpi, 14 * dpi, 14 * dpi, 14 * dpi);
+        c->spacing = 8 * dpi;
+        // Children named "idle" show normally, "editing" ones while recording,
+        // "typing" ones while the shortcut is typed into the field.
+        const bool editing = sshortcut_editing == index;
+        const bool typing = sshortcut_typing == index;
+        for (auto child : c->children) {
+            if (child->name == "idle")
+                child->exists = !editing && !typing;
+            else if (child->name == "keys")
+                child->exists = !typing;
+            else if (child->name == "editing")
+                child->exists = editing;
+            else if (child->name == "typing")
+                child->exists = typing;
+        }
+    };
+    row->when_paint = [index, is_first, is_last](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+
+        // Neighbouring rows share their border line.
+        auto b = c->real_bounds;
+        const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
+        b.y -= overlap;
+        b.h += 2.0 * overlap;
+
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, 0, is_first, is_first, is_last, is_last);
+        const bool active = sshortcut_editing == index || sshortcut_typing == index;
+        set_argb(cr, active ? swifi_mix(theme.row_background, theme.accent, .14) : theme.row_background);
+        cairo_fill(cr);
+
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_border);
+        cairo_set_line_width(cr, std::floor(1.0 * dpi));
+        cairo_stroke(cr);
+    };
+
+    auto name = row->child(FILL_SPACE, FILL_SPACE);
+    name->when_paint = [index](Container *root, Container *c) {
+        if (index >= (int) sshortcut_rows.size())
+            return;
+        const auto &data = sshortcut_rows[index];
+        if (!data.custom) {
+            swifi_text(root, c->real_bounds, data.shortcut.name, 12, theme.text);
+            return;
+        }
+        // Custom rows also show the command they run.
+        swifi_two_lines(root, c->real_bounds, data.shortcut.name, data.command);
+    };
+
+    auto keys_text = [index]() -> std::string {
+        if (sshortcut_editing == index)
+            return sshortcut_pending.empty() ? "Press a shortcut…" : sshortcut_pending;
+        if (index >= (int) sshortcut_rows.size())
+            return "";
+        const auto &keys = sshortcut_rows[index].keys;
+        return keys.empty() ? "Unassigned" : keys;
+    };
+    auto keys = row->child(FILL_SPACE, FILL_SPACE);
+    keys->name = "keys";
+    keys->pre_layout = [keys_text](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = swifi_text_width(root, keys_text(), 12) + 8 * swifi_window(root)->dpi;
+    };
+    keys->when_paint = [index, keys_text](Container *root, Container *c) {
+        const bool typed = sshortcut_editing == index && !sshortcut_pending.empty();
+        const bool unassigned = sshortcut_editing != index && sshortcut_rows[index].keys.empty();
+        auto color = typed ? theme.text : unassigned ? swifi_dim(theme.text_secondary) : theme.text_secondary;
+        swifi_text(root, c->real_bounds, keys_text(), 12, color);
+    };
+
+    // Typing the shortcut by hand, e.g. "SUPER + SHIFT + T".
+    auto field = make_placeholder_field(row, "e.g. SUPER + SHIFT + T");
+    field->name = "typing";
+    field->exists = false;
+    auto field_layout = field->pre_layout;
+    field->pre_layout = [field_layout](Container *root, Container *c, const Bounds &b) {
+        if (field_layout)
+            field_layout(root, c, b);
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.w = 230 * dpi;
+        c->wanted_bounds.h = 30 * dpi;
+    };
+    auto submit_typed = [index, field]() {
+        if (sshortcut_typing != index)
+            return;
+        sshortcut_apply(index, sshortcut_clean_typed(sshortcut_field_text(field)));
+    };
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key, index, submit_typed](Container *root, Container *c, int key, bool pressed,
+                                                           xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        // The field stays focused after it hides, ignore keys meant for something else.
+        if (sshortcut_typing != index)
+            return;
+        if (pressed && sym == XKB_KEY_Escape) {
+            sshortcut_stop_editing();
+            swifi_redraw(root);
+            return;
+        }
+        if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+            submit_typed();
+            swifi_redraw(root);
+            return;
+        }
+        if (edit_key)
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+    };
+
+    auto always = []() { return true; };
+    const bool custom = sshortcut_rows[index].custom;
+    swifi_card_button(row, []() { return std::string("Edit"); }, always, [index]() {
+        sshortcut_start_editing(index);
+    })->name = "idle";
+    swifi_card_button(row, []() { return std::string("Type"); }, always, [index, field]() {
+        sshortcut_stop_editing();
+        sshortcut_typing = index;
+        reset_text_editor(field, sshortcut_rows[index].keys);
+        if (settings_mylar)
+            set_active(settings_mylar->root, {field}, field, true, false);
+    })->name = "idle";
+    if (custom) {
+        swifi_card_button(row, []() { return std::string("Remove"); }, always, [index]() {
+            sshortcut_remove(index);
+        })->name = "idle";
+    }
+    swifi_card_button(row, []() { return std::string("Set"); }, []() { return !sshortcut_pending.empty(); }, [index]() {
+        sshortcut_apply(index, sshortcut_pending);
+    })->name = "editing";
+    swifi_card_button(row, []() { return std::string("Clear"); }, [index]() { return !sshortcut_rows[index].keys.empty(); }, [index]() {
+        sshortcut_apply(index, "");
+    })->name = "editing";
+    if (!custom) {
+        swifi_card_button(row, []() { return std::string("Reset"); },
+            [index]() { return sshortcut_rows[index].keys != sshortcut_rows[index].shortcut.keys; }, [index]() {
+                sshortcut_apply(index, sshortcut_rows[index].shortcut.keys);
+            })->name = "editing";
+    }
+    swifi_card_button(row, []() { return std::string("Cancel"); }, always, []() {
+        sshortcut_stop_editing();
+    })->name = "editing";
+
+    swifi_card_button(row, []() { return std::string("Set"); }, always, submit_typed)->name = "typing";
+    swifi_card_button(row, []() { return std::string("Cancel"); }, always, []() {
+        sshortcut_stop_editing();
+    })->name = "typing";
+}
+
+// A make_field that shows `placeholder` while empty and not focused.
+static Container *make_placeholder_field(Container *parent, std::string placeholder) {
+    auto field = make_field(parent, false, "", [](std::string) {});
+    field->parent_bounds_limit_input_bounds = false;
+    auto paint_field = std::move(field->when_paint);
+    field->when_paint = [paint_field, placeholder](Container *root, Container *c) {
+        if (paint_field)
+            paint_field(root, c);
+        auto data = static_cast<STextEditorData *>(c->user_data);
+        if (c->active || !data || !data->text.empty())
+            return;
+        auto dpi = swifi_window(root)->dpi;
+        auto b = c->real_bounds;
+        b.x += 11 * dpi;
+        b.w = std::max(0.0, b.w - 22 * dpi);
+        swifi_text(root, b, placeholder, 11, swifi_dim(theme.text_secondary));
+    };
+    return field;
+}
+
+static std::string sshortcut_field_text(Container *field) {
+    auto data = static_cast<STextEditorData *>(field->user_data);
+    return data ? trim(data->text) : "";
+}
+
+// Name, command and an Add button; the shortcut itself is recorded on the new row.
+static void make_custom_shortcut_form(Container *parent) {
+    auto card = parent->child(::vbox, FILL_SPACE, FILL_SPACE);
+    card->parent_bounds_limit_input_bounds = false;
+    card->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 12 * dpi, 12 * dpi, 12 * dpi);
+        c->spacing = 8 * dpi;
+        double h = c->wanted_pad.y + c->wanted_pad.h;
+        int shown = 0;
+        for (auto child : c->children) {
+            if (!child->exists)
+                continue;
+            if (child->pre_layout)
+                child->pre_layout(root, child, b);
+            h += child->wanted_bounds.h;
+            shown++;
+        }
+        h += std::max(0, shown - 1) * c->spacing;
+        c->wanted_bounds.h = h;
+    };
+    card->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(window->cr, theme.row_background);
+        cairo_fill(window->cr);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * dpi, std::floor(1.0 * dpi));
+        set_argb(window->cr, theme.row_border);
+        cairo_set_line_width(window->cr, std::floor(1.0 * dpi));
+        cairo_stroke(window->cr);
+    };
+
+    auto caption = card->child(FILL_SPACE, FILL_SPACE);
+    caption->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 20 * swifi_window(root)->dpi;
+    };
+    caption->when_paint = [](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, "Add a custom shortcut", 12, theme.text);
+    };
+
+    auto line = card->child(::hbox, FILL_SPACE, FILL_SPACE);
+    line->parent_bounds_limit_input_bounds = false;
+    line->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 32 * dpi;
+        c->spacing = 8 * dpi;
+    };
+    auto name = make_placeholder_field(line, "Name");
+    auto command = make_placeholder_field(line, "Command to run");
+    // The command usually needs more room than the name.
+    auto name_layout = name->pre_layout;
+    name->pre_layout = [name_layout](Container *root, Container *c, const Bounds &b) {
+        if (name_layout)
+            name_layout(root, c, b);
+        c->wanted_bounds.w = 200 * swifi_window(root)->dpi;
+        c->wanted_bounds.h = 32 * swifi_window(root)->dpi;
+    };
+    auto command_layout = command->pre_layout;
+    command->pre_layout = [command_layout](Container *root, Container *c, const Bounds &b) {
+        if (command_layout)
+            command_layout(root, c, b);
+        c->wanted_bounds.h = 32 * swifi_window(root)->dpi;
+    };
+    auto can_add = [command]() { return !sshortcut_field_text(command).empty(); };
+    auto add = swifi_card_button(line, []() { return std::string("Add"); }, can_add, [name, command]() {
+        sshortcut_add(sshortcut_field_text(name), sshortcut_field_text(command));
+    });
+    add->parent_bounds_limit_input_bounds = false;
+
+    auto hint = card->child(FILL_SPACE, FILL_SPACE);
+    hint->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 18 * swifi_window(root)->dpi;
+    };
+    hint->when_paint = [](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, "After adding, press the keys you want and then Set, or use Type to write them", 10, theme.text_secondary);
+    };
+}
+
+static void fill_shortcuts_settings(Container *root, bool reload_rows = true) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    padded_right->name = "shortcuts_page";
+
+    if (reload_rows)
+        sshortcut_load_rows();
+    sshortcut_page_stale = false;
+
+    make_section_title(padded_right, "Custom shortcuts");
+    make_vert_space(padded_right, 10);
+    make_custom_shortcut_form(padded_right);
+
+    int custom_count = 0;
+    while (custom_count < (int) sshortcut_rows.size() && sshortcut_rows[custom_count].custom)
+        custom_count++;
+    if (custom_count > 0) {
+        make_vert_space(padded_right, 8);
+        for (int i = 0; i < custom_count; i++)
+            make_shortcut_row(padded_right, i, i == 0, i == custom_count - 1);
+    }
+
+    // The gap between the user's own shortcuts and the system ones.
+    make_vert_space(padded_right, 28);
+    make_section_title(padded_right, "System shortcuts");
+    make_vert_space(padded_right, 10);
+
+    const int total = (int) sshortcut_rows.size();
+    for (int i = custom_count; i < total; i++)
+        make_shortcut_row(padded_right, i, i == custom_count, i == total - 1);
+
+    if (sshortcut_edit_after_rebuild >= 0 && sshortcut_edit_after_rebuild < total) {
+        auto index = sshortcut_edit_after_rebuild;
+        sshortcut_edit_after_rebuild = -1;
+        sshortcut_start_editing(index);
+    }
+    sshortcut_edit_after_rebuild = -1;
 }
 
 static void fill_wifi_settings(Container *root) {
@@ -5136,6 +5686,134 @@ struct SdtZoneRow {
     std::string abbreviation;
 };
 
+// Scrollbar for the popup lists (time zones, keyboard layouts): thin, wider while
+// hovered or dragged, draggable, and clicking the track jumps there.
+// T needs `float scroll`, `float overflow` and `ListScrollbar bar`.
+struct ListScrollbar {
+    bool hovered = false;
+    bool dragging = false;
+    bool pressed = false; // The press began on the bar, so it must not pick a row
+    double grab = 0;
+};
+
+static constexpr float list_bar_hit_w = 12;
+
+static bool list_bar_hit(Container *root, Container *c, float overflow) {
+    auto dpi = swifi_window(root)->dpi;
+    auto b = c->real_bounds;
+    return overflow > 0 && root->mouse_current_x >= b.x + b.w - list_bar_hit_w * dpi &&
+        root->mouse_current_x <= b.x + b.w && root->mouse_current_y >= b.y && root->mouse_current_y <= b.y + b.h;
+}
+
+static void list_bar_thumb(Container *c, double dpi, float scroll, float overflow, double &thumb_y, double &thumb_h) {
+    auto b = c->real_bounds;
+    double content = b.h + overflow;
+    thumb_h = std::min(b.h, std::max(24.0 * dpi, b.h * b.h / content));
+    thumb_y = b.y + (overflow > 0 ? (-scroll / overflow) * (b.h - thumb_h) : 0);
+}
+
+static void list_bar_paint(Container *root, Container *c, float scroll, float overflow, const ListScrollbar &bar) {
+    if (overflow <= 0)
+        return;
+    auto window = swifi_window(root);
+    auto cr = window->cr;
+    auto dpi = window->dpi;
+    auto b = c->real_bounds;
+    const bool active = bar.hovered || bar.dragging;
+    double ty, thumb_h;
+    list_bar_thumb(c, dpi, scroll, overflow, ty, thumb_h);
+    double w = (active ? 6 : 3) * dpi;
+    double x = b.x + b.w - w - 2 * dpi;
+    if (active) {
+        RGBA track = theme.text_secondary;
+        track.a *= .12;
+        set_argb(cr, track);
+        drawRoundedRect(cr, x, b.y, w, b.h, w * .5, 1.0);
+        cairo_fill(cr);
+    }
+    RGBA color = theme.text_secondary;
+    color.a *= bar.dragging ? .8 : active ? .65 : .4;
+    set_argb(cr, color);
+    drawRoundedRect(cr, x, ty, w, thumb_h, w * .5, 1.0);
+    cairo_fill(cr);
+}
+
+// Whether a row under the mouse should show as hovered.
+static bool list_bar_blocks_hover(const ListScrollbar &bar) {
+    return bar.hovered || bar.dragging;
+}
+
+template <typename T>
+static void list_bar_scroll_to(Container *root, Container *c, double thumb_top) {
+    auto data = (T *) c->user_data;
+    double thumb_y, thumb_h;
+    list_bar_thumb(c, swifi_window(root)->dpi, data->scroll, data->overflow, thumb_y, thumb_h);
+    double room = c->real_bounds.h - thumb_h;
+    double t = room > 0 ? std::clamp((thumb_top - c->real_bounds.y) / room, 0.0, 1.0) : 0.0;
+    data->scroll = (float) (-t * data->overflow);
+    swifi_redraw(root);
+}
+
+// Call after setting the list's when_clicked, which is skipped for presses on the bar.
+template <typename T>
+static void list_bar_install(Container *list) {
+    list->when_mouse_motion = [](Container *root, Container *c) {
+        auto data = (T *) c->user_data;
+        data->bar.hovered = list_bar_hit(root, c, data->overflow);
+        swifi_redraw(root);
+    };
+    list->when_mouse_leaves_container = [](Container *root, Container *c) {
+        auto data = (T *) c->user_data;
+        if (!data->bar.dragging)
+            data->bar.hovered = false;
+        swifi_redraw(root);
+    };
+    list->when_mouse_down = [](Container *root, Container *c) {
+        auto data = (T *) c->user_data;
+        data->bar.pressed = list_bar_hit(root, c, data->overflow);
+        if (!data->bar.pressed)
+            return;
+        data->bar.dragging = true;
+        data->bar.hovered = true;
+        double thumb_y, thumb_h;
+        list_bar_thumb(c, swifi_window(root)->dpi, data->scroll, data->overflow, thumb_y, thumb_h);
+        double y = root->mouse_current_y;
+        if (y >= thumb_y && y <= thumb_y + thumb_h) {
+            data->bar.grab = y - thumb_y;
+        } else {
+            // Clicking the track jumps there, centering the thumb under the mouse.
+            data->bar.grab = thumb_h * .5;
+            list_bar_scroll_to<T>(root, c, y - data->bar.grab);
+        }
+        swifi_redraw(root);
+    };
+    list->when_drag = [](Container *root, Container *c) {
+        auto data = (T *) c->user_data;
+        if (data->bar.dragging)
+            list_bar_scroll_to<T>(root, c, root->mouse_current_y - data->bar.grab);
+    };
+    auto release = [](Container *root, Container *c) {
+        auto data = (T *) c->user_data;
+        if (!data->bar.dragging)
+            return;
+        data->bar.dragging = false;
+        data->bar.hovered = list_bar_hit(root, c, data->overflow);
+        swifi_redraw(root);
+    };
+    list->when_mouse_up = release;
+    list->when_drag_end = release;
+    auto clicked = std::move(list->when_clicked);
+    list->when_clicked = [clicked](Container *root, Container *c) {
+        auto data = (T *) c->user_data;
+        if (data->bar.pressed) {
+            data->bar.pressed = false;
+            return;
+        }
+        if (clicked)
+            clicked(root, c);
+    };
+}
+
 struct SdtZoneList : UserData {
     std::vector<SdtZoneRow> all;
     std::vector<const SdtZoneRow *> shown;
@@ -5143,6 +5821,7 @@ struct SdtZoneList : UserData {
     float scroll = 0;
     float overflow = 0;
     bool scrolled_to_current = false;
+    ListScrollbar bar;
 };
 
 static constexpr int sdt_zone_row_h = 40;
@@ -5227,8 +5906,9 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
             if (y > b.y + b.h)
                 break;
             auto row = data->shown[i];
-            Bounds rb(b.x, y, b.w - 8 * dpi, row_h);
-            bool hovered = c->state.mouse_hovering && root->mouse_current_y >= y && root->mouse_current_y < y + row_h;
+            Bounds rb(b.x, y, b.w - list_bar_hit_w * dpi, row_h);
+            bool hovered = c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) &&
+                root->mouse_current_y >= y && root->mouse_current_y < y + row_h;
             if (hovered) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
@@ -5251,16 +5931,7 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
         if (data->shown.empty())
             swifi_text(root, b, "No matching time zones", 11, theme.text_secondary, true);
         cairo_restore(cr);
-        if (data->overflow > 0) {
-            double content = b.h + data->overflow;
-            double thumb_h = std::max(24.0 * dpi, b.h * b.h / content);
-            double ty = b.y + (-data->scroll / data->overflow) * (b.h - thumb_h);
-            RGBA color = theme.text_secondary;
-            color.a *= .4;
-            set_argb(cr, color);
-            drawRoundedRect(cr, b.x + b.w - 4 * dpi, ty, 3 * dpi, thumb_h, 1.5 * dpi, 1.0);
-            cairo_fill(cr);
-        }
+        list_bar_paint(root, c, data->scroll, data->overflow, data->bar);
     };
     list->when_clicked = [](Container *root, Container *c) {
         auto data = (SdtZoneList *) c->user_data;
@@ -5269,6 +5940,7 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
         if (i >= 0 && i < (int) data->shown.size())
             sdt_pick_zone(data->shown[i]->entry->id);
     };
+    list_bar_install<SdtZoneList>(list);
 
     // The search field goes above the list.
     auto field = make_field(body, false, "", [data](std::string text) {
@@ -5394,6 +6066,497 @@ static void fill_datetime_settings(Container *root) {
     sdt_watch(generation);
 }
 
+/*************************************************
+ *
+ * Keyboard page
+ *
+ *************************************************/
+
+struct SkbdLayoutEntry {
+    std::string layout;
+    std::string variant;
+    std::string description;
+    std::string search; // Lower case text the filter matches against
+};
+
+// Every layout and variant xkb knows about, from its rules listing.
+static const std::vector<SkbdLayoutEntry> &skbd_all_layouts() {
+    static std::vector<SkbdLayoutEntry> list;
+    static bool loaded = false;
+    if (loaded)
+        return list;
+    loaded = true;
+    const char *paths[] = {"/usr/share/X11/xkb/rules/evdev.lst", "/usr/share/X11/xkb/rules/base.lst",
+                           "/usr/local/share/X11/xkb/rules/evdev.lst"};
+    for (auto path : paths) {
+        std::ifstream in(path);
+        if (!in)
+            continue;
+        std::string line, section;
+        while (std::getline(in, line)) {
+            if (line.starts_with("!")) {
+                section = trim(line.substr(1));
+                continue;
+            }
+            if (section != "layout" && section != "variant")
+                continue;
+            std::istringstream entry(line);
+            std::string name;
+            if (!(entry >> name))
+                continue;
+            std::string rest;
+            std::getline(entry, rest);
+            rest = trim(rest);
+            SkbdLayoutEntry e;
+            if (section == "layout") {
+                e.layout = name;
+                e.description = rest;
+            } else {
+                // "  variant   layout: Description"
+                auto colon = rest.find(':');
+                if (colon == std::string::npos)
+                    continue;
+                e.layout = trim(rest.substr(0, colon));
+                e.variant = name;
+                e.description = trim(rest.substr(colon + 1));
+            }
+            e.search = sdt_lower(e.description + " " + e.layout + " " + e.variant);
+            list.push_back(e);
+        }
+        if (!list.empty())
+            break;
+    }
+    // Layouts first, each followed by its variants, sorted by name.
+    std::stable_sort(list.begin(), list.end(), [](const SkbdLayoutEntry &a, const SkbdLayoutEntry &b) {
+        return sdt_lower(a.description) < sdt_lower(b.description);
+    });
+    return list;
+}
+
+static std::string skbd_id(const SKeyboardLayout &layout) {
+    return layout.variant.empty() ? layout.layout : layout.layout + " (" + layout.variant + ")";
+}
+
+static std::string skbd_description(const SKeyboardLayout &layout) {
+    for (const auto &entry : skbd_all_layouts())
+        if (entry.layout == layout.layout && entry.variant == layout.variant)
+            return entry.description;
+    return skbd_id(layout);
+}
+
+// Only touched on the settings thread.
+static std::vector<SKeyboardLayout> skbd_layouts;
+static bool skbd_page_stale = false;
+
+static void skbd_commit() {
+    auto layouts = skbd_layouts;
+    main_thread([layouts]() {
+        set->keyboard_layouts = layouts;
+        settings::load_save_settings(true, set);
+        hypriso->generate_mylar_hyprland_config();
+    });
+    skbd_page_stale = true;
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+static bool skbd_contains(const std::string &layout, const std::string &variant) {
+    for (const auto &l : skbd_layouts)
+        if (l.layout == layout && l.variant == variant)
+            return true;
+    return false;
+}
+
+static void skbd_add(const SkbdLayoutEntry &entry) {
+    close_dropdown_menu();
+    if (skbd_contains(entry.layout, entry.variant))
+        return;
+    // Without an explicit list Hyprland uses US English, keep it as the first layout.
+    if (skbd_layouts.empty() && !(entry.layout == "us" && entry.variant.empty()))
+        skbd_layouts.push_back({"us", ""});
+    skbd_layouts.push_back({entry.layout, entry.variant});
+    skbd_commit();
+}
+
+struct SkbdLayoutList : UserData {
+    std::vector<const SkbdLayoutEntry *> shown;
+    float scroll = 0;
+    float overflow = 0;
+    ListScrollbar bar;
+};
+
+static constexpr int skbd_row_h = 40;
+
+static void skbd_filter(SkbdLayoutList *list, const std::string &query) {
+    // Every word has to match somewhere, so "german mac" finds "German (Macintosh)".
+    std::vector<std::string> words;
+    std::istringstream stream(sdt_lower(query));
+    std::string word;
+    while (stream >> word)
+        words.push_back(word);
+    list->shown.clear();
+    for (const auto &entry : skbd_all_layouts()) {
+        bool match = true;
+        for (const auto &w : words)
+            if (entry.search.find(w) == std::string::npos)
+                match = false;
+        if (match)
+            list->shown.push_back(&entry);
+    }
+    list->scroll = 0;
+}
+
+static void skbd_open_layout_dialog(Container *root, Container *anchor) {
+    auto popup = sdt_open_popup(root, anchor, 440, 460);
+    if (!popup)
+        return;
+    auto data = new SkbdLayoutList;
+    skbd_filter(data, "");
+
+    auto body = popup->root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    body->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(10 * dpi, 10 * dpi, 10 * dpi, 6 * dpi);
+        c->spacing = 8 * dpi;
+    };
+
+    auto list = body->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    list->user_data = data;
+    list->receive_events_even_if_obstructed = true;
+    list->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto data = (SkbdLayoutList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        double content = data->shown.size() * skbd_row_h * dpi;
+        data->overflow = (float) std::max(0.0, content - b.h);
+        data->scroll = std::clamp(data->scroll, -data->overflow, 0.0f);
+    };
+    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool) {
+        auto data = (SkbdLayoutList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        data->scroll = std::clamp(data->scroll + (float) (scroll_y * 3 * dpi), -data->overflow, 0.0f);
+        swifi_redraw(root);
+    };
+    // Rows are painted directly (hundreds of layouts), hit-testing by position.
+    list->when_paint = [](Container *root, Container *c) {
+        auto data = (SkbdLayoutList *) c->user_data;
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        cairo_save(cr);
+        cairo_rectangle(cr, b.x, b.y, b.w, b.h);
+        cairo_clip(cr);
+        double row_h = skbd_row_h * dpi;
+        int first = std::max(0, (int) std::floor(-data->scroll / row_h));
+        for (int i = first; i < (int) data->shown.size(); i++) {
+            double y = b.y + data->scroll + i * row_h;
+            if (y > b.y + b.h)
+                break;
+            auto entry = data->shown[i];
+            Bounds rb(b.x, y, b.w - list_bar_hit_w * dpi, row_h);
+            const bool added = skbd_contains(entry->layout, entry->variant);
+            bool hovered = c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) &&
+                root->mouse_current_y >= y && root->mouse_current_y < y + row_h;
+            if (hovered && !added) {
+                set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
+                drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            if (added) {
+                set_argb(cr, theme.accent);
+                drawRoundedRect(cr, rb.x + 4 * dpi, rb.y + rb.h * .3, 3 * dpi, rb.h * .4, 1.5 * dpi, 1.0);
+                cairo_fill(cr);
+            }
+            std::string id = entry->variant.empty() ? entry->layout : entry->layout + "(" + entry->variant + ")";
+            std::string right = added ? "Added" : id;
+            double right_w = swifi_text_width(root, right, 10) + 8 * dpi;
+            swifi_text(root, Bounds(rb.x + 16 * dpi, rb.y, rb.w - 32 * dpi - right_w, rb.h),
+                entry->description, 11, added ? theme.text_secondary : theme.text, false, entry->variant.empty());
+            swifi_text(root, Bounds(rb.x + rb.w - right_w - 10 * dpi, rb.y, right_w, rb.h), right, 10, theme.text_secondary);
+        }
+        if (data->shown.empty())
+            swifi_text(root, b, "No matching layouts", 11, theme.text_secondary, true);
+        cairo_restore(cr);
+        list_bar_paint(root, c, data->scroll, data->overflow, data->bar);
+    };
+    list->when_clicked = [](Container *root, Container *c) {
+        auto data = (SkbdLayoutList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        int i = (int) std::floor((root->mouse_current_y - c->real_bounds.y - data->scroll) / (skbd_row_h * dpi));
+        if (i >= 0 && i < (int) data->shown.size())
+            skbd_add(*data->shown[i]);
+    };
+    list_bar_install<SkbdLayoutList>(list);
+
+    // The search field goes above the list.
+    auto field = make_field(body, false, "", [data](std::string text) {
+        skbd_filter(data, text);
+    });
+    std::rotate(body->children.begin(), body->children.end() - 1, body->children.end());
+    auto paint_field = std::move(field->when_paint);
+    field->when_paint = [paint_field](Container *root, Container *c) {
+        if (paint_field)
+            paint_field(root, c);
+        auto text = static_cast<STextEditorData *>(c->user_data);
+        if (text && !text->text.empty())
+            return;
+        auto dpi = swifi_window(root)->dpi;
+        auto b = c->real_bounds;
+        b.x += 11 * dpi;
+        b.w = std::max(0.0, b.w - 22 * dpi);
+        swifi_text(root, b, "Search layouts by language, country or name", 11, swifi_dim(theme.text_secondary));
+    };
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key, data](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+                                            int mods, bool is_text, std::string text) {
+        if (pressed && sym == XKB_KEY_Escape) {
+            close_dropdown_menu();
+            return;
+        }
+        if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+            for (auto entry : data->shown) {
+                if (!skbd_contains(entry->layout, entry->variant)) {
+                    skbd_add(*entry);
+                    break;
+                }
+            }
+            return;
+        }
+        if (edit_key)
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+    };
+    set_active(popup->root, {field}, popup->root, true, false);
+    windowing::redraw(popup->raw_window);
+}
+
+// Index of the layout Hyprland is using, polled while the Keyboard page shows.
+static int skbd_active = -1;
+static unsigned skbd_watch_generation = 0;
+
+static void skbd_watch(unsigned generation) {
+    if (!settings_app)
+        return;
+    windowing::timer(settings_app, 400, [generation](void *) {
+        if (generation != skbd_watch_generation || !settings_mylar)
+            return;
+        if (!container_by_name("keyboard_page", settings_mylar->root))
+            return;
+        main_thread([generation]() {
+            int index = hypriso->active_keyboard_layout_index();
+            auto app = settings_app;
+            if (!app)
+                return;
+            windowing::run_on_app(app, [generation, index]() {
+                if (generation != skbd_watch_generation)
+                    return;
+                if (index != skbd_active) {
+                    skbd_active = index;
+                    if (settings_mylar)
+                        windowing::redraw(settings_mylar->raw_window);
+                }
+                skbd_watch(generation);
+            });
+        });
+    }, nullptr);
+}
+
+static void skbd_watch_start() {
+    const unsigned generation = ++skbd_watch_generation;
+    main_thread([generation]() {
+        int index = hypriso->active_keyboard_layout_index();
+        auto app = settings_app;
+        if (!app)
+            return;
+        windowing::run_on_app(app, [generation, index]() {
+            if (generation != skbd_watch_generation)
+                return;
+            skbd_active = index;
+            if (settings_mylar)
+                windowing::redraw(settings_mylar->raw_window);
+            skbd_watch(generation);
+        });
+    });
+}
+
+// One layout: its name and id, then Make default and Remove. `implicit` is the
+// US layout Hyprland falls back to when none were added, shown without buttons.
+static void skbd_layout_row(Container *parent, int index, SKeyboardLayout layout, bool implicit, bool is_first, bool is_last) {
+    static const float height = 64;
+    static const float round = 8;
+    auto row = parent->child(::hbox, FILL_SPACE, height);
+    row->parent_bounds_limit_input_bounds = false;
+    row->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = height * dpi;
+        c->wanted_pad = Bounds(20 * dpi, 15 * dpi, 14 * dpi, 15 * dpi);
+        c->spacing = 10 * dpi;
+    };
+    row->when_paint = [index, is_first, is_last](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        const bool active = index == skbd_active;
+        auto b = c->real_bounds;
+        const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
+        b.y -= overlap;
+        b.h += 2.0 * overlap;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, 0, is_first, is_first, is_last, is_last);
+        set_argb(cr, active ? swifi_mix(theme.row_background, theme.accent, .16) : theme.row_background);
+        cairo_fill(cr);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_border);
+        cairo_set_line_width(cr, std::floor(1.0 * dpi));
+        cairo_stroke(cr);
+        if (active) {
+            // Accent bar on the left edge.
+            set_argb(cr, theme.accent);
+            drawRoundedRect(cr, c->real_bounds.x + 6 * dpi, c->real_bounds.y + c->real_bounds.h * .28,
+                3 * dpi, c->real_bounds.h * .44, 1.5 * dpi, 1.0);
+            cairo_fill(cr);
+        }
+    };
+
+    const auto description = skbd_description(layout);
+    const auto id = skbd_id(layout);
+    auto name = row->child(FILL_SPACE, FILL_SPACE);
+    name->when_paint = [description, id, index](Container *root, Container *c) {
+        std::string subtitle = id;
+        if (index == 0)
+            subtitle += "  ·  Default";
+        swifi_two_lines(root, c->real_bounds, description, subtitle, index == skbd_active);
+    };
+
+    // "Active" tag for the layout in use.
+    auto tag = row->child(FILL_SPACE, FILL_SPACE);
+    tag->pre_layout = [index](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.w = index == skbd_active ? swifi_text_width(root, "Active", 10) + 20 * dpi : 0;
+    };
+    tag->when_paint = [index](Container *root, Container *c) {
+        if (index != skbd_active)
+            return;
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        double h = 22 * dpi;
+        Bounds pill(b.x, b.y + (b.h - h) * .5, b.w, h);
+        RGBA bg = theme.accent;
+        bg.a *= .22;
+        set_argb(window->cr, bg);
+        drawRoundedRect(window->cr, pill.x, pill.y, pill.w, pill.h, h * .5, 1.0);
+        cairo_fill(window->cr);
+        swifi_text(root, pill, "Active", 10, theme.text, true, true);
+    };
+
+    if (implicit)
+        return;
+    auto always = []() { return true; };
+    if (index > 0) {
+        swifi_card_button(row, []() { return std::string("Make default"); }, always, [index]() {
+            if (index <= 0 || index >= (int) skbd_layouts.size())
+                return;
+            auto moved = skbd_layouts[index];
+            skbd_layouts.erase(skbd_layouts.begin() + index);
+            skbd_layouts.insert(skbd_layouts.begin(), moved);
+            skbd_commit();
+        });
+    }
+    swifi_card_button(row, []() { return std::string("Remove"); }, always, [index]() {
+        if (index < 0 || index >= (int) skbd_layouts.size())
+            return;
+        skbd_layouts.erase(skbd_layouts.begin() + index);
+        skbd_commit();
+    });
+}
+
+// A line of secondary text under a section title.
+static void skbd_caption(Container *parent, std::string text) {
+    auto caption = parent->child(FILL_SPACE, FILL_SPACE);
+    caption->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = swifi_text_height(root, text, 11) + 4 * dpi;
+    };
+    caption->when_paint = [text](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, text, 11, theme.text_secondary);
+    };
+}
+
+static void fill_keyboard_settings(Container *root, Container *c, bool reload) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    padded_right->name = "keyboard_page";
+
+    if (reload) {
+        skbd_layouts = set->keyboard_layouts;
+        sshortcut_load_rows();
+        skbd_watch_start();
+    }
+    skbd_page_stale = false;
+
+    make_section_title(padded_right, "Keyboard Settings");
+
+    make_vert_space(padded_right, 10);
+
+    bool only_numbers = true;
+    make_reset_textfield(padded_right, "Repeat delay", "Delay before a held key starts repeating, in milliseconds", "", only_numbers, std::to_string(set->repeat_delay), "600", [](std::string value) {
+        set->repeat_delay = std::atoi(value.c_str());
+        reset_conf();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "Repeat rate", "Number of key repeats per second", "", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
+        set->repeat_rate = std::atoi(value.c_str());
+        reset_conf();
+    });
+
+    make_vert_space(padded_right, 28);
+
+    make_section_title(padded_right, "Layouts");
+
+    make_vert_space(padded_right, 6);
+
+    skbd_caption(padded_right, "The first layout is used when you log in");
+
+    make_vert_space(padded_right, 12);
+
+    // Same row and state as on the Shortcuts page.
+    int switch_index = sshortcut_index_of("switch_layout");
+    if (switch_index >= 0) {
+        make_shortcut_row(padded_right, switch_index, true, true);
+        make_vert_space(padded_right, 16);
+    }
+
+    if (skbd_layouts.empty()) {
+        skbd_layout_row(padded_right, 0, {"us", ""}, true, true, true);
+    } else {
+        for (int i = 0; i < (int) skbd_layouts.size(); i++)
+            skbd_layout_row(padded_right, i, skbd_layouts[i], false, i == 0, i == (int) skbd_layouts.size() - 1);
+    }
+
+    make_vert_space(padded_right, 12);
+
+    auto add_line = padded_right->child(::hbox, FILL_SPACE, FILL_SPACE);
+    add_line->parent_bounds_limit_input_bounds = false;
+    add_line->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 34 * swifi_window(root)->dpi;
+    };
+    auto add = swifi_card_button(add_line, []() { return std::string("Add a layout…"); }, []() { return true; }, []() {});
+    add->parent_bounds_limit_input_bounds = false;
+    add->when_clicked = [](Container *root, Container *c) {
+        skbd_open_layout_dialog(root, c);
+    };
+
+    make_vert_space(padded_right, 16);
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->name = label;
@@ -5423,6 +6586,7 @@ void create_tab_option(Container *parent, std::string label) {
     };
     c->when_clicked = [label](Container *root, Container *c) {
         sdt_invalidate();
+        sshortcut_stop_editing();
         if (label == "Mouse & Touchpad") {
             fill_mouse_settings(root, c);
         } else if (label == "Keyboard") {
@@ -5481,6 +6645,14 @@ void fill_root(Container *root) {
             }
         }
 
+        // Rows were added or removed, rebuild from the in-memory state.
+        if (sshortcut_page_stale && container_by_name("shortcuts_page", root))
+            fill_shortcuts_settings(root, false);
+        sshortcut_page_stale = false;
+        if (skbd_page_stale && container_by_name("keyboard_page", root))
+            fill_keyboard_settings(root, nullptr, false);
+        skbd_page_stale = false;
+
         // Only present while the display page is showing.
         if (container_by_name("display_trial_banner", root)) {
             if (display_trial.page_stale)
@@ -5524,7 +6696,63 @@ void fill_root(Container *root) {
         auto mylar = (MylarWindow*)root->user_data;
         // Clamp against the limits from the last real layout pass.
         d->scroll = std::clamp(d->applied_scroll + (float) (scroll_y * 3 * mylar->raw_window->dpi), -d->overflow, 0.0f);
+        right_bar_touch(c);
     };
+    right->when_mouse_motion = [](Container *root, Container *c) {
+        auto d = (RightData *) c->user_data;
+        bool hovered = right_bar_hit(root, c);
+        if (hovered != d->bar_hovered) {
+            d->bar_hovered = hovered;
+            right_bar_touch(c);
+            swifi_redraw(root);
+        }
+    };
+    right->when_mouse_leaves_container = [](Container *root, Container *c) {
+        auto d = (RightData *) c->user_data;
+        if (d->bar_hovered && !d->bar_dragging) {
+            d->bar_hovered = false;
+            right_bar_touch(c);
+            swifi_redraw(root);
+        }
+    };
+    right->when_mouse_down = [](Container *root, Container *c) {
+        auto d = (RightData *) c->user_data;
+        if (!right_bar_hit(root, c))
+            return;
+        RightBarGeometry g;
+        if (!right_bar_geometry(c, swifi_window(root)->dpi, g))
+            return;
+        d->bar_dragging = true;
+        d->bar_hovered  = true;
+        double y        = root->mouse_current_y;
+        if (y >= g.thumb_y && y <= g.thumb_y + g.thumb_h) {
+            d->bar_grab = y - g.thumb_y;
+        } else {
+            // Clicking the track jumps there, centering the thumb under the mouse.
+            d->bar_grab = g.thumb_h * .5;
+            right_bar_scroll_to(root, c, y - d->bar_grab);
+        }
+        right_bar_touch(c);
+        swifi_redraw(root);
+    };
+    right->when_drag = [](Container *root, Container *c) {
+        auto d = (RightData *) c->user_data;
+        if (!d->bar_dragging)
+            return;
+        right_bar_scroll_to(root, c, root->mouse_current_y - d->bar_grab);
+        right_bar_touch(c);
+    };
+    auto bar_release = [](Container *root, Container *c) {
+        auto d = (RightData *) c->user_data;
+        if (!d->bar_dragging)
+            return;
+        d->bar_dragging = false;
+        d->bar_hovered  = right_bar_hit(root, c);
+        right_bar_touch(c);
+        swifi_redraw(root);
+    };
+    right->when_mouse_up = bar_release;
+    right->when_drag_end = bar_release;
     right->after_paint = paint_right_scrollbar;
 }
 
@@ -5545,6 +6773,7 @@ void actual_start() {
     mylar->raw_window->on_close = [](RawWindow *w) {
         settings_wifi_release();
         settings_audio_release();
+        sshortcut_stop_editing();
         dropdown_popup = nullptr;
         for (auto p : popups) {
             windowing::close_window(p->raw_window);

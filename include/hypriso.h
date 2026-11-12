@@ -95,6 +95,25 @@ struct SWorkspaceTiling {
     bool is_tiling = false;
 };
 
+// A shortcut the user changed away from its default. Empty keys means unbound.
+struct SShortcutOverride {
+    std::string id;
+    std::string keys;
+};
+
+// A user made shortcut that runs a command.
+struct SCustomShortcut {
+    std::string name;
+    std::string command;
+    std::string keys; // Empty means unbound
+};
+
+// One xkb layout, the first one in the list is the default.
+struct SKeyboardLayout {
+    std::string layout;
+    std::string variant;
+};
+
 struct ConfigSettings {
     int version = 2;
     std::string touchpad_acceleration_curve = "Adaptive";
@@ -135,6 +154,9 @@ struct ConfigSettings {
     bool active_window_border_hint = true;
     int tiling_window_gap = 8;
     std::vector<SWorkspaceTiling> workspace_tiling;
+    std::vector<SShortcutOverride> shortcuts;
+    std::vector<SCustomShortcut> custom_shortcuts;
+    std::vector<SKeyboardLayout> keyboard_layouts;
 
     std::vector<MylarMonitor> monitors;
 };
@@ -345,6 +367,9 @@ struct HyprIso {
     void create_callbacks();
 
     uint32_t keycode_to_keysym(int keycode);
+    std::string keycode_to_key_name(int keycode);
+    // Index into the kb_layout list of the layout in use, -1 when unknown.
+    int active_keyboard_layout_index();
     
     bool session_active();
 

@@ -39,6 +39,7 @@
 
 #include <cstring>
 #include "hypriso.h"
+#include "shortcuts.h"
 #include "settings.h"
 #include "overview.h"
 #include "show_desktop.h"
@@ -3593,34 +3594,7 @@ hl.device({
 
 local mainMod = "ALT" -- Sets "Windows" key as main modifier
 
--- Example binds, see https://wiki.hypr.land/Configuring/Basics/Binds/ for more
-hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))
-local closeWindowBind = hl.bind(mainMod .. " + C", hl.dsp.window.close())
--- closeWindowBind:set_enabled(false)
-hl.bind(mainMod .. " + M", hl.dsp.exec_cmd("command -v hyprshutdown >/dev/null 2>&1 && hyprshutdown || hyprctl dispatch 'hl.dsp.exit()'"))
--- hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))
-hl.bind(mainMod .. " + V", hl.dsp.window.float({ action = "toggle" }))
---hl.bind(mainMod .. " + P", hl.dsp.exec_cmd(menu))
--- hl.bind(mainMod .. " + P", hl.dsp.window.pseudo())
--- hl.bind(mainMod .. " + J", hl.dsp.layout("togglesplit"))    -- dwindle only
-
--- Move focus with mainMod + arrow keys
-hl.bind(mainMod .. " + left",  hl.dsp.focus({ direction = "left" }))
-hl.bind(mainMod .. " + right", hl.dsp.focus({ direction = "right" }))
-hl.bind(mainMod .. " + up",    hl.dsp.focus({ direction = "up" }))
-hl.bind(mainMod .. " + down",  hl.dsp.focus({ direction = "down" }))
-
--- Switch workspaces with mainMod + [0-9]
--- Move active window to a workspace with mainMod + SHIFT + [0-9]
-for i = 1, 10 do
-    local key = i % 10 -- 10 maps to key 0
-    hl.bind(mainMod .. " + " .. key,             hl.dsp.focus({ workspace = i}))
-    hl.bind(mainMod .. " + SHIFT + " .. key,     hl.dsp.window.move({ workspace = i }))
-end
-
--- Example special workspace (scratchpad)
-hl.bind(mainMod .. " + S",         hl.dsp.workspace.toggle_special("magic"))
-hl.bind(mainMod .. " + SHIFT + S", hl.dsp.window.move({ workspace = "special:magic" }))
+-- Keyboard shortcuts are generated from the Shortcuts settings page (see shortcuts.cpp)
 
 -- Scroll through existing workspaces with mainMod + scroll
 hl.bind(mainMod .. " + mouse_down", hl.dsp.focus({ workspace = "e+1" }))
@@ -3630,19 +3604,6 @@ hl.bind(mainMod .. " + mouse_up",   hl.dsp.focus({ workspace = "e-1" }))
 hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(),   { mouse = true })
 hl.bind(mainMod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
 
--- Laptop multimedia keys for volume and LCD brightness
-hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+"), { locked = true, repeating = true })
-hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"),      { locked = true, repeating = true })
-hl.bind("XF86AudioMute",        hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"),     { locked = true, repeating = true })
-hl.bind("XF86AudioMicMute",     hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle"),   { locked = true, repeating = true })
-hl.bind("XF86MonBrightnessUp",  hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%+"),                  { locked = true, repeating = true })
-hl.bind("XF86MonBrightnessDown",hl.dsp.exec_cmd("brightnessctl -e4 -n2 set 5%-"),                  { locked = true, repeating = true })
-
--- Requires playerctl
-hl.bind("XF86AudioNext",  hl.dsp.exec_cmd("playerctl next"),       { locked = true })
-hl.bind("XF86AudioPause", hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
-hl.bind("XF86AudioPlay",  hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
-hl.bind("XF86AudioPrev",  hl.dsp.exec_cmd("playerctl previous"),   { locked = true })
 
 
 --------------------------------
@@ -3714,41 +3675,14 @@ hl.layer_rule({
     hl.layer_rule({ match = { namespace = "Dock" }, blur = true })
 })
 
-if hl.plugin.mylar ~= nil then
-
-    hl.bind("SUPER_L", hl.plugin.mylar.applications, { release = true })
-    hl.bind("SUPER_L + D", hl.plugin.mylar.toggle_desktop_show)
-
-    --hl.bind("SUPER_L + H", hl.plugin.mylar.snap_left)
-    --hl.bind("SUPER_L + J", hl.plugin.mylar.snap_down)
-    --hl.bind("SUPER_L + K", hl.plugin.mylar.snap_up)
-    --hl.bind("SUPER_L + L", hl.plugin.mylar.snap_right)
-end
 
 
 
 
--- Shortcuts shown in the tiling menu. Keep the existing Alt bindings too.
-for _, direction in ipairs({ "left", "right", "up", "down" }) do
-    hl.bind("SUPER + " .. direction, hl.dsp.focus({ direction = direction }))
-    hl.bind("SHIFT + SUPER + " .. direction, hl.dsp.window.move({ direction = direction }))
-end
-hl.bind("SUPER + G", hl.dsp.window.float({ action = "toggle" }))
 
 hl.config({ input = { float_switch_override_focus = false } })
 
 
-local MOD = "SUPER"
-
-hl.bind(MOD .. " + J", hl.dsp.layout("cyclenext"))
-
-hl.bind(MOD .. " + K", hl.dsp.layout("cycleprev"))
-
-hl.bind(MOD .. " + Return", hl.dsp.layout("swapwithmaster auto"))
-
-hl.bind(MOD .. " + H", hl.dsp.layout("mfact -0.05"))
-
-hl.bind(MOD .. " + L", hl.dsp.layout("mfact +0.05"))
 
 
 )END";
@@ -3827,6 +3761,25 @@ hl.bind(MOD .. " + L", hl.dsp.layout("mfact +0.05"))
     }
     
     
+    if (!set->keyboard_layouts.empty()) {
+        // Only xkb names reach here, but keep the Lua strings well formed regardless.
+        auto clean = [](const std::string &text) {
+            std::string out;
+            for (char ch : text)
+                if (ch != '"' && ch != '\\' && ch != '\n' && ch != ',')
+                    out += ch;
+            return out;
+        };
+        std::string layouts, variants;
+        for (size_t i = 0; i < set->keyboard_layouts.size(); i++) {
+            layouts += (i ? "," : "") + clean(set->keyboard_layouts[i].layout);
+            variants += (i ? "," : "") + clean(set->keyboard_layouts[i].variant);
+        }
+        base += "hl.config({ input = { kb_layout = \"" + layouts + "\", kb_variant = \"" + variants + "\" }})\n\n";
+    }
+
+    base += shortcuts::lua(set);
+
     base += "if hl.plugin.mylar ~= nil then\n";
 #ifdef NDEBUG
         base += "    require(\"user\")\n";
@@ -10402,6 +10355,50 @@ void HyprIso::send_false_position(int x, int y) {
 void HyprIso::send_false_click() {
     g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
     g_pSeatManager->sendPointerButton(Time::millis(Time::steadyNow()), BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+}
+
+// The name Hyprland's binds know a key by: its unshifted keysym, so SHIFT + 1 stays "1".
+int HyprIso::active_keyboard_layout_index() {
+    if (g_pSeatManager && g_pSeatManager->m_keyboard) {
+        if (auto index = g_pSeatManager->m_keyboard->getActiveLayoutIndex())
+            return (int) *index;
+    }
+    if (!g_pInputManager)
+        return -1;
+    for (const auto &keyboard : g_pInputManager->m_keyboards) {
+        if (!keyboard || keyboard->isVirtual() || !keyboard->m_enabled)
+            continue;
+        if (auto index = keyboard->getActiveLayoutIndex())
+            return (int) *index;
+    }
+    return -1;
+}
+
+std::string HyprIso::keycode_to_key_name(int keycode) {
+    const auto xkb_keycode = static_cast<xkb_keycode_t>(keycode + 8);
+    const std::string fallback = "code:" + std::to_string(xkb_keycode);
+    if (!g_pInputManager)
+        return fallback;
+
+    for (const auto &keyboard : g_pInputManager->m_keyboards) {
+        if (!keyboard)
+            continue;
+        const auto state = keyboard->m_xkbSymState ? keyboard->m_xkbSymState : keyboard->m_xkbState;
+        if (!state)
+            continue;
+        const auto keysym = xkb_state_key_get_one_sym(state, xkb_keycode);
+        if (keysym == XKB_KEY_NoSymbol)
+            continue;
+        char name[64] = {0};
+        if (xkb_keysym_get_name(keysym, name, sizeof(name)) <= 0)
+            continue;
+        std::string result = name;
+        if (result.size() == 1)
+            result[0] = (char) std::toupper((unsigned char) result[0]);
+        return result;
+    }
+
+    return fallback;
 }
 
 uint32_t HyprIso::keycode_to_keysym(int keycode) {

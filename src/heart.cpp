@@ -12,6 +12,7 @@
 #include "desktop_gesture.h"
 #include "simple_dbus.h"
 #include "hypriso.h"
+#include "shortcuts.h"
 #include "titlebar.h"
 #include "events.h"
 #include "icons.h"
@@ -372,6 +373,10 @@ void toggle_layout() {
 }
 
 static bool on_key_press(int id, int key, int state, bool update_mods) {
+    // The Shortcuts settings page is recording a key combo.
+    if (shortcuts::on_key_press(key, state))
+        return true;
+
     if (key == KEY_LEFTSHIFT || key == KEY_RIGHTSHIFT)
         SHIFT_PRESSED = state;
     if (key == KEY_LEFTCTRL || key == KEY_RIGHTCTRL)
