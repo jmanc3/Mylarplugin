@@ -2591,7 +2591,8 @@ void dock_start(std::string monitor_name) {
         for (auto d : docks) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 
-            if (d->creation_settings.monitor_name == monitor_name) {
+            // A dock that is still shutting down (monitor disabled then re-enabled) doesn't count.
+            if (d->creation_settings.monitor_name == monitor_name && !d->closing) {
                 return; // already created that dock
             }
         }
@@ -2704,6 +2705,7 @@ void dock::stop(std::string monitor_name) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 
             if (d->creation_settings.monitor_name == monitor_name) {
+                d->closing = true;
                 windowing::close_app(d->app);
             }
         }

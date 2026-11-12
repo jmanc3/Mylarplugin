@@ -2496,6 +2496,16 @@ void HyprIso::create_callbacks() {
         on_open_layer(l);
     }
 
+    // Disabling a monitor (e.g. from the display settings) disconnects it without destroying it,
+    // and re-enabling connects it again; track both so per-monitor things like the dock follow.
+    eventListeners.emplace_back(Event::bus()->m_events.monitor.added.listen([](PHLMONITOR m) {
+        on_open_monitor(m);
+    }));
+    // preRemoved fires before the monitor's layer surfaces are closed.
+    eventListeners.emplace_back(Event::bus()->m_events.monitor.preRemoved.listen([](PHLMONITOR m) {
+        on_close_monitor(m);
+    }));
+
     eventListeners.emplace_back(Event::bus()->m_events.window.open.listen([this](PHLWINDOW w) {
         if (hypriso->on_window_open)
             on_open_window(w);

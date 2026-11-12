@@ -23,6 +23,8 @@ struct STilingMenuState {
 
 struct Dock : UserData {
     RawApp *app = nullptr;
+    // Set by dock::stop; the dock stays in `docks` until its thread exits.
+    bool closing = false;
     MylarWindow *window = nullptr;
 
     MylarWindow *applications = nullptr;

@@ -347,7 +347,7 @@ void parse(const std::vector<std::string>& lines,
 // settings file keeps holding the last confirmed monitors, so a change that
 // crashes the compositor, or blanks every screen until the session is killed,
 // is gone on the next start.
-static const long display_trial_ms = 15000;
+static const long display_trial_ms = 10000;
 
 struct DisplayTrial {
     std::mutex                mutex; // `confirmed` is read by whichever thread saves settings
@@ -690,6 +690,10 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
 static Container *make_self_height_sized_parent(Container *parent) {
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
     c->receive_events_even_if_obstructed = true;
+    // The page container is only viewport tall and moves with the scroll, so rows
+    // scrolled into view lie outside it and would otherwise never be hit (no hover,
+    // no clicks on the row itself).
+    c->parent_bounds_limit_input_bounds = false;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->cr;
@@ -2164,13 +2168,6 @@ static void change_display_options(MonitorOption *m) {
 
     make_vert_space(padded_right, 10);
 
-    make_bool(padded_right, "Disabled", "Turn this monitor off without disconnecting it", m->config.disabled, [m, commit](bool value) {
-        m->config.disabled = value;
-        commit();
-    });
-
-    make_vert_space(padded_right, 4);
-
     std::vector<std::string> modes = {"Preferred", "High refresh rate", "High resolution", "Maximum width"};
     modes.insert(modes.end(), m->option.begin(), m->option.end());
 
@@ -2235,21 +2232,6 @@ static void change_display_options(MonitorOption *m) {
 
     make_vert_space(padded_right, 4);
 
-    make_reset_textfield(padded_right, "Position", "Position such as \"1920x0\" or \"auto\"", "\uE7F4", false, m->config.position, "auto", [m, commit](std::string value) {
-        value              = trim(value);
-        m->config.position = value.empty() ? "auto" : value;
-        commit();
-    });
-
-    make_vert_space(padded_right, 4);
-
-    make_reset_textfield(padded_right, "Mirror", "Monitor output to mirror, leave empty for none", "\uE7F4", false, m->config.mirror, "", [m, commit](std::string value) {
-        m->config.mirror = trim(value);
-        commit();
-    });
-
-    make_vert_space(padded_right, 4);
-
     const bool hdr_on = m->config.cm == "hdr" || m->config.cm == "hdredid";
     make_bool(padded_right, "HDR", "High dynamic range, for displays that support it", hdr_on, [m, commit](bool value) {
         m->config.cm = value ? "hdr" : "srgb";
@@ -2263,8 +2245,23 @@ static void change_display_options(MonitorOption *m) {
 
     // Everything below is rarely touched, keep it folded away until asked for.
     static bool advanced_open = false;
-    auto        advanced      = make_accordion(padded_right, "Advanced", "Bit depth, color management, VRR and luminance overrides", "\ue93a", &advanced_open);
+    auto        advanced      = make_accordion(padded_right, "Advanced", "Position, mirroring, bit depth, color management, VRR and more", "\ue93a", &advanced_open);
     const size_t first_advanced = padded_right->children.size();
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "Position", "Position such as \"1920x0\" or \"auto\"", "\ue7f4", false, m->config.position, "auto", [m, commit](std::string value) {
+        value              = trim(value);
+        m->config.position = value.empty() ? "auto" : value;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    make_reset_textfield(padded_right, "Mirror", "Monitor output to mirror, leave empty for none", "\ue7f4", false, m->config.mirror, "", [m, commit](std::string value) {
+        m->config.mirror = trim(value);
+        commit();
+    });
 
     make_vert_space(padded_right, 4);
 
@@ -2383,6 +2380,13 @@ static void change_display_options(MonitorOption *m) {
                               m->config.max_avg_luminance = value;
                               commit();
                           });
+
+    make_vert_space(padded_right, 4);
+
+    make_bool(padded_right, "Disabled", "Turn this monitor off without disconnecting it", m->config.disabled, [m, commit](bool value) {
+        m->config.disabled = value;
+        commit();
+    });
 
     auto accordion = (AccordionData *) advanced->user_data;
     for (size_t i = first_advanced; i < padded_right->children.size(); i++) {
