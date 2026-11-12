@@ -125,7 +125,7 @@ struct ConfigSettings {
     int repeat_rate = 30;
     int repeat_delay = 450;
     bool meter_animations = false;
-    bool prefer_pipewire_audio_backend = true;
+    bool prefer_pipewire_audio_backend = false;
     bool show_docks = true;
     bool battery_history_enabled = true;
     bool dock_current_workspace_only = true;
