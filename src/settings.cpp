@@ -11,6 +11,8 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock/dock.h"
+#include "dock/dock_wifi.h"
+#include "events.h"
 #include <chrono>
 #include <csetjmp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
@@ -26,6 +28,8 @@
 #include <pango/pango-layout.h>
 #include <pango/pango-types.h>
 #include <pango/pangocairo.h>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -1887,6 +1891,7 @@ static void layout_right_page(Container *root, Container *c, const Bounds &b) {
 }
 
 static void paint_right_scrollbar(Container *root, Container *c) {
+    return;
     auto d = (RightData *) c->user_data;
     if (d->overflow <= 0 || d->content_h <= 0)
         return;
@@ -2524,6 +2529,751 @@ static void fill_multitasking_settings(Container *root) {
         });
 }
 
+/*************************************************
+ *
+ * Wi-Fi page (same behaviour as the dock's Wi-Fi menu, sharing its worker)
+ *
+ *************************************************/
+
+struct SettingsWifiPage : UserData {
+    WifiMenuView view;
+    unsigned long revision = 0;
+    unsigned generation = 0;
+    bool animating = false;
+    std::string selected;
+    bool password_mode = false;
+    bool show_password = false;
+    bool confirming_forget = false;
+    // Mirror of the selected row's text editor, kept current by its on_change.
+    std::string password;
+    Container *list = nullptr;
+    ~SettingsWifiPage() override;
+};
+
+struct SettingsWifiRow : UserData {
+    WifiAccessPoint ap;
+    bool hovered = false;
+    double expansion = 0;
+    double expansion_from = 0;
+    double expansion_target = 0;
+    long animation_start = 0;
+    Container *field = nullptr;
+    Container *input = nullptr;
+    Container *buttons = nullptr;
+    Container *secondary = nullptr;
+};
+
+// The live page, if the Wi-Fi tab is showing. Only touched on the settings thread.
+static SettingsWifiPage *settings_wifi = nullptr;
+static unsigned settings_wifi_generation = 0;
+
+static void settings_wifi_release() {
+    if (!settings_wifi)
+        return;
+    settings_wifi = nullptr;
+    wifi_menu_closed();
+}
+
+SettingsWifiPage::~SettingsWifiPage() {
+    if (settings_wifi == this)
+        settings_wifi_release();
+}
+
+static RawWindow *swifi_window(Container *root) {
+    return ((MylarWindow *) root->user_data)->raw_window;
+}
+
+static void swifi_redraw(Container *root) {
+    windowing::redraw(swifi_window(root));
+}
+
+static RGBA swifi_mix(RGBA a, RGBA b, double t) {
+    return RGBA(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
+
+static RGBA swifi_dim(RGBA color) {
+    color.a *= .5;
+    return color;
+}
+
+static void swifi_text(Container *root, Bounds b, const std::string &text, double size, RGBA color,
+                       bool centered = false, bool bold = false) {
+    auto window = swifi_window(root);
+    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+        bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_text(font, text.c_str(), -1);
+    pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
+    pango_layout_set_height(font, std::max(1.0, b.h) * PANGO_SCALE);
+    pango_layout_set_wrap(font, PANGO_WRAP_WORD_CHAR);
+    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_END);
+    pango_layout_set_alignment(font, centered ? PANGO_ALIGN_CENTER : PANGO_ALIGN_LEFT);
+    int width, height;
+    pango_layout_get_pixel_size(font, &width, &height);
+    cairo_save(window->cr);
+    cairo_rectangle(window->cr, b.x, b.y, b.w, b.h);
+    cairo_clip(window->cr);
+    set_argb(window->cr, color);
+    cairo_move_to(window->cr, b.x, b.y + std::max(0.0, (b.h - height) * .5));
+    pango_cairo_show_layout(window->cr, font);
+    cairo_restore(window->cr);
+    pango_layout_set_alignment(font, PANGO_ALIGN_LEFT);
+}
+
+static double swifi_text_width(Container *root, const std::string &text, double size) {
+    auto window = swifi_window(root);
+    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi, PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_width(font, -1);
+    pango_layout_set_height(font, -1);
+    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_text(font, text.c_str(), -1);
+    int width = 0, height = 0;
+    pango_layout_get_pixel_size(font, &width, &height);
+    return width;
+}
+
+static void swifi_glyph(cairo_t *cr, double x, double y, const char *glyph, double size, RGBA color, bool path = false) {
+    auto layout = get_cached_pango_font(cr, icon_font, size, PANGO_WEIGHT_NORMAL, false);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_height(layout, -1);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_alignment(layout, PANGO_ALIGN_LEFT);
+    pango_layout_set_text(layout, glyph, -1);
+    cairo_move_to(cr, x, y);
+    if (path) {
+        pango_cairo_layout_path(cr, layout);
+        return;
+    }
+    set_argb(cr, color);
+    pango_cairo_show_layout(cr, layout);
+}
+
+// Signal strength like the dock menu: the full Wi-Fi glyph drawn faintly, the bars
+// for the current level on top, and the lock badge outlined in the row colour.
+static void swifi_paint_signal(cairo_t *cr, double x, double y, double size, int strength, bool secured,
+                               double dpi, RGBA background) {
+    const char *level = strength >= 75 ? "" : strength >= 50 ? "" : strength >= 25 ? "" : "";
+    RGBA faint = theme.text;
+    faint.a *= .22;
+    swifi_glyph(cr, x, y, "", size, faint);
+    swifi_glyph(cr, x, y, level, size, theme.text);
+    if (!secured)
+        return;
+    cairo_save(cr);
+    cairo_new_path(cr);
+    swifi_glyph(cr, x, y, "", size, theme.text, true);
+    set_argb(cr, background);
+    cairo_set_line_width(cr, 3 * dpi);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    cairo_stroke_preserve(cr);
+    set_argb(cr, theme.text);
+    cairo_fill(cr);
+    cairo_restore(cr);
+}
+
+static void swifi_paint_button(Container *root, Container *c, const std::string &text, bool enabled) {
+    auto window = swifi_window(root);
+    auto cr = window->cr;
+    auto dpi = window->dpi;
+    auto b = c->real_bounds;
+    if (b.h <= 1 || b.w <= 1)
+        return;
+    set_argb(cr, !enabled ? theme.slider_track : c->state.mouse_pressing ? theme.button_pressed :
+        c->state.mouse_hovering ? theme.button_hover : theme.button_background);
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+    cairo_fill(cr);
+    b.x += 6 * dpi;
+    b.w -= 12 * dpi;
+    swifi_text(root, b, text, 11, enabled ? theme.text : swifi_dim(theme.text_secondary), true);
+}
+
+static RGBA swifi_row_color(SettingsWifiRow *data) {
+    auto base = data->hovered ? theme.row_hover : theme.row_background;
+    return swifi_mix(base, theme.accent, .14 * data->expansion);
+}
+
+static void swifi_reset_selection() {
+    auto page = settings_wifi;
+    if (!page)
+        return;
+    page->password_mode = false;
+    page->show_password = false;
+    page->confirming_forget = false;
+    page->password.clear();
+    // Don't leave typed passwords (or their undo history) sitting in hidden editors.
+    for (auto row : page->list->children)
+        if (auto input = ((SettingsWifiRow *) row->user_data)->input)
+            reset_text_editor(input, "");
+}
+
+static void swifi_submit_password(Container *root, SettingsWifiRow *row) {
+    auto page = settings_wifi;
+    std::string problem;
+    if (!wifi_valid_password(row->ap, page->password, problem)) {
+        wifi_command({"notice", "", problem});
+        return;
+    }
+    wifi_command({"connect", row->ap.ssid, page->password});
+    swifi_reset_selection();
+    swifi_redraw(root);
+}
+
+static std::string swifi_primary_label(SettingsWifiPage *page, SettingsWifiRow *row, bool *enabled) {
+    const auto &view = page->view;
+    *enabled = !view.busy && view.action_ssid.empty();
+    if (view.connecting_ssid == row->ap.ssid) return "Connecting…";
+    if (view.action_ssid == row->ap.ssid) return view.action;
+    if (page->password_mode) {
+        *enabled = *enabled && !page->password.empty();
+        return "Connect";
+    }
+    return row->ap.active ? "Disconnect" : "Connect";
+}
+
+static void swifi_primary_clicked(Container *root, SettingsWifiRow *row) {
+    auto page = settings_wifi;
+    if (page->password_mode) {
+        swifi_submit_password(root, row);
+    } else if (row->ap.active) {
+        wifi_command({"disconnect", row->ap.ssid, ""});
+    } else if (!row->ap.saved_connections.empty() || !row->ap.secured) {
+        wifi_command({"connect", row->ap.ssid, ""});
+    } else if (row->ap.enterprise) {
+        wifi_command({"notice", "", "Enterprise (802.1X) networks need to be set up in your network settings first."});
+    } else {
+        page->password_mode = true;
+        page->password.clear();
+        reset_text_editor(row->input, "");
+        set_active(root, {row->input}, root, true, false);
+    }
+    page->confirming_forget = false;
+    swifi_redraw(root);
+}
+
+// Advances the row's open/close animation and returns its height.
+static double swifi_row_step(SettingsWifiRow *data, double dpi) {
+    auto page = settings_wifi;
+    const bool selected = page->selected == data->ap.ssid;
+    const auto now = get_current_time_in_ms();
+    double elapsed = std::clamp((now - data->animation_start) / 180.0, 0.0, 1.0);
+    data->expansion = data->expansion_from + (data->expansion_target - data->expansion_from) *
+        (1 - std::pow(1 - elapsed, 3));
+    double target = selected ? 1 : 0;
+    if (target != data->expansion_target) {
+        data->expansion_from = data->expansion;
+        data->expansion_target = target;
+        data->animation_start = now;
+    }
+    if (std::abs(data->expansion - data->expansion_target) > .001)
+        page->animating = true;
+    const bool password = selected && page->password_mode;
+    data->field->exists = password && data->expansion > .001;
+    data->buttons->exists = data->expansion > .001;
+    data->secondary->exists = password || !data->ap.saved_connections.empty();
+    return (62 + ((password ? 44 : 0) + 42) * data->expansion) * dpi;
+}
+
+static Container *swifi_network_row(Container *parent) {
+    auto row = parent->child(::vbox, FILL_SPACE, 62);
+    auto data = new SettingsWifiRow;
+    row->user_data = data;
+    row->receive_events_even_if_obstructed = true;
+    row->when_mouse_enters_container = [data](Container *root, Container *) {
+        data->hovered = true;
+        swifi_redraw(root);
+    };
+    row->when_mouse_leaves_container = [data](Container *root, Container *) {
+        data->hovered = false;
+        swifi_redraw(root);
+    };
+    row->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        cairo_save(window->cr);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        cairo_clip(window->cr);
+        set_argb(window->cr, swifi_row_color(data));
+        cairo_paint(window->cr);
+    };
+    row->after_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        cairo_restore(window->cr);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->cr, theme.row_border);
+        cairo_stroke(window->cr);
+    };
+
+    auto header = row->child(FILL_SPACE, 62);
+    header->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 62 * swifi_window(root)->dpi;
+    };
+    header->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto page = settings_wifi;
+        auto b = c->real_bounds;
+        swifi_paint_signal(window->cr, b.x + 19 * dpi, b.y + 19 * dpi, 20 * dpi, data->ap.strength, data->ap.secured,
+            dpi, swifi_row_color(data));
+        std::string security = data->ap.security == "OWE" ? "Open (encrypted)" :
+            data->ap.security.empty() ? "Open" : data->ap.security == "WEP" ? "WEP (insecure)" : data->ap.security;
+        std::string subtitle;
+        if (data->ap.active) {
+            const auto &status = page->view.status;
+            auto device = wifi_device(status);
+            subtitle = !(device && device->state == 100) ? "Connecting…" :
+                status.connectivity == 2 ? "Connected, sign-in required" :
+                status.connectivity == 1 || status.connectivity == 3 ? "Connected, no internet" : "Connected";
+            subtitle += " · " + security;
+        } else if (page->view.connecting_ssid == data->ap.ssid) {
+            subtitle = "Connecting…";
+        } else {
+            subtitle = (data->ap.saved_connections.empty() ? "" : "Saved · ") + security;
+        }
+        if (auto band = wifi_band(data->ap.frequency); !band.empty()) subtitle += " · " + band;
+        if ((data->hovered || page->selected == data->ap.ssid) && !data->ap.bssid.empty())
+            subtitle += " · " + data->ap.bssid;
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 9 * dpi, b.w - 76 * dpi, 22 * dpi), data->ap.ssid, 12, theme.text);
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 31 * dpi, b.w - 76 * dpi, 22 * dpi), subtitle, 10,
+            theme.text_secondary);
+    };
+    header->when_clicked = [data](Container *root, Container *) {
+        auto page = settings_wifi;
+        page->selected = page->selected == data->ap.ssid ? "" : data->ap.ssid;
+        swifi_reset_selection();
+        swifi_redraw(root);
+    };
+
+    data->field = row->child(::hbox, FILL_SPACE, 0);
+    data->field->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 44 * data->expansion * dpi;
+        c->wanted_pad = Bounds(60 * dpi, 2 * dpi, 16 * dpi, 8 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    auto input = data->field->child(FILL_SPACE, FILL_SPACE);
+    data->input = input;
+    STextEditorOptions options;
+    options.multiline = false;
+    options.password = true;
+    options.max_length = 64; // WPA allows 63 characters or 64 hex digits.
+    options.font_size = 11;
+    options.window = [](Container *root) { return swifi_window(root); };
+    options.viewport = [](Container *root, Container *c) {
+        auto dpi = swifi_window(root)->dpi;
+        auto bounds = c->real_bounds;
+        bounds.x += 10 * dpi;
+        bounds.w = std::max(0.0, bounds.w - 20 * dpi);
+        return bounds;
+    };
+    // Fires for typing and for asynchronous clipboard pastes alike.
+    options.on_change = [](std::string text) {
+        if (settings_wifi)
+            settings_wifi->password = std::move(text);
+    };
+    setup_text_editor(input, "", std::move(options));
+    input->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        // "Show" turns masking off on the shared editor.
+        static_cast<STextEditorData *>(c->user_data)->options.password = !settings_wifi->show_password;
+    };
+    input->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        if (b.h <= 2 * dpi)
+            return;
+        set_argb(cr, c->active ? theme.accent : theme.field_border);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
+        cairo_fill(cr);
+        auto inner = b;
+        inner.shrink(std::round(1 * dpi));
+        set_argb(cr, theme.field_background);
+        drawRoundedRect(cr, inner.x, inner.y, inner.w, inner.h, settings_control_rounding * dpi, 1.0);
+        cairo_fill(cr);
+        if (static_cast<STextEditorData *>(c->user_data)->text.empty()) {
+            auto hint = b;
+            hint.x += 10 * dpi;
+            hint.w -= 20 * dpi;
+            swifi_text(root, hint, "Enter the network security key", 11, swifi_dim(theme.text_secondary));
+        }
+        paint_text_editor(root, c, theme.text, theme.accent);
+    };
+    auto edit_key = std::move(input->when_key_event);
+    input->when_key_event = [edit_key, data](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+                                             int mods, bool is_text, std::string text) {
+        auto page = settings_wifi;
+        // Key events reach every container; only the open password row reacts.
+        if (!page || !page->password_mode || page->selected != data->ap.ssid) return;
+        if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+            swifi_submit_password(root, data);
+            return;
+        }
+        if (pressed && sym == XKB_KEY_Escape) {
+            swifi_reset_selection();
+            swifi_redraw(root);
+            return;
+        }
+        edit_key(root, c, key, pressed, sym, mods, is_text, text);
+        swifi_redraw(root);
+    };
+    auto reveal = data->field->child(70, FILL_SPACE);
+    reveal->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 70 * swifi_window(root)->dpi;
+    };
+    reveal->when_paint = [](Container *root, Container *c) {
+        swifi_paint_button(root, c, settings_wifi->show_password ? "Hide" : "Show", true);
+    };
+    reveal->when_clicked = [data](Container *root, Container *) {
+        settings_wifi->show_password = !settings_wifi->show_password;
+        // Clicking the button took focus from the field; hand it back.
+        set_active(root, {data->input}, root, true, false);
+        swifi_redraw(root);
+    };
+
+    data->buttons = row->child(::hbox, FILL_SPACE, 0);
+    data->buttons->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 42 * data->expansion * dpi;
+        c->wanted_pad = Bounds(60 * dpi, 0, 16 * dpi, 8 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    auto primary = data->buttons->child(FILL_SPACE, FILL_SPACE);
+    primary->when_paint = [data](Container *root, Container *c) {
+        bool enabled = false;
+        auto label = swifi_primary_label(settings_wifi, data, &enabled);
+        swifi_paint_button(root, c, label, enabled);
+    };
+    primary->when_clicked = [data](Container *root, Container *) {
+        bool enabled = false;
+        swifi_primary_label(settings_wifi, data, &enabled);
+        if (enabled) swifi_primary_clicked(root, data);
+    };
+    data->secondary = data->buttons->child(FILL_SPACE, FILL_SPACE);
+    data->secondary->when_paint = [](Container *root, Container *c) {
+        auto page = settings_wifi;
+        if (page->password_mode) {
+            swifi_paint_button(root, c, "Cancel", true);
+            return;
+        }
+        swifi_paint_button(root, c, page->confirming_forget ? "Are you sure?" : "Forget",
+            !page->view.busy && page->view.action_ssid.empty());
+    };
+    data->secondary->when_clicked = [data](Container *root, Container *) {
+        auto page = settings_wifi;
+        if (page->password_mode) {
+            swifi_reset_selection();
+        } else if (!page->view.busy && page->view.action_ssid.empty()) {
+            if (!page->confirming_forget) {
+                page->confirming_forget = true;
+            } else {
+                page->confirming_forget = false;
+                wifi_command({"forget", data->ap.ssid, ""});
+            }
+        }
+        swifi_redraw(root);
+    };
+    return row;
+}
+
+static void swifi_apply(SettingsWifiPage *page, const WifiMenuView &view) {
+    page->view = view;
+    if (!page->selected.empty() && !wifi_access_point(view.status, page->selected)) {
+        page->selected.clear();
+        swifi_reset_selection();
+    }
+    auto content = page->list;
+    std::unordered_set<std::string> wanted;
+    for (const auto &ap : view.status.access_points) wanted.insert(ap.ssid);
+    std::unordered_map<std::string, Container *> rows;
+    std::erase_if(content->children, [&wanted, &rows](Container *row) {
+        if (wanted.contains(row->name)) {
+            rows.emplace(row->name, row);
+            return false;
+        }
+        delete row;
+        return true;
+    });
+    // Rows survive refreshes (keyed by SSID) so selection, typing and animations persist.
+    std::vector<Container *> ordered;
+    for (const auto &ap : view.status.access_points) {
+        auto found = rows.find(ap.ssid);
+        Container *row = nullptr;
+        if (found != rows.end()) {
+            row = found->second;
+        } else {
+            row = swifi_network_row(content);
+            content->children.pop_back(); // Re-inserted below in sorted order.
+            row->name = ap.ssid;
+        }
+        ((SettingsWifiRow *) row->user_data)->ap = ap;
+        ordered.push_back(row);
+    }
+    content->children = std::move(ordered);
+}
+
+static void swifi_watch(unsigned generation) {
+    windowing::timer(settings_app, 16, [generation](void *) {
+        if (!settings_app || !settings_mylar)
+            return;
+        bool redraw = false;
+        {
+            std::lock_guard<std::mutex> lock(settings_app->mutex);
+            auto page = settings_wifi;
+            if (!page || page->generation != generation)
+                return; // Page left or rebuilt; stop polling.
+            auto view = wifi_latest();
+            if (view && view->revision != page->revision) {
+                swifi_apply(page, *view);
+                page->revision = view->revision;
+                redraw = true;
+            }
+            redraw |= page->animating || page->view.scanning || page->view.busy;
+            page->animating = false;
+        }
+        if (redraw)
+            windowing::redraw(settings_mylar->raw_window);
+        swifi_watch(generation);
+    }, nullptr);
+}
+
+// Text-sized button for the status card.
+static Container *swifi_card_button(Container *parent, std::function<std::string()> label,
+                                    std::function<bool()> enabled, std::function<void()> on_click) {
+    auto button = parent->child(FILL_SPACE, FILL_SPACE);
+    button->pre_layout = [label](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = swifi_text_width(root, label(), 11) + 24 * swifi_window(root)->dpi;
+    };
+    button->when_paint = [label, enabled](Container *root, Container *c) {
+        swifi_paint_button(root, c, label(), enabled());
+    };
+    button->when_clicked = [enabled, on_click](Container *, Container *) {
+        if (enabled()) on_click();
+    };
+    return button;
+}
+
+static void fill_wifi_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Wi-Fi");
+    make_vert_space(padded_right, 10);
+
+    // Status card: state, adapter, refresh and on/off.
+    auto card = padded_right->child(::hbox, FILL_SPACE, 70);
+    card->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 70 * dpi;
+        c->wanted_pad = Bounds(0, 17 * dpi, 16 * dpi, 17 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    card->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->cr;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(cr, theme.row_background);
+        cairo_fill(cr);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(cr, theme.row_border);
+        cairo_stroke(cr);
+
+        const auto &view = settings_wifi->view;
+        if (!view.scanning && !view.busy)
+            return;
+        // The dock menu's scanning animation: five dots easing along the card's bottom edge.
+        double phase = (get_current_time_in_ms() % 2000) / 2000.0;
+        cairo_save(cr);
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        cairo_clip(cr);
+        for (int i = 0; i < 5; ++i) {
+            double step = (phase - i * .08) / .6;
+            if (step < 0 || step > 1) continue;
+            double x = .5 - .5 * std::cos(step * M_PI);
+            set_argb(cr, theme.accent);
+            cairo_arc(cr, b.x + x * b.w, b.y + b.h - 5 * dpi, 2 * dpi, 0, 2 * M_PI);
+            cairo_fill(cr);
+        }
+        cairo_restore(cr);
+    };
+    auto heading = card->child(FILL_SPACE, FILL_SPACE);
+    heading->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_wifi->view;
+        auto b = c->real_bounds;
+        bool on = view.status.service_running && !view.status.devices.empty() && view.status.wireless_enabled;
+        swifi_glyph(window->cr, b.x + 19 * dpi, b.y + b.h * .5 - 10 * dpi, "", 16 * dpi,
+            on ? theme.text : swifi_dim(theme.text_secondary));
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y - 6 * dpi, b.w - 60 * dpi, 24 * dpi), "Wi-Fi", 12, theme.text);
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 16 * dpi, b.w - 60 * dpi, 22 * dpi),
+            wifi_status_line(view), 10, theme.text_secondary);
+    };
+    // Adapter pill; with several adapters, clicking it cycles through them.
+    auto adapter_label = []() {
+        const auto &view = settings_wifi->view;
+        std::string label;
+        if (auto device = wifi_device(view.status)) label = device->interface;
+        if (view.status.devices.size() > 1) label += "  ▾";
+        return label;
+    };
+    auto adapter = card->child(0, FILL_SPACE);
+    adapter->pre_layout = [adapter_label](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        auto label = adapter_label();
+        c->exists = !label.empty();
+        c->wanted_bounds.w = std::min<double>(swifi_text_width(root, label, 10) + 20 * dpi, 160 * dpi);
+    };
+    adapter->when_paint = [adapter_label](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const bool switchable = settings_wifi->view.status.devices.size() > 1;
+        const double h = 24 * dpi;
+        Bounds pill(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
+        set_argb(window->cr, switchable && c->state.mouse_pressing ? theme.button_pressed :
+            switchable && c->state.mouse_hovering ? theme.button_hover : theme.segment_background);
+        drawRoundedRect(window->cr, pill.x, pill.y, pill.w, pill.h, h * .5, 1.0);
+        cairo_fill(window->cr);
+        pill.x += 10 * dpi;
+        pill.w -= 20 * dpi;
+        swifi_text(root, pill, adapter_label(), 10, theme.text_secondary, true);
+    };
+    adapter->when_clicked = [](Container *, Container *) {
+        if (settings_wifi->view.status.devices.size() > 1) wifi_command({"device", "", ""});
+    };
+    swifi_card_button(card, []() {
+        return settings_wifi->view.scanning ? std::string("Scanning…") : std::string("Refresh");
+    }, []() {
+        const auto &view = settings_wifi->view;
+        return view.status.service_running && !view.status.devices.empty() && view.status.wireless_enabled && !view.scanning;
+    }, []() { wifi_command({"scan", "", ""}); });
+    swifi_card_button(card, []() {
+        return settings_wifi->view.status.wireless_enabled ? std::string("Turn off Wi-Fi") : std::string("Turn on Wi-Fi");
+    }, []() {
+        const auto &view = settings_wifi->view;
+        return view.status.service_running && !view.status.devices.empty() && view.status.hardware_enabled;
+    }, []() { wifi_command({"toggle", "", ""}); });
+
+    // Captive portal banner, shown while NetworkManager reports Connectivity == PORTAL.
+    auto portal = padded_right->child(FILL_SPACE, 0);
+    portal->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->exists = settings_wifi->view.status.connectivity == 2;
+        c->wanted_bounds.h = 54 * dpi;
+        c->wanted_pad = Bounds(0, 8 * dpi, 0, 0);
+    };
+    auto sign_in = portal->child(FILL_SPACE, FILL_SPACE);
+    sign_in->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        double tint = c->state.mouse_pressing ? .34 : c->state.mouse_hovering ? .26 : .18;
+        set_argb(window->cr, swifi_mix(theme.row_background, theme.accent, tint));
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        cairo_fill(window->cr);
+        b.x += 16 * dpi;
+        b.w -= 32 * dpi;
+        swifi_text(root, b, "This network needs you to sign in · Open sign-in page", 11, theme.text);
+    };
+    sign_in->when_clicked = [](Container *, Container *) { wifi_command({"sign-in", "", ""}); };
+
+    // Result of the last action (connected, wrong password, ...).
+    auto feedback = padded_right->child(FILL_SPACE, 0);
+    feedback->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_wifi->view;
+        c->exists = !view.message.empty();
+        auto font = get_cached_pango_font(window->cr, set->font, 11 * dpi, PANGO_WEIGHT_NORMAL, false);
+        pango_layout_set_text(font, view.message.c_str(), -1);
+        pango_layout_set_width(font, std::max(1.0, b.w - 32 * dpi) * PANGO_SCALE);
+        pango_layout_set_height(font, -1);
+        pango_layout_set_wrap(font, PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
+        int width, height;
+        pango_layout_get_pixel_size(font, &width, &height);
+        c->wanted_bounds.h = std::min(height + 24.0 * dpi, 100.0 * dpi) + 8 * dpi;
+    };
+    feedback->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_wifi->view;
+        RGBA hue = view.error ? RGBA(.86, .26, .22, 1) : RGBA(.20, .66, .36, 1);
+        RGBA text = set->dark_theme ? swifi_mix(hue, RGBA(1, 1, 1, 1), .45) : swifi_mix(hue, RGBA(0, 0, 0, 1), .25);
+        auto b = c->real_bounds;
+        b.y += 8 * dpi;
+        b.h -= 8 * dpi;
+        set_argb(window->cr, swifi_mix(theme.row_background, hue, .18));
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        cairo_fill(window->cr);
+        b.x += 16 * dpi;
+        b.w -= 32 * dpi;
+        swifi_text(root, b, view.message, 11, text);
+    };
+
+    make_vert_space(padded_right, 20);
+    make_section_title(padded_right, "Available networks");
+    make_vert_space(padded_right, 10);
+
+    auto list = padded_right->child(::vbox, FILL_SPACE, 0);
+    auto page = new SettingsWifiPage;
+    page->list = list;
+    page->generation = ++settings_wifi_generation;
+    list->user_data = page;
+    list->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->spacing = 4 * dpi;
+        double h = 0;
+        for (auto row : c->children) {
+            row->wanted_bounds.h = swifi_row_step((SettingsWifiRow *) row->user_data, dpi);
+            h += row->wanted_bounds.h;
+        }
+        if (c->children.empty())
+            h = 120 * dpi;
+        else
+            h += c->spacing * (c->children.size() - 1);
+        c->wanted_bounds.h = h;
+    };
+    list->when_paint = [](Container *root, Container *c) {
+        if (!c->children.empty())
+            return;
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_wifi->view;
+        std::string message = wifi_state_line(view);
+        if (view.status.service_running && !view.status.devices.empty() && view.status.wireless_enabled)
+            message = view.scanning || view.revision <= 1 ? "Searching for networks…" : "No networks found";
+        auto b = c->real_bounds;
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->cr, theme.row_background);
+        cairo_fill(window->cr);
+        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->cr, theme.row_border);
+        cairo_stroke(window->cr);
+        b.x += 30 * dpi;
+        b.w -= 60 * dpi;
+        swifi_text(root, b, message, 11, theme.text_secondary, true);
+    };
+
+    // The previous page (if any) was deleted above and released its hold on the worker.
+    settings_wifi = page;
+    // Show the last snapshot immediately; the worker refreshes it right away.
+    if (auto previous = wifi_latest()) {
+        swifi_apply(page, *previous);
+        page->revision = previous->revision;
+    }
+    wifi_menu_opened();
+    swifi_watch(page->generation);
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->name = label;
@@ -2564,6 +3314,8 @@ void create_tab_option(Container *parent, std::string label) {
             fill_shortcuts_settings(root);
         } else if (label == "Multitasking") {
             fill_multitasking_settings(root);
+        } else if (label == "Wifi") {
+            fill_wifi_settings(root);
         }
     };
 }
@@ -2657,6 +3409,7 @@ void actual_start() {
     settings_mylar = mylar;
     fill_root(mylar->root);
     mylar->raw_window->on_close = [](RawWindow *w) {
+        settings_wifi_release();
         for (auto p : popups) {
             windowing::close_window(p->raw_window);
         }

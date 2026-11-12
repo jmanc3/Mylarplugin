@@ -9,24 +9,6 @@
 // block, so they run on a worker thread that publishes value snapshots. The
 // Wayland dock thread only reads those snapshots and posts commands back.
 
-struct WifiMenuView {
-    unsigned long revision = 0;
-    WifiStatus status;
-    bool scanning = false;
-    bool busy = false;
-    std::string connecting_ssid;
-    std::string action_ssid;
-    std::string action;
-    bool error = false;
-    std::string message;
-};
-
-struct WifiCommand {
-    std::string type;
-    std::string ssid;
-    std::string text;
-};
-
 static std::mutex wifi_mutex;
 static std::condition_variable wifi_wakeup;
 static std::thread wifi_thread;
@@ -35,7 +17,7 @@ static int wifi_menu_count = 0;
 static std::vector<WifiCommand> wifi_commands;
 static std::atomic<std::shared_ptr<const WifiMenuView>> wifi_latest_view;
 
-static void wifi_command(WifiCommand command) {
+void wifi_command(WifiCommand command) {
     {
         std::lock_guard<std::mutex> lock(wifi_mutex);
         wifi_commands.push_back(std::move(command));
@@ -43,13 +25,13 @@ static void wifi_command(WifiCommand command) {
     wifi_wakeup.notify_all();
 }
 
-static const WifiDevice *wifi_device(const WifiStatus &status) {
+const WifiDevice *wifi_device(const WifiStatus &status) {
     for (const auto &device : status.devices)
         if (device.path == status.device_path) return &device;
     return nullptr;
 }
 
-static const WifiAccessPoint *wifi_access_point(const WifiStatus &status, const std::string &ssid) {
+const WifiAccessPoint *wifi_access_point(const WifiStatus &status, const std::string &ssid) {
     for (const auto &ap : status.access_points)
         if (ap.ssid == ssid) return &ap;
     return nullptr;
@@ -261,7 +243,7 @@ static void wifi_worker() {
     wifi_thread_running = false;
 }
 
-static void wifi_menu_opened() {
+void wifi_menu_opened() {
     {
         std::lock_guard<std::mutex> lock(wifi_mutex);
         ++wifi_menu_count;
@@ -277,9 +259,13 @@ static void wifi_menu_opened() {
     wifi_wakeup.notify_all();
 }
 
-static void wifi_menu_closed() {
+void wifi_menu_closed() {
     std::lock_guard<std::mutex> lock(wifi_mutex);
     if (wifi_menu_count > 0) --wifi_menu_count;
+}
+
+std::shared_ptr<const WifiMenuView> wifi_latest() {
+    return wifi_latest_view.load();
 }
 
 void wifi_stop() {
@@ -448,14 +434,14 @@ static void wifi_paint_signal(cairo_t *cr, double x, double y, double size, int 
     cairo_restore(cr);
 }
 
-static std::string wifi_band(unsigned frequency) {
+std::string wifi_band(unsigned frequency) {
     if (frequency >= 5925) return "6 GHz";
     if (frequency >= 4900) return "5 GHz";
     if (frequency >= 2400) return "2.4 GHz";
     return "";
 }
 
-static bool wifi_valid_password(const WifiAccessPoint &ap, const std::string &password, std::string &problem) {
+bool wifi_valid_password(const WifiAccessPoint &ap, const std::string &password, std::string &problem) {
     if (ap.key_mgmt == "wpa-psk") {
         bool hex = password.size() == 64 && std::all_of(password.begin(), password.end(),
             [](unsigned char c) { return std::isxdigit(c) != 0; });
@@ -748,7 +734,7 @@ static Container *wifi_network_row(Container *parent, WifiMenuData *menu) {
 }
 
 // Wi-Fi state only; used for the empty network list.
-static std::string wifi_state_line(const WifiMenuView &view) {
+std::string wifi_state_line(const WifiMenuView &view) {
     const auto &status = view.status;
     if (!view.revision) return "";
     if (!status.service_running) return "Neither NetworkManager nor wpa_supplicant is running";
@@ -765,7 +751,7 @@ static std::string wifi_state_line(const WifiMenuView &view) {
 }
 
 // Header line: like winbar's tray icon, report a wired default route first.
-static std::string wifi_status_line(const WifiMenuView &view) {
+std::string wifi_status_line(const WifiMenuView &view) {
     auto wifi = wifi_state_line(view);
     const auto &link = view.status.link;
     if (!view.revision || !link.up || !link.wired) return wifi;
