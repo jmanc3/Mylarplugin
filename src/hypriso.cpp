@@ -41,6 +41,7 @@
 #include "hypriso.h"
 #include "settings.h"
 #include "overview.h"
+#include "show_desktop.h"
 #include "drag_workspace_switcher.h"
 //#include "heart.h"
 //#include "dock/dock.h"
@@ -5880,33 +5881,36 @@ bool HyprIso::is_fake_fullscreen(int id) {
     return false;
 }
 
+// Fullscreen requests are synced by default, which forces the internal mode
+// to follow the client mode. Unsync while applying the requested pair so a
+// client-only (fake) fullscreen survives, then resync if the modes match.
+static void apply_fullscreen_modes(PHLWINDOW w, Fullscreen::eFullscreenMode internal, Fullscreen::eFullscreenMode client) {
+    if (!w)
+        return;
+    w->m_ruleApplicator->syncFullscreenOverride(Desktop::Types::COverridableVar(false, Desktop::Types::PRIORITY_SET_PROP));
+    Fullscreen::controller()->setFullscreenMode(w, internal, client);
+    const auto modes = Fullscreen::controller()->getFullscreenModes(w);
+    w->m_ruleApplicator->syncFullscreenOverride(Desktop::Types::COverridableVar(modes.internal == modes.client, Desktop::Types::PRIORITY_SET_PROP));
+    if (auto m = w->m_monitor.lock()) {
+        g_layoutManager->recalculateMonitor(m, Layout::CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN);
+        if (m->m_activeWorkspace && m->m_activeWorkspace->space())
+            m->m_activeWorkspace->space()->recalculate();
+    }
+}
+
 void HyprIso::set_fullscreen(int id, bool state) {
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
-            if (state) {
-                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_FULLSCREEN, Fullscreen::FSMODE_FULLSCREEN);
-            } else {
-                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
-            }
-            if (auto m = hw->w->m_monitor.lock())
-                g_layoutManager->recalculateMonitor(m, Layout::CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN);
-            hw->w->m_monitor->m_activeWorkspace->space()->recalculate();
+            const auto mode = state ? Fullscreen::FSMODE_FULLSCREEN : Fullscreen::FSMODE_NONE;
+            apply_fullscreen_modes(hw->w, mode, mode);
         }
     }
 }
 
 void HyprIso::fake_fullscreen(int id, bool state) {
     for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (state) {
-                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_FULLSCREEN);
-            } else {
-                Fullscreen::controller()->setFullscreenMode(hw->w, Fullscreen::FSMODE_NONE, Fullscreen::FSMODE_NONE);
-            }
-            if (auto m = hw->w->m_monitor.lock())
-                g_layoutManager->recalculateMonitor(m, Layout::CLayoutManager::RECALCULATE_MONITOR_REASON_TOGGLE_FULLSCREEN);
-            hw->w->m_monitor->m_activeWorkspace->space()->recalculate();
-        }
+        if (hw->id == id)
+            apply_fullscreen_modes(hw->w, Fullscreen::FSMODE_NONE, state ? Fullscreen::FSMODE_FULLSCREEN : Fullscreen::FSMODE_NONE);
     }
 }
 
@@ -11185,12 +11189,55 @@ void add_mylar_gesture() {
     HyprlandAPI::addConfigKeyword(globals->api, "mylar-gesture", ::mylarGestureKeyword, {});
 }
 
+// A fullscreen window fades the top layers (the dock) out and makes them
+// unfocusable. Overview and show desktop hide that window, so the top layers
+// are lifted above fullscreen for as long as either view is up. The core
+// drops the flag whenever fullscreen state changes, so it is reapplied per frame.
+static void sync_top_layers_over_fullscreen(PHLMONITOR pMonitor) {
+    static std::vector<PHLLSREF> lifted;
+    const bool want = overview::is_showing() || show_desktop::is_opened();
+    if (!want && lifted.empty())
+        return;
+
+    if (want) {
+        for (auto const& ref : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP]) {
+            const auto ls = ref.lock();
+            if (!ls)
+                continue;
+            const bool ours = std::ranges::any_of(lifted, [&](const auto& l) { return l.lock() == ls; });
+            if (!ours && (ls->m_flags & Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN))
+                continue; // already allowed above fullscreen by the compositor
+            if (!ours)
+                lifted.emplace_back(ls);
+            ls->m_flags |= Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
+            if (ls->alpha()[Desktop::View::LS_ALPHA_FADE]->goal() != 1.F)
+                *ls->alpha()[Desktop::View::LS_ALPHA_FADE] = 1.F;
+        }
+        return;
+    }
+
+    for (auto const& ref : lifted) {
+        const auto ls = ref.lock();
+        if (!ls)
+            continue;
+        ls->m_flags &= ~Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
+        const auto m = ls->m_monitor.lock();
+        if (!m || ls->m_layer != ZWLR_LAYER_SHELL_V1_LAYER_TOP)
+            continue;
+        const bool covered = Fullscreen::controller()->hasFullscreen(m, true) && Fullscreen::controller()->getFullscreenModes(m, true).internal == Fullscreen::FSMODE_FULLSCREEN;
+        *ls->alpha()[Desktop::View::LS_ALPHA_FADE] = covered ? 0.F : 1.F;
+    }
+    lifted.clear();
+}
+
 //  We add 2 more render stages
 //     Event::bus()->m_events.render.stage.emit((eRenderStage) STAGE::RENDER_POST_CURSOR);
 void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
     auto tis = g_pHyprRenderer.get();
     if (tis->m_renderingMonitor || tis->context().active() || !pMonitor)
         return;
+
+    sync_top_layers_over_fullscreen(pMonitor);
 
     // Hooks outside a render session must not re-enter monitor orchestration.
     tis->m_renderingMonitor = true;

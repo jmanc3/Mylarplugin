@@ -31,6 +31,7 @@ static bool painting_workspace_snapshot = false;
 static int snapshot_workspace = -1;
 static constexpr int teaser_workspace = -1;
 static constexpr double thumbnail_fade_ms = 200.0;
+static constexpr double departure_ms = 300.0;
 // Timers use whole milliseconds: rounding up keeps captures below 60 FPS.
 static constexpr long fast_capture_ms = 17;
 static constexpr long slow_capture_ms = 400;
@@ -99,6 +100,14 @@ struct OverviewWorkspace {
     bool retiring = false;
 };
 
+// A thumbnail whose window was put to sleep while overview was open. It flies
+// from where it was last drawn into the dock's sleep button and fades out.
+struct OverviewDeparture {
+    int cid;
+    Bounds from;
+    long start;
+};
+
 struct WindowOption {
     int cid;
     int workspace;
@@ -115,6 +124,7 @@ struct OverviewMonitor {
     std::vector<int> order;
     std::vector<WindowOption> window_options;
     std::vector<WorkspaceOption> workspace_options;
+    std::vector<OverviewDeparture> departures;
     int active = -1;
     int pending_workspace = 0;
     int dragged = -1;
@@ -337,7 +347,7 @@ static void update_scene() {
                 if (c->custom_type != (int) TYPE::CLIENT)
                     continue;
                 const int cid = *datum<int>(c, "cid");
-                if (wid == teaser_workspace || get_monitor(cid) != mid || hypriso->get_active_workspace_id_client(cid) != wid)
+                if (wid == teaser_workspace || is_slept(cid) || get_monitor(cid) != mid || hypriso->get_active_workspace_id_client(cid) != wid)
                     continue;
                 workspace.stacking.push_back(cid);
                 auto [thumb_entry, new_thumbnail] = workspace.thumbnails.try_emplace(cid);
@@ -364,6 +374,14 @@ static void update_scene() {
             }
             for (auto it = workspace.thumbnails.begin(); it != workspace.thumbnails.end();) {
                 if (std::find(workspace.stacking.begin(), workspace.stacking.end(), it->first) == workspace.stacking.end()) {
+                    if (is_slept(it->first) && get_cid_container(it->first)) {
+                        const auto &thumbnail = it->second;
+                        const double pitch = bounds_monitor(mid).w * (1.0 - .16 * std::clamp(openess, 0.0f, 1.0f));
+                        auto from = lerp(thumbnail.natural, thumbnail.slot.bounds(), std::clamp(openess, 0.0f, 1.0f));
+                        from.x += workspace.position.value * pitch + thumbnail.drag_x.value;
+                        from.y += thumbnail.drag_y.value;
+                        monitor.departures.push_back({it->first, from, now});
+                    }
                     it = workspace.thumbnails.erase(it);
                     dirty = true;
                 } else {
@@ -391,6 +409,11 @@ static void update_scene() {
                 }
             }
         }
+        std::erase_if(monitor.departures, [now](const OverviewDeparture &departure) {
+            return now - departure.start >= departure_ms || !get_cid_container(departure.cid);
+        });
+        if (!monitor.departures.empty())
+            moving = true;
         // Enforce the visibility limit during spring settling too, translating
         // the whole strip together to preserve the spacing between cards.
         const auto visible_order = visible_workspace_order(monitor);
@@ -566,6 +589,31 @@ static void paint_monitor(int monitor_id) {
     std::sort(elevated.begin(), elevated.end(), [](const auto &a, const auto &b) { return a.order < b.order; });
     for (const auto &item : elevated)
         paint_thumbnail(item.workspace, item.cid, monitor.workspaces.at(item.workspace).position.value * pitch, mb);
+    if (!monitor.departures.empty()) {
+        auto target = dock::get_item_location(hypriso->monitor_name(monitor_id), "sleep_button");
+        target.x += mb.x;
+        target.y = mb.bottom();
+        const auto now = get_current_time_in_ms();
+        hypriso->clipbox = render_bounds(mb, monitor_id);
+        for (const auto &departure : monitor.departures) {
+            const double t = std::clamp((now - departure.start) / departure_ms, 0.0, 1.0);
+            const double eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+            // Shrink toward the button while keeping the window's aspect ratio.
+            auto end = target;
+            const auto aspect = departure.from.w / std::max(1.0, departure.from.h);
+            if (aspect > end.w / std::max(1.0, end.h)) {
+                const auto height = end.w / aspect;
+                end.y += (end.h - height) * .5;
+                end.h = height;
+            } else {
+                const auto width = end.h * aspect;
+                end.x += (end.w - width) * .5;
+                end.w = width;
+            }
+            const auto b = lerp(departure.from, end, eased);
+            hypriso->draw_deco_thumbnail(departure.cid, render_bounds(b, monitor_id), 0, 2.0f, 0, 1.0f - t);
+        }
+    }
     if (monitor.dragged != -1 && monitor.workspaces.contains(monitor.dragged_workspace)) {
         auto &workspace = monitor.workspaces.at(monitor.dragged_workspace);
         if (workspace.thumbnails.contains(monitor.dragged))

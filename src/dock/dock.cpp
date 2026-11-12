@@ -3121,7 +3121,7 @@ void dock::remove_slept_button() {
         if (zed.is_fullscreen) {
             hypriso->set_fullscreen(zed.cid, zed.is_fullscreen);
         } else if (zed.is_fake_fullscreen) {
-            hypriso->fake_fullscreen(zed.cid, zed.is_fullscreen);
+            hypriso->fake_fullscreen(zed.cid, zed.is_fake_fullscreen);
         }
     }
     slept_windows.clear();

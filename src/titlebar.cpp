@@ -108,6 +108,7 @@ static void sleep_cid(int cid) {
     
     hypriso->set_hidden(cid, true, true);
     dock::remove_window(cid);
+    
     auto pid = hypriso->get_pid(cid);
     auto slept = SleptWindow(cid, pid);
     slept.is_fake_fullscreen = is_fake_fullscreen;
@@ -120,7 +121,7 @@ static void sleep_cid(int cid) {
     }
     dock::throb_slept_button();
 
-    heart::layout_containers();
+    heart::layout_containers();        
 }
 
 void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
