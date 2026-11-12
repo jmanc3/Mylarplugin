@@ -10,6 +10,7 @@
 #include "events.h"
 #include "hypriso.h"
 #include "icons.h"
+#include "smooth_scroll.h"
 
 #include <cairo.h>
 #include <climits>
@@ -53,6 +54,7 @@ struct PinData : UserData {
     float dropdown_scroll = 0;
     float dropdown_overflow = 0;
     float dropdown_view_h = 0;
+    SmoothScroll dropdown_smooth;
     bool swallow_escape = false;
     bool dragging_scrollbar = false;
     float scrollbar_grab_offset = 0; // mouse y minus thumb top when the drag began
@@ -78,28 +80,28 @@ static constexpr int icon_preview_size = 64;
 
 static void paint_bg(Container *root, Container *c) {
     auto mylar = (PinData*)root->user_data;
-    auto cr = mylar->window->raw_window->cr;
-    cairo_save(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(cr);
-    cairo_restore(cr);
+    auto cr = mylar->window->raw_window->drawing_context;
+    cr->save();
+    cr->set_operator(CAIRO_OPERATOR_CLEAR);
+    cr->paint_source();
+    cr->restore();
 
     set_rect(cr, c->real_bounds);
     set_argb(cr, RGBA(.941, .957, .976, .9));
-    cairo_fill(cr);
+    cr->fill();
 }
 
-static void rounded_rect_new(cairo_t *cr, double corner_radius, double x, double y, double width, double height) {
+static void rounded_rect_new(drawing::Context *cr, double corner_radius, double x, double y, double width, double height) {
     double radius = corner_radius;
     double degrees = M_PI / 180.0;
     
-    cairo_new_sub_path(cr);
+    cr->new_sub_path();
     
-    cairo_arc(cr, x + width - radius, y + radius, radius, -90 * degrees, 0 * degrees);
-    cairo_arc(cr, x + width - radius, y + height - radius, radius, 0 * degrees, 90 * degrees);
-    cairo_arc(cr, x + radius, y + height - radius, radius, 90 * degrees, 180 * degrees);
-    cairo_arc(cr, x + radius, y + radius, radius, 180 * degrees, 270 * degrees);
-    cairo_close_path(cr);
+    cr->arc(x + width - radius, y + radius, radius, -90 * degrees, 0 * degrees);
+    cr->arc(x + width - radius, y + height - radius, radius, 0 * degrees, 90 * degrees);
+    cr->arc(x + radius, y + height - radius, radius, 90 * degrees, 180 * degrees);
+    cr->arc(x + radius, y + radius, radius, 180 * degrees, 270 * degrees);
+    cr->close_path();
 }
 
 static void collect_preorder(Container *node, std::vector<Container*> &out) {
@@ -108,81 +110,6 @@ static void collect_preorder(Container *node, std::vector<Container*> &out) {
         collect_preorder(child, out);
     if (node->when_key_event && !node->name.empty())
         out.push_back(node);
-}
-
-void activate_previous_activatable(Container *root, Container *c) {
-    if (!root || !c) return;
-    static std::vector<Container*> coll;
-    coll.push_back(c);
-    if (c->parent)
-        coll.push_back(c->parent);
-    set_active(root, coll, root, false, true);
-    coll.clear();
-
-    // 1. Collect a flat traversal of all containers.
-    std::vector<Container*> order;
-    collect_preorder(root, order);
-
-    // 2. Find the index of `c`.
-    int index_of_c = -1;
-    for (int i = 0; i < (int)order.size(); i++) {
-        if (order[i] == c) {
-            index_of_c = i;
-            break;
-        }
-    }
-    if (index_of_c < 0)
-        index_of_c = 0;
-
-    if (index_of_c == 0) {
-        coll.push_back(order[order.size() - 1]);
-        coll.push_back(order[order.size() - 1]->parent);
-        set_active(root, coll, root, true, true);
-        coll.clear();
-    } else {
-        coll.push_back(order[index_of_c - 1]);
-        coll.push_back(order[index_of_c - 1]->parent);
-        set_active(root, coll, root, true, true);
-        coll.clear();
-    }
-}
-
-// needs to occur next frame because otherwise the tab key will effect the next container as well because it'll gain focus and then receive the tab event
-void activate_next_activatable(Container *root, Container *c) {
-    if (!root || !c) return;
-    static std::vector<Container*> coll;
-    coll.push_back(c);
-    if (c->parent)
-        coll.push_back(c->parent);
-    set_active(root, coll, root, false, true);
-    coll.clear();
-
-    // 1. Collect a flat traversal of all containers.
-    std::vector<Container*> order;
-    collect_preorder(root, order);
-
-    // 2. Find the index of `c`.
-    int index_of_c = -1;
-    for (int i = 0; i < (int)order.size(); i++) {
-        if (order[i] == c) {
-            index_of_c = i;
-            break;
-        }
-    }
-    if (index_of_c < 0)
-        index_of_c = order.size() - 1;
-
-    if (index_of_c == order.size() - 1) {
-        coll.push_back(order[0]);
-        coll.push_back(order[0]->parent);
-        set_active(root, coll, root, true, true);
-        coll.clear();
-    } else {
-        coll.push_back(order[index_of_c + 1]);
-        coll.push_back(order[index_of_c + 1]->parent);
-        set_active(root, coll, root, true, true);
-        coll.clear();
-    }
 }
 
 Container *get_root(Container *c) {
@@ -196,7 +123,7 @@ Container *get_root(Container *c) {
     return temp;
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
+static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size = 10, bool draw = true, std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
 
 static Container *setup_label(Container *root, Container *label_parent, bool bold, bool editable, std::function<std::string (Container *root, Container *c)> func,
                               std::function<void(std::string)> on_change = nullptr) {
@@ -242,13 +169,13 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
         if (!editable)
             return;
         auto window = static_cast<PinData *>(root->user_data)->window->raw_window;
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         set_argb(cr, {1, 1, 1, 1});
         rounded_rect_new(cr, 6 * window->dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_fill(cr);
+        cr->fill();
         set_argb(cr, c->active || c->children[0]->active ? RGBA(.23, .6, 1, 1) : RGBA(0, 0, 0, .2));
         rounded_rect_new(cr, 6 * window->dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_stroke(cr);
+        cr->stroke();
     };
     label->when_paint = [](Container *root, Container *c) {
         paint_text_editor(root, c, RGBA(0, 0, 0, 1), RGBA(.2, .5, .8, 1));
@@ -272,7 +199,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
     return label;
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color) {
+static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color) {
     auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
@@ -292,8 +219,8 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, b
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, std::round(x), std::round(y));
-        pango_cairo_show_layout(cr, layout);
+        cr->move_to(std::round(x), std::round(y));
+        cr->show_layout(layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
@@ -342,7 +269,7 @@ static void button(Container *root, std::function<std::string()> get_text, std::
     child->name = child->uuid;
     child->when_paint = [size, get_text](Container *root, Container *c) {
         auto mylar = (PinData*)root->user_data;
-        auto cr = mylar->window->raw_window->cr;
+        auto cr = mylar->window->raw_window->drawing_context;
         auto dpi = mylar->window->raw_window->dpi;
  
         set_rect(cr, c->real_bounds);
@@ -353,17 +280,17 @@ static void button(Container *root, std::function<std::string()> get_text, std::
         } else {
             set_argb(cr, {.7, .7, .7, 1});
         }
-        cairo_fill(cr);
+        cr->fill();
 
         if (c->active && c->viakey) {
             auto b = c->real_bounds;
             b.shrink(std::round(1 * dpi));
             set_rect(cr, b);
             set_argb(cr, {.4, .4, .4, 1});
-            auto hehe = cairo_get_line_width(cr);
-            cairo_set_line_width(cr, std::round(2 * dpi));
-            cairo_stroke(cr);
-            cairo_set_line_width(cr, hehe);
+            auto hehe = cr->get_line_width();
+            cr->set_line_width(std::round(2 * dpi));
+            cr->stroke();
+            cr->set_line_width(hehe);
         }
         auto text = get_text();
 
@@ -374,7 +301,7 @@ static void button(Container *root, std::function<std::string()> get_text, std::
     };
     child->pre_layout = [size, get_text](Container* root, Container* c, const Bounds& b) {
         auto mylar = (PinData*)root->user_data;
-        auto cr = mylar->window->raw_window->cr;
+        auto cr = mylar->window->raw_window->drawing_context;
         auto dpi = mylar->window->raw_window->dpi;
         auto text = get_text();
 
@@ -569,7 +496,7 @@ static void make_icon_preview(Container *content) {
     preview->when_paint = [](Container *root, Container *c) {
         auto data = (PinData *) root->user_data;
         auto window = pin_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         int size = icon_preview_size * dpi;
         auto name = preview_icon_name(root);
@@ -591,13 +518,13 @@ static void make_icon_preview(Container *content) {
         double x = std::round(c->real_bounds.x + c->real_bounds.w * .5 - size * .5);
         double y = std::round(c->real_bounds.y);
         if (data->preview) {
-            cairo_set_source_surface(cr, data->preview, x, y);
-            cairo_paint(cr);
+            cr->set_source_surface(data->preview, x, y);
+            cr->paint_source();
         } else {
             set_argb(cr, {0, 0, 0, .15});
-            cairo_set_line_width(cr, std::max(1.0, (double) std::floor(dpi)));
+            cr->set_line_width(std::max(1.0, (double) std::floor(dpi)));
             rounded_rect_new(cr, 10 * dpi, x + .5, y + .5, size - 1, size - 1);
-            cairo_stroke(cr);
+            cr->stroke();
         }
     };
 }
@@ -624,6 +551,7 @@ static void scroll_dropdown_to_thumb_top(PinData *data, Bounds dropdown, double 
     auto bar = dropdown_scrollbar(data, dropdown, dpi);
     double range = bar.track.h - bar.thumb.h;
     double t = range > 0 ? std::clamp((thumb_top - bar.track.y) / range, 0.0, 1.0) : 0;
+    data->dropdown_smooth.stop();
     data->dropdown_scroll = (float) (-t * data->dropdown_overflow);
 }
 
@@ -635,27 +563,30 @@ static void make_icon_dropdown(Container *root) {
     dropdown->when_paint = [](Container *root, Container *c) {
         auto data = (PinData *) root->user_data;
         auto window = pin_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
+        if (data->dropdown_smooth.step(data->dropdown_scroll))
+            windowing::redraw(window);
+        data->dropdown_scroll = std::clamp(data->dropdown_scroll, -data->dropdown_overflow, 0.0f);
 
         // Shadow, background and border
         set_argb(cr, {0, 0, 0, .08});
         rounded_rect_new(cr, 7 * dpi, b.x - 1 * dpi, b.y, b.w + 2 * dpi, b.h + 3 * dpi);
-        cairo_fill(cr);
+        cr->fill();
         set_argb(cr, {1, 1, 1, 1});
         rounded_rect_new(cr, 6 * dpi, b.x, b.y, b.w, b.h);
-        cairo_fill(cr);
+        cr->fill();
         set_argb(cr, {0, 0, 0, .2});
-        cairo_set_line_width(cr, std::max(1.0, (double) std::floor(dpi)));
+        cr->set_line_width(std::max(1.0, (double) std::floor(dpi)));
         rounded_rect_new(cr, 6 * dpi, b.x + .5, b.y + .5, b.w - 1, b.h - 1);
-        cairo_stroke(cr);
+        cr->stroke();
 
         double pad = 4 * dpi;
         Bounds list(b.x + pad, b.y + pad, b.w - pad * 2, b.h - pad * 2);
-        cairo_save(cr);
-        cairo_rectangle(cr, list.x, list.y, list.w, list.h);
-        cairo_clip(cr);
+        cr->save();
+        cr->rectangle(list.x, list.y, list.w, list.h);
+        cr->clip_path();
         double row_h = icon_option_row_h * dpi;
         int icon_size = icon_option_icon_size * dpi;
         int first = std::max(0, (int) std::floor(-data->dropdown_scroll / row_h));
@@ -668,7 +599,7 @@ static void make_icon_dropdown(Container *root) {
             if (i == data->active_option && data->active_option_preferred) {
                 set_argb(cr, c->state.mouse_pressing ? RGBA(.23, .6, 1, .3) : RGBA(.23, .6, 1, .16));
                 rounded_rect_new(cr, 5 * dpi, rb.x, rb.y, rb.w, rb.h);
-                cairo_fill(cr);
+                cr->fill();
             }
 
             // Icons are only loaded once their row is first shown.
@@ -680,8 +611,8 @@ static void make_icon_dropdown(Container *root) {
             double icon_x = std::round(rb.x + 8 * dpi);
             double icon_y = std::round(rb.y + rb.h * .5 - icon_size * .5);
             if (o.surface) {
-                cairo_set_source_surface(cr, o.surface, icon_x, icon_y);
-                cairo_paint(cr);
+                cr->set_source_surface(o.surface, icon_x, icon_y);
+                cr->paint_source();
             }
 
             std::string theme = o.theme.empty() ? "unthemed" : o.theme;
@@ -691,13 +622,13 @@ static void make_icon_dropdown(Container *root) {
 
             double name_x = icon_x + icon_size + 10 * dpi;
             auto name_bounds = draw_text(cr, 0, 0, o.name, 12 * dpi, false);
-            cairo_save(cr);
-            cairo_rectangle(cr, name_x, rb.y, std::max(0.0, theme_x - 12 * dpi - name_x), rb.h);
-            cairo_clip(cr);
+            cr->save();
+            cr->rectangle(name_x, rb.y, std::max(0.0, theme_x - 12 * dpi - name_x), rb.h);
+            cr->clip_path();
             draw_text(cr, name_x, rb.y + rb.h * .5 - name_bounds.h * .5, o.name, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, .9});
-            cairo_restore(cr);
+            cr->restore();
         }
-        cairo_restore(cr);
+        cr->restore();
 
         if (data->dropdown_overflow > 0) {
             auto bar = dropdown_scrollbar(data, b, dpi);
@@ -706,7 +637,7 @@ static void make_icon_dropdown(Container *root) {
             double w = (hot ? 6 : 3) * dpi;
             set_argb(cr, {0, 0, 0, data->dragging_scrollbar ? .45 : hot ? .35 : .25});
             rounded_rect_new(cr, w * .5, bar.thumb.x + bar.thumb.w - w, bar.thumb.y, w, bar.thumb.h);
-            cairo_fill(cr);
+            cr->fill();
         }
     };
     auto option_under_mouse = [](Container *root, Container *c) {
@@ -738,10 +669,16 @@ static void make_icon_dropdown(Container *root) {
         ((PinData *) root->user_data)->active_option_preferred = false;
         windowing::redraw(pin_window(root));
     };
-    dropdown->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool) {
+    dropdown->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool touchpad) {
         auto data = (PinData *) root->user_data;
         auto dpi = pin_window(root)->dpi;
-        data->dropdown_scroll = std::clamp(data->dropdown_scroll + (float) (scroll_y * 3 * dpi), -data->dropdown_overflow, 0.0f);
+        float delta = (float) (scroll_y * 3 * dpi);
+        if (touchpad) {
+            data->dropdown_smooth.stop();
+            data->dropdown_scroll = std::clamp(data->dropdown_scroll + delta, -data->dropdown_overflow, 0.0f);
+        } else {
+            data->dropdown_smooth.scroll_by(data->dropdown_scroll, delta, -data->dropdown_overflow, 0.0f);
+        }
         windowing::redraw(pin_window(root));
     };
     // The scrollbar can be grabbed and dragged; pressing the track elsewhere jumps the thumb there.

@@ -41,7 +41,7 @@ static int text_index(const STextEditorData &data, int index) {
 static PangoLayout *editor_layout(Container *root, STextEditorData &data) {
     auto window = data.options.window(root);
     if (!data.layout)
-        data.layout = pango_cairo_create_layout(window->cr);
+        data.layout = pango_cairo_create_layout(drawing::scratch_cairo());
     auto font = pango_font_description_new();
     pango_font_description_set_family(font, set->font.c_str());
     pango_font_description_set_size(font, static_cast<int>(data.options.font_size * window->dpi) * PANGO_SCALE);
@@ -58,7 +58,7 @@ static PangoLayout *editor_layout(Container *root, STextEditorData &data) {
     } else {
         pango_layout_set_text(data.layout, data.text.data(), data.text.size());
     }
-    pango_cairo_update_layout(window->cr, data.layout);
+    pango_cairo_update_layout(drawing::scratch_cairo(), data.layout);
     return data.layout;
 }
 
@@ -467,7 +467,7 @@ Bounds measure_text_editor(Container *root, Container *c) {
 void paint_text_editor(Container *root, Container *c, const RGBA &color, const RGBA &selection_color) {
     auto &data = *static_cast<STextEditorData *>(c->user_data);
     auto window = data.options.window(root);
-    auto cr = window->cr;
+    auto cr = window->drawing_context;
     auto layout = editor_layout(root, data);
     auto viewport = data.options.viewport(root, c);
     int height = 0;
@@ -476,9 +476,9 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
     double y = viewport.y + (viewport.h - height) * .5;
     if (!editor_active(c, data))
         data.selecting = false;
-    cairo_save(cr);
+    cr->save();
     set_rect(cr, viewport);
-    cairo_clip(cr);
+    cr->clip_path();
     if (has_selection(data)) {
         set_argb(cr, selection_color);
         int start = layout_index(data, std::min(data.cursor, data.selection));
@@ -496,24 +496,24 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
                     y + logical.y / static_cast<double>(PANGO_SCALE),
                     (ranges[i * 2 + 1] - ranges[i * 2]) / static_cast<double>(PANGO_SCALE),
                     logical.height / static_cast<double>(PANGO_SCALE)));
-                cairo_fill(cr);
+                cr->fill();
             }
             g_free(ranges);
         } while (pango_layout_iter_next_line(iter));
         pango_layout_iter_free(iter);
     }
     set_argb(cr, color);
-    cairo_move_to(cr, x, y);
-    pango_cairo_show_layout(cr, layout);
+    cr->move_to(x, y);
+    cr->show_layout(layout);
     if (data.options.editable && editor_active(c, data)) {
         PangoRectangle cursor = {};
         pango_layout_get_cursor_pos(layout, layout_index(data, data.cursor), &cursor, nullptr);
         set_rect(cr, Bounds(x + cursor.x / static_cast<double>(PANGO_SCALE),
             y + cursor.y / static_cast<double>(PANGO_SCALE), std::max(1.0f, std::round(window->dpi)),
             cursor.height / static_cast<double>(PANGO_SCALE)));
-        cairo_fill(cr);
+        cr->fill();
     }
-    cairo_restore(cr);
+    cr->restore();
 }
 
 void reset_text_editor(Container *c, std::string value) {

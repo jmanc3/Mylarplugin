@@ -300,6 +300,49 @@ void set_active(Container* root, const std::vector<Container*>& active_container
     }
 }
 
+static void collect_activatable(Container* node, std::vector<Container*>& out) {
+    if (!node)
+        return;
+    for (auto* child : node->children)
+        collect_activatable(child, out);
+    if (node->when_key_event && !node->name.empty())
+        out.push_back(node);
+}
+
+static void activate_neighbour(Container* root, Container* c, Container* scope, int step) {
+    if (!root || !c)
+        return;
+    std::vector<Container*> coll = {c};
+    if (c->parent)
+        coll.push_back(c->parent);
+    set_active(root, coll, root, false, true);
+
+    std::vector<Container*> order;
+    collect_activatable(scope ? scope : root, order);
+    if (order.empty())
+        return;
+    const int count = (int) order.size();
+    auto it = std::find(order.begin(), order.end(), c);
+    int index;
+    if (it == order.end())
+        index = step > 0 ? 0 : count - 1;
+    else
+        index = ((int) (it - order.begin()) + step + count) % count;
+
+    coll = {order[index]};
+    if (order[index]->parent)
+        coll.push_back(order[index]->parent);
+    set_active(root, coll, root, true, true);
+}
+
+void activate_next_activatable(Container* root, Container* c, Container* scope) {
+    activate_neighbour(root, c, scope, 1);
+}
+
+void activate_previous_activatable(Container* root, Container* c, Container* scope) {
+    activate_neighbour(root, c, scope, -1);
+}
+
 void handle_mouse_button_press(Container* root, const Event& e) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

@@ -44,9 +44,10 @@ bool on_mouse_press(RawWindow *rw, int button, int state, float x, float y) {
     y *= rw->dpi;
     auto m = mylar(rw);
     if (!m) return false;
-    auto m2 = target_popup_if_exists_instead(m);
-    if (m2 != m) {
-        windowing::close_window(m2->raw_window);
+    // A press in a window dismisses the popups opened from it; closing its direct
+    // popup also closes every popup nested under that one, at any depth.
+    if (m->popup_window) {
+        windowing::close_window(m->popup_window->raw_window);
         m->popup_window = nullptr;
     }
     ::layout(m->root, m->root, m->root->real_bounds);
@@ -118,7 +119,7 @@ bool on_keyboard_focus(RawWindow *rw, bool gained) {
 void on_render(RawWindow *rw, int w, int h) {
     std::lock_guard<std::mutex> lock(rw->creator->mutex);
     log("on_render");
-    if (!rw->cr)
+    if (!rw->drawing_context)
         return;
     if (!rw->fractional_scale_set_once)
         return;
@@ -127,11 +128,7 @@ void on_render(RawWindow *rw, int w, int h) {
     m->root->real_bounds = Bounds(0, 0, w, h);
     m->root->wanted_bounds = m->root->real_bounds;
     ::layout(m->root, m->root, m->root->real_bounds);
-    auto cr = rw->cr;
-    cairo_save(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR); 
-    cairo_paint(cr);
-    cairo_restore(cr);
+    // The drawing context starts every frame cleared to transparent.
     paint_root(m->root);
 }
 

@@ -222,7 +222,7 @@ static void volume_row_set_level(AudioData *data, float scalar, bool finished) {
 static Container *fill_out_volume_slider(Container *c) {
     c->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto dpi = dock->volume->raw_window->dpi;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
@@ -322,7 +322,7 @@ static Container *add_volume_option(Container *parent) {
     };
     label_icon->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
         auto dpi = dock->volume->raw_window->dpi;
@@ -348,10 +348,10 @@ static Container *add_volume_option(Container *parent) {
         if (audio_data->icon_surface) {
             auto width = cairo_image_surface_get_width(audio_data->icon_surface);
             auto height = cairo_image_surface_get_height(audio_data->icon_surface);
-            cairo_set_source_surface(cr, audio_data->icon_surface,
+            cr->set_source_surface(audio_data->icon_surface,
                 std::round(x + icon_w * .5 - width * .5),
                 std::round(c->real_bounds.y + c->real_bounds.h * .5 - height * .5));
-            cairo_paint(cr);
+            cr->paint_source();
         } else {
             std::string glyph = "";
             auto b = draw_text(cr, 0, 0, glyph, 14 * dpi, false, icon_font);
@@ -405,7 +405,7 @@ static Container *add_volume_option(Container *parent) {
     };
     left_volume_icon->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto dpi = dock->volume->raw_window->dpi;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
@@ -446,7 +446,7 @@ static Container *add_volume_option(Container *parent) {
     };
     right_volume_text->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto dpi = dock->volume->raw_window->dpi;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
@@ -812,7 +812,7 @@ static Container *make_volume_page(Container *body, float dpi, const std::string
             return DrawContext{};
 
         auto window = dock->volume->raw_window;
-        return DrawContext({window->cr, window->dpi, [dock]() {
+        return DrawContext({window->drawing_context, window->dpi, [dock]() {
             if (!dock || !dock->volume || !dock->volume->raw_window)
                 return;
             windowing::redraw(dock->volume->raw_window);
@@ -844,29 +844,29 @@ void build_volume_popup(Dock *dock) {
     };
     segment->when_paint = [menu](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto dpi = dock->volume->raw_window->dpi;
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
         set_argb(cr, {0, 0, 0, .06});
-        cairo_fill(cr);
+        cr->fill();
 
         auto inner = c->children_bounds;
         double tab_w = inner.w / 2.0;
         Bounds pill(inner.x + tab_w * volume_slide_pos(menu), inner.y, tab_w, inner.h);
         drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 6 * dpi, 1.0);
         set_argb(cr, {1, 1, 1, 1});
-        cairo_fill(cr);
+        cr->fill();
         drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 6 * dpi, 1.0);
         set_argb(cr, {0, 0, 0, .1});
-        cairo_set_line_width(cr, 1.0);
-        cairo_stroke(cr);
+        cr->set_line_width(1.0);
+        cr->stroke();
     };
     for (int i = 0; i < 2; i++) {
         auto tab = segment->child(FILL_SPACE, FILL_SPACE);
         tab->when_paint = [menu, i](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
-            auto cr = dock->volume->raw_window->cr;
+            auto cr = dock->volume->raw_window->drawing_context;
             auto dpi = dock->volume->raw_window->dpi;
             bool selected = menu->tab == i;
             float alpha = selected ? .9f : (c->state.mouse_hovering ? .75f : .55f);
@@ -897,13 +897,13 @@ void build_volume_popup(Dock *dock) {
     };
     gear->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto dpi = dock->volume->raw_window->dpi;
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
         float alpha = c->state.mouse_pressing ? .14f : (c->state.mouse_hovering ? .1f : .06f);
         set_argb(cr, {0, 0, 0, alpha});
-        cairo_fill(cr);
+        cr->fill();
         std::string glyph = "";
         auto t = draw_text(cr, 0, 0, glyph, 13 * dpi, false, icon_font);
         draw_text(cr, center_x(c, t.w), center_y(c, t.h), glyph, 13 * dpi, true, icon_font, -1, -1, {0, 0, 0, .8});
@@ -913,15 +913,6 @@ void build_volume_popup(Dock *dock) {
         windowing::close_window(dock->volume->raw_window);
         main_thread([]() {
             settings::start("Audio");
-            // Already open: un-minimize and raise it. (A new window is focused on its own.)
-            auto pid = getpid();
-            for (auto cid : get_window_stacking_order()) {
-                if (hypriso->get_pid(cid) != pid || hypriso->class_name(cid) != "preferences-system")
-                    continue;
-                if (hypriso->is_hidden(cid))
-                    hypriso->set_hidden(cid, false);
-                hypriso->bring_to_front(cid);
-            }
         });
     };
 
@@ -936,14 +927,14 @@ void build_volume_popup(Dock *dock) {
     body->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto window = dock->volume->raw_window;
-        cairo_save(window->cr);
-        clip_to_popup_background(window->cr, root->real_bounds, window->dpi);
-        cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_clip(window->cr);
+        window->drawing_context->save();
+        clip_to_popup_background(window->drawing_context, root->real_bounds, window->dpi);
+        window->drawing_context->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        window->drawing_context->clip_path();
     };
     body->after_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        cairo_restore(dock->volume->raw_window->cr);
+        dock->volume->raw_window->drawing_context->restore();
     };
 
     auto dpi = window->raw_window->dpi;
@@ -953,7 +944,7 @@ void build_volume_popup(Dock *dock) {
         if (menu->mic_rows > 0)
             return;
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->volume->raw_window->cr;
+        auto cr = dock->volume->raw_window->drawing_context;
         auto dpi = dock->volume->raw_window->dpi;
         std::string text = "No microphones found";
         auto b = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font);

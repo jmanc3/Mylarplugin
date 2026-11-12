@@ -9,7 +9,7 @@ struct BrightnessSliderInfo : UserData {
 void fill_brightness_container(Dock *dock) {
     dock->brightness->root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->brightness->raw_window->cr;
+        auto cr = dock->brightness->raw_window->drawing_context;
         paint_popup_background(cr, c->real_bounds, dock->brightness->raw_window->dpi);
     };
     auto parent = dock->brightness->root->child(::vbox, FILL_SPACE, FILL_SPACE);

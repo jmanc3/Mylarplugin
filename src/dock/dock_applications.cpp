@@ -5,7 +5,10 @@
 #include "settings.h"
 #include "text_editor.h"
 
+#include <dbus/dbus.h>
 #include <dirent.h>
+#include <dlfcn.h>
+#include <linux/input-event-codes.h>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -59,13 +62,13 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
 
     pad->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock*)root->user_data;
-        auto cr = dock->applications->raw_window->cr;
+        auto cr = dock->applications->raw_window->drawing_context;
         auto dpi = dock->applications->raw_window->dpi;
 
         set_argb(cr, c->active ? accent : RGBA(.8, .8, .8, 1));
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
-        cairo_stroke(cr);
+        cr->stroke();
 
         set_argb(cr, {1, 1, 1, 1});
         auto minus_border = c->real_bounds;
@@ -73,7 +76,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         b = minus_border;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
         //set_rect(cr, minus_border);
-        cairo_fill(cr);
+        cr->fill();
 
         paint_text_editor(root, c, RGBA(0, 0, 0, 1), accent);
     };
@@ -193,10 +196,248 @@ static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
     }, nullptr);
 }
 
+/*
+ * Keyboard focus moves between the search field, the settings gear and the power button
+ * with Tab / Shift+Tab, using the shared tab traversal (named containers with key handlers).
+ */
+static void applications_move_focus(Container *root, Container *c, bool previous) {
+    auto dock = (Dock *) root->user_data;
+    auto applications = dock->applications;
+    std::weak_ptr<bool> lifetime = c->lifetime;
+    // Next frame, or the newly focused container would also receive this Tab.
+    windowing::timer(dock->app, 1, [dock, applications, root, c, previous, lifetime](void *) {
+        std::lock_guard<std::mutex> lock(dock->app->mutex);
+        if (lifetime.expired() || !applications || dock->applications != applications)
+            return;
+        if (previous)
+            activate_previous_activatable(root, c);
+        else
+            activate_next_activatable(root, c);
+        windowing::redraw(applications->raw_window);
+    }, nullptr);
+}
+
+/*
+ * Power menu: sign out, shut down, restart (the computer) and reload (this plugin).
+ */
+struct PowerItem {
+    const char *label;
+    const char *icon;
+};
+static const PowerItem power_items[] = {
+    {"Sign Out", "\uE77B"},
+    {"Shut Down", "\uE7E8"},
+    {"Restart", "\uE777"},
+    {"Reload", "\uE117"},
+};
+static constexpr int power_item_count = sizeof(power_items) / sizeof(power_items[0]);
+
+// systemd-logind over the system bus. interactive=true lets polkit ask when needed.
+static void login1_call(std::string method) {
+    std::thread([method]() {
+        DBusError error;
+        dbus_error_init(&error);
+        DBusConnection *connection = dbus_bus_get_private(DBUS_BUS_SYSTEM, &error);
+        if (!connection) {
+            fprintf(stderr, "mylar: system bus unavailable for %s: %s\n", method.c_str(), error.message ? error.message : "");
+            dbus_error_free(&error);
+            return;
+        }
+        dbus_connection_set_exit_on_disconnect(connection, false);
+        DBusMessage *message = dbus_message_new_method_call("org.freedesktop.login1", "/org/freedesktop/login1",
+                                                            "org.freedesktop.login1.Manager", method.c_str());
+        dbus_bool_t interactive = true;
+        if (message && dbus_message_append_args(message, DBUS_TYPE_BOOLEAN, &interactive, DBUS_TYPE_INVALID)) {
+            // Long timeout: polkit may be waiting on an authentication prompt.
+            DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection, message, 120000, &error);
+            if (reply)
+                dbus_message_unref(reply);
+            else
+                fprintf(stderr, "mylar: login1 %s failed: %s\n", method.c_str(), error.message ? error.message : "");
+        }
+        if (message)
+            dbus_message_unref(message);
+        dbus_error_free(&error);
+        dbus_connection_close(connection);
+        dbus_connection_unref(connection);
+    }).detach();
+}
+
+static std::string shell_quote(const std::string &text) {
+    std::string quoted = "'";
+    for (char ch : text) {
+        if (ch == '\'')
+            quoted += "'\\''";
+        else
+            quoted += ch;
+    }
+    return quoted + "'";
+}
+
+// Path of the loaded plugin .so, so it can be unloaded and loaded again.
+static std::string plugin_path() {
+    Dl_info info;
+    if (!dladdr((void *) &plugin_path, &info) || !info.dli_fname)
+        return "";
+    std::error_code ec;
+    auto path = std::filesystem::canonical(info.dli_fname, ec);
+    return ec ? std::string(info.dli_fname) : path.string();
+}
+
+static void run_power_action(int index) {
+    if (index == 0) {
+        // Same as the "Log out" shortcut: hyprshutdown when installed, otherwise exit Hyprland.
+        launch_command("command -v hyprshutdown >/dev/null 2>&1 && hyprshutdown || hyprctl dispatch 'hl.dsp.exit()'");
+    } else if (index == 1) {
+        login1_call("PowerOff");
+    } else if (index == 2) {
+        login1_call("Reboot");
+    } else if (index == 3) {
+        auto path = plugin_path();
+        if (path.empty())
+            return;
+        // Runs outside the plugin, which is gone between the two commands.
+        auto quoted = shell_quote(path);
+        launch_command("sleep 0.3; hyprctl plugin unload " + quoted + "; sleep 1; hyprctl plugin load " + quoted);
+    }
+}
+
+static void close_power_menu(Dock *dock, bool refocus_applications) {
+    if (!dock->power_menu)
+        return;
+    windowing::close_window(dock->power_menu->raw_window);
+    if (refocus_applications && dock->applications) {
+        auto applications = dock->applications;
+        later(30, [dock, applications](Timer *) {
+            if (dock->applications == applications)
+                windowing::request_keyboard_focus(applications->raw_window);
+        });
+    }
+}
+
+static void activate_power_item(Dock *dock, int index) {
+    if (index < 0 || index >= power_item_count)
+        return;
+    // Closing the applications menu also closes this child popup.
+    if (dock->applications)
+        windowing::close_window(dock->applications->raw_window);
+    run_power_action(index);
+}
+
+static void open_power_menu(Container *root, Container *anchor, bool via_keyboard) {
+    auto dock = (Dock *) root->user_data;
+    auto parent = dock->applications;
+    if (!parent || parent->popup_window || dock->power_menu)
+        return;
+    auto dpi = parent->raw_window->dpi;
+    static constexpr int row_h = 36;
+    static constexpr int pad = 6;
+    const int w = 200;
+    const int h = pad * 2 + row_h * power_item_count;
+    RawWindowSettings settings = make_icon_anchored_popup_settings(anchor, dpi, w, h);
+    // Above the button, extending left from its right edge.
+    settings.popup.anchor = RawWindowSettings::PopupAnchor::TOP_RIGHT;
+    settings.popup.gravity = RawWindowSettings::PopupGravity::TOP_LEFT;
+    settings.popup.offset_y = -6;
+    settings.keyboard_focus_on_click = true;
+    auto menu = open_mylar_popup(parent, settings);
+    if (!menu)
+        return;
+    dock->power_menu = menu;
+    auto menu_root = menu->root;
+    menu_root->user_data = dock;
+    menu_root->wanted_bounds.w = FILL_SPACE;
+    menu_root->wanted_bounds.h = FILL_SPACE;
+    menu_root->on_closed = [menu](Container *root) {
+        auto dock = (Dock *) root->user_data;
+        if (dock->power_menu == menu)
+            dock->power_menu = nullptr;
+    };
+    menu_root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto window = dock->power_menu->raw_window;
+        paint_popup_background(window->drawing_context, c->real_bounds, window->dpi);
+    };
+
+    // Keyboard selection; -1 until the keyboard or the mouse picks a row.
+    auto selected = std::make_shared<int>(via_keyboard ? 0 : -1);
+    menu_root->when_key_event = [selected](Container *root, Container *, int, bool pressed, xkb_keysym_t sym, int mods,
+                                           bool, std::string) {
+        if (!pressed)
+            return;
+        auto dock = (Dock *) root->user_data;
+        int &index = *selected;
+        bool back = sym == XKB_KEY_Up || sym == XKB_KEY_ISO_Left_Tab ||
+                    (sym == XKB_KEY_Tab && (mods & Modifier::MOD_SHIFT));
+        if (back) {
+            index = index <= 0 ? power_item_count - 1 : index - 1;
+        } else if (sym == XKB_KEY_Down || sym == XKB_KEY_Tab) {
+            index = index < 0 ? 0 : (index + 1) % power_item_count;
+        } else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter || sym == XKB_KEY_space) {
+            activate_power_item(dock, index);
+            return;
+        } else if (sym == XKB_KEY_Escape) {
+            close_power_menu(dock, true);
+            return;
+        } else {
+            return;
+        }
+        if (dock->power_menu)
+            windowing::redraw(dock->power_menu->raw_window);
+    };
+
+    auto list = menu_root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    list->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = ((Dock *) root->user_data)->power_menu->raw_window->dpi;
+        c->wanted_pad = Bounds(pad, pad, pad, pad).scale(dpi);
+    };
+    for (int i = 0; i < power_item_count; i++) {
+        auto row = list->child(FILL_SPACE, row_h);
+        row->pre_layout = [](Container *root, Container *c, const Bounds &) {
+            c->wanted_bounds.h = row_h * ((Dock *) root->user_data)->power_menu->raw_window->dpi;
+        };
+        row->when_paint = [i, selected](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto window = dock->power_menu->raw_window;
+            auto cr = window->drawing_context;
+            auto dpi = window->dpi;
+            auto b = c->real_bounds;
+            if (c->state.mouse_pressing || c->state.mouse_hovering || *selected == i) {
+                set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .14) : RGBA(0, 0, 0, .07));
+                drawRoundedRect(cr, b.x, b.y, b.w, b.h, 6 * dpi, 1.0);
+                cr->fill();
+            }
+            const RGBA ink(0, 0, 0, .9);
+            auto ib = draw_text(cr, 0, 0, power_items[i].icon, 13 * dpi, false, icon_font);
+            draw_text(cr, b.x + 12 * dpi, b.y + b.h * .5 - ib.h * .5, power_items[i].icon, 13 * dpi, true, icon_font,
+                      -1, -1, ink);
+            auto tb = draw_text(cr, 0, 0, power_items[i].label, 11 * dpi, false, set->font, -1, -1, ink);
+            draw_text(cr, b.x + 40 * dpi, b.y + b.h * .5 - tb.h * .5, power_items[i].label, 11 * dpi, true, set->font,
+                      -1, -1, ink);
+        };
+        row->when_mouse_enters_container = [i, selected](Container *root, Container *) {
+            *selected = i;
+            auto dock = (Dock *) root->user_data;
+            windowing::redraw(dock->power_menu->raw_window);
+        };
+        row->when_clicked = [i](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed != BTN_LEFT)
+                return;
+            activate_power_item((Dock *) root->user_data, i);
+        };
+    }
+
+    later(30, [dock, menu](Timer *) {
+        if (dock->power_menu == menu)
+            windowing::request_keyboard_focus(menu->raw_window);
+    });
+    windowing::redraw(menu->raw_window);
+}
+
 void fill_applications_container(Container *root) {
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->applications->raw_window->cr;
+        auto cr = dock->applications->raw_window->drawing_context;
         paint_popup_background(cr, c->real_bounds, dock->applications->raw_window->dpi);
     };
 
@@ -213,19 +454,26 @@ void fill_applications_container(Container *root) {
         std::string field_text;
         int active_option = 0;
         bool keyboard_option_changed = false;
+        // The selected entry is only highlighted while the field has focus.
+        Container *field = nullptr;
     };
     auto search = std::make_shared<SearchState>();
 
     auto field = make_field(padded, false, "", [search](std::string text) {
-        auto &[field_text, active_option, keyboard_option_changed] = *search;
+        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
         field_text = std::move(text);
         active_option = 0;
         keyboard_option_changed = false;
     });
+    search->field = field;
+    field->name = "applications_search";
+    static_cast<STextEditorData *>(field->user_data)->options.on_tab = [](Container *root, Container *c, bool previous) {
+        applications_move_focus(root, c, previous);
+    };
     auto edit_key = std::move(field->when_key_event);
     field->when_key_event = [edit_key, search](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
                                      int mods, bool is_text, std::string text) {
-        auto &[field_text, active_option, keyboard_option_changed] = *search;
+        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
         if (!c->active)
             return;
         edit_key(root, c, key, pressed, sym, mods, is_text, text);
@@ -269,10 +517,13 @@ void fill_applications_container(Container *root) {
     auto scroll_parent = padded->child(FILL_SPACE, FILL_SPACE);
     ScrollPaneSettings scroll_settings(1.0);
     scroll_settings.right_inline_track = true;
+    // Rows are 56px tall and the list can hold hundreds of entries.
+    scroll_settings.wheel_step = 84;
+    scroll_settings.wheel_max_acceleration = 4;
     auto scroll = make_newscrollpane_as_child(scroll_parent, scroll_settings, [](Container *root) {
         auto dock = ((Dock *) root->user_data);
         auto applications = dock->applications;
-        return DrawContext({applications->raw_window->cr, applications->raw_window->dpi, [dock, applications]() {
+        return DrawContext({applications->raw_window->drawing_context, applications->raw_window->dpi, [dock, applications]() {
             // Scroll animations can finish after this popup has closed or been replaced.
             if (dock->applications != applications)
                 return;
@@ -282,7 +533,7 @@ void fill_applications_container(Container *root) {
     auto scroll_content = scroll->content;
     scroll->name = "scroll_content";
     scroll->pre_layout = [search](Container *root, Container *c_, const Bounds &b) {
-        auto &[field_text, active_option, keyboard_option_changed] = *search;
+        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
         auto scroll = ((ScrollContainer *) c_);
         auto animation_active = datum<bool>(scroll, "applications_scroll_animation_active");
         if (*animation_active) {
@@ -385,7 +636,7 @@ void fill_applications_container(Container *root) {
     };
 
     auto rebuild_scripts = [scroll_content, scroll, search](const std::vector<Script> &entries) {
-    auto &[field_text, active_option, keyboard_option_changed] = *search;
+    auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
     for (auto child : scroll_content->children)
         delete child;
     scroll_content->children.clear();
@@ -403,13 +654,13 @@ void fill_applications_container(Container *root) {
             auto dpi = dock->applications->raw_window->dpi;
             c->wanted_bounds.h = 56 * dpi;
         };
-        o->when_paint = [](Container *root, Container *c) {
+        o->when_paint = [search](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto s = (Script *) c->user_data;
             auto name = s->name;
             auto full = s->full_path;
             auto dpi = dock->applications->raw_window->dpi;
-            auto cr = dock->applications->raw_window->cr;
+            auto cr = dock->applications->raw_window->drawing_context;
             const int icon_size = std::round(get_icon_size(dpi));
             if (icons_loaded && s->icon_size != icon_size) {
                 s->icon_size = icon_size;
@@ -432,11 +683,11 @@ void fill_applications_container(Container *root) {
                                     c->real_bounds.x + c->real_bounds.w > clip_bounds.x + clip_bounds.w ||
                                     c->real_bounds.y + c->real_bounds.h > clip_bounds.y + clip_bounds.h;
             if (needs_clip) {
-                cairo_save(cr);
-                cairo_rectangle(cr, clip_bounds.x, clip_bounds.y, clip_bounds.w, clip_bounds.h);
-                cairo_clip(cr);
+                cr->save();
+                cr->rectangle(clip_bounds.x, clip_bounds.y, clip_bounds.w, clip_bounds.h);
+                cr->clip_path();
             }
-            if (s->selected) {
+            if (s->selected && search->field && search->field->active) {
                 set_argb(cr, accent);
             } else {
                 set_argb(cr, {0, 0, 0, .15});
@@ -445,7 +696,7 @@ void fill_applications_container(Container *root) {
                             c->real_bounds.h,
                             10 * dock->applications->raw_window->dpi,
                             std::round(1.0 * dpi));
-            cairo_stroke(cr);
+            cr->stroke();
 
             const auto text_x = c->real_bounds.x + (20 * dpi) + icon_size;
             const auto text_width = std::max(1.0, c->real_bounds.w - (30 * dpi) - icon_size);
@@ -466,17 +717,17 @@ void fill_applications_container(Container *root) {
                       std::round(text_width), std::round(path_size * PANGO_SCALE), path_color, false);
             if (s->icon_surface) {
                 const auto icon_height = cairo_image_surface_get_height(s->icon_surface.get());
-                cairo_set_source_surface(cr, s->icon_surface.get(),
+                cr->set_source_surface(s->icon_surface.get(),
                     c->real_bounds.x + 10 * dpi,
                     center_y(c, icon_height));
-                cairo_paint(cr);
+                cr->paint_source();
             }
 
             if (needs_clip)
-                cairo_restore(cr);
+                cr->restore();
         };
         o->when_mouse_enters_container = [search](Container *root, Container *c) {
-            auto &[field_text, active_option, keyboard_option_changed] = *search;
+            auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
             int index = 0;
             int alive_index = 0;
             for (auto sibling : c->parent->children) {
@@ -493,6 +744,8 @@ void fill_applications_container(Container *root) {
             windowing::redraw(dock->applications->raw_window);
         };
         o->when_clicked = [search](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed != BTN_LEFT)
+                return;
             auto dock = (Dock *) root->user_data;
             auto s = (Script *) c->user_data;
             launch_command(s->full_path);
@@ -536,42 +789,62 @@ void fill_applications_container(Container *root) {
         "\uE713", // Settings
         "\uE7E8", // PowerButton
     };
+    static const char *button_names[] = {"applications_settings", "applications_power"};
+    auto activate_button = [](Container *root, Container *c, int i, bool via_keyboard) {
+        auto dock = (Dock *) root->user_data;
+        if (i == 0) {
+            windowing::close_window(dock->applications->raw_window);
+            main_thread([]() {
+                settings::start();
+            });
+        } else {
+            open_power_menu(root, c, via_keyboard);
+        }
+    };
     for (int i = 0; i < 2; i++) {
         auto b = bottom->child(FILL_SPACE, FILL_SPACE);
+        b->name = button_names[i];
         b->when_paint = [i](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto dpi = dock->applications->raw_window->dpi;
-            auto cr = dock->applications->raw_window->cr;
-            if (c->state.mouse_pressing) {
-                set_argb(cr, {.5, .5, .5, 1});
-                set_rect(cr, c->real_bounds);
-                cairo_fill(cr);
-            } else if (c->state.mouse_hovering) {
-                set_argb(cr, {.65, .65, .65, 1});
-                set_rect(cr, c->real_bounds);
-                cairo_fill(cr);
+            auto cr = dock->applications->raw_window->drawing_context;
+            auto rb = c->real_bounds;
+            const bool menu_open = i == 1 && dock->power_menu;
+            if (c->state.mouse_pressing || c->state.mouse_hovering || c->active || menu_open) {
+                set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .16) : RGBA(0, 0, 0, .08));
+                drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 8 * dpi, 1.0);
+                cr->fill();
             }
-
+            if (c->active) {
+                // Keyboard focus ring.
+                set_argb(cr, accent);
+                drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 8 * dpi, std::max(1.0, (double) std::round(1.5 * dpi)));
+                cr->stroke();
+            }
 
             auto b = draw_text(cr, 0, 0, icons[i], 16 * dpi, false, icon_font);
             draw_text(cr,
                 c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5,
                 c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, icons[i], 16 * dpi, true, icon_font, -1, -1, {0, 0, 0, 1});
         };
-        if (i == 0) {
-            b->when_clicked = [](Container *root, Container *c) {
-                auto dock = (Dock *) root->user_data;
+        b->when_key_event = [i, activate_button](Container *root, Container *c, int, bool pressed, xkb_keysym_t sym,
+                                                 int mods, bool, std::string) {
+            if (!c->active || !pressed)
+                return;
+            auto dock = (Dock *) root->user_data;
+            if (sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+                applications_move_focus(root, c, sym == XKB_KEY_ISO_Left_Tab || (mods & Modifier::MOD_SHIFT));
+            } else if (sym == XKB_KEY_space || sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+                activate_button(root, c, i, true);
+            } else if (sym == XKB_KEY_Escape) {
                 windowing::close_window(dock->applications->raw_window);
-                main_thread([]() {
-                    settings::start();
-                });
-            };
-        } else if (i == 1) {
-            b->when_clicked = [](Container *root, Container *c) {
-                auto dock = (Dock *) root->user_data;
-                windowing::close_window(dock->applications->raw_window);
-            };
-        }
+            }
+        };
+        b->when_clicked = [i, activate_button](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed != BTN_LEFT)
+                return;
+            activate_button(root, c, i, false);
+        };
     }
 }
 

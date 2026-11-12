@@ -376,7 +376,7 @@ static Container *bluetooth_row(Container *parent, double height) {
 static void bluetooth_draw_text(Container *root, Bounds b, const std::string &text, double size = 10,
                                 RGBA color = {.14, .18, .24, 1}, bool centered = false, bool bold = false) {
     auto window = bluetooth_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi,
         bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(font, text.c_str(), -1);
     pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
@@ -386,13 +386,13 @@ static void bluetooth_draw_text(Container *root, Bounds b, const std::string &te
     pango_layout_set_alignment(font, centered ? PANGO_ALIGN_CENTER : PANGO_ALIGN_LEFT);
     int width, height;
     pango_layout_get_pixel_size(font, &width, &height);
-    cairo_save(window->cr);
-    cairo_rectangle(window->cr, b.x, b.y, b.w, b.h);
-    cairo_clip(window->cr);
-    set_argb(window->cr, color);
-    cairo_move_to(window->cr, b.x, b.y + std::max(0.0, (b.h - height) * .5));
-    pango_cairo_show_layout(window->cr, font);
-    cairo_restore(window->cr);
+    window->drawing_context->save();
+    window->drawing_context->rectangle(b.x, b.y, b.w, b.h);
+    window->drawing_context->clip_path();
+    set_argb(window->drawing_context, color);
+    window->drawing_context->move_to(b.x, b.y + std::max(0.0, (b.h - height) * .5));
+    window->drawing_context->show_layout(font);
+    window->drawing_context->restore();
 }
 
 static Container *bluetooth_label(Container *parent, std::string text, double height = 28,
@@ -411,10 +411,10 @@ static void bluetooth_paint_button(Container *root, Container *c, const std::str
     auto window = bluetooth_window(root);
     auto b = c->real_bounds;
     if (b.h <= 0) return;
-    set_argb(window->cr, !enabled ? RGBA(.95, .96, .97, 1) : c->state.mouse_pressing ?
+    set_argb(window->drawing_context, !enabled ? RGBA(.95, .96, .97, 1) : c->state.mouse_pressing ?
         RGBA(.72, .83, .95, 1) : c->state.mouse_hovering ? RGBA(.83, .90, .98, 1) : RGBA(.92, .94, .96, 1));
-    drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
-    cairo_fill(window->cr);
+    drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
+    window->drawing_context->fill();
     b.x += 6 * window->dpi;
     b.w -= 12 * window->dpi;
     bluetooth_draw_text(root, b, text, 10, enabled ? RGBA(.14, .18, .24, 1) : RGBA(.53, .57, .62, 1), true);
@@ -467,15 +467,15 @@ static Container *bluetooth_device_row(Container *parent) {
     row->when_paint = [data](Container *root, Container *c) {
         auto window = bluetooth_window(root);
         auto b = c->real_bounds;
-        cairo_save(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 6 * window->dpi, 1);
-        cairo_clip(window->cr);
-        set_argb(window->cr, data->expansion > .01 ? RGBA(.88, .93, .99, 1) : RGBA(.95, .96, .97, 1));
-        cairo_paint(window->cr);
+        window->drawing_context->save();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 6 * window->dpi, 1);
+        window->drawing_context->clip_path();
+        set_argb(window->drawing_context, data->expansion > .01 ? RGBA(.88, .93, .99, 1) : RGBA(.95, .96, .97, 1));
+        window->drawing_context->paint_source();
         if (std::abs(data->expansion - data->expansion_target) > .001)
             bluetooth_menu_data(root)->animating = true;
     };
-    row->after_paint = [](Container *root, Container *) { cairo_restore(bluetooth_window(root)->cr); };
+    row->after_paint = [](Container *root, Container *) { bluetooth_window(root)->drawing_context->restore(); };
     auto header = bluetooth_row(row, 62);
     header->when_paint = [data](Container *root, Container *c) {
         auto window = bluetooth_window(root);
@@ -495,10 +495,10 @@ static Container *bluetooth_device_row(Container *parent) {
         }
         auto b = c->real_bounds;
         if (data->icon) {
-            cairo_set_source_surface(window->cr, data->icon.get(), b.x + 10 * dpi, b.y + 19 * dpi);
-            cairo_paint(window->cr);
+            window->drawing_context->set_source_surface(data->icon.get(), b.x + 10 * dpi, b.y + 19 * dpi);
+            window->drawing_context->paint_source();
         } else {
-            draw_text(window->cr, b.x + 10 * dpi, b.y + 19 * dpi, "\uE702", 20 * dpi, true,
+            draw_text(window->drawing_context, b.x + 10 * dpi, b.y + 19 * dpi, "\uE702", 20 * dpi, true,
                 icon_font, -1, -1, accent);
         }
         std::string subtitle = data->device.connected ? "Connected" : "Paired";
@@ -565,25 +565,25 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
             auto window = bluetooth_window(root);
             double phase = (get_current_time_in_ms() % 2000) / 2000.0;
             // Dots slide in from the edges; keep them inside the rounded corners.
-            cairo_save(window->cr);
-            clip_to_popup_background(window->cr, root->real_bounds, window->dpi);
+            window->drawing_context->save();
+            clip_to_popup_background(window->drawing_context, root->real_bounds, window->dpi);
             for (int i = 0; i < 5; ++i) {
                 double step = (phase - i * .08) / .6;
                 if (step < 0 || step > 1) continue;
                 double x = .5 - .5 * std::cos(step * M_PI);
-                set_argb(window->cr, accent);
-                cairo_arc(window->cr, c->real_bounds.x + x * c->real_bounds.w,
+                set_argb(window->drawing_context, accent);
+                window->drawing_context->arc(c->real_bounds.x + x * c->real_bounds.w,
                     c->real_bounds.y + 4 * window->dpi, 2 * window->dpi, 0, 2 * M_PI);
-                cairo_fill(window->cr);
+                window->drawing_context->fill();
             }
-            cairo_restore(window->cr);
+            window->drawing_context->restore();
         };
         ScrollPaneSettings settings(dock->bluetooth->raw_window->dpi);
         settings.bottom_show_amount = SNever;
         auto devices = make_newscrollpane_as_child(body, settings, [](Container *root) {
             auto window = bluetooth_window(root);
             DrawContext context;
-            context.cr = window->cr;
+            context.cr = window->drawing_context;
             context.dpi = window->dpi;
             context.on_needs_frame = [window]() { windowing::redraw(window); };
             return context;
@@ -599,9 +599,9 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
         };
         devices->when_paint = [](Container *root, Container *c) {
             auto window = bluetooth_window(root);
-            cairo_save(window->cr);
-            cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            cairo_clip(window->cr);
+            window->drawing_context->save();
+            window->drawing_context->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            window->drawing_context->clip_path();
             if (!static_cast<ScrollContainer *>(c)->content->children.empty()) return;
             const auto &view = bluetooth_menu_data(root)->view;
             bool powered = std::any_of(view.adapters.begin(), view.adapters.end(), [](const Adapter &a) { return a.powered; });
@@ -615,14 +615,14 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
             b.w -= 60 * window->dpi;
             bluetooth_draw_text(root, b, message, 10, {.43, .48, .55, 1}, true);
         };
-        devices->after_paint = [](Container *root, Container *) { cairo_restore(bluetooth_window(root)->cr); };
+        devices->after_paint = [](Container *root, Container *) { bluetooth_window(root)->drawing_context->restore(); };
         auto feedback = body->child(FILL_SPACE, 0);
         feedback->name = "bluetooth_feedback";
         feedback->pre_layout = [](Container *root, Container *c, const Bounds &) {
             auto window = bluetooth_window(root);
             const auto &view = bluetooth_menu_data(root)->view;
             c->exists = !view.message.empty();
-            auto font = get_cached_pango_font(window->cr, set->font, 10 * window->dpi, PANGO_WEIGHT_NORMAL, false);
+            auto font = get_cached_pango_font(window->drawing_context, set->font, 10 * window->dpi, PANGO_WEIGHT_NORMAL, false);
             pango_layout_set_text(font, view.message.c_str(), -1);
             pango_layout_set_width(font, std::max(1.0, root->real_bounds.w - 24 * window->dpi) * PANGO_SCALE);
             pango_layout_set_height(font, -1);
@@ -635,9 +635,9 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
         feedback->when_paint = [](Container *root, Container *c) {
             auto window = bluetooth_window(root);
             const auto &view = bluetooth_menu_data(root)->view;
-            set_argb(window->cr, view.error ? RGBA(.99, .90, .89, 1) : RGBA(.89, .95, .91, 1));
-            cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            cairo_fill(window->cr);
+            set_argb(window->drawing_context, view.error ? RGBA(.99, .90, .89, 1) : RGBA(.89, .95, .91, 1));
+            window->drawing_context->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            window->drawing_context->fill();
             auto b = c->real_bounds;
             b.shrink(8 * window->dpi);
             bluetooth_draw_text(root, b, view.message, 10, view.error ? RGBA(.68, .19, .15, 1) : RGBA(.19, .43, .28, 1));
@@ -651,9 +651,9 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
         };
         prompt->when_paint = [](Container *root, Container *c) {
             auto window = bluetooth_window(root);
-            set_argb(window->cr, {.89, .94, .99, 1});
-            cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-            cairo_fill(window->cr);
+            set_argb(window->drawing_context, {.89, .94, .99, 1});
+            window->drawing_context->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+            window->drawing_context->fill();
         };
         auto footer = bluetooth_row(body, 50);
         footer->name = "bluetooth_footer";
@@ -761,12 +761,12 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
             b.w -= 26 * window->dpi;
             b.y += 5 * window->dpi;
             b.h -= 10 * window->dpi;
-            set_argb(window->cr, {1, 1, 1, 1});
-            drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
-            cairo_fill_preserve(window->cr);
-            set_argb(window->cr, accent);
-            cairo_set_line_width(window->cr, window->dpi);
-            cairo_stroke(window->cr);
+            set_argb(window->drawing_context, {1, 1, 1, 1});
+            drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
+            window->drawing_context->fill_preserve();
+            set_argb(window->drawing_context, accent);
+            window->drawing_context->set_line_width(window->dpi);
+            window->drawing_context->stroke();
             b.shrink(6 * window->dpi);
             bluetooth_draw_text(root, b, dock->bluetooth_input.empty() ? "Type here…" : dock->bluetooth_input + "|", 11);
         };
@@ -847,7 +847,7 @@ void fill_bluetooth_container(Dock *dock) {
     window->root->when_paint = [](Container *root, Container *c) {
         auto dock = static_cast<Dock *>(root->user_data);
         auto window = dock->bluetooth->raw_window;
-        paint_popup_background(window->cr, c->real_bounds, window->dpi);
+        paint_popup_background(window->drawing_context, c->real_bounds, window->dpi);
     };
     // Mylar's raw close handler currently does not destroy roots, so hook the
     // actual window close for discovery/agent cleanup as well as popup ownership.

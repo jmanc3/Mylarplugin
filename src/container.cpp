@@ -640,6 +640,10 @@ void layout_newscrollpane_content(Container* root, ScrollContainer* scroll, cons
 }
 
 void layout_newscrollpane(Container* root, ScrollContainer* scroll, const Bounds& bounds) {
+    bool easing = scroll->smooth_v.step(scroll->scroll_v_visual);
+    easing |= scroll->smooth_h.step(scroll->scroll_h_visual);
+    if (easing && scroll->request_frame)
+        scroll->request_frame(root, scroll);
     if (scroll->pre_layout)
         scroll->pre_layout(root, scroll, bounds);
     ScrollPaneSettings settings = scroll->settings;

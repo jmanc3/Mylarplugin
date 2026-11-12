@@ -4,6 +4,7 @@
 #include "container.h"
 #include "hypriso.h"
 #include "defer.h"
+#include "drawing/context.h"
 
 #include <any>
 #include <assert.h>
@@ -354,6 +355,14 @@ static void set_argb(cairo_t *cr, RGBA color) {
 
 static void set_rect(cairo_t *cr, Bounds bounds) {
     cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
+}
+
+static void set_argb(drawing::Context *cr, RGBA color) {
+    cr->set_source_rgba(color.r, color.g, color.b, color.a);
+}
+
+static void set_rect(drawing::Context *cr, Bounds bounds) {
+    cr->rectangle(bounds.x, bounds.y, bounds.w, bounds.h);
 }
 
 struct SnapLimits {

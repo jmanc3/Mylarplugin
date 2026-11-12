@@ -39,7 +39,7 @@ static Container *add_extra_button(Container *parent, std::string icon,
     icon_button->when_paint = [icon = std::move(icon)](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto window = extra_window(dock);
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         auto dpi = window->raw_window->dpi;
         if (c->state.mouse_pressing || c->state.mouse_hovering) {
             if (c->state.mouse_pressing) {
@@ -48,11 +48,11 @@ static Container *add_extra_button(Container *parent, std::string icon,
                 set_argb(cr, {0, 0, 0, .1});
             }
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dpi, 1.0);
-            cairo_fill(cr);
+            cr->fill();
         }
         set_argb(cr, {0, 0, 0, .2});
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dpi, 1.0);
-        cairo_stroke(cr);
+        cr->stroke();
 
         auto b = draw_text(cr, 0, 0, icon, 36, false, icon_font, -1, -1, {0, 0, 0, 1});
         draw_text(cr, center_x(c, b.w), center_y(c, b.h), icon, 36, true, icon_font, -1, -1, {0, 0, 0, 1});
@@ -258,14 +258,15 @@ static cairo_surface_t *tray_icon_surface(TrayAreaData *data, const TrayItemView
         cairo_surface_mark_dirty(pixels);
         // Scale to the cell size once instead of on every paint.
         cache.surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
-        auto cr = cairo_create(cache.surface);
+        // Offscreen icon preparation (once per icon), not window painting.
+        auto scale_cr = cairo_create(cache.surface);
         double scale = (double) size / std::max(item.pixels.w, item.pixels.h);
-        cairo_translate(cr, (size - item.pixels.w * scale) * .5, (size - item.pixels.h * scale) * .5);
-        cairo_scale(cr, scale, scale);
-        cairo_set_source_surface(cr, pixels, 0, 0);
-        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-        cairo_paint(cr);
-        cairo_destroy(cr);
+        cairo_translate(scale_cr, (size - item.pixels.w * scale) * .5, (size - item.pixels.h * scale) * .5);
+        cairo_scale(scale_cr, scale, scale);
+        cairo_set_source_surface(scale_cr, pixels, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(scale_cr), CAIRO_FILTER_GOOD);
+        cairo_paint(scale_cr);
+        cairo_destroy(scale_cr);
         cairo_surface_destroy(pixels);
     }
     return cache.surface;
@@ -317,14 +318,14 @@ static void make_tray_area(Container *parent) {
     tray->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto window = extra_window(dock);
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         auto dpi = window->raw_window->dpi;
         auto data = (TrayAreaData *) c->user_data;
         auto b = c->real_bounds;
 
         set_argb(cr, {0, 0, 0, .08});
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
-        cairo_fill(cr);
+        cr->fill();
 
         if (systray::revision() != data->revision) {
             data->items = systray::snapshot(&data->revision);
@@ -349,9 +350,9 @@ static void make_tray_area(Container *parent) {
 
         auto l = tray_layout(b, data->items.size(), dpi);
         int hovered = c->state.mouse_hovering ? tray_item_at(root, c, data, dpi) : -1;
-        cairo_save(cr);
+        cr->save();
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
-        cairo_clip(cr);
+        cr->clip_path();
         for (int i = 0; i < (int) data->items.size(); i++) {
             auto &item = data->items[i];
             double x = l.x + (i % l.per_row) * l.cell;
@@ -359,12 +360,12 @@ static void make_tray_area(Container *parent) {
             if (i == hovered) {
                 set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .14) : RGBA(0, 0, 0, .08));
                 drawRoundedRect(cr, x + 2 * dpi, y + 2 * dpi, l.cell - 4 * dpi, l.cell - 4 * dpi, 6 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             if (item.needs_attention) {
                 set_argb(cr, {.95, .45, .1, .25});
                 drawRoundedRect(cr, x + 2 * dpi, y + 2 * dpi, l.cell - 4 * dpi, l.cell - 4 * dpi, 6 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             int size = (int) l.icon;
             double ix = std::round(x + (l.cell - size) * .5);
@@ -372,24 +373,24 @@ static void make_tray_area(Container *parent) {
             if (auto surface = tray_icon_surface(data, item, size)) {
                 double sw = cairo_image_surface_get_width(surface);
                 double sh = cairo_image_surface_get_height(surface);
-                cairo_save(cr);
-                cairo_translate(cr, ix, iy);
+                cr->save();
+                cr->translate(ix, iy);
                 if (sw > 0 && sh > 0 && (sw != size || sh != size))
-                    cairo_scale(cr, size / sw, size / sh);
-                cairo_set_source_surface(cr, surface, 0, 0);
-                cairo_paint(cr);
-                cairo_restore(cr);
+                    cr->scale(size / sw, size / sh);
+                cr->set_source_surface(surface, 0, 0);
+                cr->paint_source();
+                cr->restore();
             } else {
                 // No icon: a circle with the first letter of the title.
                 set_argb(cr, {0, 0, 0, .2});
-                cairo_arc(cr, ix + size * .5, iy + size * .5, size * .5, 0, 2 * M_PI);
-                cairo_fill(cr);
+                cr->arc(ix + size * .5, iy + size * .5, size * .5, 0, 2 * M_PI);
+                cr->fill();
                 std::string letter = item.title.empty() ? "?" : item.title.substr(0, 1);
                 auto tb = draw_text(cr, 0, 0, letter, size * .5, false, set->font, -1, -1, {0, 0, 0, .8});
                 draw_text(cr, ix + size * .5 - tb.w * .5, iy + size * .5 - tb.h * .5, letter, size * .5, true, set->font, -1, -1, {0, 0, 0, .8});
             }
         }
-        cairo_restore(cr);
+        cr->restore();
     };
     tray->when_mouse_motion = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -513,7 +514,7 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
         root->when_paint = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto window = dock->tray_menu->raw_window;
-            paint_popup_background(window->cr, c->real_bounds, window->dpi);
+            paint_popup_background(window->drawing_context, c->real_bounds, window->dpi);
         };
 
         auto list = root->child(FILL_SPACE, FILL_SPACE);
@@ -529,17 +530,17 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
         list->when_paint = [area](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto window = dock->tray_menu->raw_window;
-            auto cr = window->cr;
+            auto cr = window->drawing_context;
             auto dpi = window->dpi;
             auto data = (TrayMenuData *) c->user_data;
             auto &level = tray_menu_level(data);
-            cairo_save(cr);
+            cr->save();
             clip_to_popup_background(cr, c->real_bounds, dpi);
             for (auto &[index, rb] : tray_menu_rows(data, area(root, c), dpi)) {
                 if (index == -2) {
                     set_argb(cr, {0, 0, 0, .1});
-                    cairo_rectangle(cr, rb.x + 8 * dpi, std::round(rb.y + rb.h * .5), rb.w - 16 * dpi, std::max(1.0, (double) std::floor(dpi)));
-                    cairo_fill(cr);
+                    cr->rectangle(rb.x + 8 * dpi, std::round(rb.y + rb.h * .5), rb.w - 16 * dpi, std::max(1.0, (double) std::floor(dpi)));
+                    cr->fill();
                     continue;
                 }
                 bool enabled = index == -1 || level[index].enabled;
@@ -547,16 +548,16 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
                 if (hovered && enabled) {
                     set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .14) : RGBA(0, 0, 0, .07));
                     drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
-                    cairo_fill(cr);
+                    cr->fill();
                 }
                 RGBA ink = enabled ? RGBA(0, 0, 0, .9) : RGBA(0, 0, 0, .35);
                 std::string label = index == -1 ? "‹  Back" : level[index].label;
                 auto tb = draw_text(cr, 0, 0, label, 11 * dpi, false, set->font, -1, -1, ink);
-                cairo_save(cr);
-                cairo_rectangle(cr, rb.x, rb.y, rb.w - 26 * dpi, rb.h);
-                cairo_clip(cr);
+                cr->save();
+                cr->rectangle(rb.x, rb.y, rb.w - 26 * dpi, rb.h);
+                cr->clip_path();
                 draw_text(cr, rb.x + 30 * dpi, rb.y + rb.h * .5 - tb.h * .5, label, 11 * dpi, true, set->font, -1, -1, ink);
-                cairo_restore(cr);
+                cr->restore();
                 if (index >= 0) {
                     auto &item = level[index];
                     if (item.toggle_state == 1 && !item.toggle_type.empty()) {
@@ -570,7 +571,7 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
                     }
                 }
             }
-            cairo_restore(cr);
+            cr->restore();
         };
         list->when_mouse_motion = [](Container *root, Container *c) {
             windowing::redraw(((Dock *) root->user_data)->tray_menu->raw_window);
@@ -614,7 +615,7 @@ void fill_extra_container(Container *root) {
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto window = extra_window(dock);
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         paint_popup_background(cr, c->real_bounds, dock->extra->raw_window->dpi);
     };
 

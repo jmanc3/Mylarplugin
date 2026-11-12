@@ -302,7 +302,7 @@ void draw_colored_rect(Container *root, Container *scroll_container, const RGBA 
     auto ctx = data->func(root);
     set_rect(ctx.cr, bounds);
     set_argb(ctx.cr, color);
-    cairo_fill(ctx.cr);
+    ctx.cr->fill();
     //rect(bounds, color);
 }
 
@@ -315,8 +315,8 @@ void draw_margins_rect(Container *root, Container *scroll_container, const RGBA 
     auto ctx = data->func(root);
     set_rect(ctx.cr, bounds);
     set_argb(ctx.cr, color);
-    cairo_set_line_width(ctx.cr, amount);
-    cairo_stroke(ctx.cr);
+    ctx.cr->set_line_width(amount);
+    ctx.cr->stroke();
 }
 
 class HoverableButton : public UserData {
@@ -377,11 +377,37 @@ void fine_scrollpane_scrolled(Container *root,
     }
 
     root->consumed_event = true;
+    if (!came_from_touchpad && scroll->settings.wheel_step > 0) {
+        // Wayland reports 15 per wheel notch.
+        auto data = (ScrollData *) scroll->user_data;
+        double dpi = data && data->func ? data->func(root).dpi : 1.0;
+        double now = SmoothScroll::now_ms();
+        if (now - scroll->previous_time_scrolled < 140)
+            scroll->scroll_count++;
+        else
+            scroll->scroll_count = 0;
+        scroll->previous_time_scrolled = (long) now;
+        double accel = std::min<double>(scroll->settings.wheel_max_acceleration, 1.0 + scroll->scroll_count * .4);
+        double factor = scroll->settings.wheel_step * dpi * std::max(1.0, accel) / 15.0;
+        scroll_x = (int) std::lround(scroll_x * factor);
+        scroll_y = (int) std::lround(scroll_y * factor);
+    }
     container->scroll_h_real += scroll_x;
     container->scroll_v_real += scroll_y;
-    container->scroll_h_visual = container->scroll_h_real;
-    container->scroll_v_visual = container->scroll_v_real;
+    if (came_from_touchpad) {
+        scroll->smooth_h.stop();
+        scroll->smooth_v.stop();
+        container->scroll_h_visual = container->scroll_h_real;
+        container->scroll_v_visual = container->scroll_v_real;
+    } else {
+        // Only the real offset jumps; layout eases the visual one after it.
+        clamp_scroll(scroll);
+        scroll->smooth_h.start(container->scroll_h_visual, container->scroll_h_real);
+        scroll->smooth_v.start(container->scroll_v_visual, container->scroll_v_real);
+    }
     ::layout(root, container, container->real_bounds);
+    if (scroll->request_frame && (scroll->smooth_h.active || scroll->smooth_v.active))
+        scroll->request_frame(root, scroll);
 }
 
 static void
@@ -429,8 +455,8 @@ paint_arrow(Container *root, Container *container) {
     PangoRectangle ink;
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
-    cairo_move_to(ctx.cr, center_x(container, logical.width), center_y(container, logical.height));
-    pango_cairo_show_layout(ctx.cr, layout);
+    ctx.cr->move_to(center_x(container, logical.width), center_y(container, logical.height));
+    ctx.cr->show_layout(layout);
 }
 
 static void
@@ -860,6 +886,14 @@ make_newscrollpane_as_child(Container *parent, const ScrollPaneSettings &setting
     auto data = new ScrollData;
     data->func = func;
     scrollpane->user_data = data;
+    scrollpane->request_frame = [](Container *root, ScrollContainer *scroll) {
+        auto data = (ScrollData *) scroll->user_data;
+        if (!data || !data->func)
+            return;
+        auto ctx = data->func(root);
+        if (ctx.on_needs_frame)
+            ctx.on_needs_frame();
+    };
     scrollpane->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto scroll = (ScrollContainer *) c;
         auto data = (ScrollData *) c->user_data;

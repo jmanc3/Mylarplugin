@@ -1,6 +1,8 @@
 // wl_input.c
  
 #include "client/raw_windowing.h"
+#include "client/egl_window.h"
+#include "drawing/context.h"
 
 #include "heart.h"
 
@@ -79,8 +81,8 @@ bool wl_window_resize_buffer(struct wl_window *win, int new_width, int new_heigh
 
 struct wl_buffer_slot {
     wl_buffer *buffer = nullptr;
-    cairo_surface_t *cairo_surface = nullptr;
-    cairo_t *cr = nullptr;
+    // Software fallback only; the OpenGL path presents through EGL.
+    std::unique_ptr<drawing::Context> cr;
 
     void *data = nullptr;
     size_t size = 0;
@@ -276,6 +278,8 @@ struct wl_context {
     int key_repeat_rate = 100;
     int key_repeat_delay = 100;
     uint32_t last_pointer_button_serial = 0;
+    // Most recent button or key press: popups opened from the keyboard grab with it.
+    uint32_t last_input_serial = 0;
     pending_pointer_frame_event pointer_axis_pending;
     pointer_scroll_axis pointer_scroll_axes[2];
     wl_window *pointer_scroll_window = nullptr;
@@ -326,7 +330,17 @@ struct wl_window {
 
     std::function<void(wl_window *)> on_render = nullptr;
 
-    cairo_t *cr = nullptr;  // points to current slot's cr (e.g. slots[0]) for API use
+    // OpenGL ES presentation (default). When EGL/ES3 is unavailable, or
+    // MYLAR_RENDERER=cairo, the shm slots with Cairo contexts are used instead.
+    // The EGL window itself is created lazily by on_window_render: popups are
+    // opened from input handlers holding RawApp::mutex, which the compositor
+    // thread also takes, and EGL surface creation may round-trip to it.
+    std::unique_ptr<EGLWindow> gpu;
+    bool use_gpu = false;
+    bool gpu_decided = false;
+    bool gpu_failed = false;
+
+    drawing::Context *cr = nullptr;  // the gpu context, or slots[0]'s, for API use
     
     int pending_width, pending_height; // recieved from configured event
     int min_width = 0, min_height = 0; // applied after first configure so initial size is (w,h)
@@ -341,6 +355,8 @@ struct wl_window {
     std::string app_id;
     bool has_pointer_focus = false;
     bool has_keyboard_focus = false;
+    // Last keyboard interactivity mode sent for this layer surface.
+    uint32_t keyboard_interactivity = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
     bool is_layer = true;
     bool marked_for_closing = false;
 
@@ -355,6 +371,7 @@ std::vector<wl_window *> windows;
 
 static struct wl_buffer *create_shm_buffer(struct wl_context *d, int width, int height);
 static struct wl_buffer *get_attach_buffer(struct wl_window *win);
+static void commit_initial_buffer(wl_window *win);
 
 static void buffer_release(void *data, struct wl_buffer *wl_buffer) {
     log("buffer released and available");
@@ -495,9 +512,11 @@ static void handle_surface_configure(void *data,
         return; // the paint already committed (and carried the ack)
     // Only attach on the first configure; afterwards a bare commit keeps the last painted
     // buffer instead of swapping in slot 0, which may be stale or blank.
-    if (first_configure)
-        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
+    if (first_configure) {
+        commit_initial_buffer(win);
+        return;
+    }
     wl_surface_commit(win->surface);
 }
 
@@ -523,6 +542,12 @@ static void handle_popup_done(void *data, struct xdg_popup *popup) {
     (void) popup;
     auto win = (wl_window *) data;
     win->marked_for_closing = true;
+    // Popups nested under a dismissed one go with it.
+    if (win->rw) {
+        auto children = win->rw->children;
+        for (auto child : children)
+            windowing::close_window(child);
+    }
 }
 
 static void handle_popup_repositioned(void *data, struct xdg_popup *popup, uint32_t token) {
@@ -570,14 +595,7 @@ static int create_anonymous_file(off_t size) {
 static void destroy_shm_buffer(struct wl_window *win) {
     for (int i = 0; i < WL_TRIPLE_BUFFER_COUNT; i++) {
         wl_buffer_slot *slot = &win->slots[i];
-        if (slot->cairo_surface) {
-            cairo_surface_destroy(slot->cairo_surface);
-            slot->cairo_surface = nullptr;
-        }
-        if (slot->cr) {
-            cairo_destroy(slot->cr);
-            slot->cr = nullptr;
-        }
+        slot->cr.reset();
         if (slot->buffer) {
             wl_buffer_destroy(slot->buffer);
             slot->buffer = nullptr;
@@ -590,11 +608,32 @@ static void destroy_shm_buffer(struct wl_window *win) {
         slot->stride = 0;
         slot->busy = false;
     }
-    win->cr = nullptr;
+    if (!win->use_gpu) {
+        win->cr = nullptr;
+        if (win->rw)
+            win->rw->drawing_context = nullptr;
+    }
 }
 
 static wl_buffer *get_attach_buffer(struct wl_window *win) {
     return win->slots[0].buffer;
+}
+
+void on_window_render(wl_window *win);
+
+// Commits the surface so it maps / carries an ack. The shm path attaches its
+// first slot; EGL attaches its own buffers on swap, so attaching anything here
+// (especially a null shm buffer) would unmap the surface.
+static void commit_initial_buffer(wl_window *win) {
+    if (win->use_gpu) {
+        if (win->configured && win->on_render && !win->frame_callback && !win->marked_for_closing)
+            on_window_render(win);
+        else
+            wl_surface_commit(win->surface);
+        return;
+    }
+    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+    wl_surface_commit(win->surface);
 }
 
 static void surface_frame_done(void *data, struct wl_callback *callback, uint32_t time) {
@@ -618,19 +657,36 @@ void on_window_render(wl_window *win) {
     // All paint paths share this gate, including input callbacks and redraw_now.
     // Keep the update pending until the compositor invites the next frame.
     if (win->frame_callback) return;
+    // An EGL swap attaches a buffer; xdg surfaces must not get one before
+    // their first configure. handle_surface_configure paints once it arrives.
+    if (win->use_gpu && !win->configured) return;
     if (win->resize_next) {
         wl_window_resize_buffer(win, win->logical_width, win->logical_height);
         win->resize_next = false;
     }
+    if (win->use_gpu && !win->gpu) {
+        try {
+            win->gpu = std::make_unique<EGLWindow>(win->ctx->display, win->surface, win->scaled_w, win->scaled_h);
+            win->cr = win->gpu->context();
+        } catch (const std::exception &error) {
+            // Keep a software path on machines without EGL/ES3 support.
+            fprintf(stderr, "OpenGL unavailable; using Cairo: %s\n", error.what());
+            win->gpu.reset();
+            win->use_gpu = false;
+            win->gpu_failed = true;
+            if (!wl_window_resize_buffer(win, win->logical_width, win->logical_height))
+                return;
+        }
+    }
     log("on_window_render");
     wl_buffer_slot *slot = nullptr;
-    for (int i = 0; i < WL_TRIPLE_BUFFER_COUNT; i++) {
-        if (!win->slots[i].busy) {
+    for (int i = 0; !win->gpu && i < WL_TRIPLE_BUFFER_COUNT; i++) {
+        if (win->slots[i].cr && !win->slots[i].busy) {
             slot = &win->slots[i];
             break;
         }
     }
-    if (!slot) {
+    if (!win->gpu && !slot) {
         win->dropped_frame = true;
         return;
     }
@@ -640,12 +696,30 @@ void on_window_render(wl_window *win) {
     // Install the gate before painting: paint callbacks may request another frame.
     win->frame_callback = wl_surface_frame(win->surface);
     wl_callback_add_listener(win->frame_callback, &surface_frame_listener, win);
+    drawing::Context *context = nullptr;
+    if (win->gpu) {
+        win->gpu->begin_frame();
+        context = win->gpu->context();
+    } else {
+        context = slot->cr.get();
+        context->begin_frame();
+    }
     if (win->rw) {
-        win->rw->cr = slot->cr;
+        win->rw->drawing_context = context;
         if (win->rw->on_render) {
             win->rw->on_render(win->rw, win->scaled_w, win->scaled_h);
         }
     }
+    if (win->gpu) {
+        // eglSwapBuffers attaches, damages and commits (carrying the frame callback).
+        try {
+            win->gpu->present();
+        } catch (const std::exception &error) {
+            fprintf(stderr, "OpenGL present failed: %s\n", error.what());
+        }
+        return;
+    }
+    context->flush();
     wl_surface_attach(win->surface, slot->buffer, 0, 0);
     wl_surface_damage_buffer(win->surface, 0, 0, INT32_MAX, INT32_MAX);
     log("surface commit");
@@ -659,12 +733,33 @@ bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_hei
 #endif
  
     log("wl_window_resize_buffer");
-    destroy_shm_buffer(win);
+    win->logical_width = std::max(1, _new_width);
+    win->logical_height = std::max(1, _new_height);
+    win->scaled_w = std::max(1, (int)(win->logical_width * win->current_fractional_scale));
+    win->scaled_h = std::max(1, (int)(win->logical_height * win->current_fractional_scale));
 
-    win->logical_width = _new_width;
-    win->logical_height = _new_height;
-    win->scaled_w = win->logical_width * win->current_fractional_scale;
-    win->scaled_h = win->logical_height * win->current_fractional_scale;
+    if (!win->gpu_decided) {
+        const char *renderer = std::getenv("MYLAR_RENDERER");
+        win->use_gpu = !renderer || std::string(renderer) != "cairo";
+        win->gpu_decided = true;
+    }
+    if (win->use_gpu) {
+        // Never blocks: the drawable and GL target are resized on the next frame.
+        if (win->gpu)
+            win->gpu->resize(win->scaled_w, win->scaled_h);
+        win->cr = win->gpu ? win->gpu->context() : drawing::placeholder_context();
+        if (win->rw) {
+            win->rw->drawing_context = win->cr;
+            win->on_render = on_window_render;
+        }
+        if (win->viewport) {
+            wl_surface_set_buffer_scale(win->surface, std::ceil(win->current_fractional_scale * 120.0));
+            wp_viewport_set_destination(win->viewport, win->logical_width, win->logical_height);
+        }
+        return true;
+    }
+
+    destroy_shm_buffer(win);
 
     const int stride = win->scaled_w * 4;
     const size_t size = (size_t)stride * win->scaled_h;
@@ -704,27 +799,19 @@ bool wl_window_resize_buffer(struct wl_window *win, int _new_width, int _new_hei
         slot->size = size;
         slot->stride = stride;
 
-        slot->cairo_surface = cairo_image_surface_create_for_data(
-            (unsigned char*)data,
-            CAIRO_FORMAT_ARGB32,
-            win->scaled_w,
-            win->scaled_h,
-            stride
-        );
-
-        if (cairo_surface_status(slot->cairo_surface) != CAIRO_STATUS_SUCCESS) {
-            fprintf(stderr, "Failed to create cairo surface\n");
+        try {
+            slot->cr = drawing::create_cairo_context((unsigned char *)data, win->scaled_w, win->scaled_h, stride);
+        } catch (const std::exception &error) {
+            fprintf(stderr, "Failed to create drawing context: %s\n", error.what());
             destroy_shm_buffer(win);
             return false;
         }
-
-        slot->cr = cairo_create(slot->cairo_surface);
         wl_buffer_add_listener(slot->buffer, &buffer_listener, win);
     }
 
-    win->cr = win->slots[0].cr;
+    win->cr = win->slots[0].cr.get();
     if (win->rw)
-        win->rw->cr = win->cr;
+        win->rw->drawing_context = win->cr;
 
     if (win->rw) {
         win->on_render = on_window_render;
@@ -861,8 +948,9 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     if (!win->configured)
         wl_display_dispatch(ctx->display);
 
-    wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create shm buffer
-    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+    wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create gpu or shm buffers
+    if (!win->use_gpu)
+        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 
@@ -934,11 +1022,16 @@ static void configure_layer_shell(void *data,
     struct wl_window *win = (struct wl_window *)data;
     if (win->configured) {
         if (!config_layer_shell(win, width, height)) {
-            wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+            if (!win->use_gpu)
+                wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
             wl_surface_commit(win->surface);
         }
     }
+    const bool first_configure = !win->configured;
     win->configured = true;
+    // A GPU frame requested before the first configure was held back.
+    if (first_configure && win->use_gpu && win->redraw_requested.load())
+        commit_initial_buffer(win);
 }
 
 static void closed_layer_shell(void* data, struct zwlr_layer_surface_v1*) {
@@ -1024,8 +1117,9 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     if (!win->configured)
         wl_display_dispatch(ctx->display);
 
-    wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create shm buffer
-    wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
+    wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create gpu or shm buffers
+    if (!win->use_gpu)
+        wl_surface_attach(win->surface, get_attach_buffer(win), 0, 0);
     log("surface commit");
     wl_surface_commit(win->surface);
 
@@ -1220,6 +1314,7 @@ static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
     if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
         pointer_scroll_cancel(ctx);
         ctx->last_pointer_button_serial = serial;
+        ctx->last_input_serial = serial;
     }
 
     auto windows_snapshot = ctx->windows;
@@ -1528,7 +1623,12 @@ static void keyboard_emit_key(wl_context *ctx, uint32_t key, uint32_t state,
             if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
                 sym == XKB_KEY_Escape &&
                 win->xdg_popup) {
-                win->marked_for_closing = true;
+                // Popups nest: Escape closes only the innermost one, which may not be the
+                // surface holding keyboard focus.
+                RawWindow *innermost = win->rw;
+                while (!innermost->children.empty())
+                    innermost = innermost->children.back();
+                windowing::close_window(innermost);
                 return;
             }
             win->rw->on_key_press(win->rw, key, state == WL_KEYBOARD_KEY_STATE_PRESSED, sym, modmask, is_text, std::string(utf8, len));
@@ -1542,11 +1642,15 @@ static void keyboard_emit_key(wl_context *ctx, uint32_t key, uint32_t state,
 static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
                                 uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
     wl_context *ctx = (wl_context *) data;
-    keyboard_emit_key(ctx, key, state, true);
-
+    // Record the serial first: a popup opened by this key press grabs with it.
     if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
         ctx->last_keyboard_serial = serial;
         ctx->has_keyboard_serial = true;
+        ctx->last_input_serial = serial;
+    }
+    keyboard_emit_key(ctx, key, state, true);
+
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
         const xkb_keycode_t keycode = key + 8;
         const bool repeatable = ctx->keymap && xkb_keymap_key_repeats(ctx->keymap, keycode);
         if (repeatable && ctx->key_repeat_rate > 0) {
@@ -2213,6 +2317,8 @@ void wl_window_destroy(struct wl_window *win) {
     if (win->xdg_surface) xdg_surface_destroy(win->xdg_surface);
     if (win->layer_surface) zwlr_layer_surface_v1_destroy(win->layer_surface);
 
+    // EGL resources reference the wl_surface: release them first.
+    win->gpu.reset();
     destroy_shm_buffer(win);
 
     if (win->surface) wl_surface_destroy(win->surface);
@@ -2651,7 +2757,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
 
     if (type == WindowType::NORMAL) {
         auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str(), rw, settings.app_id);
-        rw->cr = window->cr;
+        rw->drawing_context = window->cr;
         window->id = rw->id;
         window->on_render = on_window_render;  // set now that rw is set (resize_buffer skipped it)
         if (window->on_render)
@@ -2660,7 +2766,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     }
     if (type == WindowType::DOCK) {
         auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.alignment, settings.monitor_name, true, rw);
-        rw->cr = window->cr;
+        rw->drawing_context = window->cr;
         window->id = rw->id;
         window->on_render = on_window_render;
         if (window->on_render)
@@ -2691,7 +2797,7 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
         return nullptr;
     }
 
-    rw->cr = window->cr;
+    rw->drawing_context = window->cr;
     window->id = rw->id;
     window->on_render = on_window_render;
     window->popup_positioner = settings.popup;
@@ -2722,20 +2828,26 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
 
     if (settings.keyboard_focus_on_click) {
         auto layer = layer_surface_for(parent_wl);
-        if (layer && layer->layer_surface) {
+        // A nested popup (e.g. the power menu inside the applications menu) must not
+        // downgrade EXCLUSIVE to ON_DEMAND: the compositor would move focus off the
+        // layer and dismiss the whole grabbed popup chain.
+        if (layer && layer->layer_surface &&
+            layer->keyboard_interactivity == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) {
             const auto mode = zwlr_layer_surface_v1_get_version(layer->layer_surface) >=
                                       ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND_SINCE_VERSION
                                   ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND
                                   : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE;
             zwlr_layer_surface_v1_set_keyboard_interactivity(layer->layer_surface, mode);
+            layer->keyboard_interactivity = mode;
             wl_surface_commit(layer->surface);
         }
     }
-    if (window_wl->xdg_popup && ctx->seat && ctx->last_pointer_button_serial != 0) {
-        xdg_popup_grab(window_wl->xdg_popup, ctx->seat, ctx->last_pointer_button_serial);
+    if (window_wl->xdg_popup && ctx->seat && ctx->last_input_serial != 0) {
+        xdg_popup_grab(window_wl->xdg_popup, ctx->seat, ctx->last_input_serial);
     }
 
-    wl_surface_attach(window_wl->surface, get_attach_buffer(window_wl), 0, 0);
+    if (!window_wl->use_gpu)
+        wl_surface_attach(window_wl->surface, get_attach_buffer(window_wl), 0, 0);
     wl_surface_commit(window_wl->surface);
 
     xdg_positioner_destroy(positioner);
@@ -2801,6 +2913,17 @@ static void queue_keyboard_interactivity(RawWindow *window, uint32_t mode, bool 
             if (mode != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
                 (!target || target->marked_for_closing || (only_if_unfocused && target->has_keyboard_focus)))
                 return;
+            if (mode == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE &&
+                layer->keyboard_interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {
+                // Going EXCLUSIVE makes Hyprland drop the popup grab, dismissing every open
+                // popup. If another surface of this layer (e.g. the parent popup of a nested
+                // menu) already has keyboard focus, keys already reach us: leave it alone.
+                for (auto candidate : ctx->windows) {
+                    if (!candidate->marked_for_closing && candidate->has_keyboard_focus &&
+                        layer_surface_for(candidate) == layer)
+                        return;
+                }
+            }
             if (mode == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE) {
                 // A replacement popup may already own focus by the time cleanup runs.
                 for (auto candidate : ctx->windows) {
@@ -2811,6 +2934,7 @@ static void queue_keyboard_interactivity(RawWindow *window, uint32_t mode, bool 
             }
 
             zwlr_layer_surface_v1_set_keyboard_interactivity(layer->layer_surface, mode);
+            layer->keyboard_interactivity = mode;
             wl_surface_commit(layer->surface);
         });
         ctx->have_functions_to_execute = true;
@@ -3076,6 +3200,11 @@ bool windowing::close_window(RawWindow *window) {
     if (!win)
         return false;
     win->marked_for_closing = true;
+    // Child popups must be destroyed before their parent (xdg-shell protocol error otherwise).
+    // They were created later, so the back-to-front cleanup loop destroys them first.
+    auto children = window->children;
+    for (auto child : children)
+        windowing::close_window(child);
     write(ctx->wake_pipe[1], "x", 1);
     return true;
 }

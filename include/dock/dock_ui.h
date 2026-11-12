@@ -18,24 +18,24 @@ RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
                                                     int popup_w,
                                                     int popup_h);
 
-Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font,
+Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font,
                  int wrap, int h, RGBA color, bool bold, int align = 0);
-Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size = 10, bool draw = true,
+Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size = 10, bool draw = true,
                  std::string font = set->font, int wrap = -1, int h = -1, RGBA color = {1, 1, 1, 1});
-Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size = 10, bool draw = true,
+Bounds draw_text(drawing::Context *cr, Container *c, std::string text, int size = 10, bool draw = true,
                  std::string font = set->font, int wrap = -1, int h = -1);
 
-void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height, double radius,
+void drawRoundedRect(drawing::Context *cr, double x, double y, double width, double height, double radius,
                      double stroke_width);
 
-void paint_popup_background(cairo_t *cr, const Bounds &bounds, double dpi,
+void paint_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi,
                             RGBA background = {1, 1, 1, 1}, RGBA outline = border_color);
 // Intersects the current clip with the inside of the popup's rounded outline.
 // Callers wrap it in cairo_save / cairo_restore.
-void clip_to_popup_background(cairo_t *cr, const Bounds &bounds, double dpi);
+void clip_to_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi);
 
 // `meter` (0..1) draws a live level inside the filled part of the track, up to the knob.
-void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value, float meter = 0);
+void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi, float value, float meter = 0);
 
 Container *make_self_sizing_slider(Container *root,
                                    std::function<std::string(Container *)> left_text,

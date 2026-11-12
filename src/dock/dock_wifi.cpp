@@ -374,7 +374,7 @@ static Container *wifi_row(Container *parent, double height) {
 static void wifi_draw_text(Container *root, Bounds b, const std::string &text, double size = 10,
                            RGBA color = {.14, .18, .24, 1}, bool centered = false, bool bold = false) {
     auto window = wifi_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi,
         bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(font, text.c_str(), -1);
     pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
@@ -384,23 +384,23 @@ static void wifi_draw_text(Container *root, Bounds b, const std::string &text, d
     pango_layout_set_alignment(font, centered ? PANGO_ALIGN_CENTER : PANGO_ALIGN_LEFT);
     int width, height;
     pango_layout_get_pixel_size(font, &width, &height);
-    cairo_save(window->cr);
-    cairo_rectangle(window->cr, b.x, b.y, b.w, b.h);
-    cairo_clip(window->cr);
-    set_argb(window->cr, color);
-    cairo_move_to(window->cr, b.x, b.y + std::max(0.0, (b.h - height) * .5));
-    pango_cairo_show_layout(window->cr, font);
-    cairo_restore(window->cr);
+    window->drawing_context->save();
+    window->drawing_context->rectangle(b.x, b.y, b.w, b.h);
+    window->drawing_context->clip_path();
+    set_argb(window->drawing_context, color);
+    window->drawing_context->move_to(b.x, b.y + std::max(0.0, (b.h - height) * .5));
+    window->drawing_context->show_layout(font);
+    window->drawing_context->restore();
 }
 
 static void wifi_paint_button(Container *root, Container *c, const std::string &text, bool enabled) {
     auto window = wifi_window(root);
     auto b = c->real_bounds;
     if (b.h <= 0) return;
-    set_argb(window->cr, !enabled ? RGBA(.95, .96, .97, 1) : c->state.mouse_pressing ?
+    set_argb(window->drawing_context, !enabled ? RGBA(.95, .96, .97, 1) : c->state.mouse_pressing ?
         RGBA(.72, .83, .95, 1) : c->state.mouse_hovering ? RGBA(.83, .90, .98, 1) : RGBA(.92, .94, .96, 1));
-    drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
-    cairo_fill(window->cr);
+    drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
+    window->drawing_context->fill();
     b.x += 6 * window->dpi;
     b.w -= 12 * window->dpi;
     wifi_draw_text(root, b, text, 10, enabled ? RGBA(.14, .18, .24, 1) : RGBA(.53, .57, .62, 1), true);
@@ -409,7 +409,7 @@ static void wifi_paint_button(Container *root, Container *c, const std::string &
 // Signal strength as in the Windows network list (and winbar): the full Wi-Fi glyph
 // drawn faintly, the bars for the current level on top, and the overlay lock glyph,
 // which is designed to sit on the same origin as the Wi-Fi glyph.
-static void wifi_paint_signal(cairo_t *cr, double x, double y, double size, int strength, bool secured,
+static void wifi_paint_signal(drawing::Context *cr, double x, double y, double size, int strength, bool secured,
                               double dpi, RGBA background) {
     const char *level = strength >= 75 ? "\uE701" : strength >= 50 ? "\uE874" : strength >= 25 ? "\uE873" : "\uE872";
     const RGBA color = {.14, .18, .24, 1};
@@ -421,17 +421,17 @@ static void wifi_paint_signal(cairo_t *cr, double x, double y, double size, int 
     pango_layout_set_width(layout, -1);
     pango_layout_set_height(layout, -1);
     pango_layout_set_text(layout, "\uE889", -1);
-    cairo_save(cr);
-    cairo_new_path(cr);
-    cairo_move_to(cr, x, y);
-    pango_cairo_layout_path(cr, layout);
+    cr->save();
+    cr->new_path();
+    cr->move_to(x, y);
+    cr->layout_path(layout);
     set_argb(cr, background);
-    cairo_set_line_width(cr, 3 * dpi);
-    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-    cairo_stroke_preserve(cr);
+    cr->set_line_width(3 * dpi);
+    cr->set_line_join(CAIRO_LINE_JOIN_ROUND);
+    cr->stroke_preserve();
     set_argb(cr, color);
-    cairo_fill(cr);
-    cairo_restore(cr);
+    cr->fill();
+    cr->restore();
 }
 
 std::string wifi_band(unsigned frequency) {
@@ -557,16 +557,16 @@ static Container *wifi_network_row(Container *parent, WifiMenuData *menu) {
     row->when_paint = [data](Container *root, Container *c) {
         auto window = wifi_window(root);
         auto b = c->real_bounds;
-        cairo_save(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 6 * window->dpi, 1);
-        cairo_clip(window->cr);
-        set_argb(window->cr, data->expansion > .01 ? RGBA(.88, .93, .99, 1) :
+        window->drawing_context->save();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 6 * window->dpi, 1);
+        window->drawing_context->clip_path();
+        set_argb(window->drawing_context, data->expansion > .01 ? RGBA(.88, .93, .99, 1) :
             data->hovered ? RGBA(.92, .94, .97, 1) : RGBA(.95, .96, .97, 1));
-        cairo_paint(window->cr);
+        window->drawing_context->paint_source();
         if (std::abs(data->expansion - data->expansion_target) > .001)
             wifi_menu_data(root)->animating = true;
     };
-    row->after_paint = [](Container *root, Container *) { cairo_restore(wifi_window(root)->cr); };
+    row->after_paint = [](Container *root, Container *) { wifi_window(root)->drawing_context->restore(); };
 
     auto header = wifi_row(row, 62);
     header->when_paint = [data](Container *root, Container *c) {
@@ -576,7 +576,7 @@ static Container *wifi_network_row(Container *parent, WifiMenuData *menu) {
         auto b = c->real_bounds;
         RGBA background = data->expansion > .01 ? RGBA(.88, .93, .99, 1) :
             data->hovered ? RGBA(.92, .94, .97, 1) : RGBA(.95, .96, .97, 1);
-        wifi_paint_signal(window->cr, b.x + 14 * dpi, b.y + 18 * dpi, 20 * dpi, data->ap.strength, data->ap.secured,
+        wifi_paint_signal(window->drawing_context, b.x + 14 * dpi, b.y + 18 * dpi, 20 * dpi, data->ap.strength, data->ap.secured,
             dpi, background);
         std::string security = data->ap.security == "OWE" ? "Open (encrypted)" :
             data->ap.security.empty() ? "Open" : data->ap.security == "WEP" ? "WEP (insecure)" : data->ap.security;
@@ -641,12 +641,12 @@ static Container *wifi_network_row(Container *parent, WifiMenuData *menu) {
         auto window = wifi_window(root);
         auto b = c->real_bounds;
         if (b.h <= 0) return;
-        set_argb(window->cr, {1, 1, 1, 1});
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
-        cairo_fill_preserve(window->cr);
-        set_argb(window->cr, c->active ? accent : RGBA(.8, .8, .8, 1));
-        cairo_set_line_width(window->cr, window->dpi);
-        cairo_stroke(window->cr);
+        set_argb(window->drawing_context, {1, 1, 1, 1});
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
+        window->drawing_context->fill_preserve();
+        set_argb(window->drawing_context, c->active ? accent : RGBA(.8, .8, .8, 1));
+        window->drawing_context->set_line_width(window->dpi);
+        window->drawing_context->stroke();
         if (static_cast<STextEditorData *>(c->user_data)->text.empty()) {
             auto hint = b;
             hint.x += 8 * window->dpi;
@@ -780,18 +780,18 @@ static void wifi_build(Dock *dock) {
         auto window = wifi_window(root);
         double phase = (get_current_time_in_ms() % 2000) / 2000.0;
         // Dots slide in from the edges; keep them inside the rounded corners.
-        cairo_save(window->cr);
-        clip_to_popup_background(window->cr, root->real_bounds, window->dpi);
+        window->drawing_context->save();
+        clip_to_popup_background(window->drawing_context, root->real_bounds, window->dpi);
         for (int i = 0; i < 5; ++i) {
             double step = (phase - i * .08) / .6;
             if (step < 0 || step > 1) continue;
             double x = .5 - .5 * std::cos(step * M_PI);
-            set_argb(window->cr, accent);
-            cairo_arc(window->cr, c->real_bounds.x + x * c->real_bounds.w,
+            set_argb(window->drawing_context, accent);
+            window->drawing_context->arc(c->real_bounds.x + x * c->real_bounds.w,
                 c->real_bounds.y + 4 * window->dpi, 2 * window->dpi, 0, 2 * M_PI);
-            cairo_fill(window->cr);
+            window->drawing_context->fill();
         }
-        cairo_restore(window->cr);
+        window->drawing_context->restore();
     };
     auto title = body->child(hbox, FILL_SPACE, 52);
     title->pre_layout = [](Container *root, Container *c, const Bounds &) {
@@ -822,7 +822,7 @@ static void wifi_build(Dock *dock) {
         auto window = wifi_window(root);
         auto label = adapter_label(wifi_menu_data(root)->view);
         c->exists = !label.empty();
-        auto font = get_cached_pango_font(window->cr, set->font, 9 * window->dpi, PANGO_WEIGHT_NORMAL, false);
+        auto font = get_cached_pango_font(window->drawing_context, set->font, 9 * window->dpi, PANGO_WEIGHT_NORMAL, false);
         pango_layout_set_width(font, -1);
         pango_layout_set_height(font, -1);
         pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
@@ -838,10 +838,10 @@ static void wifi_build(Dock *dock) {
         const bool switchable = view.status.devices.size() > 1;
         const double h = 22 * dpi;
         Bounds pill(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
-        set_argb(window->cr, switchable && c->state.mouse_pressing ? RGBA(.78, .86, .96, 1) :
+        set_argb(window->drawing_context, switchable && c->state.mouse_pressing ? RGBA(.78, .86, .96, 1) :
             switchable && c->state.mouse_hovering ? RGBA(.86, .91, .98, 1) : RGBA(.93, .95, .97, 1));
-        drawRoundedRect(window->cr, pill.x, pill.y, pill.w, pill.h, h * .5, 1);
-        cairo_fill(window->cr);
+        drawRoundedRect(window->drawing_context, pill.x, pill.y, pill.w, pill.h, h * .5, 1);
+        window->drawing_context->fill();
         pill.x += 10 * dpi;
         pill.w -= 20 * dpi;
         wifi_draw_text(root, pill, adapter_label(view), 9, {.33, .38, .45, 1}, true);
@@ -862,10 +862,10 @@ static void wifi_build(Dock *dock) {
     sign_in->when_paint = [](Container *root, Container *c) {
         auto window = wifi_window(root);
         auto b = c->real_bounds;
-        set_argb(window->cr, c->state.mouse_pressing ? RGBA(.72, .83, .95, 1) :
+        set_argb(window->drawing_context, c->state.mouse_pressing ? RGBA(.72, .83, .95, 1) :
             c->state.mouse_hovering ? RGBA(.80, .88, .98, 1) : RGBA(.86, .92, .99, 1));
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
-        cairo_fill(window->cr);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 4 * window->dpi, 1);
+        window->drawing_context->fill();
         b.x += 10 * window->dpi;
         b.w -= 20 * window->dpi;
         wifi_draw_text(root, b, "This network needs you to sign in · Open sign-in page", 10, {.10, .36, .66, 1});
@@ -877,7 +877,7 @@ static void wifi_build(Dock *dock) {
     auto networks = make_newscrollpane_as_child(body, settings, [](Container *root) {
         auto window = wifi_window(root);
         DrawContext context;
-        context.cr = window->cr;
+        context.cr = window->drawing_context;
         context.dpi = window->dpi;
         context.on_needs_frame = [window]() { windowing::redraw(window); };
         return context;
@@ -893,9 +893,9 @@ static void wifi_build(Dock *dock) {
     };
     networks->when_paint = [](Container *root, Container *c) {
         auto window = wifi_window(root);
-        cairo_save(window->cr);
-        cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_clip(window->cr);
+        window->drawing_context->save();
+        window->drawing_context->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        window->drawing_context->clip_path();
         if (!static_cast<ScrollContainer *>(c)->content->children.empty()) return;
         const auto &view = wifi_menu_data(root)->view;
         std::string message = wifi_state_line(view);
@@ -906,14 +906,14 @@ static void wifi_build(Dock *dock) {
         b.w -= 60 * window->dpi;
         wifi_draw_text(root, b, message, 10, {.43, .48, .55, 1}, true);
     };
-    networks->after_paint = [](Container *root, Container *) { cairo_restore(wifi_window(root)->cr); };
+    networks->after_paint = [](Container *root, Container *) { wifi_window(root)->drawing_context->restore(); };
 
     auto feedback = body->child(FILL_SPACE, 0);
     feedback->pre_layout = [](Container *root, Container *c, const Bounds &) {
         auto window = wifi_window(root);
         const auto &view = wifi_menu_data(root)->view;
         c->exists = !view.message.empty();
-        auto font = get_cached_pango_font(window->cr, set->font, 10 * window->dpi, PANGO_WEIGHT_NORMAL, false);
+        auto font = get_cached_pango_font(window->drawing_context, set->font, 10 * window->dpi, PANGO_WEIGHT_NORMAL, false);
         pango_layout_set_text(font, view.message.c_str(), -1);
         pango_layout_set_width(font, std::max(1.0, root->real_bounds.w - 24 * window->dpi) * PANGO_SCALE);
         pango_layout_set_height(font, -1);
@@ -926,9 +926,9 @@ static void wifi_build(Dock *dock) {
     feedback->when_paint = [](Container *root, Container *c) {
         auto window = wifi_window(root);
         const auto &view = wifi_menu_data(root)->view;
-        set_argb(window->cr, view.error ? RGBA(.99, .90, .89, 1) : RGBA(.89, .95, .91, 1));
-        cairo_rectangle(window->cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, view.error ? RGBA(.99, .90, .89, 1) : RGBA(.89, .95, .91, 1));
+        window->drawing_context->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        window->drawing_context->fill();
         auto b = c->real_bounds;
         b.shrink(8 * window->dpi);
         wifi_draw_text(root, b, view.message, 10, view.error ? RGBA(.68, .19, .15, 1) : RGBA(.19, .43, .28, 1));
@@ -1034,7 +1034,7 @@ void fill_wifi_container(Dock *dock) {
     window->root->when_paint = [](Container *root, Container *c) {
         auto dock = static_cast<Dock *>(root->user_data);
         auto window = dock->wifi->raw_window;
-        paint_popup_background(window->cr, c->real_bounds, window->dpi);
+        paint_popup_background(window->drawing_context, c->real_bounds, window->dpi);
     };
     // Mylar's raw close handler doesn't destroy roots; hook the real close so the
     // menu is freed and the worker can go back to sleep.

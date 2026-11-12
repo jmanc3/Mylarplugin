@@ -8,13 +8,13 @@ void fill_projection_container(Dock *dock) {
     dock->projection->root->wanted_bounds.h = FILL_SPACE;
     auto scroll = make_newscrollpane_as_child(dock->projection->root, ScrollPaneSettings(1.0), [](Container *root) {
         auto dock = ((Dock *) root->user_data);
-        return DrawContext({dock->projection->raw_window->cr, dock->projection->raw_window->dpi, [dock]() {
+        return DrawContext({dock->projection->raw_window->drawing_context, dock->projection->raw_window->dpi, [dock]() {
             windowing::redraw(dock->projection->raw_window);
         }});
     });
     dock->projection->root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->projection->raw_window->cr;
+        auto cr = dock->projection->raw_window->drawing_context;
         paint_popup_background(cr, c->real_bounds, dock->projection->raw_window->dpi);
     };
 
@@ -39,7 +39,7 @@ void fill_projection_container(Dock *dock) {
         label->when_paint = [text, size, color, left, right, left_bright, right_bright](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto dpi = dock->projection->raw_window->dpi;
-            auto cr = dock->projection->raw_window->cr;
+            auto cr = dock->projection->raw_window->drawing_context;
             auto bounds_text = draw_text(cr, 0, 0, text, size * dpi, false, set->font, -1, -1, color);
             auto left_color = color;
             auto right_color = color;
@@ -78,7 +78,7 @@ void fill_projection_container(Dock *dock) {
                     set_argb(cr, RGBA(0, 0, 0, 1));
                 }
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 8 * dpi, std::round(1.0 * dpi));
-                cairo_stroke(cr);
+                cr->stroke();
             }
         };
     };
@@ -101,7 +101,7 @@ void fill_projection_container(Dock *dock) {
                 auto dock = (Dock *) root->user_data;
                 auto mylar = get_window(root);
                 auto dpi = mylar->raw_window->dpi;
-                auto cr = mylar->raw_window->cr;
+                auto cr = mylar->raw_window->drawing_context;
                 if (c->state.mouse_pressing || c->state.mouse_hovering) {
                     if (c->state.mouse_pressing) {
                         set_argb(cr, RGBA(.6, .6, .6, 1));
@@ -109,11 +109,11 @@ void fill_projection_container(Dock *dock) {
                         set_argb(cr, RGBA(.8, .8, .8, 1));
                     }
                     drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 4 * dpi, std::round(1.0 * dpi));
-                    cairo_fill(cr);
+                    cr->fill();
                 }
                 set_argb(cr, RGBA(.6, .6, .6, 1));
                 drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 4 * dpi, std::round(1.0 * dpi));
-                cairo_stroke(cr);
+                cr->stroke();
 
 
                 auto b = draw_text(cr, 0, 0, option, size * dpi, false, set->font, -1, -1, color);
@@ -127,7 +127,7 @@ void fill_projection_container(Dock *dock) {
             auto dock = (Dock *) root->user_data;
             auto mylar = get_window(root);
             auto dpi = mylar->raw_window->dpi;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             int lines = 1;
             float xoff = c->real_bounds.x;
             float layout_yoff = c->real_bounds.y;

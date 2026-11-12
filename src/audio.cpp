@@ -2458,7 +2458,11 @@ static void pipewire_core_done_callback(void *, uint32_t id, int seq) {
     }
 }
 
-static void pipewire_core_error_callback(void *, uint32_t, int, int, const char *) {
+static void pipewire_core_error_callback(void *, uint32_t id, int, int res, const char *) {
+    // Most errors are about a single object, e.g. "unknown resource" for a stream that just went away
+    // (like the volume blip) while we still had requests in flight for it. Only a broken connection is fatal.
+    if (id != PW_ID_CORE || res != -EPIPE)
+        return;
     ready = false;
     audio_running = false;
     pw_thread_loop_signal(pw_thread_loop_instance, false);

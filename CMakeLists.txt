@@ -56,6 +56,9 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     xcb-damage
     xcb-composite
     fontconfig
+    egl
+    glesv2
+    wayland-egl
 )
 
 target_link_libraries(Mylardesktop PRIVATE rt PkgConfig::deps)

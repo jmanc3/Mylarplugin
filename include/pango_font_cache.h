@@ -1,6 +1,8 @@
 #ifndef MYLAR_PANGO_FONT_CACHE_H
 #define MYLAR_PANGO_FONT_CACHE_H
 
+#include "drawing/context.h"
+
 #include <pango/pangocairo.h>
 #include <string>
 
@@ -18,6 +20,13 @@ PangoLayout *get_cached_pango_font(cairo_t *cr, const std::string &name,
 // lookup lazily starts a new cache. Every rendering thread must call this before
 // exiting, and the compositor thread must call it during plugin shutdown.
 // A shutdown coordinator must not free another thread's in-use layouts.
+// Raw windowing apps: layouts are prepared against a thread-local scratch Cairo
+// context; drawing them goes through drawing::Context::show_layout.
+inline PangoLayout *get_cached_pango_font(drawing::Context *, const std::string &name,
+                                          int pixel_height, PangoWeight weight, bool italic) {
+    return get_cached_pango_font(drawing::scratch_cairo(), name, pixel_height, weight, italic);
+}
+
 void cleanup_cached_pango_fonts();
 
 #endif

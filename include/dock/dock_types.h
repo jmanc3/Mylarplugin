@@ -28,6 +28,8 @@ struct Dock : UserData {
     MylarWindow *window = nullptr;
 
     MylarWindow *applications = nullptr;
+    // Sign out / shut down / restart / reload, opened from the applications menu.
+    MylarWindow *power_menu = nullptr;
 
     MylarWindow *volume = nullptr;
 

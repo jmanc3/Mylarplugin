@@ -13,6 +13,7 @@
 #undef explicit
 
 #include <functional>
+#include "smooth_scroll.h"
 
 constexpr double EPSILON = 1e-9;
 
@@ -461,6 +462,12 @@ class ScrollPaneSettings : public UserData {
 
     bool start_at_end = false;
 
+    // Logical pixels a mouse wheel notch scrolls, scaled by dpi. 0 keeps the raw
+    // wheel delta (15px a notch). Quick successive notches accelerate up to
+    // wheel_max_acceleration times the step, so long lists can be crossed fast.
+    float wheel_step = 0;
+    float wheel_max_acceleration = 1;
+
     // paint functions
     bool paint_minimal = false;
 };
@@ -478,6 +485,11 @@ struct ScrollContainer : public Container {
     float              scrollbar_openess     = 1;
     float              scrollbar_visible     = 1;
     Timeout*           openess_delay_timeout = nullptr;
+    // Wheel scrolls ease scroll_*_visual toward scroll_*_real.
+    SmoothScroll       smooth_v;
+    SmoothScroll       smooth_h;
+    // Asks the owning window for another frame while an ease is running.
+    std::function<void(Container* root, ScrollContainer* scroll)> request_frame = nullptr;
 
     explicit ScrollContainer(ScrollPaneSettings settings) : settings(std::move(settings)) {
         type            = ::newscroll;

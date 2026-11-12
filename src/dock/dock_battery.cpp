@@ -261,12 +261,12 @@ static std::string battery_clock(std::time_t timestamp, bool include_day = false
     return result;
 }
 
-static void battery_text(cairo_t *cr, double x, double y, const std::string &text, double size,
+static void battery_text(drawing::Context *cr, double x, double y, const std::string &text, double size,
                          double dpi, RGBA color, double width = -1, bool bold = false) {
     draw_text(cr, x, y, text, size * dpi, true, set->font, width, -1, color, bold);
 }
 
-static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const BatteryView &view,
+static void paint_battery_graph(drawing::Context *cr, const Bounds &b, double dpi, const BatteryView &view,
                                 double mouse_x, bool hovered) {
     const RGBA muted = {.40, .46, .54, 1};
     const RGBA blue = {.08, .48, .88, 1};
@@ -280,22 +280,22 @@ static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const 
     const Bounds plot(b.x + 32 * dpi, b.y + 8 * dpi, b.w - 44 * dpi, b.h - 40 * dpi);
     auto x = [&](double t) { return plot.x + (t - start) / total * plot.w; };
     auto y = [&](double percent) { return plot.y + (1 - percent / 100) * plot.h; };
-    cairo_save(cr);
+    cr->save();
     set_argb(cr, {.08, .48, .88, .04});
-    cairo_rectangle(cr, x(now), plot.y, plot.right() - x(now), plot.h);
-    cairo_fill(cr);
+    cr->rectangle(x(now), plot.y, plot.right() - x(now), plot.h);
+    cr->fill();
     for (int percent : {0, 25, 50, 75, 100}) {
         set_argb(cr, {.89, .92, .95, 1});
-        cairo_set_line_width(cr, dpi);
-        cairo_move_to(cr, plot.x, y(percent));
-        cairo_line_to(cr, plot.right(), y(percent));
-        cairo_stroke(cr);
+        cr->set_line_width(dpi);
+        cr->move_to(plot.x, y(percent));
+        cr->line_to(plot.right(), y(percent));
+        cr->stroke();
         battery_text(cr, b.x, y(percent) - 6 * dpi, std::to_string(percent), 8, dpi, muted);
     }
     set_argb(cr, {.68, .75, .83, 1});
-    cairo_move_to(cr, x(now), plot.y);
-    cairo_line_to(cr, x(now), plot.bottom());
-    cairo_stroke(cr);
+    cr->move_to(x(now), plot.y);
+    cr->line_to(x(now), plot.bottom());
+    cr->stroke();
     std::vector<BatterySample> points;
     for (const auto &sample : view.history)
         if (sample.timestamp >= start && sample.timestamp <= now) points.push_back(sample);
@@ -306,44 +306,40 @@ static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const 
         size_t end = begin + 1;
         while (end < points.size() && points[end].timestamp - points[end - 1].timestamp <= 360) ++end;
         if (end - begin >= 2) {
-            cairo_move_to(cr, x(points[begin].timestamp), y(0));
-            for (size_t i = begin; i < end; ++i) cairo_line_to(cr, x(points[i].timestamp), y(points[i].percentage));
-            cairo_line_to(cr, x(points[end - 1].timestamp), y(0));
-            cairo_close_path(cr);
-            auto gradient = cairo_pattern_create_linear(0, plot.y, 0, plot.bottom());
-            cairo_pattern_add_color_stop_rgba(gradient, 0, .08, .48, .88, .24);
-            cairo_pattern_add_color_stop_rgba(gradient, 1, .08, .48, .88, .02);
-            cairo_set_source(cr, gradient);
-            cairo_fill(cr);
-            cairo_pattern_destroy(gradient);
+            cr->move_to(x(points[begin].timestamp), y(0));
+            for (size_t i = begin; i < end; ++i) cr->line_to(x(points[i].timestamp), y(points[i].percentage));
+            cr->line_to(x(points[end - 1].timestamp), y(0));
+            cr->close_path();
+            cr->set_linear_gradient(0, plot.y, 0, plot.bottom(), RGBA(.08, .48, .88, .24), RGBA(.08, .48, .88, .02));
+            cr->fill();
             set_argb(cr, blue);
-            cairo_set_line_width(cr, 2 * dpi);
-            cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-            cairo_move_to(cr, x(points[begin].timestamp), y(points[begin].percentage));
-            for (size_t i = begin + 1; i < end; ++i) cairo_line_to(cr, x(points[i].timestamp), y(points[i].percentage));
-            cairo_stroke(cr);
+            cr->set_line_width(2 * dpi);
+            cr->set_line_join(CAIRO_LINE_JOIN_ROUND);
+            cr->move_to(x(points[begin].timestamp), y(points[begin].percentage));
+            for (size_t i = begin + 1; i < end; ++i) cr->line_to(x(points[i].timestamp), y(points[i].percentage));
+            cr->stroke();
         } else {
             set_argb(cr, blue);
-            cairo_arc(cr, x(points[begin].timestamp), y(points[begin].percentage), 2.5 * dpi, 0, 2 * M_PI);
-            cairo_fill(cr);
+            cr->arc(x(points[begin].timestamp), y(points[begin].percentage), 2.5 * dpi, 0, 2 * M_PI);
+            cr->fill();
         }
         begin = end;
     }
     if (forecast) {
         set_argb(cr, {.08, .48, .88, .65});
         double dash[] = {4 * dpi, 4 * dpi};
-        cairo_set_dash(cr, dash, 2, 0);
-        cairo_set_line_width(cr, 2 * dpi);
-        cairo_move_to(cr, x(now), y(view.status.percentage));
+        cr->set_dash(dash, 2, 0);
+        cr->set_line_width(2 * dpi);
+        cr->move_to(x(now), y(view.status.percentage));
         const double duration = std::min(future_seconds, view.remaining_seconds);
-        cairo_line_to(cr, x(now + duration), y(view.status.percentage * (1 - duration / view.remaining_seconds)));
-        cairo_stroke(cr);
-        cairo_set_dash(cr, nullptr, 0, 0);
+        cr->line_to(x(now + duration), y(view.status.percentage * (1 - duration / view.remaining_seconds)));
+        cr->stroke();
+        cr->set_dash(nullptr, 0, 0);
     }
     if (view.status.valid) {
         set_argb(cr, blue);
-        cairo_arc(cr, x(now), y(view.status.percentage), 3.5 * dpi, 0, 2 * M_PI);
-        cairo_fill(cr);
+        cr->arc(x(now), y(view.status.percentage), 3.5 * dpi, 0, 2 * M_PI);
+        cr->fill();
     }
     if (hovered) {
         const double hover_x = std::clamp(mouse_x, plot.x, plot.right());
@@ -368,15 +364,15 @@ static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const 
             const double hover_y = y(hover_percent);
             set_argb(cr, {.25, .35, .46, .72});
             double dash[] = {3 * dpi, 3 * dpi};
-            cairo_set_dash(cr, dash, 2, 0);
-            cairo_set_line_width(cr, dpi);
-            cairo_move_to(cr, hover_x, plot.y);
-            cairo_line_to(cr, hover_x, plot.bottom());
-            cairo_stroke(cr);
-            cairo_set_dash(cr, nullptr, 0, 0);
+            cr->set_dash(dash, 2, 0);
+            cr->set_line_width(dpi);
+            cr->move_to(hover_x, plot.y);
+            cr->line_to(hover_x, plot.bottom());
+            cr->stroke();
+            cr->set_dash(nullptr, 0, 0);
             set_argb(cr, blue);
-            cairo_arc(cr, hover_x, hover_y, 3.5 * dpi, 0, 2 * M_PI);
-            cairo_fill(cr);
+            cr->arc(hover_x, hover_y, 3.5 * dpi, 0, 2 * M_PI);
+            cr->fill();
             const auto time_label = battery_clock(static_cast<std::time_t>(std::round(hover_time)));
             const auto charge_label = std::format("{:.1f}%", hover_percent);
             const double label_x = std::clamp(hover_x + 6 * dpi, plot.x, plot.right() - 68 * dpi);
@@ -395,7 +391,7 @@ static void paint_battery_graph(cairo_t *cr, const Bounds &b, double dpi, const 
         battery_text(cr, plot.x + 12 * dpi, plot.y + 67 * dpi,
             view.history_enabled ? "A new reading every 5 minutes" : "Enable history to record battery levels", 9, dpi, muted);
     }
-    cairo_restore(cr);
+    cr->restore();
 }
 
 void fill_battery_container(Dock *dock) {
@@ -403,7 +399,7 @@ void fill_battery_container(Dock *dock) {
     root->type = ::vbox;
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->battery->raw_window->cr;
+        auto cr = dock->battery->raw_window->drawing_context;
         auto dpi = dock->battery->raw_window->dpi;
         paint_popup_background(cr, c->real_bounds, dpi);
     };
@@ -425,7 +421,7 @@ void fill_battery_container(Dock *dock) {
     header->type = ::hbox;
     header->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        battery_text(dock->battery->raw_window->cr, c->real_bounds.x, c->real_bounds.y,
+        battery_text(dock->battery->raw_window->drawing_context, c->real_bounds.x, c->real_bounds.y,
             "Battery", 13, dock->battery->raw_window->dpi, {.12, .17, .24, 1}, -1, true);
     };
     header->child(FILL_SPACE, FILL_SPACE);
@@ -437,7 +433,7 @@ void fill_battery_container(Dock *dock) {
     history_toggle->when_clicked = [](Container *, Container *) { toggle_battery_history(); };
     history_toggle->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->battery->raw_window->cr;
+        auto cr = dock->battery->raw_window->drawing_context;
         auto dpi = dock->battery->raw_window->dpi;
         const bool enabled = battery_snapshot().history_enabled;
         auto b = c->real_bounds;
@@ -448,15 +444,15 @@ void fill_battery_container(Dock *dock) {
         if (c->state.mouse_hovering) fill = enabled ? RGBA(.06, .40, .78, 1) : RGBA(.72, .79, .87, 1);
         set_argb(cr, fill);
         drawRoundedRect(cr, x, b.y, 42 * dpi, 24 * dpi, 12 * dpi, 1);
-        cairo_fill(cr);
+        cr->fill();
         set_argb(cr, {1, 1, 1, 1});
-        cairo_arc(cr, x + (enabled ? 30 : 12) * dpi, b.y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
-        cairo_fill(cr);
+        cr->arc(x + (enabled ? 30 : 12) * dpi, b.y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
+        cr->fill();
     };
     auto summary = sized_row(114);
     summary->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->battery->raw_window->cr;
+        auto cr = dock->battery->raw_window->drawing_context;
         auto dpi = dock->battery->raw_window->dpi;
         const auto view = battery_snapshot();
         const auto &s = view.status;
@@ -502,7 +498,7 @@ void fill_battery_container(Dock *dock) {
     graph_title->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->battery->raw_window->dpi;
-        auto cr = dock->battery->raw_window->cr;
+        auto cr = dock->battery->raw_window->drawing_context;
         auto view = battery_snapshot();
         auto b = c->real_bounds;
         battery_text(cr, b.x, b.y, "Last 3 hours · charge %", 10, dpi, {.40, .46, .54, 1});
@@ -519,7 +515,7 @@ void fill_battery_container(Dock *dock) {
     auto graph = sized_row(175);
     graph->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        paint_battery_graph(dock->battery->raw_window->cr, c->real_bounds, dock->battery->raw_window->dpi,
+        paint_battery_graph(dock->battery->raw_window->drawing_context, c->real_bounds, dock->battery->raw_window->dpi,
             battery_snapshot(), root->mouse_current_x, c->state.mouse_hovering);
     };
     graph->when_mouse_motion = request_damage;
@@ -529,7 +525,7 @@ void fill_battery_container(Dock *dock) {
     legend->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->battery->raw_window->dpi;
-        battery_text(dock->battery->raw_window->cr, c->real_bounds.x, c->real_bounds.y,
+        battery_text(dock->battery->raw_window->drawing_context, c->real_bounds.x, c->real_bounds.y,
             "Solid: recorded charge   ·   Dashed: estimate", 8, dpi, {.40, .46, .54, 1});
     };
     for (bool protector : {false, true}) {
@@ -537,7 +533,7 @@ void fill_battery_container(Dock *dock) {
         control->when_clicked = [protector](Container *, Container *) { request_battery_action(protector); };
         control->when_paint = [protector](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
-            auto cr = dock->battery->raw_window->cr;
+            auto cr = dock->battery->raw_window->drawing_context;
             auto dpi = dock->battery->raw_window->dpi;
             const auto view = battery_snapshot();
             const auto &s = view.status;
@@ -545,10 +541,10 @@ void fill_battery_container(Dock *dock) {
             const bool available = (protector ? s.protector_available : s.saver_available) && !view.pending;
             auto b = c->real_bounds;
             set_argb(cr, {.88, .91, .95, 1});
-            cairo_set_line_width(cr, dpi);
-            cairo_move_to(cr, b.x, b.y);
-            cairo_line_to(cr, b.right(), b.y);
-            cairo_stroke(cr);
+            cr->set_line_width(dpi);
+            cr->move_to(b.x, b.y);
+            cr->line_to(b.right(), b.y);
+            cr->stroke();
             RGBA ink = available ? RGBA(.12, .17, .24, 1) : RGBA(.43, .47, .53, 1);
             battery_text(cr, b.x, b.y + 9 * dpi, protector ? "Battery protector" : "Battery saver", 11, dpi, ink, -1, true);
             std::string reason = protector ? s.protector_reason : s.saver_reason;
@@ -563,14 +559,14 @@ void fill_battery_container(Dock *dock) {
             if (available && c->state.mouse_hovering) fill = enabled ? RGBA(.06, .40, .78, 1) : RGBA(.72, .79, .87, 1);
             set_argb(cr, fill);
             drawRoundedRect(cr, x, y, width, height, (protector ? 6 : 12) * dpi, 1);
-            cairo_fill(cr);
+            cr->fill();
             if (protector) {
                 battery_text(cr, x + 8 * dpi, y + 5 * dpi, label, 9, dpi,
                     enabled ? RGBA(1, 1, 1, 1) : ink);
             } else {
                 set_argb(cr, {1, 1, 1, 1});
-                cairo_arc(cr, x + (enabled ? 30 : 12) * dpi, y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
-                cairo_fill(cr);
+                cr->arc(x + (enabled ? 30 : 12) * dpi, y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
+                cr->fill();
             }
         };
     }
@@ -581,7 +577,7 @@ void fill_battery_container(Dock *dock) {
         auto message = view.pending ? "Applying power setting…" : view.action_error;
         if (message.empty()) message = view.history_error;
         if (message.empty()) return;
-        battery_text(dock->battery->raw_window->cr, c->real_bounds.x, c->real_bounds.y + 4 * dock->battery->raw_window->dpi,
+        battery_text(dock->battery->raw_window->drawing_context, c->real_bounds.x, c->real_bounds.y + 4 * dock->battery->raw_window->dpi,
             message, 8, dock->battery->raw_window->dpi,
             view.action_error.empty() && view.history_error.empty() ? RGBA(.40, .46, .54, 1) : RGBA(.70, .23, .16, 1), c->real_bounds.w);
     };

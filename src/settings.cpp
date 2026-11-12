@@ -16,12 +16,14 @@
 #include "audio.h"
 #include "events.h"
 #include "datetime.h"
+#include "smooth_scroll.h"
 #include <chrono>
 #include <csetjmp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
 
 #include <gtk/gtk.h>
 #include <thread>
+#include <unistd.h>
 #include <atomic>
 #include <mutex>
 #include <fstream>
@@ -237,6 +239,8 @@ struct RightData : UserData {
     double bar_grab       = 0;     // Mouse offset from the thumb top while dragging
     long last_interaction = -100000;
     bool fade_timer       = false;
+
+    SmoothScroll smooth;
 };
 
 std::vector<MylarWindow *> popups;
@@ -649,7 +653,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
 #undef bind
 }
 
-static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
+static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
     auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
@@ -672,15 +676,15 @@ static Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, b
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, std::round(x), std::round(y));
-        pango_cairo_show_layout(cr, layout);
+        cr->move_to(std::round(x), std::round(y));
+        cr->show_layout(layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
 static void paint_label(Container *root, Container *c, std::string text) {
     auto mylar = (MylarWindow*)root->user_data;
-    auto cr = mylar->raw_window->cr;
+    auto cr = mylar->raw_window->drawing_context;
     auto dpi = mylar->raw_window->dpi;
     auto size = 12 * dpi;
 
@@ -690,7 +694,7 @@ static void paint_label(Container *root, Container *c, std::string text) {
         c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, text, size, true, set->font, -1, 0, theme.text,  false);
 }
 
-static void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height,
+static void drawRoundedRect(drawing::Context *cr, double x, double y, double width, double height,
                      double radius, double stroke_width,
                      bool round_top_left = true, bool round_top_right = true,
                      bool round_bottom_right = true, bool round_bottom_left = true) {
@@ -710,47 +714,124 @@ static void drawRoundedRect(cairo_t *cr, double x, double y, double width, doubl
     double adjusted_y = y + half_stroke;
     
     // Begin path for rounded rectangle
-    cairo_new_path(cr);
+    cr->new_path();
     
-    cairo_move_to(cr, adjusted_x + (round_top_left ? adjusted_radius : 0), adjusted_y);
+    cr->move_to(adjusted_x + (round_top_left ? adjusted_radius : 0), adjusted_y);
     
-    cairo_line_to(cr, adjusted_x + inner_width - (round_top_right ? adjusted_radius : 0), adjusted_y);
+    cr->line_to(adjusted_x + inner_width - (round_top_right ? adjusted_radius : 0), adjusted_y);
     
     if (round_top_right)
-        cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
+        cr->arc(adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
                   adjusted_radius, -M_PI / 2, 0);
     else
-        cairo_line_to(cr, adjusted_x + inner_width, adjusted_y);
+        cr->line_to(adjusted_x + inner_width, adjusted_y);
     
-    cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - (round_bottom_right ? adjusted_radius : 0));
+    cr->line_to(adjusted_x + inner_width, adjusted_y + inner_height - (round_bottom_right ? adjusted_radius : 0));
     
     if (round_bottom_right)
-        cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+        cr->arc(adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
                   adjusted_radius, 0, M_PI / 2);
     else
-        cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height);
+        cr->line_to(adjusted_x + inner_width, adjusted_y + inner_height);
     
-    cairo_line_to(cr, adjusted_x + (round_bottom_left ? adjusted_radius : 0), adjusted_y + inner_height);
+    cr->line_to(adjusted_x + (round_bottom_left ? adjusted_radius : 0), adjusted_y + inner_height);
     
     if (round_bottom_left)
-        cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+        cr->arc(adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
                   adjusted_radius, M_PI / 2, M_PI);
     else
-        cairo_line_to(cr, adjusted_x, adjusted_y + inner_height);
+        cr->line_to(adjusted_x, adjusted_y + inner_height);
     
-    cairo_line_to(cr, adjusted_x, adjusted_y + (round_top_left ? adjusted_radius : 0));
+    cr->line_to(adjusted_x, adjusted_y + (round_top_left ? adjusted_radius : 0));
     
     if (round_top_left)
-        cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
+        cr->arc(adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
                   adjusted_radius, M_PI, 3 * M_PI / 2);
     else
-        cairo_line_to(cr, adjusted_x, adjusted_y);
+        cr->line_to(adjusted_x, adjusted_y);
     
     // Close the path
-    cairo_close_path(cr);
+    cr->close_path();
     
     // Set stroke width and stroke
-    cairo_set_line_width(cr, stroke_width);
+    cr->set_line_width(stroke_width);
+}
+
+/*
+ * Paints a filled, bordered rounded rectangle with Cairo's analytic antialiasing.
+ * The GL backend only has 4x MSAA, which leaves visibly stepped corners on large
+ * radii (popups, drop-down buttons). The frame is rasterized once into a small
+ * image surface per (size, radius, colors) and blitted, so repaints stay cheap.
+ */
+static void paint_smooth_frame(drawing::Context *cr, Bounds b, double radius, RGBA fill, RGBA border, double border_width = 1.0) {
+    struct FrameKey {
+        int w, h;
+        int fx, fy; // sub-pixel offset, 1/8th px
+        int radius, border; // 1/8th px
+        uint32_t fill, stroke;
+        bool operator==(const FrameKey &) const = default;
+    };
+    struct FrameEntry {
+        FrameKey key;
+        cairo_surface_t *surface;
+    };
+    thread_local std::vector<FrameEntry> cache;
+
+    auto pack = [](RGBA c) {
+        auto ch = [](double v) { return (uint32_t) std::lround(std::clamp(v, 0.0, 1.0) * 255); };
+        return ch(c.r) << 24 | ch(c.g) << 16 | ch(c.b) << 8 | ch(c.a);
+    };
+    double x0 = std::floor(b.x), y0 = std::floor(b.y);
+    int w = (int) std::ceil(b.x + b.w) - (int) x0;
+    int h = (int) std::ceil(b.y + b.h) - (int) y0;
+    if (w <= 0 || h <= 0)
+        return;
+    FrameKey key{w, h, (int) std::lround((b.x - x0) * 8), (int) std::lround((b.y - y0) * 8),
+                 (int) std::lround(radius * 8), (int) std::lround(border_width * 8), pack(fill), pack(border)};
+
+    cairo_surface_t *surface = nullptr;
+    for (auto &entry : cache) {
+        if (entry.key == key) {
+            surface = entry.surface;
+            break;
+        }
+    }
+    if (!surface) {
+        if (cache.size() >= 48) {
+            cairo_surface_destroy(cache.front().surface);
+            cache.erase(cache.begin());
+        }
+        surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        auto c = cairo_create(surface);
+        cairo_set_antialias(c, CAIRO_ANTIALIAS_BEST);
+        double half = border_width / 2.0;
+        double x = key.fx / 8.0 + half, y = key.fy / 8.0 + half;
+        double rw = b.w - border_width, rh = b.h - border_width;
+        double r = std::max(0.0, std::min(radius, std::min(rw, rh) / 2.0));
+        cairo_new_sub_path(c);
+        cairo_arc(c, x + rw - r, y + r, r, -M_PI / 2, 0);
+        cairo_arc(c, x + rw - r, y + rh - r, r, 0, M_PI / 2);
+        cairo_arc(c, x + r, y + rh - r, r, M_PI / 2, M_PI);
+        cairo_arc(c, x + r, y + r, r, M_PI, 3 * M_PI / 2);
+        cairo_close_path(c);
+        cairo_set_source_rgba(c, fill.r, fill.g, fill.b, fill.a);
+        cairo_fill_preserve(c);
+        if (border_width > 0) {
+            cairo_set_line_width(c, border_width);
+            cairo_set_source_rgba(c, border.r, border.g, border.b, border.a);
+            cairo_stroke(c);
+        }
+        cairo_destroy(c);
+        cairo_surface_flush(surface);
+        cache.push_back({key, surface});
+    }
+
+    cr->save();
+    cr->new_path();
+    cr->set_source_surface(surface, x0, y0);
+    cr->rectangle(x0, y0, w, h);
+    cr->fill();
+    cr->restore();
 }
 
 // Text and glyph helpers shared by the Wi-Fi, Audio pages and drop-down menus.
@@ -774,7 +855,7 @@ static RGBA swifi_dim(RGBA color) {
 static void swifi_text(Container *root, Bounds b, const std::string &text, double size, RGBA color,
                        bool centered = false, bool bold = false) {
     auto window = swifi_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi,
         bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(font, text.c_str(), -1);
     pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
@@ -784,31 +865,42 @@ static void swifi_text(Container *root, Bounds b, const std::string &text, doubl
     pango_layout_set_alignment(font, centered ? PANGO_ALIGN_CENTER : PANGO_ALIGN_LEFT);
     int width, height;
     pango_layout_get_pixel_size(font, &width, &height);
-    cairo_save(window->cr);
-    cairo_rectangle(window->cr, b.x, b.y, b.w, b.h);
-    cairo_clip(window->cr);
-    set_argb(window->cr, color);
-    cairo_move_to(window->cr, b.x, b.y + std::max(0.0, (b.h - height) * .5));
-    pango_cairo_show_layout(window->cr, font);
-    cairo_restore(window->cr);
+    window->drawing_context->save();
+    window->drawing_context->rectangle(b.x, b.y, b.w, b.h);
+    window->drawing_context->clip_path();
+    set_argb(window->drawing_context, color);
+    window->drawing_context->move_to(b.x, b.y + std::max(0.0, (b.h - height) * .5));
+    window->drawing_context->show_layout(font);
+    window->drawing_context->restore();
     pango_layout_set_alignment(font, PANGO_ALIGN_LEFT);
 }
 
+// Pages measure their labels on every layout (the Shortcuts page alone has
+// hundreds of buttons), so widths are remembered instead of reshaped each time.
 static double swifi_text_width(Container *root, const std::string &text, double size) {
+    static std::unordered_map<std::string, double> widths;
     auto window = swifi_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi, PANGO_WEIGHT_NORMAL, false);
+    char numbers[32];
+    std::snprintf(numbers, sizeof numbers, "\x1f%g", size * window->dpi);
+    std::string key = text + numbers + "\x1f" + set->font;
+    if (auto it = widths.find(key); it != widths.end())
+        return it->second;
+    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi, PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_width(font, -1);
     pango_layout_set_height(font, -1);
     pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
     pango_layout_set_text(font, text.c_str(), -1);
     int width = 0, height = 0;
     pango_layout_get_pixel_size(font, &width, &height);
+    if (widths.size() > 4096)
+        widths.clear();
+    widths[key] = width;
     return width;
 }
 
 static double swifi_text_height(Container *root, const std::string &text, double size, bool bold = false) {
     auto window = swifi_window(root);
-    auto font = get_cached_pango_font(window->cr, set->font, size * window->dpi,
+    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi,
         bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_width(font, -1);
     pango_layout_set_height(font, -1);
@@ -832,20 +924,20 @@ static void swifi_two_lines(Container *root, Bounds b, const std::string &title,
     swifi_text(root, Bounds(b.x, y + th + gap, b.w, sh), subtitle, subtitle_size, theme.text_secondary);
 }
 
-static void swifi_glyph(cairo_t *cr, double x, double y, const char *glyph, double size, RGBA color, bool path = false) {
+static void swifi_glyph(drawing::Context *cr, double x, double y, const char *glyph, double size, RGBA color, bool path = false) {
     auto layout = get_cached_pango_font(cr, icon_font, size, PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_width(layout, -1);
     pango_layout_set_height(layout, -1);
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
     pango_layout_set_alignment(layout, PANGO_ALIGN_LEFT);
     pango_layout_set_text(layout, glyph, -1);
-    cairo_move_to(cr, x, y);
+    cr->move_to(x, y);
     if (path) {
-        pango_cairo_layout_path(cr, layout);
+        cr->layout_path(layout);
         return;
     }
     set_argb(cr, color);
-    pango_cairo_show_layout(cr, layout);
+    cr->show_layout(layout);
 }
 
 // Creates a container that sizes itself based on children size
@@ -860,7 +952,7 @@ static Container *make_self_height_sized_parent(Container *parent) {
     c->parent_bounds_limit_input_bounds = false;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
 
         auto left = c->children[0];
@@ -899,7 +991,7 @@ static Container *make_self_height_sized_parent(Container *parent) {
     static const float border_rounding = 5;
     c->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
 
@@ -908,17 +1000,17 @@ static Container *make_self_height_sized_parent(Container *parent) {
             bg_color = theme.row_hover;
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
             set_argb(cr, bg_color);
-            cairo_fill(cr);
+            cr->fill();
         } else {
             bg_color = theme.row_background;
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
             set_argb(cr, bg_color);
-            cairo_fill(cr);
+            cr->fill();
         }
 
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
         set_argb(cr, theme.row_border);
-        cairo_stroke(cr);
+        cr->stroke();
     };
 
     return c;
@@ -929,7 +1021,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
     //static float button_text_pad = 8; 
     left->when_paint = [title, description, icon](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto size_ico = 16 * dpi;
         auto size_title = 12 * dpi;
@@ -970,7 +1062,7 @@ static void make_label_like(Container *parent, std::string title, std::string de
     };
     left->pre_layout = [title, description, icon](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto size_title = 12 * dpi;
         auto size_desc = 11 * dpi;
@@ -993,7 +1085,7 @@ static Container *make_section_title(Container *parent, std::string title) {
     static float size = 13;
     section_title->pre_layout = [title](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto size_title = size * dpi;
         auto bo = draw_text(cr, 0, 0, title, size_title, false, set->font, b.w, -1, theme.text, false);
@@ -1002,7 +1094,7 @@ static Container *make_section_title(Container *parent, std::string title) {
     };
     section_title->when_paint = [title](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto size_title = size * dpi;
         draw_text(cr,
@@ -1062,7 +1154,7 @@ static constexpr float toggle_anim_ms = 70;
 
 static void paint_toggle(Container *root, Container *c, ToggleAnim *t, Bounds check, bool on, bool row_hovered, bool pressing, bool enabled = true) {
     auto mylar = (MylarWindow *) root->user_data;
-    auto cr = mylar->raw_window->cr;
+    auto cr = mylar->raw_window->drawing_context;
     auto dpi = mylar->raw_window->dpi;
 
     if (!t->initialized) {
@@ -1104,13 +1196,13 @@ static void paint_toggle(Container *root, Container *c, ToggleAnim *t, Bounds ch
         track.a *= alpha;
         drawRoundedRect(cr, check.x, check.y, check.w, check.h, 10 * dpi, 1.0);
         set_argb(cr, track);
-        cairo_fill(cr);
+        cr->fill();
     } else {
         RGBA border = theme.toggle_border;
         border.a *= alpha;
         drawRoundedRect(cr, check.x, check.y, check.w, check.h, 10 * dpi, std::floor(1.0 * dpi));
         set_argb(cr, border);
-        cairo_stroke(cr);
+        cr->stroke();
     }
 
     Bounds knob;
@@ -1122,7 +1214,7 @@ static void paint_toggle(Container *root, Container *c, ToggleAnim *t, Bounds ch
     knob_color.a *= enabled ? 1.0 : .6;
     drawRoundedRect(cr, knob.x, knob.y, knob.w, knob.h, (circ_size * .5) * dpi, 1.0);
     set_argb(cr, knob_color);
-    cairo_fill(cr);
+    cr->fill();
 }
 
 static void make_bool_control(Container *parent, bool initial_value, std::function<void(bool)> on_change, Container *row = nullptr) {
@@ -1139,7 +1231,7 @@ static void make_bool_control(Container *parent, bool initial_value, std::functi
     right->user_data = bool_info;
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto data = (BoolInfo *) c->user_data;
 
@@ -1221,7 +1313,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
     right->user_data = slider_info;
     right->when_paint = [notches](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
 
         {
@@ -1232,7 +1324,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
 
             drawRoundedRect(cr, b.x - std::round(5 * dpi), b.y, b.w + std::round(10 * dpi), b.h, h * .5, 1.0);
             set_argb(cr, theme.slider_track);
-            cairo_fill(cr); 
+            cr->fill(); 
 
             if (notches != 0) {
                 float snap_percentage = 1.0f / ((float) notches);
@@ -1242,7 +1334,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
                 for (int i = 0; i < count + 1; i++) {
                     set_rect(cr, {b.x + x_off - std::round(1 * dpi), b.y + std::round(10 * dpi), std::round(2 * dpi), std::round(6 * dpi)});
                     set_argb(cr, theme.slider_track);
-                    cairo_fill(cr); 
+                    cr->fill(); 
 
                     x_off += spacing;
                 }
@@ -1256,24 +1348,24 @@ static void make_slider(Container *parent, std::string title, std::string descri
             b.x += c->real_bounds.w * data->value - b.h * .5;
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
             set_argb(cr, theme.slider_thumb);
-            cairo_fill(cr);
+            cr->fill();
 
             //b.shrink(1.0);
             
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
             set_argb(cr, theme.slider_track);
-            cairo_stroke(cr);
+            cr->stroke();
 
             b.shrink(5 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, b.h * .5, 1.0);
             set_argb(cr, theme.accent);
-            cairo_fill(cr);
+            cr->fill();
         }
 
     };
     right->when_mouse_down = [on_change, notches](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
         float scalar = (root->mouse_current_x - b.x) / b.w;
@@ -1297,7 +1389,7 @@ static void make_slider(Container *parent, std::string title, std::string descri
     
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         c->real_bounds.w = 350 * dpi;
         c->real_bounds.h = 20 * dpi;
@@ -1314,12 +1406,12 @@ static void make_button_group(Container *parent, std::string title, std::string 
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
         set_argb(cr, theme.segment_background);
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
-        cairo_fill(cr);
+        cr->fill();
     };
     right->pre_layout = [options](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -1351,14 +1443,14 @@ static void make_button_group(Container *parent, std::string title, std::string 
         option->when_paint = [o](Container *root, Container *c) {
             auto data = (OptionData *) c->user_data;
             auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             auto dpi = mylar->raw_window->dpi;
             auto b = c->real_bounds;
             bool selected = data->selected;
             if (selected || c->state.mouse_hovering) {
                 set_argb(cr, selected ? theme.segment_selected : swifi_mix(theme.segment_background, theme.segment_selected, .5));
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             swifi_text(root, b, o, option_text_size, selected ? theme.text : theme.text_secondary, true);
         };
@@ -1379,7 +1471,7 @@ static Container *make_vert_space(Container *parent, float amount) {
     auto pad = parent->child(FILL_SPACE, 8);
     pad->pre_layout = [amount](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         c->wanted_bounds.h = amount * dpi;
     };
@@ -1431,6 +1523,7 @@ struct DropdownMenuData : UserData {
     float overflow = 0;
     int selected_index = -1;
     bool scrolled_to_selection = false;
+    SmoothScroll smooth;
 };
 
 static MylarWindow *dropdown_popup = nullptr;
@@ -1479,12 +1572,7 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
     popup->root->when_paint = [](Container *root, Container *c) {
         auto window = ((MylarWindow *) root->user_data)->raw_window;
         auto b = c->real_bounds;
-        set_argb(window->cr, theme.popup_background);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
-        cairo_fill(window->cr);
-        set_argb(window->cr, theme.dropdown_border);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
-        cairo_stroke(window->cr);
+        paint_smooth_frame(window->drawing_context, b, 8 * window->dpi, theme.popup_background, theme.dropdown_border);
     };
 
     auto list = popup->root->child(::fullycustom, FILL_SPACE, FILL_SPACE);
@@ -1513,6 +1601,8 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
             if (menu->selected_index >= 0)
                 menu->scroll = -(float) ((menu->selected_index + .5) * dropdown_row_h * dpi + inset - b.h * .5);
         }
+        if (menu->smooth.step(menu->scroll))
+            windowing::redraw(((MylarWindow *) root->user_data)->raw_window);
         menu->scroll = std::clamp(menu->scroll, -menu->overflow, 0.0f);
         for (auto ch : c->children) {
             ch->real_bounds.x += inset;
@@ -1520,21 +1610,27 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
             modify_all(ch, 0, inset + menu->scroll);
         }
     };
-    list->when_fine_scrolled = [menu](Container *root, Container *, double, double scroll_y, bool) {
+    list->when_fine_scrolled = [menu](Container *root, Container *, double, double scroll_y, bool touchpad) {
         auto window = ((MylarWindow *) root->user_data)->raw_window;
-        menu->scroll = std::clamp(menu->scroll + (float) (scroll_y * 3 * window->dpi), -menu->overflow, 0.0f);
+        float delta = (float) (scroll_y * 3 * window->dpi);
+        if (touchpad) {
+            menu->smooth.stop();
+            menu->scroll = std::clamp(menu->scroll + delta, -menu->overflow, 0.0f);
+        } else {
+            menu->smooth.scroll_by(menu->scroll, delta, -menu->overflow, 0.0f);
+        }
         windowing::redraw(window);
     };
     list->when_paint = [](Container *root, Container *c) {
         auto window = ((MylarWindow *) root->user_data)->raw_window;
-        cairo_save(window->cr);
+        window->drawing_context->save();
         auto b = c->real_bounds;
-        cairo_rectangle(window->cr, b.x, b.y + 2 * window->dpi, b.w, b.h - 4 * window->dpi);
-        cairo_clip(window->cr);
+        window->drawing_context->rectangle(b.x, b.y + 2 * window->dpi, b.w, b.h - 4 * window->dpi);
+        window->drawing_context->clip_path();
     };
     list->after_paint = [menu](Container *root, Container *c) {
         auto window = ((MylarWindow *) root->user_data)->raw_window;
-        cairo_restore(window->cr);
+        window->drawing_context->restore();
         if (menu->overflow <= 0)
             return;
         // Thin scroll indicator.
@@ -1545,9 +1641,9 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
         double y = b.y + (-menu->scroll / menu->overflow) * (b.h - thumb_h);
         RGBA color = theme.text_secondary;
         color.a *= .4;
-        set_argb(window->cr, color);
-        drawRoundedRect(window->cr, b.x + b.w - 5 * dpi, y, 3 * dpi, thumb_h, 1.5 * dpi, 1.0);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, color);
+        drawRoundedRect(window->drawing_context, b.x + b.w - 5 * dpi, y, 3 * dpi, thumb_h, 1.5 * dpi, 1.0);
+        window->drawing_context->fill();
     };
 
     for (size_t i = 0; i < options.size(); i++) {
@@ -1556,18 +1652,18 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
         auto label = options[i].label;
         ch->when_paint = [label, is_selected](Container *root, Container *c) {
             auto window = ((MylarWindow *) root->user_data)->raw_window;
-            auto cr = window->cr;
+            auto cr = window->drawing_context;
             auto dpi = window->dpi;
             auto b = c->real_bounds;
             if (c->state.mouse_pressing || c->state.mouse_hovering) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 6 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             if (is_selected) {
                 set_argb(cr, theme.accent);
                 drawRoundedRect(cr, b.x + 4 * dpi, b.y + b.h * .3, 3 * dpi, b.h * .4, 1.5 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             swifi_text(root, Bounds(b.x + 16 * dpi, b.y, b.w - 24 * dpi, b.h), label, 11, theme.text, false, is_selected);
         };
@@ -1588,17 +1684,14 @@ static double dropdown_button_width(Container *root, const std::string &label) {
 
 static void paint_dropdown_button(Container *root, Container *c, const std::string &label) {
     auto window = swifi_window(root);
-    auto cr = window->cr;
+    auto cr = window->drawing_context;
     auto dpi = window->dpi;
     double h = std::min<double>(30 * dpi, c->real_bounds.h);
     Bounds b(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
-    set_argb(cr, c->state.mouse_pressing ? theme.dropdown_pressed :
-        c->state.mouse_hovering ? theme.dropdown_hover : theme.dropdown_background);
-    drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-    cairo_fill(cr);
-    set_argb(cr, theme.dropdown_border);
-    drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-    cairo_stroke(cr);
+    paint_smooth_frame(cr, b, settings_control_rounding * dpi,
+        c->state.mouse_pressing ? theme.dropdown_pressed :
+        c->state.mouse_hovering ? theme.dropdown_hover : theme.dropdown_background,
+        theme.dropdown_border);
     swifi_text(root, Bounds(b.x + 10 * dpi, b.y, b.w - 38 * dpi, b.h), label, 11, theme.text);
     // ChevronDown (U+E70D) marks the button as a dropdown
     const std::string chevron = "\uE70D";
@@ -1650,7 +1743,7 @@ static Container *make_dropdown_option(Container *parent, std::string title, std
     
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         c->real_bounds.w = 250 * dpi;
         c->real_bounds.h = 70 * dpi;
@@ -1672,7 +1765,7 @@ static void make_button(Container *parent, std::string text, std::function<void(
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     pad->pre_layout = [text](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         text_height = 11 * dpi;
         pad_amount = 11 * dpi;
@@ -1682,7 +1775,7 @@ static void make_button(Container *parent, std::string text, std::function<void(
     };
     pad->when_paint = [text, is_enabled](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         const bool enabled = !is_enabled || is_enabled();
         auto text_color = enabled ? theme.text : theme.text_secondary;
@@ -1699,7 +1792,7 @@ static void make_button(Container *parent, std::string text, std::function<void(
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
                         c->real_bounds.w, c->real_bounds.h,
                         settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
+        cr->fill();
         Bounds bounds = draw_text(cr, 0, 0, text, text_height, false, set->font, -1, -1, theme.text, false);
         draw_text(cr, 
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, 
@@ -1748,7 +1841,7 @@ static void make_bool_with_button(Container *parent, std::string title, std::str
     auto label_space = right->child(FILL_SPACE, FILL_SPACE);
     label_space->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto on = draw_text(cr, 0, 0, "On", 11 * dpi, false, set->font, -1, -1, theme.text, false, 0);
         auto off = draw_text(cr, 0, 0, "Off", 11 * dpi, false, set->font, -1, -1, theme.text, false, 0);
@@ -1783,20 +1876,10 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     };
     pad->when_paint = [](Container *root, Container *c) {
         auto mylar = static_cast<MylarWindow *>(root->user_data);
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
-        set_argb(cr, c->active ? theme.accent : theme.field_border);
-        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y,
-                        c->real_bounds.w, c->real_bounds.h,
-                        settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
-        set_argb(cr, theme.field_background);
-        auto minus_border = c->real_bounds;
-        minus_border.shrink(std::round(1 * dpi));
-        drawRoundedRect(cr, minus_border.x, minus_border.y,
-                        minus_border.w, minus_border.h,
-                        settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
+        paint_smooth_frame(cr, c->real_bounds, settings_control_rounding * dpi, theme.field_background,
+                           c->active ? theme.accent : theme.field_border, std::max(1.0, (double) std::round(1 * dpi)));
         paint_text_editor(root, c, theme.text, theme.accent);
     };
     return pad;
@@ -2007,12 +2090,12 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
     };
     c->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         set_argb(cr, theme.monitor_background);
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
-        cairo_fill(cr);
+        cr->fill();
     };
     // Alignment guides, drawn over the monitors while one is snapped.
     c->after_paint = paint {
@@ -2020,28 +2103,28 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         if (!canvas->dragging || (!canvas->guide_x_on && !canvas->guide_y_on))
             return;
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
 
-        cairo_save(cr);
+        cr->save();
         set_rect(cr, b);
-        cairo_clip(cr);
+        cr->clip_path();
         set_argb(cr, theme.accent);
-        cairo_set_line_width(cr, std::max(1.0, std::floor(1.0 * dpi)));
+        cr->set_line_width(std::max(1.0, std::floor(1.0 * dpi)));
         if (canvas->guide_x_on) {
             const double x = std::round(b.x + b.w * .5 + (canvas->guide_x - canvas->origin_x) * canvas->scale) + .5;
-            cairo_move_to(cr, x, b.y);
-            cairo_line_to(cr, x, b.y + b.h);
-            cairo_stroke(cr);
+            cr->move_to(x, b.y);
+            cr->line_to(x, b.y + b.h);
+            cr->stroke();
         }
         if (canvas->guide_y_on) {
             const double y = std::round(b.y + b.h * .5 + (canvas->guide_y - canvas->origin_y) * canvas->scale) + .5;
-            cairo_move_to(cr, b.x, y);
-            cairo_line_to(cr, b.x + b.w, y);
-            cairo_stroke(cr);
+            cr->move_to(b.x, y);
+            cr->line_to(b.x + b.w, y);
+            cr->stroke();
         }
-        cairo_restore(cr);
+        cr->restore();
     };
 
     bool first = true;
@@ -2049,26 +2132,26 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         auto main = c->child(10, 10);
         main->when_paint = paint {
             auto mylar = (MylarWindow*)root->user_data;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             auto dpi = mylar->raw_window->dpi;
             auto data = (MonitorInfo *) c->user_data;
             auto b = c->real_bounds;
             
-            cairo_save(cr);
+            cr->save();
             set_rect(cr, c->parent->real_bounds);
-            cairo_clip(cr);
+            cr->clip_path();
             
             auto surface = theme.monitor_surface;
             if (data->dragging)
                 surface.a *= .85;
             set_argb(cr, surface);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
-            cairo_fill(cr);
+            cr->fill();
 
             if (data->selected) {
                 set_argb(cr, theme.accent);
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 2.0 * dpi);
-                cairo_stroke(cr);
+                cr->stroke();
             }
 
             auto text = fz("{}\n({}x{})", data->o->name, data->o->w, data->o->h);
@@ -2081,8 +2164,8 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
                 c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, 
                 text, 12 * dpi, true, set->font, c->real_bounds.w, -1, theme.text, false, 1);
 
-            cairo_reset_clip(cr);
-            cairo_restore(cr);
+            cr->reset_clip();
+            cr->restore();
         };
         auto select = [on_clicked](Container *root, Container *c) {
             auto data = (MonitorInfo *) c->user_data;
@@ -2265,7 +2348,7 @@ static Container *make_accordion(Container *parent, std::string title, std::stri
     };
     right->when_paint = [open](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         const std::string chevron = *open ? "\uE70E" : "\uE70D";
         auto b = draw_text(cr, 0, 0, chevron, 12 * dpi, false, icon_font, -1, -1, theme.text_secondary, false);
@@ -2578,6 +2661,25 @@ static float right_content_height(Container *right) {
     return (float) (content_h + right->wanted_pad.h);
 }
 
+// Paints the children of a page that overlap the viewport (the page's parent).
+// Pages can hold hundreds of rows and most of them are scrolled out of view.
+static void paint_right_page_visible(Container *root, Container *c) {
+    auto viewport = c->parent ? c->parent->real_bounds : c->real_bounds;
+    // Leave room for anything drawn slightly outside its own bounds.
+    double margin = 24 * ((MylarWindow *) root->user_data)->raw_window->dpi;
+    viewport.x -= margin;
+    viewport.y -= margin;
+    viewport.w += margin * 2;
+    viewport.h += margin * 2;
+    std::vector<Container *> order;
+    for (auto child : c->children)
+        if (child->exists && overlaps(child->real_bounds, viewport))
+            order.push_back(child);
+    std::stable_sort(order.begin(), order.end(), [](Container *a, Container *b) { return a->z_index < b->z_index; });
+    for (auto child : order)
+        paint_outline(root, child);
+}
+
 // Lays out a settings page as a vbox and offsets it by the current scroll.
 // layout_hbox calls pre_layout once with the parent's bounds before the real
 // layout, so this must not clamp the stored scroll: doing so in that bogus
@@ -2593,10 +2695,18 @@ static void layout_right_page(Container *root, Container *c, const Bounds &b) {
     auto d            = (RightData *) c->user_data;
     d->content_h      = right_content_height(c);
     d->overflow       = std::max(0.0f, d->content_h - (float) c->real_bounds.h);
+    if (d->smooth.step(d->scroll))
+        windowing::redraw(mylar->raw_window);
     d->applied_scroll = std::clamp(d->scroll, -d->overflow, 0.0f);
 
-    for (auto child : c->children)
+    for (auto child : c->children) {
         modify_all(child, 0, d->applied_scroll);
+        // Only rows inside the viewport are painted.
+        if (!child->when_paint && child->automatically_paint_children) {
+            child->automatically_paint_children = false;
+            child->when_paint = paint_right_page_visible;
+        }
+    }
 }
 
 // The page scrollbar: thin while scrolling, thicker while hovered or dragged,
@@ -2644,6 +2754,7 @@ static void right_bar_scroll_to(Container *root, Container *c, double thumb_y) {
         return;
     double room = g.track_h - g.thumb_h;
     double t    = room > 0 ? std::clamp((thumb_y - g.track_y) / room, 0.0, 1.0) : 0.0;
+    d->smooth.stop();
     d->scroll   = (float) (-t * d->overflow);
     swifi_redraw(root);
 }
@@ -2685,16 +2796,16 @@ static void paint_right_scrollbar(Container *root, Container *c) {
     if (active) {
         RGBA track = theme.text_secondary;
         track.a *= .12 * alpha;
-        drawRoundedRect(window->cr, x, g.track_y, w, g.track_h, w * .5, 1.0);
-        set_argb(window->cr, track);
-        cairo_fill(window->cr);
+        drawRoundedRect(window->drawing_context, x, g.track_y, w, g.track_h, w * .5, 1.0);
+        set_argb(window->drawing_context, track);
+        window->drawing_context->fill();
     }
 
     RGBA color = theme.text_secondary;
     color.a *= (d->bar_dragging ? .8 : active ? .65 : .5) * alpha;
-    drawRoundedRect(window->cr, x, g.thumb_y, w, g.thumb_h, w * .5, 1.0);
-    set_argb(window->cr, color);
-    cairo_fill(window->cr);
+    drawRoundedRect(window->drawing_context, x, g.thumb_y, w, g.thumb_h, w * .5, 1.0);
+    set_argb(window->drawing_context, color);
+    window->drawing_context->fill();
 }
 
 // Shown while a display change is on trial: a countdown plus keep / revert.
@@ -2717,7 +2828,7 @@ static void make_display_trial_banner(Container *parent) {
     };
     left->when_paint = [description](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         auto text = description();
         auto t = draw_text(cr, 0, 0, title, 12 * dpi, false, set->font, -1, -1, theme.text, false);
@@ -3048,7 +3159,7 @@ static void make_reset_textfield(Container *parent, std::string title, std::stri
     
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         c->real_bounds.w = 340 * dpi;
         c->real_bounds.h = 70 * dpi;
@@ -3315,7 +3426,7 @@ SettingsWifiPage::~SettingsWifiPage() {
 
 // Signal strength like the dock menu: the full Wi-Fi glyph drawn faintly, the bars
 // for the current level on top, and the lock badge outlined in the row colour.
-static void swifi_paint_signal(cairo_t *cr, double x, double y, double size, int strength, bool secured,
+static void swifi_paint_signal(drawing::Context *cr, double x, double y, double size, int strength, bool secured,
                                double dpi, RGBA background) {
     const char *level = strength >= 75 ? "" : strength >= 50 ? "" : strength >= 25 ? "" : "";
     RGBA faint = theme.text;
@@ -3324,21 +3435,21 @@ static void swifi_paint_signal(cairo_t *cr, double x, double y, double size, int
     swifi_glyph(cr, x, y, level, size, theme.text);
     if (!secured)
         return;
-    cairo_save(cr);
-    cairo_new_path(cr);
+    cr->save();
+    cr->new_path();
     swifi_glyph(cr, x, y, "", size, theme.text, true);
     set_argb(cr, background);
-    cairo_set_line_width(cr, 3 * dpi);
-    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-    cairo_stroke_preserve(cr);
+    cr->set_line_width(3 * dpi);
+    cr->set_line_join(CAIRO_LINE_JOIN_ROUND);
+    cr->stroke_preserve();
     set_argb(cr, theme.text);
-    cairo_fill(cr);
-    cairo_restore(cr);
+    cr->fill();
+    cr->restore();
 }
 
 static void swifi_paint_button(Container *root, Container *c, const std::string &text, bool enabled) {
     auto window = swifi_window(root);
-    auto cr = window->cr;
+    auto cr = window->drawing_context;
     auto dpi = window->dpi;
     auto b = c->real_bounds;
     if (b.h <= 1 || b.w <= 1)
@@ -3346,7 +3457,7 @@ static void swifi_paint_button(Container *root, Container *c, const std::string 
     set_argb(cr, !enabled ? theme.slider_track : c->state.mouse_pressing ? theme.button_pressed :
         c->state.mouse_hovering ? theme.button_hover : theme.button_background);
     drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-    cairo_fill(cr);
+    cr->fill();
     b.x += 6 * dpi;
     b.w -= 12 * dpi;
     swifi_text(root, b, text, 11, enabled ? theme.text : swifi_dim(theme.text_secondary), true);
@@ -3454,19 +3565,19 @@ static Container *swifi_network_row(Container *parent) {
     row->when_paint = [data](Container *root, Container *c) {
         auto window = swifi_window(root);
         auto b = c->real_bounds;
-        cairo_save(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
-        cairo_clip(window->cr);
-        set_argb(window->cr, swifi_row_color(data));
-        cairo_paint(window->cr);
+        window->drawing_context->save();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        window->drawing_context->clip_path();
+        set_argb(window->drawing_context, swifi_row_color(data));
+        window->drawing_context->paint_source();
     };
     row->after_paint = [](Container *root, Container *c) {
         auto window = swifi_window(root);
         auto b = c->real_bounds;
-        cairo_restore(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
-        set_argb(window->cr, theme.row_border);
-        cairo_stroke(window->cr);
+        window->drawing_context->restore();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->stroke();
     };
 
     auto header = row->child(FILL_SPACE, 62);
@@ -3478,7 +3589,7 @@ static Container *swifi_network_row(Container *parent) {
         auto dpi = window->dpi;
         auto page = settings_wifi;
         auto b = c->real_bounds;
-        swifi_paint_signal(window->cr, b.x + 19 * dpi, b.y + 19 * dpi, 20 * dpi, data->ap.strength, data->ap.secured,
+        swifi_paint_signal(window->drawing_context, b.x + 19 * dpi, b.y + 19 * dpi, 20 * dpi, data->ap.strength, data->ap.secured,
             dpi, swifi_row_color(data));
         std::string security = data->ap.security == "OWE" ? "Open (encrypted)" :
             data->ap.security.empty() ? "Open" : data->ap.security == "WEP" ? "WEP (insecure)" : data->ap.security;
@@ -3543,19 +3654,13 @@ static Container *swifi_network_row(Container *parent) {
     };
     input->when_paint = [](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
         if (b.h <= 2 * dpi)
             return;
-        set_argb(cr, c->active ? theme.accent : theme.field_border);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
-        auto inner = b;
-        inner.shrink(std::round(1 * dpi));
-        set_argb(cr, theme.field_background);
-        drawRoundedRect(cr, inner.x, inner.y, inner.w, inner.h, settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
+        paint_smooth_frame(cr, b, settings_control_rounding * dpi, theme.field_background,
+                           c->active ? theme.accent : theme.field_border, std::max(1.0, (double) std::round(1 * dpi)));
         if (static_cast<STextEditorData *>(c->user_data)->text.empty()) {
             auto hint = b;
             hint.x += 10 * dpi;
@@ -3902,15 +4007,64 @@ static void sshortcut_add(const std::string &name, const std::string &command) {
     sshortcut_request_rebuild();
 }
 
-static Container *make_placeholder_field(Container *parent, std::string placeholder);
+static Container *make_placeholder_field(Container *parent, std::string placeholder,
+                                        std::string initial_value = "", std::function<void(std::string)> on_change = nullptr);
+
+// Filter typed above the system shortcuts; rows not matching it are hidden.
+static std::string sshortcut_filter;
+
+static std::string sshortcut_lower(std::string text) {
+    for (auto &ch : text)
+        ch = (char) std::tolower((unsigned char) ch);
+    return text;
+}
+
+// Every space-separated word of the filter must appear in the row's name or keys.
+static bool sshortcut_matches_filter(int index) {
+    if (index < 0 || index >= (int) sshortcut_rows.size())
+        return false;
+    const auto &row = sshortcut_rows[index];
+    auto haystack = sshortcut_lower(row.shortcut.name + " " + row.keys + " " + row.command);
+    std::istringstream words(sshortcut_lower(sshortcut_filter));
+    std::string word;
+    while (words >> word)
+        if (haystack.find(word) == std::string::npos)
+            return false;
+    return true;
+}
+
+// Shows only the system rows matching the filter, or the "no match" note when none do.
+static void sshortcut_apply_filter(Container *page) {
+    if (!page)
+        return;
+    int index = 0;
+    while (index < (int) sshortcut_rows.size() && sshortcut_rows[index].custom)
+        index++;
+    bool any = false;
+    Container *empty = nullptr;
+    for (auto child : page->children) {
+        if (child->name == "system_row") {
+            child->exists = sshortcut_matches_filter(index++);
+            any = any || child->exists;
+        } else if (child->name == "system_empty") {
+            empty = child;
+        }
+    }
+    if (empty)
+        empty->exists = !any;
+}
 static std::string sshortcut_field_text(Container *field);
 
-static void make_shortcut_row(Container *parent, int index, bool is_first, bool is_last) {
+static void make_shortcut_row(Container *parent, int index) {
     static const float height = 60;
     static const float round = 8;
     auto row = parent->child(::hbox, FILL_SPACE, height);
+    // Rows of the same kind form one rounded group; the filter can hide system rows.
+    row->name = index < (int) sshortcut_rows.size() && sshortcut_rows[index].custom ? "custom_row" : "system_row";
     // The page container is only viewport tall and moves with the scroll.
     row->parent_bounds_limit_input_bounds = false;
+    // Stay hovered over the children too, so custom rows can swap name for command.
+    row->receive_events_even_if_obstructed = true;
     row->pre_layout = [index](Container *root, Container *c, const Bounds &) {
         double dpi = swifi_window(root)->dpi;
         c->wanted_bounds.h = height * dpi;
@@ -3931,10 +4085,30 @@ static void make_shortcut_row(Container *parent, int index, bool is_first, bool 
                 child->exists = typing;
         }
     };
-    row->when_paint = [index, is_first, is_last](Container *root, Container *c) {
+    row->when_paint = [index](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
+
+        // First/last among the visible rows of the same group get the rounded corners.
+        bool is_first = true, is_last = true;
+        if (auto parent = c->parent) {
+            auto &siblings = parent->children;
+            auto it = std::find(siblings.begin(), siblings.end(), c);
+            for (auto prev = it; prev != siblings.begin();) {
+                --prev;
+                if (!(*prev)->exists)
+                    continue;
+                is_first = (*prev)->name != c->name;
+                break;
+            }
+            for (auto next = it == siblings.end() ? it : it + 1; next != siblings.end(); ++next) {
+                if (!(*next)->exists)
+                    continue;
+                is_last = (*next)->name != c->name;
+                break;
+            }
+        }
 
         // Neighbouring rows share their border line.
         auto b = c->real_bounds;
@@ -3945,25 +4119,22 @@ static void make_shortcut_row(Container *parent, int index, bool is_first, bool 
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, 0, is_first, is_first, is_last, is_last);
         const bool active = sshortcut_editing == index || sshortcut_typing == index;
         set_argb(cr, active ? swifi_mix(theme.row_background, theme.accent, .14) : theme.row_background);
-        cairo_fill(cr);
+        cr->fill();
 
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
         set_argb(cr, theme.row_border);
-        cairo_set_line_width(cr, std::floor(1.0 * dpi));
-        cairo_stroke(cr);
+        cr->set_line_width(std::floor(1.0 * dpi));
+        cr->stroke();
     };
 
     auto name = row->child(FILL_SPACE, FILL_SPACE);
-    name->when_paint = [index](Container *root, Container *c) {
+    name->when_paint = [index, row](Container *root, Container *c) {
         if (index >= (int) sshortcut_rows.size())
             return;
         const auto &data = sshortcut_rows[index];
-        if (!data.custom) {
-            swifi_text(root, c->real_bounds, data.shortcut.name, 12, theme.text);
-            return;
-        }
-        // Custom rows also show the command they run.
-        swifi_two_lines(root, c->real_bounds, data.shortcut.name, data.command);
+        // Custom rows show the command they run instead of the name while hovered.
+        const bool show_command = data.custom && row->state.mouse_hovering && !data.command.empty();
+        swifi_text(root, c->real_bounds, show_command ? data.command : data.shortcut.name, 12, theme.text);
     };
 
     auto keys_text = [index]() -> std::string {
@@ -4063,8 +4234,11 @@ static void make_shortcut_row(Container *parent, int index, bool is_first, bool 
 }
 
 // A make_field that shows `placeholder` while empty and not focused.
-static Container *make_placeholder_field(Container *parent, std::string placeholder) {
-    auto field = make_field(parent, false, "", [](std::string) {});
+static Container *make_placeholder_field(Container *parent, std::string placeholder,
+                                        std::string initial_value, std::function<void(std::string)> on_change) {
+    if (!on_change)
+        on_change = [](std::string) {};
+    auto field = make_field(parent, false, std::move(initial_value), std::move(on_change));
     field->parent_bounds_limit_input_bounds = false;
     auto paint_field = std::move(field->when_paint);
     field->when_paint = [paint_field, placeholder](Container *root, Container *c) {
@@ -4112,13 +4286,13 @@ static void make_custom_shortcut_form(Container *parent) {
         auto window = swifi_window(root);
         auto dpi = window->dpi;
         auto b = c->real_bounds;
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
-        set_argb(window->cr, theme.row_background);
-        cairo_fill(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * dpi, std::floor(1.0 * dpi));
-        set_argb(window->cr, theme.row_border);
-        cairo_set_line_width(window->cr, std::floor(1.0 * dpi));
-        cairo_stroke(window->cr);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_background);
+        window->drawing_context->fill();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 8 * dpi, std::floor(1.0 * dpi));
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->set_line_width(std::floor(1.0 * dpi));
+        window->drawing_context->stroke();
     };
 
     auto caption = card->child(FILL_SPACE, FILL_SPACE);
@@ -4138,6 +4312,26 @@ static void make_custom_shortcut_form(Container *parent) {
     };
     auto name = make_placeholder_field(line, "Name");
     auto command = make_placeholder_field(line, "Command to run");
+    // Tab / Shift+Tab move between the form's fields (traversal needs them named).
+    name->name = "custom_shortcut_name";
+    command->name = "custom_shortcut_command";
+    for (auto field : {name, command}) {
+        static_cast<STextEditorData *>(field->user_data)->options.on_tab = [card](Container *root, Container *c, bool previous) {
+            std::weak_ptr<bool> lifetime = c->lifetime;
+            std::weak_ptr<bool> card_lifetime = card->lifetime;
+            // Next frame, or the newly focused field would also receive this Tab.
+            windowing::timer(settings_app, 1, [root, c, card, previous, lifetime, card_lifetime](void *) {
+                std::lock_guard<std::mutex> lock(settings_app->mutex);
+                if (lifetime.expired() || card_lifetime.expired())
+                    return;
+                if (previous)
+                    activate_previous_activatable(root, c, card);
+                else
+                    activate_next_activatable(root, c, card);
+                swifi_redraw(root);
+            }, nullptr);
+        };
+    }
     // The command usually needs more room than the name.
     auto name_layout = name->pre_layout;
     name->pre_layout = [name_layout](Container *root, Container *c, const Bounds &b) {
@@ -4193,7 +4387,7 @@ static void fill_shortcuts_settings(Container *root, bool reload_rows = true) {
     if (custom_count > 0) {
         make_vert_space(padded_right, 8);
         for (int i = 0; i < custom_count; i++)
-            make_shortcut_row(padded_right, i, i == 0, i == custom_count - 1);
+            make_shortcut_row(padded_right, i);
     }
 
     // The gap between the user's own shortcuts and the system ones.
@@ -4201,9 +4395,32 @@ static void fill_shortcuts_settings(Container *root, bool reload_rows = true) {
     make_section_title(padded_right, "System shortcuts");
     make_vert_space(padded_right, 10);
 
+    auto filter = make_placeholder_field(padded_right, "Filter shortcuts by name or keys", sshortcut_filter,
+                                         [padded_right](std::string text) {
+        sshortcut_filter = text;
+        sshortcut_apply_filter(padded_right);
+    });
+    auto filter_layout = filter->pre_layout;
+    filter->pre_layout = [filter_layout](Container *root, Container *c, const Bounds &b) {
+        if (filter_layout)
+            filter_layout(root, c, b);
+        c->wanted_bounds.h = 32 * swifi_window(root)->dpi;
+    };
+    make_vert_space(padded_right, 10);
+
     const int total = (int) sshortcut_rows.size();
     for (int i = custom_count; i < total; i++)
-        make_shortcut_row(padded_right, i, i == custom_count, i == total - 1);
+        make_shortcut_row(padded_right, i);
+
+    auto empty = padded_right->child(FILL_SPACE, FILL_SPACE);
+    empty->name = "system_empty";
+    empty->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 40 * swifi_window(root)->dpi;
+    };
+    empty->when_paint = [](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, "No shortcuts match the filter", 11, theme.text_secondary);
+    };
+    sshortcut_apply_filter(padded_right);
 
     if (sshortcut_edit_after_rebuild >= 0 && sshortcut_edit_after_rebuild < total) {
         auto index = sshortcut_edit_after_rebuild;
@@ -4237,12 +4454,12 @@ static void fill_wifi_settings(Container *root) {
     };
     card->when_paint = [](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
         set_argb(cr, theme.row_background);
-        cairo_fill(cr);
+        cr->fill();
 
         const auto &view = settings_wifi->view;
         if (view.scanning || view.busy) {
@@ -4251,26 +4468,26 @@ static void fill_wifi_settings(Container *root) {
             double phase = (get_current_time_in_ms() % 2000) / 2000.0;
             double inset = std::max(1.0, std::floor(1.0 * dpi));
             Bounds inner(b.x + inset, b.y + inset, b.w - inset * 2, b.h - inset * 2);
-            cairo_save(cr);
-            cairo_new_path(cr);
+            cr->save();
+            cr->new_path();
             drawRoundedRect(cr, inner.x, inner.y, inner.w, inner.h, std::max(0.0, 5 * dpi - inset), 0.0);
-            cairo_clip(cr);
+            cr->clip_path();
             set_argb(cr, theme.accent);
             for (int i = 0; i < 5; ++i) {
                 double step = (phase - i * .08) / .6;
                 if (step < 0 || step > 1) continue;
                 double x = .5 - .5 * std::cos(step * M_PI);
-                cairo_new_path(cr);
-                cairo_arc(cr, inner.x + x * inner.w, inner.y + inner.h - 5 * dpi, 2 * dpi, 0, 2 * M_PI);
-                cairo_fill(cr);
+                cr->new_path();
+                cr->arc(inner.x + x * inner.w, inner.y + inner.h - 5 * dpi, 2 * dpi, 0, 2 * M_PI);
+                cr->fill();
             }
-            cairo_restore(cr);
+            cr->restore();
         }
 
         // Border last so nothing drawn inside the card can sit on top of it.
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
         set_argb(cr, theme.row_border);
-        cairo_stroke(cr);
+        cr->stroke();
     };
     auto heading = card->child(FILL_SPACE, FILL_SPACE);
     heading->when_paint = [](Container *root, Container *c) {
@@ -4279,7 +4496,7 @@ static void fill_wifi_settings(Container *root) {
         const auto &view = settings_wifi->view;
         auto b = c->real_bounds;
         bool on = view.status.service_running && !view.status.devices.empty() && view.status.wireless_enabled;
-        swifi_glyph(window->cr, b.x + 19 * dpi, b.y + b.h * .5 - 10 * dpi, "", 16 * dpi,
+        swifi_glyph(window->drawing_context, b.x + 19 * dpi, b.y + b.h * .5 - 10 * dpi, "", 16 * dpi,
             on ? theme.text : swifi_dim(theme.text_secondary));
         swifi_text(root, Bounds(b.x + 60 * dpi, b.y - 6 * dpi, b.w - 60 * dpi, 24 * dpi), "Wi-Fi", 12, theme.text);
         swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 16 * dpi, b.w - 60 * dpi, 22 * dpi),
@@ -4306,10 +4523,10 @@ static void fill_wifi_settings(Container *root) {
         const bool switchable = settings_wifi->view.status.devices.size() > 1;
         const double h = 24 * dpi;
         Bounds pill(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
-        set_argb(window->cr, switchable && c->state.mouse_pressing ? theme.button_pressed :
+        set_argb(window->drawing_context, switchable && c->state.mouse_pressing ? theme.button_pressed :
             switchable && c->state.mouse_hovering ? theme.button_hover : theme.segment_background);
-        drawRoundedRect(window->cr, pill.x, pill.y, pill.w, pill.h, h * .5, 1.0);
-        cairo_fill(window->cr);
+        drawRoundedRect(window->drawing_context, pill.x, pill.y, pill.w, pill.h, h * .5, 1.0);
+        window->drawing_context->fill();
         pill.x += 10 * dpi;
         pill.w -= 20 * dpi;
         swifi_text(root, pill, adapter_label(), 10, theme.text_secondary, true);
@@ -4344,9 +4561,9 @@ static void fill_wifi_settings(Container *root) {
         auto dpi = window->dpi;
         auto b = c->real_bounds;
         double tint = c->state.mouse_pressing ? .34 : c->state.mouse_hovering ? .26 : .18;
-        set_argb(window->cr, swifi_mix(theme.row_background, theme.accent, tint));
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, swifi_mix(theme.row_background, theme.accent, tint));
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        window->drawing_context->fill();
         b.x += 16 * dpi;
         b.w -= 32 * dpi;
         swifi_text(root, b, "This network needs you to sign in · Open sign-in page", 11, theme.text);
@@ -4360,7 +4577,7 @@ static void fill_wifi_settings(Container *root) {
         auto dpi = window->dpi;
         const auto &view = settings_wifi->view;
         c->exists = !view.message.empty();
-        auto font = get_cached_pango_font(window->cr, set->font, 11 * dpi, PANGO_WEIGHT_NORMAL, false);
+        auto font = get_cached_pango_font(window->drawing_context, set->font, 11 * dpi, PANGO_WEIGHT_NORMAL, false);
         pango_layout_set_text(font, view.message.c_str(), -1);
         pango_layout_set_width(font, std::max(1.0, b.w - 32 * dpi) * PANGO_SCALE);
         pango_layout_set_height(font, -1);
@@ -4379,9 +4596,9 @@ static void fill_wifi_settings(Container *root) {
         auto b = c->real_bounds;
         b.y += 8 * dpi;
         b.h -= 8 * dpi;
-        set_argb(window->cr, swifi_mix(theme.row_background, hue, .18));
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, swifi_mix(theme.row_background, hue, .18));
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        window->drawing_context->fill();
         b.x += 16 * dpi;
         b.w -= 32 * dpi;
         swifi_text(root, b, view.message, 11, text);
@@ -4420,12 +4637,12 @@ static void fill_wifi_settings(Container *root) {
         if (view.status.service_running && !view.status.devices.empty() && view.status.wireless_enabled)
             message = view.scanning || view.revision <= 1 ? "Searching for networks…" : "No networks found";
         auto b = c->real_bounds;
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-        set_argb(window->cr, theme.row_background);
-        cairo_fill(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-        set_argb(window->cr, theme.row_border);
-        cairo_stroke(window->cr);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_background);
+        window->drawing_context->fill();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->stroke();
         b.x += 30 * dpi;
         b.w -= 60 * dpi;
         swifi_text(root, b, message, 11, theme.text_secondary, true);
@@ -4676,12 +4893,12 @@ static Container *saudio_row(Container *parent) {
     row->when_paint = [data](Container *root, Container *c) {
         auto window = swifi_window(root);
         auto b = c->real_bounds;
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
-        set_argb(window->cr, data->hovered ? theme.row_hover : theme.row_background);
-        cairo_fill(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
-        set_argb(window->cr, theme.row_border);
-        cairo_stroke(window->cr);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->drawing_context, data->hovered ? theme.row_hover : theme.row_background);
+        window->drawing_context->fill();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->stroke();
     };
 
     auto header = row->child(::hbox, FILL_SPACE, 46);
@@ -4697,7 +4914,7 @@ static Container *saudio_row(Container *parent) {
     };
     icon->when_paint = [data](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         std::string wanted = data->is_card ? data->card.icon_name : data->node.icon_name;
         if (data->loaded_icon != wanted || std::abs(data->loaded_dpi - dpi) > 0.001) {
@@ -4717,10 +4934,10 @@ static Container *saudio_row(Container *parent) {
         }
         if (data->icon) {
             auto h = cairo_image_surface_get_height(data->icon);
-            cairo_set_source_surface(cr, data->icon, std::round(c->real_bounds.x + 16 * dpi),
+            cr->set_source_surface(data->icon, std::round(c->real_bounds.x + 16 * dpi),
                                      std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
             bool paused = !data->is_card && saudio_is_stream(data->node) && data->node.corked;
-            cairo_paint_with_alpha(cr, paused ? .6 : 1.0);
+            cr->paint_source(paused ? .6 : 1.0);
         } else {
             swifi_glyph(cr, c->real_bounds.x + 19 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - 10 * dpi,
                         "\uE995", 18 * dpi, theme.text);
@@ -4775,7 +4992,7 @@ static Container *saudio_row(Container *parent) {
     };
     default_button->when_paint = [data](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         bool is_default = saudio_is_default(data->node);
         double h = 30 * dpi;
@@ -4787,7 +5004,7 @@ static Container *saudio_row(Container *parent) {
                 c->state.mouse_hovering ? theme.button_hover : theme.button_background);
         }
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
+        cr->fill();
         if (is_default) {
             // Check mark glyph followed by the label.
             swifi_glyph(cr, b.x + 12 * dpi, b.y + b.h * .5 - 6 * dpi, "\uE73E", 11 * dpi, theme.accent);
@@ -4820,7 +5037,7 @@ static Container *saudio_row(Container *parent) {
     };
     mute->when_paint = [data](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
         double size = 30 * dpi;
@@ -4828,7 +5045,7 @@ static Container *saudio_row(Container *parent) {
         if (c->state.mouse_hovering || c->state.mouse_pressing) {
             set_argb(cr, c->state.mouse_pressing ? theme.button_pressed : theme.button_hover);
             drawRoundedRect(cr, circle.x, circle.y, circle.w, circle.h, size * .5, 1.0);
-            cairo_fill(cr);
+            cr->fill();
         }
         double gx = circle.x + 8 * dpi;
         double gy = circle.y + circle.h * .5 - 7.5 * dpi;
@@ -4856,7 +5073,7 @@ static Container *saudio_row(Container *parent) {
     auto slider = line->child(FILL_SPACE, FILL_SPACE);
     slider->when_paint = [data](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
         double r = 8 * dpi;
@@ -4868,24 +5085,24 @@ static Container *saudio_row(Container *parent) {
         RGBA fill = data->node.mute || !data->node.has_volume ? theme.text_secondary : theme.accent;
         set_argb(cr, theme.slider_track);
         drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
-        cairo_fill(cr);
+        cr->fill();
         if (value > 0) {
             set_argb(cr, fill);
             drawRoundedRect(cr, x0, y, std::max(track_h, w * value), track_h, track_h * .5, 1.0);
-            cairo_fill(cr);
+            cr->fill();
         }
         double cx = x0 + w * value;
         Bounds thumb(cx - r, b.y + b.h * .5 - r, r * 2, r * 2);
         set_argb(cr, theme.slider_thumb);
         drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, r, 1.0);
-        cairo_fill(cr);
+        cr->fill();
         set_argb(cr, theme.slider_track);
         drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, r, 1.0);
-        cairo_stroke(cr);
+        cr->stroke();
         thumb.shrink((c->state.mouse_hovering || data->dragging ? 4 : 5) * dpi);
         set_argb(cr, fill);
         drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, thumb.w * .5, 1.0);
-        cairo_fill(cr);
+        cr->fill();
     };
     slider->when_mouse_down = [data](Container *root, Container *c) {
         saudio_set_volume_from_mouse(root, c, data, false);
@@ -4923,7 +5140,7 @@ static Container *saudio_row(Container *parent) {
         if (!data->node.peak_supported)
             return;
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
         double r = 8 * dpi;
@@ -4935,14 +5152,14 @@ static Container *saudio_row(Container *parent) {
         track.a *= .5;
         auto pill = [cr](double px, double py, double pw, double ph) {
             double rad = ph * .5;
-            cairo_new_path(cr);
-            cairo_arc(cr, px + pw - rad, py + rad, rad, -M_PI / 2, M_PI / 2);
-            cairo_arc(cr, px + rad, py + rad, rad, M_PI / 2, 3 * M_PI / 2);
-            cairo_close_path(cr);
+            cr->new_path();
+            cr->arc(px + pw - rad, py + rad, rad, -M_PI / 2, M_PI / 2);
+            cr->arc(px + rad, py + rad, rad, M_PI / 2, 3 * M_PI / 2);
+            cr->close_path();
         };
         set_argb(cr, track);
         pill(x0, y, w, h);
-        cairo_fill(cr);
+        cr->fill();
         double level = saudio_meter_level(data->shown_peak);
         if (level <= 0.001)
             return;
@@ -4954,12 +5171,12 @@ static Container *saudio_row(Container *parent) {
         // Keep the round end at the peak; at low levels the pill's left end is clipped by the track.
         double fill_w = w * level;
         double pill_w = std::max(h, fill_w);
-        cairo_save(cr);
+        cr->save();
         pill(x0, y, w, h);
-        cairo_clip(cr);
+        cr->clip_path();
         pill(x0 + fill_w - pill_w, y, pill_w, h);
-        cairo_fill(cr);
-        cairo_restore(cr);
+        cr->fill();
+        cr->restore();
     };
     auto meter_right = meter_line->child(64, FILL_SPACE);
     meter_right->pre_layout = [](Container *root, Container *c, const Bounds &) {
@@ -5144,22 +5361,22 @@ static void fill_audio_settings(Container *root) {
     tabs->when_paint = [](Container *root, Container *c) {
         auto window = swifi_window(root);
         auto b = c->real_bounds;
-        set_argb(window->cr, theme.segment_background);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 10 * window->dpi, 1.0);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, theme.segment_background);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 10 * window->dpi, 1.0);
+        window->drawing_context->fill();
     };
     for (int i = 0; i < 5; i++) {
         auto tab = tabs->child(FILL_SPACE, FILL_SPACE);
         tab->when_paint = [i](Container *root, Container *c) {
             auto window = swifi_window(root);
-            auto cr = window->cr;
+            auto cr = window->drawing_context;
             auto dpi = window->dpi;
             auto b = c->real_bounds;
             bool selected = settings_audio_tab == i;
             if (selected || c->state.mouse_hovering) {
                 set_argb(cr, selected ? theme.segment_selected : swifi_mix(theme.segment_background, theme.segment_selected, .5));
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             swifi_text(root, b, saudio_tab_names[i], 11, selected ? theme.text : theme.text_secondary, true);
         };
@@ -5210,12 +5427,12 @@ static void fill_audio_settings(Container *root) {
         std::string message = settings_audio && settings_audio->backend.empty()
             ? "Connecting to the sound server…" : empty_messages[settings_audio_tab];
         auto b = c->real_bounds;
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-        set_argb(window->cr, theme.row_background);
-        cairo_fill(window->cr);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-        set_argb(window->cr, theme.row_border);
-        cairo_stroke(window->cr);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_background);
+        window->drawing_context->fill();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->stroke();
         b.x += 30 * dpi;
         b.w -= 60 * dpi;
         swifi_text(root, b, message, 11, theme.text_secondary, true);
@@ -5362,7 +5579,7 @@ static Container *sdt_row(Container *parent, SdtRowSpec spec, bool is_first, boo
     };
     row->when_paint = [spec_ptr, toggle, is_first, is_last](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         bool enabled = !spec_ptr->enabled || spec_ptr->enabled();
         bool clickable = enabled && spec_ptr->on_click;
@@ -5376,11 +5593,11 @@ static Container *sdt_row(Container *parent, SdtRowSpec spec, bool is_first, boo
         if (clickable && (c->state.mouse_hovering || c->state.mouse_pressing))
             bg = theme.row_hover;
         set_argb(cr, bg);
-        cairo_fill(cr);
+        cr->fill();
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
         set_argb(cr, theme.row_border);
-        cairo_set_line_width(cr, std::floor(1.0 * dpi));
-        cairo_stroke(cr);
+        cr->set_line_width(std::floor(1.0 * dpi));
+        cr->stroke();
 
         RGBA primary = theme.text;
         RGBA secondary = theme.text_secondary;
@@ -5469,12 +5686,7 @@ static MylarWindow *sdt_open_popup(Container *root, Container *anchor, int w, in
     popup->root->when_paint = [](Container *root, Container *c) {
         auto window = ((MylarWindow *) root->user_data)->raw_window;
         auto b = c->real_bounds;
-        set_argb(window->cr, theme.popup_background);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
-        cairo_fill(window->cr);
-        set_argb(window->cr, theme.dropdown_border);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, 8 * window->dpi, 1.0);
-        cairo_stroke(window->cr);
+        paint_smooth_frame(window->drawing_context, b, 8 * window->dpi, theme.popup_background, theme.dropdown_border);
     };
     popup->root->when_key_event = [](Container *, Container *, int, bool pressed, xkb_keysym_t sym, int, bool, std::string) {
         if (pressed && sym == XKB_KEY_Escape)
@@ -5506,13 +5718,13 @@ static Container *sdt_popup_button(Container *parent, std::string label, bool pr
             bg = primary ? swifi_mix(theme.accent, RGBA(0, 0, 0, 1), .15) : theme.dropdown_pressed;
         else if (c->state.mouse_hovering)
             bg = primary ? swifi_mix(theme.accent, RGBA(1, 1, 1, 1), .12) : theme.dropdown_hover;
-        set_argb(window->cr, bg);
-        drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, settings_control_rounding * window->dpi, 1.0);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, bg);
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, settings_control_rounding * window->dpi, 1.0);
+        window->drawing_context->fill();
         if (!primary) {
-            set_argb(window->cr, theme.dropdown_border);
-            drawRoundedRect(window->cr, b.x, b.y, b.w, b.h, settings_control_rounding * window->dpi, 1.0);
-            cairo_stroke(window->cr);
+            set_argb(window->drawing_context, theme.dropdown_border);
+            drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, settings_control_rounding * window->dpi, 1.0);
+            window->drawing_context->stroke();
         }
         swifi_text(root, b, label, 11, primary ? RGBA(1, 1, 1, 1) : theme.text, true, primary);
     };
@@ -5537,15 +5749,10 @@ static void sdt_spin(Container *parent, std::function<std::string()> label, std:
     auto cell = parent->child(FILL_SPACE, FILL_SPACE);
     cell->when_paint = [label](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
-        set_argb(cr, theme.field_background);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-        cairo_fill(cr);
-        set_argb(cr, theme.field_border);
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
-        cairo_stroke(cr);
+        paint_smooth_frame(cr, b, settings_control_rounding * dpi, theme.field_background, theme.field_border);
         double third = b.w / 4;
         if (c->state.mouse_hovering) {
             bool left = root->mouse_current_x < b.x + third;
@@ -5554,7 +5761,7 @@ static void sdt_spin(Container *parent, std::function<std::string()> label, std:
                 set_argb(cr, c->state.mouse_pressing ? theme.dropdown_pressed : theme.dropdown_hover);
                 drawRoundedRect(cr, left ? b.x + 2 * dpi : b.x + b.w - third + 1 * dpi, b.y + 2 * dpi, third - 3 * dpi, b.h - 4 * dpi,
                     (settings_control_rounding - 1) * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
         }
         swifi_text(root, Bounds(b.x, b.y, third, b.h), "−", 12, theme.text_secondary, true);
@@ -5716,7 +5923,7 @@ static void list_bar_paint(Container *root, Container *c, float scroll, float ov
     if (overflow <= 0)
         return;
     auto window = swifi_window(root);
-    auto cr = window->cr;
+    auto cr = window->drawing_context;
     auto dpi = window->dpi;
     auto b = c->real_bounds;
     const bool active = bar.hovered || bar.dragging;
@@ -5729,13 +5936,13 @@ static void list_bar_paint(Container *root, Container *c, float scroll, float ov
         track.a *= .12;
         set_argb(cr, track);
         drawRoundedRect(cr, x, b.y, w, b.h, w * .5, 1.0);
-        cairo_fill(cr);
+        cr->fill();
     }
     RGBA color = theme.text_secondary;
     color.a *= bar.dragging ? .8 : active ? .65 : .4;
     set_argb(cr, color);
     drawRoundedRect(cr, x, ty, w, thumb_h, w * .5, 1.0);
-    cairo_fill(cr);
+    cr->fill();
 }
 
 // Whether a row under the mouse should show as hovered.
@@ -5750,6 +5957,7 @@ static void list_bar_scroll_to(Container *root, Container *c, double thumb_top) 
     list_bar_thumb(c, swifi_window(root)->dpi, data->scroll, data->overflow, thumb_y, thumb_h);
     double room = c->real_bounds.h - thumb_h;
     double t = room > 0 ? std::clamp((thumb_top - c->real_bounds.y) / room, 0.0, 1.0) : 0.0;
+    data->smooth.stop();
     data->scroll = (float) (-t * data->overflow);
     swifi_redraw(root);
 }
@@ -5822,6 +6030,7 @@ struct SdtZoneList : UserData {
     float overflow = 0;
     bool scrolled_to_current = false;
     ListScrollbar bar;
+    SmoothScroll smooth;
 };
 
 static constexpr int sdt_zone_row_h = 40;
@@ -5881,24 +6090,32 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
                 if (data->shown[i]->entry->id == data->current)
                     data->scroll = -(float) ((i + .5) * sdt_zone_row_h * dpi - b.h * .5);
         }
+        if (data->smooth.step(data->scroll))
+            swifi_redraw(root);
         data->scroll = std::clamp(data->scroll, -data->overflow, 0.0f);
     };
-    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool) {
+    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool touchpad) {
         auto data = (SdtZoneList *) c->user_data;
         auto dpi = swifi_window(root)->dpi;
-        data->scroll = std::clamp(data->scroll + (float) (scroll_y * 3 * dpi), -data->overflow, 0.0f);
+        float delta = (float) (scroll_y * 3 * dpi);
+        if (touchpad) {
+            data->smooth.stop();
+            data->scroll = std::clamp(data->scroll + delta, -data->overflow, 0.0f);
+        } else {
+            data->smooth.scroll_by(data->scroll, delta, -data->overflow, 0.0f);
+        }
         swifi_redraw(root);
     };
     // Rows are painted directly (hundreds of zones), hit-testing by position.
     list->when_paint = [](Container *root, Container *c) {
         auto data = (SdtZoneList *) c->user_data;
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
-        cairo_save(cr);
-        cairo_rectangle(cr, b.x, b.y, b.w, b.h);
-        cairo_clip(cr);
+        cr->save();
+        cr->rectangle(b.x, b.y, b.w, b.h);
+        cr->clip_path();
         double row_h = sdt_zone_row_h * dpi;
         int first = std::max(0, (int) std::floor(-data->scroll / row_h));
         for (int i = first; i < (int) data->shown.size(); i++) {
@@ -5912,13 +6129,13 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
             if (hovered) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             bool current = row->entry->id == data->current;
             if (current) {
                 set_argb(cr, theme.accent);
                 drawRoundedRect(cr, rb.x + 4 * dpi, rb.y + rb.h * .3, 3 * dpi, rb.h * .4, 1.5 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             double abbrev_w = swifi_text_width(root, row->abbreviation, 10) + 8 * dpi;
             swifi_text(root, Bounds(rb.x + 16 * dpi, rb.y + 3 * dpi, rb.w - 32 * dpi - abbrev_w, rb.h * .5),
@@ -5930,7 +6147,7 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
         }
         if (data->shown.empty())
             swifi_text(root, b, "No matching time zones", 11, theme.text_secondary, true);
-        cairo_restore(cr);
+        cr->restore();
         list_bar_paint(root, c, data->scroll, data->overflow, data->bar);
     };
     list->when_clicked = [](Container *root, Container *c) {
@@ -6183,6 +6400,7 @@ struct SkbdLayoutList : UserData {
     float scroll = 0;
     float overflow = 0;
     ListScrollbar bar;
+    SmoothScroll smooth;
 };
 
 static constexpr int skbd_row_h = 40;
@@ -6228,24 +6446,32 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
         auto dpi = swifi_window(root)->dpi;
         double content = data->shown.size() * skbd_row_h * dpi;
         data->overflow = (float) std::max(0.0, content - b.h);
+        if (data->smooth.step(data->scroll))
+            swifi_redraw(root);
         data->scroll = std::clamp(data->scroll, -data->overflow, 0.0f);
     };
-    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool) {
+    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool touchpad) {
         auto data = (SkbdLayoutList *) c->user_data;
         auto dpi = swifi_window(root)->dpi;
-        data->scroll = std::clamp(data->scroll + (float) (scroll_y * 3 * dpi), -data->overflow, 0.0f);
+        float delta = (float) (scroll_y * 3 * dpi);
+        if (touchpad) {
+            data->smooth.stop();
+            data->scroll = std::clamp(data->scroll + delta, -data->overflow, 0.0f);
+        } else {
+            data->smooth.scroll_by(data->scroll, delta, -data->overflow, 0.0f);
+        }
         swifi_redraw(root);
     };
     // Rows are painted directly (hundreds of layouts), hit-testing by position.
     list->when_paint = [](Container *root, Container *c) {
         auto data = (SkbdLayoutList *) c->user_data;
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         auto b = c->real_bounds;
-        cairo_save(cr);
-        cairo_rectangle(cr, b.x, b.y, b.w, b.h);
-        cairo_clip(cr);
+        cr->save();
+        cr->rectangle(b.x, b.y, b.w, b.h);
+        cr->clip_path();
         double row_h = skbd_row_h * dpi;
         int first = std::max(0, (int) std::floor(-data->scroll / row_h));
         for (int i = first; i < (int) data->shown.size(); i++) {
@@ -6260,12 +6486,12 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
             if (hovered && !added) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             if (added) {
                 set_argb(cr, theme.accent);
                 drawRoundedRect(cr, rb.x + 4 * dpi, rb.y + rb.h * .3, 3 * dpi, rb.h * .4, 1.5 * dpi, 1.0);
-                cairo_fill(cr);
+                cr->fill();
             }
             std::string id = entry->variant.empty() ? entry->layout : entry->layout + "(" + entry->variant + ")";
             std::string right = added ? "Added" : id;
@@ -6276,7 +6502,7 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
         }
         if (data->shown.empty())
             swifi_text(root, b, "No matching layouts", 11, theme.text_secondary, true);
-        cairo_restore(cr);
+        cr->restore();
         list_bar_paint(root, c, data->scroll, data->overflow, data->bar);
     };
     list->when_clicked = [](Container *root, Container *c) {
@@ -6393,7 +6619,7 @@ static void skbd_layout_row(Container *parent, int index, SKeyboardLayout layout
     };
     row->when_paint = [index, is_first, is_last](Container *root, Container *c) {
         auto window = swifi_window(root);
-        auto cr = window->cr;
+        auto cr = window->drawing_context;
         auto dpi = window->dpi;
         const bool active = index == skbd_active;
         auto b = c->real_bounds;
@@ -6402,17 +6628,17 @@ static void skbd_layout_row(Container *parent, int index, SKeyboardLayout layout
         b.h += 2.0 * overlap;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, 0, is_first, is_first, is_last, is_last);
         set_argb(cr, active ? swifi_mix(theme.row_background, theme.accent, .16) : theme.row_background);
-        cairo_fill(cr);
+        cr->fill();
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
         set_argb(cr, theme.row_border);
-        cairo_set_line_width(cr, std::floor(1.0 * dpi));
-        cairo_stroke(cr);
+        cr->set_line_width(std::floor(1.0 * dpi));
+        cr->stroke();
         if (active) {
             // Accent bar on the left edge.
             set_argb(cr, theme.accent);
             drawRoundedRect(cr, c->real_bounds.x + 6 * dpi, c->real_bounds.y + c->real_bounds.h * .28,
                 3 * dpi, c->real_bounds.h * .44, 1.5 * dpi, 1.0);
-            cairo_fill(cr);
+            cr->fill();
         }
     };
 
@@ -6442,9 +6668,9 @@ static void skbd_layout_row(Container *parent, int index, SKeyboardLayout layout
         Bounds pill(b.x, b.y + (b.h - h) * .5, b.w, h);
         RGBA bg = theme.accent;
         bg.a *= .22;
-        set_argb(window->cr, bg);
-        drawRoundedRect(window->cr, pill.x, pill.y, pill.w, pill.h, h * .5, 1.0);
-        cairo_fill(window->cr);
+        set_argb(window->drawing_context, bg);
+        drawRoundedRect(window->drawing_context, pill.x, pill.y, pill.w, pill.h, h * .5, 1.0);
+        window->drawing_context->fill();
         swifi_text(root, pill, "Active", 10, theme.text, true, true);
     };
 
@@ -6530,7 +6756,7 @@ static void fill_keyboard_settings(Container *root, Container *c, bool reload) {
     // Same row and state as on the Shortcuts page.
     int switch_index = sshortcut_index_of("switch_layout");
     if (switch_index >= 0) {
-        make_shortcut_row(padded_right, switch_index, true, true);
+        make_shortcut_row(padded_right, switch_index);
         make_vert_space(padded_right, 16);
     }
 
@@ -6566,7 +6792,7 @@ void create_tab_option(Container *parent, std::string label) {
     };
     c->when_paint = [label](Container *root, Container *c) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
 
         if (c->state.mouse_pressing) {
@@ -6574,13 +6800,13 @@ void create_tab_option(Container *parent, std::string label) {
             b.shrink(3 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
             set_argb(cr, theme.navigation_pressed);
-            cairo_fill(cr);
+            cr->fill();
         } else if (c->state.mouse_hovering) {
             auto b = c->real_bounds;
             b.shrink(3 * dpi);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
             set_argb(cr, theme.navigation_hover);
-            cairo_fill(cr);
+            cr->fill();
         }
         paint_label(root, c, label);
     };
@@ -6625,10 +6851,10 @@ void fill_left(Container *left) {
 void fill_root(Container *root) {
     root->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         set_argb(cr, theme.background);
         set_rect(cr, c->real_bounds);
-        cairo_fill(cr);
+        cr->fill();
     };
     auto left_right = root->child(::hbox, FILL_SPACE, FILL_SPACE);
     // Handle external navigation on the settings thread before laying out the page.
@@ -6671,10 +6897,10 @@ void fill_root(Container *root) {
     left->when_paint = paint {
         return;
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         set_argb(cr, theme.background);
         set_rect(cr, c->real_bounds);
-        cairo_fill(cr);
+        cr->fill();
     };
     fill_left(left);
 
@@ -6685,18 +6911,26 @@ void fill_root(Container *root) {
     right->when_paint = paint {
         return;
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         set_argb(cr, theme.background);
         set_rect(cr, c->real_bounds);
-        cairo_fill(cr);
+        cr->fill();
     };
     right->receive_events_even_if_obstructed = true;
     right->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         auto d = (RightData *) c->user_data;
         auto mylar = (MylarWindow*)root->user_data;
         // Clamp against the limits from the last real layout pass.
-        d->scroll = std::clamp(d->applied_scroll + (float) (scroll_y * 3 * mylar->raw_window->dpi), -d->overflow, 0.0f);
+        float delta = (float) (scroll_y * 3 * mylar->raw_window->dpi);
+        if (came_from_touchpad) {
+            d->smooth.stop();
+            d->scroll = std::clamp(d->applied_scroll + delta, -d->overflow, 0.0f);
+        } else {
+            d->scroll = d->applied_scroll;
+            d->smooth.scroll_by(d->applied_scroll, delta, -d->overflow, 0.0f);
+        }
         right_bar_touch(c);
+        swifi_redraw(root);
     };
     right->when_mouse_motion = [](Container *root, Container *c) {
         auto d = (RightData *) c->user_data;
@@ -6756,6 +6990,12 @@ void fill_root(Container *root) {
     right->after_paint = paint_right_scrollbar;
 }
 
+// Usable space (logical px) on the monitor the settings window opens on, minus
+// the titlebar and a small gap. Written on the main thread in settings::start,
+// read by the window thread. 0 means unknown.
+static std::atomic<int> settings_fit_w = 0;
+static std::atomic<int> settings_fit_h = 0;
+
 void actual_start() {
     theme = set->dark_theme ? dark_theme : light_theme;
     settings_app = windowing::open_app();
@@ -6764,6 +7004,18 @@ void actual_start() {
     settings.pos.h = 760;
     settings.pos.min_w = 800;
     settings.pos.min_h = 600;
+    // On displays too small for the defaults, shrink the minimum and the
+    // starting size so the window fits in the usable area.
+    int fit_w = settings_fit_w.load();
+    int fit_h = settings_fit_h.load();
+    if (fit_w > 0) {
+        settings.pos.min_w = std::min(settings.pos.min_w, fit_w);
+        settings.pos.w = std::min(settings.pos.w, fit_w);
+    }
+    if (fit_h > 0) {
+        settings.pos.min_h = std::min(settings.pos.min_h, fit_h);
+        settings.pos.h = std::min(settings.pos.h, fit_h);
+    }
     settings.name = "Settings";
     settings.app_id = "preferences-system";
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
@@ -6799,7 +7051,29 @@ void settings::start(std::string page) {
     if (settings_app) {
         if (settings_mylar)
             windowing::redraw(settings_mylar->raw_window);
+        // Already open: pull it to the current workspace, un-minimize, and raise it.
+        main_thread([]() {
+            auto pid = getpid();
+            for (auto cid : get_window_stacking_order()) {
+                if (hypriso->get_pid(cid) != pid || hypriso->class_name(cid) != "preferences-system")
+                    continue;
+                if (!hypriso->is_window_workspace_visible(cid)) {
+                    int workspace = hypriso->get_active_workspace(hypriso->monitor_from_cursor());
+                    if (workspace != -1)
+                        hypriso->move_to_workspace(cid, workspace, false);
+                }
+                if (hypriso->is_hidden(cid))
+                    hypriso->set_hidden(cid, false);
+                hypriso->bring_to_front(cid);
+            }
+        });
         return;
+    }
+    {
+        Bounds area = bounds_reserved_monitor(hypriso->monitor_from_cursor());
+        int gap = 20;
+        settings_fit_w = area.w > 0 ? std::max(1, (int) area.w - gap * 2) : 0;
+        settings_fit_h = area.h > 0 ? std::max(1, (int) area.h - titlebar_h - gap * 2) : 0;
     }
     std::thread t(actual_start);
     t.detach();

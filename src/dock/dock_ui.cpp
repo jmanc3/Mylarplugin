@@ -47,7 +47,7 @@ RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
     return settings;
 }
 
-Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font,
+Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font,
                  int wrap, int h, RGBA color, bool bold, int align) {
     auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
 
@@ -70,13 +70,13 @@ Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool dra
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, std::round(x), std::round(y));
-        pango_cairo_show_layout(cr, layout);
+        cr->move_to(std::round(x), std::round(y));
+        cr->show_layout(layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool draw, std::string font,
+Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font,
                  int wrap, int h, RGBA color) {
     auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(layout, text.data(), text.size());
@@ -91,18 +91,18 @@ Bounds draw_text(cairo_t *cr, int x, int y, std::string text, int size, bool dra
         pango_layout_set_height(layout, h);
         pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
-    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
+    cr->set_source_rgba(color.r, color.g, color.b, color.a);
     PangoRectangle ink;
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, std::round(x), std::round(y));
-        pango_cairo_show_layout(cr, layout);
+        cr->move_to(std::round(x), std::round(y));
+        cr->show_layout(layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size, bool draw, std::string font,
+Bounds draw_text(drawing::Context *cr, Container *c, std::string text, int size, bool draw, std::string font,
                  int wrap, int h) {
     if (!cr)
         return {0, 0, 0, 0};
@@ -119,18 +119,18 @@ Bounds draw_text(cairo_t *cr, Container *c, std::string text, int size, bool dra
         pango_layout_set_height(layout, h);
         pango_layout_set_ellipsize(layout, PangoEllipsizeMode::PANGO_ELLIPSIZE_MIDDLE);
     }
-    cairo_set_source_rgba(cr, 1, 1, 1, 1);
+    cr->set_source_rgba(1, 1, 1, 1);
     PangoRectangle ink;
     PangoRectangle logical;
     pango_layout_get_pixel_extents(layout, &ink, &logical);
     if (draw) {
-        cairo_move_to(cr, std::round(center_x(c, logical.width)), std::round(center_y(c, logical.height)));
-        pango_cairo_show_layout(cr, layout);
+        cr->move_to(std::round(center_x(c, logical.width)), std::round(center_y(c, logical.height)));
+        cr->show_layout(layout);
     }
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-void drawRoundedRect(cairo_t *cr, double x, double y, double width, double height,
+void drawRoundedRect(drawing::Context *cr, double x, double y, double width, double height,
                      double radius, double stroke_width) {
     double half_stroke = stroke_width / 2.0;
     double adjusted_radius = std::fmin(radius, std::fmin(width, height) / 2.0);
@@ -143,69 +143,69 @@ void drawRoundedRect(cairo_t *cr, double x, double y, double width, double heigh
     double adjusted_x = x + half_stroke;
     double adjusted_y = y + half_stroke;
 
-    cairo_new_path(cr);
+    cr->new_path();
 
-    cairo_move_to(cr, adjusted_x + adjusted_radius, adjusted_y);
-    cairo_line_to(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y);
-    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
+    cr->move_to(adjusted_x + adjusted_radius, adjusted_y);
+    cr->line_to(adjusted_x + inner_width - adjusted_radius, adjusted_y);
+    cr->arc(adjusted_x + inner_width - adjusted_radius, adjusted_y + adjusted_radius,
               adjusted_radius, -M_PI / 2, 0);
-    cairo_line_to(cr, adjusted_x + inner_width, adjusted_y + inner_height - adjusted_radius);
-    cairo_arc(cr, adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+    cr->line_to(adjusted_x + inner_width, adjusted_y + inner_height - adjusted_radius);
+    cr->arc(adjusted_x + inner_width - adjusted_radius, adjusted_y + inner_height - adjusted_radius,
               adjusted_radius, 0, M_PI / 2);
-    cairo_line_to(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height);
-    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
+    cr->line_to(adjusted_x + adjusted_radius, adjusted_y + inner_height);
+    cr->arc(adjusted_x + adjusted_radius, adjusted_y + inner_height - adjusted_radius,
               adjusted_radius, M_PI / 2, M_PI);
-    cairo_line_to(cr, adjusted_x, adjusted_y + adjusted_radius);
-    cairo_arc(cr, adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
+    cr->line_to(adjusted_x, adjusted_y + adjusted_radius);
+    cr->arc(adjusted_x + adjusted_radius, adjusted_y + adjusted_radius,
               adjusted_radius, M_PI, 3 * M_PI / 2);
 
-    cairo_close_path(cr);
-    cairo_set_line_width(cr, stroke_width);
+    cr->close_path();
+    cr->set_line_width(stroke_width);
 }
 
 // Rounded outline shared by popup painting and clipping. The compositor shadow takes
 // an integer pixel radius; use the same rounding here.
-static void popup_background_path(cairo_t *cr, const Bounds &bounds, double dpi, double inset) {
+static void popup_background_path(drawing::Context *cr, const Bounds &bounds, double dpi, double inset) {
     const double radius = std::min(std::round(dock::popup_corner_radius * dpi), std::floor(std::min(bounds.w, bounds.h) * .5));
     const double r = std::max(0.0, radius - inset);
     const double left = bounds.x + inset;
     const double top = bounds.y + inset;
     const double right = bounds.x + bounds.w - inset;
     const double bottom = bounds.y + bounds.h - inset;
-    cairo_new_path(cr);
-    cairo_arc(cr, right - r, top + r, r, -M_PI / 2, 0);
-    cairo_arc(cr, right - r, bottom - r, r, 0, M_PI / 2);
-    cairo_arc(cr, left + r, bottom - r, r, M_PI / 2, M_PI);
-    cairo_arc(cr, left + r, top + r, r, M_PI, 3 * M_PI / 2);
-    cairo_close_path(cr);
+    cr->new_path();
+    cr->arc(right - r, top + r, r, -M_PI / 2, 0);
+    cr->arc(right - r, bottom - r, r, 0, M_PI / 2);
+    cr->arc(left + r, bottom - r, r, M_PI / 2, M_PI);
+    cr->arc(left + r, top + r, r, M_PI, 3 * M_PI / 2);
+    cr->close_path();
 }
 
-void paint_popup_background(cairo_t *cr, const Bounds &bounds, double dpi,
+void paint_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi,
                             RGBA background, RGBA outline) {
     if (bounds.w <= 0 || bounds.h <= 0)
         return;
     const double stroke = std::min(dpi, std::min(bounds.w, bounds.h));
-    cairo_save(cr);
+    cr->save();
     set_argb(cr, background);
     popup_background_path(cr, bounds, dpi, 0);
-    cairo_fill(cr);
+    cr->fill();
     set_argb(cr, outline);
-    cairo_set_line_width(cr, stroke);
+    cr->set_line_width(stroke);
     // Inset the stroke and its radius equally so its outer edge matches the fill.
     popup_background_path(cr, bounds, dpi, stroke * .5);
-    cairo_stroke(cr);
-    cairo_restore(cr);
+    cr->stroke();
+    cr->restore();
 }
 
-void clip_to_popup_background(cairo_t *cr, const Bounds &bounds, double dpi) {
+void clip_to_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi) {
     if (bounds.w <= 0 || bounds.h <= 0)
         return;
     // Stay inside the outline so clipped content never paints over the border.
     popup_background_path(cr, bounds, dpi, std::min(dpi, std::min(bounds.w, bounds.h)));
-    cairo_clip(cr);
+    cr->clip_path();
 }
 
-void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float value, float meter) {
+void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi, float value, float meter) {
     static constexpr float dotr = 17;
     static constexpr float thickness = 8;
     float final_thickness = std::round(thickness * dpi);
@@ -216,27 +216,27 @@ void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float v
         b.h = final_thickness;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
         set_argb(cr, {0, 0, 0, .1});
-        cairo_fill(cr);
+        cr->fill();
 
         double meter_w = b.w * std::clamp(value, 0.0f, 1.0f) * std::clamp(meter, 0.0f, 1.0f);
         if (meter_w > 0.5) {
-            cairo_save(cr);
+            cr->save();
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
-            cairo_clip(cr);
+            cr->clip_path();
             // A pill whose right end sits at the peak; when it is shorter than it is tall,
             // its left end slides out of the track and is clipped away.
             double pill_w = std::max(meter_w, (double) b.h);
             double pill_x = b.x + meter_w - pill_w;
             double rad = b.h * .5;
-            cairo_new_path(cr);
-            cairo_arc(cr, pill_x + pill_w - rad, b.y + rad, rad, -M_PI / 2, M_PI / 2);
-            cairo_arc(cr, pill_x + rad, b.y + rad, rad, M_PI / 2, 3 * M_PI / 2);
-            cairo_close_path(cr);
+            cr->new_path();
+            cr->arc(pill_x + pill_w - rad, b.y + rad, rad, -M_PI / 2, M_PI / 2);
+            cr->arc(pill_x + rad, b.y + rad, rad, M_PI / 2, 3 * M_PI / 2);
+            cr->close_path();
             auto color = accent;
             color.a = .55;
             set_argb(cr, color);
-            cairo_fill(cr);
-            cairo_restore(cr);
+            cr->fill();
+            cr->restore();
         }
     }
 
@@ -248,7 +248,7 @@ void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float v
         b.h = final_dotr;
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
         set_argb(cr, {1, 1, 1, 1});
-        cairo_fill(cr);
+        cr->fill();
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
         auto bigger = b;
         bigger.scale_from_center(1.4);
@@ -259,10 +259,10 @@ void paint_slider(Container *root, Container *c, cairo_t *cr, float dpi, float v
             b.scale_from_center(.55);
         }
         set_argb(cr, {0, 0, 0, .1});
-        cairo_stroke(cr);
+        cr->stroke();
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_dotr * .45, 1.0);
         set_argb(cr, accent);
-        cairo_fill(cr);
+        cr->fill();
     }
 }
 
@@ -295,7 +295,7 @@ Container *make_self_sizing_slider(Container *root,
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         auto left = left_text(c);
         auto b = draw_text(cr, 0, 0, left, 12 * dpi, false, icon_font);
         draw_text(cr,
@@ -313,7 +313,7 @@ Container *make_self_sizing_slider(Container *root,
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         auto right = right_text(c);
         auto b = draw_text(cr, 0, 0, right, 12 * dpi, false);
         draw_text(cr,
@@ -324,7 +324,7 @@ Container *make_self_sizing_slider(Container *root,
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
 
         paint_slider(root, c, cr, dpi, get_value(c));
     };
@@ -379,7 +379,7 @@ Container *make_self_sizing_label(Container *root, std::string text, int size,
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         auto bounds = draw_text(cr, c, text, size * dpi, false);
         c->wanted_bounds.h = bounds.h;
     };
@@ -387,7 +387,7 @@ Container *make_self_sizing_label(Container *root, std::string text, int size,
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         draw_text(cr, c->real_bounds.x, c->real_bounds.y, text, size * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
     };
     return label;

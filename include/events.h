@@ -43,6 +43,13 @@ void key_press(Container*, int key, bool pressed, xkb_keysym_t sym, int mods, bo
 
 void set_active(Container* root, const std::vector<Container*>& active_containers, Container* c, bool state, bool viakey);
 
+// Tab traversal: moves activation from `c` to the next (or previous) named container that
+// has when_key_event, wrapping around. Candidates are searched under `scope` (the whole
+// window when null); `root` must be the window root since activation callbacks use it.
+// Call it a frame after the Tab press, or the newly active container also receives the Tab.
+void activate_next_activatable(Container* root, Container* c, Container* scope = nullptr);
+void activate_previous_activatable(Container* root, Container* c, Container* scope = nullptr);
+
 void paint_root(Container*);
 void paint_outline(Container*, Container*);
 

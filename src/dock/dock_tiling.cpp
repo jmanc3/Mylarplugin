@@ -34,7 +34,7 @@ static Container *tiling_row(Container *parent, double height) {
 }
 
 static void paint_tiling_text(Dock *dock, Container *c, const std::string &text, bool right = false, RGBA color = {0, 0, 0, 1}) {
-    const auto cr = dock->tiling->raw_window->cr;
+    const auto cr = dock->tiling->raw_window->drawing_context;
     const auto dpi = dock->tiling->raw_window->dpi;
     const auto bounds = draw_text(cr, 0, 0, text, 12 * dpi, false);
     draw_text(cr, right ? c->real_bounds.right() - bounds.w : c->real_bounds.x,
@@ -63,16 +63,16 @@ static void tiling_toggle(Container *parent, const std::string &text, std::funct
     toggle->when_paint = [value](Container *root, Container *c) {
         const auto dock = static_cast<Dock *>(root->user_data);
         const auto dpi = dock->tiling->raw_window->dpi;
-        const auto cr = dock->tiling->raw_window->cr;
+        const auto cr = dock->tiling->raw_window->drawing_context;
         const bool enabled = value(dock->tiling_settings);
         const double x = c->real_bounds.x;
         const double y = c->real_bounds.y + (c->real_bounds.h - 22 * dpi) * .5;
         set_argb(cr, enabled ? accent : RGBA(.7, .7, .7, 1));
         drawRoundedRect(cr, x, y, 44 * dpi, 22 * dpi, 11 * dpi, 1);
-        cairo_fill(cr);
+        cr->fill();
         set_argb(cr, {1, 1, 1, 1});
-        cairo_arc(cr, x + (enabled ? 33 : 11) * dpi, y + 11 * dpi, 8 * dpi, 0, 2 * M_PI);
-        cairo_fill(cr);
+        cr->arc(x + (enabled ? 33 : 11) * dpi, y + 11 * dpi, 8 * dpi, 0, 2 * M_PI);
+        cr->fill();
     };
     toggle->when_clicked = [change](Container *root, Container *) {
         const auto dock = static_cast<Dock *>(root->user_data);
@@ -92,12 +92,12 @@ static void tiling_segments(Container *parent, const std::string &first, const s
         auto segment = row->child(FILL_SPACE, FILL_SPACE);
         segment->when_paint = [first, second, is_first, first_selected](Container *root, Container *c) {
             const auto dock = static_cast<Dock *>(root->user_data);
-            const auto cr = dock->tiling->raw_window->cr;
+            const auto cr = dock->tiling->raw_window->drawing_context;
             const auto dpi = dock->tiling->raw_window->dpi;
             const bool selected = first_selected(dock->tiling_settings) == is_first;
             set_argb(cr, selected ? RGBA(.91, .96, 1, 1) : RGBA(.95, .95, .95, 1));
             drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 6 * dpi, 1);
-            cairo_fill(cr);
+            cr->fill();
             const std::string text = (selected ? "\u2713  " : "") + (is_first ? first : second);
             const auto bounds = draw_text(cr, 0, 0, text, 12 * dpi, false);
             draw_text(cr, c->real_bounds.x + (c->real_bounds.w - bounds.w) * .5,
@@ -123,7 +123,7 @@ void fill_tiling_container(Dock *dock) {
     auto root = dock->tiling->root;
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto cr = dock->tiling->raw_window->cr;
+        auto cr = dock->tiling->raw_window->drawing_context;
         paint_popup_background(cr, c->real_bounds, dock->tiling->raw_window->dpi);
     };
 

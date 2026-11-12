@@ -246,7 +246,7 @@ static void make_vert_space(Container *parent, int wanted_h, std::function<Mylar
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->cr;
+        auto cr = window->raw_window->drawing_context;
         c->wanted_bounds.h = wanted_h * dpi;
     };
 }
@@ -292,7 +292,7 @@ static RGBA darken_dock_color(RGBA color, double amount) {
 // strip on the right side. This mirrors winbar's paint_double_bg /
 // paint_double_bar helpers. The bands are composited in a group so their
 // semi-transparent colors replace each other instead of double-blending.
-static void paint_dock_horizontal_bands(cairo_t *cr, const Bounds &bounds, double dpi,
+static void paint_dock_horizontal_bands(drawing::Context *cr, const Bounds &bounds, double dpi,
                                         const RGBA &left, const RGBA &middle, const RGBA &right) {
     if (bounds.w <= 0 || bounds.h <= 0)
         return;
@@ -300,17 +300,17 @@ static void paint_dock_horizontal_bands(cairo_t *cr, const Bounds &bounds, doubl
     auto fill = [&](const Bounds &b, const RGBA &color) {
         if (b.w <= 0 || b.h <= 0)
             return;
-        cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
-        cairo_rectangle(cr, b.x, b.y, b.w, b.h);
-        cairo_fill(cr);
+        cr->set_source_rgba(color.r, color.g, color.b, color.a);
+        cr->rectangle(b.x, b.y, b.w, b.h);
+        cr->fill();
     };
 
-    cairo_save(cr);
+    cr->save();
     // Keep the temporary group from being the size of the entire dock.
-    cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
-    cairo_clip(cr);
-    cairo_push_group(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cr->rectangle(bounds.x, bounds.y, bounds.w, bounds.h);
+    cr->clip_path();
+    cr->push_group();
+    cr->set_operator(CAIRO_OPERATOR_SOURCE);
 
     Bounds b = bounds;
     fill(b, right);
@@ -324,18 +324,18 @@ static void paint_dock_horizontal_bands(cairo_t *cr, const Bounds &bounds, doubl
             fill(b, left);
     }
 
-    cairo_pop_group_to_source(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-    cairo_paint(cr);
-    cairo_restore(cr);
+    cr->pop_group_to_source();
+    cr->set_operator(CAIRO_OPERATOR_OVER);
+    cr->paint_source();
+    cr->restore();
 }
 
-static void paint_dock_icon_pane(cairo_t *cr, const Bounds &bounds, double dpi,
+static void paint_dock_icon_pane(drawing::Context *cr, const Bounds &bounds, double dpi,
                                  const RGBA &left, const RGBA &middle, const RGBA &right) {
     paint_dock_horizontal_bands(cr, bounds, dpi, left, middle, right);
 }
 
-static void paint_dock_highlight_bar(cairo_t *cr, const Bounds &bounds, double dpi, double bar_amount,
+static void paint_dock_highlight_bar(drawing::Context *cr, const Bounds &bounds, double dpi, double bar_amount,
                                      const RGBA &left, const RGBA &middle, const RGBA &right) {
     bar_amount = std::clamp(bar_amount, 0.0, 1.0);
 
@@ -353,25 +353,25 @@ static void paint_dock_highlight_bar(cairo_t *cr, const Bounds &bounds, double d
 static void paint_root_func(Container *root, Container *c) {
     auto dock = (Dock *) root->user_data;
     auto mylar = dock->window;
-    auto cr = mylar->raw_window->cr;
-    cairo_save(cr);
-    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-    cairo_paint(cr);
-    cairo_restore(cr);
+    auto cr = mylar->raw_window->drawing_context;
+    cr->save();
+    cr->set_operator(CAIRO_OPERATOR_CLEAR);
+    cr->paint_source();
+    cr->restore();
 
-    //cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, std::round(1 * mylar->raw_window->dpi));
-    //cairo_set_source_rgba(cr, 1, 1, 1, .1);
-    //cairo_fill(cr);
+    //cr->rectangle(root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, std::round(1 * mylar->raw_window->dpi));
+    //cr->set_source_rgba(1, 1, 1, .1);
+    //cr->fill();
 
-    cairo_rectangle(cr, root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, root->real_bounds.h);
+    cr->rectangle(root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, root->real_bounds.h);
     auto color = color_dock_color();
-    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a);
-    cairo_fill(cr);
+    cr->set_source_rgba(color.r, color.g, color.b, color.a);
+    cr->fill();
 }
 
 static void paint_label(Container *root, Container *c, std::string text) {
     auto mylar = (MylarWindow*)root->user_data;
-    auto cr = mylar->raw_window->cr;
+    auto cr = mylar->raw_window->drawing_context;
     auto dpi = mylar->raw_window->dpi;
     auto size = 12 * dpi;
 
@@ -384,15 +384,15 @@ static void paint_label(Container *root, Container *c, std::string text) {
 static void paint_button_bg(Container *root, Container *c) {
     auto dock = (Dock *) root->user_data;
     auto mylar = dock->window;
-    auto cr = mylar->raw_window->cr;
+    auto cr = mylar->raw_window->drawing_context;
     if (c->state.mouse_pressing) {
-        cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_set_source_rgba(cr, 1, 1, 1, .2);
-        cairo_fill(cr);
+        cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cr->set_source_rgba(1, 1, 1, .2);
+        cr->fill();
     } else if (c->state.mouse_hovering) {
-        cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-        cairo_set_source_rgba(cr, 1, 1, 1, .3);
-        cairo_fill(cr);
+        cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cr->set_source_rgba(1, 1, 1, .3);
+        cr->fill();
     }
 }
 
@@ -480,7 +480,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     c->when_paint = [ico, text, layout_text](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         paint_button_bg(root, c);
 
         auto ico_bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, icon_font);
@@ -500,7 +500,7 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     c->pre_layout = [ico, layout_text](Container *root, Container *c, const Bounds &b) {
         auto dock = (Dock *) root->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
         auto bounds = draw_text(cr, c, ico(), 12 * mylar->raw_window->dpi, false, icon_font);
         if (layout_text)
             bounds.w += draw_text(cr, c, layout_text(), tex_size * mylar->raw_window->dpi, false).w + 10;
@@ -704,15 +704,15 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
     });
 }
 
-static void draw_clip_begin(cairo_t *cr, const Bounds &b) {
-    cairo_save(cr);
+static void draw_clip_begin(drawing::Context *cr, const Bounds &b) {
+    cr->save();
     set_rect(cr, b);
-    cairo_clip(cr);
+    cr->clip_path();
 }
 
-void draw_clip_end(cairo_t *cr) {
-    cairo_reset_clip(cr);
-    cairo_restore(cr);
+void draw_clip_end(drawing::Context *cr) {
+    cr->reset_clip();
+    cr->restore();
 }
 
 static Bounds pin_thumbnail_bounds(Container *pin_container, Dock *dock, bool use_layout_target = false) {
@@ -802,12 +802,12 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
     ch->minimum_y_distance_to_move_before_drag_begins = 10;
     ch->when_paint = paint {
         auto dock = (Dock*)root->user_data;
-        if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->cr)
+        if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->drawing_context)
             return;
 
         Pin* pin = (Pin*)c->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
 
         auto backup = c->real_bounds;
         {
@@ -874,11 +874,11 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 auto h = cairo_image_surface_get_height(ico_surf);
                 auto w = cairo_image_surface_get_width(ico_surf);
                 if (none) {
-                    cairo_set_source_surface(cr, ico_surf, std::round(c->real_bounds.x + c->real_bounds.w * .5 - w * .5), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
+                    cr->set_source_surface(ico_surf, std::round(c->real_bounds.x + c->real_bounds.w * .5 - w * .5), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
                 } else {
-                    cairo_set_source_surface(cr, ico_surf, std::round(c->real_bounds.x + 10), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
+                    cr->set_source_surface(ico_surf, std::round(c->real_bounds.x + 10), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
                 }
-                cairo_paint(cr);
+                cr->paint_source();
                 auto wi = cairo_image_surface_get_height(ico_surf);
                 offx = wi;
             }
@@ -1045,7 +1045,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
 
         const auto windows_count = pin->windows.size();
         if (c->state.mouse_button_pressed == BTN_LEFT) {
@@ -1129,7 +1129,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->cr;
+        auto cr = mylar->raw_window->drawing_context;
 
         std::string title = pin->stacking_rule;
         if (!pin->windows.empty())
@@ -1649,7 +1649,7 @@ static void fill_date_menu(Dock *dock) {
     root->type = ::vbox;
     root->when_paint = [](Container *root, Container *c) {
         auto dock = static_cast<Dock *>(root->user_data);
-        paint_popup_background(dock->date_menu->raw_window->cr, c->real_bounds, dock->date_menu->raw_window->dpi);
+        paint_popup_background(dock->date_menu->raw_window->drawing_context, c->real_bounds, dock->date_menu->raw_window->dpi);
     };
     auto content = root->child(::vbox, FILL_SPACE, FILL_SPACE);
     content->pre_layout = [](Container *root, Container *c, const Bounds &) {
@@ -1669,7 +1669,7 @@ static void fill_date_menu(Dock *dock) {
     auto title = row(88);
     title->when_paint = [](Container *root, Container *c) {
         auto dock = static_cast<Dock *>(root->user_data);
-        auto cr = dock->date_menu->raw_window->cr;
+        auto cr = dock->date_menu->raw_window->drawing_context;
         const auto dpi = dock->date_menu->raw_window->dpi;
         const auto local = datetime::now_tm();
         char date_text[96];
@@ -1682,8 +1682,8 @@ static void fill_date_menu(Dock *dock) {
         auto border_c = border_color;
         border_c.a *= .2;
         set_argb(cr, border_c);
-        cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.bottom() - dpi, c->real_bounds.w, dpi);
-        cairo_fill(cr);
+        cr->rectangle(c->real_bounds.x, c->real_bounds.bottom() - dpi, c->real_bounds.w, dpi);
+        cr->fill();
     };
 
     auto navigation = row(38);
@@ -1695,8 +1695,8 @@ static void fill_date_menu(Dock *dock) {
             "July", "August", "September", "October", "November", "December"};
         const auto label = std::format("{} {}", months[dock->date_view_month], dock->date_view_year);
         auto dpi = dock->date_menu->raw_window->dpi;
-        auto bounds = draw_text(dock->date_menu->raw_window->cr, 0, 0, label, 13 * dpi, false);
-        draw_text(dock->date_menu->raw_window->cr, c->real_bounds.x,
+        auto bounds = draw_text(dock->date_menu->raw_window->drawing_context, 0, 0, label, 13 * dpi, false);
+        draw_text(dock->date_menu->raw_window->drawing_context, c->real_bounds.x,
             c->real_bounds.y + (c->real_bounds.h - bounds.h) / 2, label, 13 * dpi, true,
             set->font, -1, -1, {.14, .18, .24, 1});
     };
@@ -1704,12 +1704,12 @@ static void fill_date_menu(Dock *dock) {
         auto button = navigation->child(48 * dpi, FILL_SPACE);
         button->when_paint = [glyph](Container *root, Container *c) {
             auto dock = static_cast<Dock *>(root->user_data);
-            auto cr = dock->date_menu->raw_window->cr;
+            auto cr = dock->date_menu->raw_window->drawing_context;
             const auto dpi = dock->date_menu->raw_window->dpi;
             if (c->state.mouse_hovering || c->state.mouse_pressing) {
                 set_argb(cr, c->state.mouse_pressing ? RGBA(.72, .83, .95, 1) : RGBA(.83, .90, .98, 1));
-                cairo_rectangle(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
-                cairo_fill(cr);
+                cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+                cr->fill();
             }
             auto b = draw_text(cr, 0, 0, glyph, 12 * dpi, false, icon_font);
             draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
@@ -1739,7 +1739,7 @@ static void fill_date_menu(Dock *dock) {
         auto day = weekdays->child(FILL_SPACE, FILL_SPACE);
         day->when_paint = [name](Container *root, Container *c) {
             auto dock = static_cast<Dock *>(root->user_data);
-            auto cr = dock->date_menu->raw_window->cr;
+            auto cr = dock->date_menu->raw_window->drawing_context;
             auto dpi = dock->date_menu->raw_window->dpi;
             auto b = draw_text(cr, 0, 0, name, 10 * dpi, false);
             draw_text(cr, c->real_bounds.x + (c->real_bounds.w - b.w) / 2,
@@ -1759,7 +1759,7 @@ static void fill_date_menu(Dock *dock) {
             cell->when_paint = [](Container *root, Container *c) {
                 auto dock = static_cast<Dock *>(root->user_data);
                 auto data = static_cast<DockDateCell *>(c->user_data);
-                auto cr = dock->date_menu->raw_window->cr;
+                auto cr = dock->date_menu->raw_window->drawing_context;
                 const auto dpi = dock->date_menu->raw_window->dpi;
                 const auto now = std::time(nullptr);
                 std::tm today{};
@@ -1769,21 +1769,21 @@ static void fill_date_menu(Dock *dock) {
                 const bool is_selected = data->year == dock->selected_date_year && data->month == dock->selected_date_month && data->day == dock->selected_date_day;
                 if (is_today) {
                     set_argb(cr, accent);
-                    cairo_rectangle(cr, c->real_bounds.x + dpi, c->real_bounds.y + dpi,
+                    cr->rectangle(c->real_bounds.x + dpi, c->real_bounds.y + dpi,
                         c->real_bounds.w - 2 * dpi, c->real_bounds.h - 2 * dpi);
-                    cairo_fill(cr);
+                    cr->fill();
                 } else if (c->state.mouse_pressing || c->state.mouse_hovering) {
                     set_argb(cr, c->state.mouse_pressing ? RGBA(.72, .83, .95, 1) : RGBA(.83, .90, .98, 1));
-                    cairo_rectangle(cr, c->real_bounds.x + dpi, c->real_bounds.y + dpi,
+                    cr->rectangle(c->real_bounds.x + dpi, c->real_bounds.y + dpi,
                         c->real_bounds.w - 2 * dpi, c->real_bounds.h - 2 * dpi);
-                    cairo_fill(cr);
+                    cr->fill();
                 }
                 if (is_selected && !is_today) {
                     set_argb(cr, accent);
-                    cairo_set_line_width(cr, dpi);
-                    cairo_rectangle(cr, c->real_bounds.x + dpi, c->real_bounds.y + dpi,
+                    cr->set_line_width(dpi);
+                    cr->rectangle(c->real_bounds.x + dpi, c->real_bounds.y + dpi,
                         c->real_bounds.w - 2 * dpi, c->real_bounds.h - 2 * dpi);
-                    cairo_stroke(cr);
+                    cr->stroke();
                 }
                 const auto text = std::to_string(data->day);
                 auto b = draw_text(cr, 0, 0, text, 11 * dpi, false);
@@ -1868,7 +1868,7 @@ static void fill_root(Container *root) {
         super->after_paint = paint {
             return;
             auto dock = (Dock *) root->user_data;
-            auto cr = dock->window->raw_window->cr;
+            auto cr = dock->window->raw_window->drawing_context;
             set_rect(cr, c->real_bounds);
             static int off = 0;
             off++;
@@ -1877,7 +1877,7 @@ static void fill_root(Container *root) {
             } else {
                 set_argb(cr, {1, 0, 0, 1});
             }
-            cairo_fill(cr);
+            cr->fill();
         };
     }
 
@@ -2223,7 +2223,7 @@ static void fill_root(Container *root) {
             build_volume_popup(dock);
             dock->volume->root->when_paint = [](Container *root, Container *c) {
                 auto dock = (Dock *) root->user_data;
-                auto cr = dock->volume->raw_window->cr;
+                auto cr = dock->volume->raw_window->drawing_context;
                 paint_popup_background(cr, c->real_bounds, dock->volume->raw_window->dpi);
             };
             // Because we need to fill items on first frame
@@ -2313,14 +2313,14 @@ static void fill_root(Container *root) {
         date->when_paint = paint {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             paint_button_bg(root, c);
             draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi);
         };
         date->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             auto bounds = draw_text(cr, c, get_date(), 9 * mylar->raw_window->dpi, false);
             c->wanted_bounds.w = bounds.w + 20;
         };
@@ -2361,11 +2361,11 @@ static void fill_root(Container *root) {
         show_desktop->when_paint = paint {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             paint_button_bg(root, c);
             set_argb(cr, {1, 1, 1, .3});
             set_rect(cr, {c->real_bounds.x, c->real_bounds.y, 1, c->real_bounds.h});
-            cairo_fill(cr);
+            cr->fill();
         };
         show_desktop->when_clicked = [](Container *root, Container *c) {
             main_thread([]() {
@@ -2380,7 +2380,7 @@ static void fill_root(Container *root) {
         show_desktop->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             c->wanted_bounds.w = 4 * mylar->raw_window->dpi;
         };
     }
@@ -3052,7 +3052,7 @@ void dock::create_slept_button() {
         sleep_button->when_paint = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto cr = mylar->raw_window->cr;
+            auto cr = mylar->raw_window->drawing_context;
             paint_button_bg(root, c);
 
             auto current = get_current_time_in_ms();
@@ -3063,7 +3063,7 @@ void dock::create_slept_button() {
 
                 set_rect(cr, c->real_bounds);
                 set_argb(cr, {.15, .52, .9, 0.7f * pull(throb, delta / throb_time)});
-                cairo_fill(cr);
+                cr->fill();
             }
 
             auto ico_bounds = draw_text(cr, c, "\uF738", 12 * mylar->raw_window->dpi, false, icon_font);

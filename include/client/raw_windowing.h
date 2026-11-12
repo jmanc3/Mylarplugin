@@ -5,7 +5,7 @@
 #include <string>
 #include <mutex>
 #include <vector>
-#include <cairo.h>
+#include "drawing/context.h"
 #include <xkbcommon/xkbcommon.h>
 
 enum Modifier : uint32_t {
@@ -137,7 +137,9 @@ struct RawWindow {
     // The motion is delivered through the regular mouse callbacks.
     bool dnd_hovering = false;
 
-    cairo_t *cr = nullptr;
+    // Backend-neutral drawing (OpenGL ES by default, Cairo fallback). Borrowed:
+    // only valid during on_render; never retain it across frames or resizes.
+    drawing::Context *drawing_context = nullptr;
 
     std::function<bool(RawWindow *, float x, float y)> on_mouse_move = nullptr;
 

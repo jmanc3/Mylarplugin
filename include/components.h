@@ -8,9 +8,10 @@
 #include <stack>
 #include "container.h"
 #include "hypriso.h"
+#include "drawing/context.h"
 
 struct DrawContext {
-    cairo_t *cr = nullptr;
+    drawing::Context *cr = nullptr;
     float dpi = 1.0;
     std::function<void ()> on_needs_frame = nullptr;
 };
