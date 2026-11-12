@@ -316,8 +316,17 @@ static void update_scene() {
         });
         if (previous_last != previous_order.rend() &&
             std::find(monitor.order.begin(), monitor.order.end(), *previous_last) == monitor.order.end()) {
-            auto last = monitor.workspaces.find(*previous_last);
-            if (last != monitor.workspaces.end() && last->second.thumbnails.empty()) {
+            // Its thumbnails are only reconciled while it is in the order, so
+            // they still hold windows that just left it. Ask the compositor
+            // instead whether any window still lives on that desktop.
+            const int removed = *previous_last;
+            const bool removed_is_empty = std::none_of(actual_root->children.begin(), actual_root->children.end(), [removed](Container *c) {
+                return c->custom_type == (int) TYPE::CLIENT && hypriso->get_active_workspace_id_client(*datum<int>(c, "cid")) == removed;
+            });
+            auto last = monitor.workspaces.find(removed);
+            if (last != monitor.workspaces.end() && removed_is_empty) {
+                last->second.thumbnails.clear();
+                last->second.stacking.clear();
                 auto teaser = monitor.workspaces.extract(last);
                 teaser.key() = teaser_workspace;
                 monitor.workspaces.erase(teaser_workspace);
