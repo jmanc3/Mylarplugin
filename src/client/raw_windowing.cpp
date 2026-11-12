@@ -103,6 +103,7 @@ struct clipboard_offer_state {
     std::vector<std::string> mime_types;
     bool selected = false;
     int active_reads = 0;
+    uint32_t dnd_action = 0; // action the compositor picked for a drag offer
 };
 
 struct clipboard_source_state {
@@ -116,6 +117,7 @@ struct clipboard_read_state {
     std::string text;
     clipboard_offer_state *offer = nullptr;
     std::function<void(std::string)> callback;
+    bool finish_dnd = false; // a drop: send wl_data_offer.finish before releasing the offer
 };
 
 struct pending_pointer_axis_event {
@@ -243,6 +245,10 @@ struct wl_context {
     struct wl_data_device *data_device = nullptr;
     clipboard_offer_state *selection_offer = nullptr;
     clipboard_offer_state *drag_offer = nullptr;
+    wl_window *dnd_window = nullptr; // window a drag-and-drop is currently over
+    uint32_t dnd_serial = 0;         // serial of the last wl_data_device.enter
+    bool dnd_accepting = false;      // the current drag offer is accepted at the cursor
+    float dnd_x = 0, dnd_y = 0;      // last drag position, surface-local logical pixels
     clipboard_source_state *clipboard_source = nullptr;
     std::vector<clipboard_offer_state *> clipboard_offers;
     std::vector<clipboard_read_state *> clipboard_reads;
@@ -1645,8 +1651,9 @@ static void clipboard_offer_source_actions(void*, wl_data_offer*, uint32_t) {
     ;
 }
 
-static void clipboard_offer_action(void*, wl_data_offer*, uint32_t) {
-    ;
+static void clipboard_offer_action(void *data, wl_data_offer*, uint32_t dnd_action) {
+    auto state = static_cast<clipboard_offer_state *>(data);
+    state->dnd_action = dnd_action;
 }
 
 static const wl_data_offer_listener clipboard_offer_listener = {
@@ -1699,15 +1706,100 @@ static void clipboard_data_device_selection(void *data, wl_data_device *device, 
         destroy_clipboard_offer(ctx, previous);
 }
 
+// While a drag-and-drop is over one of our surfaces the compositor sends
+// wl_data_device events instead of wl_pointer events. Forward them as plain
+// mouse motion (with RawWindow::dnd_hovering set) so containers still get
+// hover enter/leave and can react to a drag passing over them.
+static void dnd_window_leave(wl_context *ctx) {
+    auto w = ctx->dnd_window;
+    if (!w)
+        return;
+    ctx->dnd_window = nullptr;
+    if (w->marked_for_closing)
+        return;
+    if (w->rw->on_mouse_leaves)
+        w->rw->on_mouse_leaves(w->rw, w->cur_x, w->cur_y);
+    w->rw->dnd_hovering = false;
+    if (w->on_render)
+        w->on_render(w);
+}
+
+static void dnd_window_motion(wl_context *ctx, double x, double y) {
+    auto w = ctx->dnd_window;
+    if (!w || w->marked_for_closing)
+        return;
+    w->cur_x = x;
+    w->cur_y = y;
+    if (w->rw->on_mouse_move)
+        w->rw->on_mouse_move(w->rw, x, y);
+    if (w->on_render)
+        w->on_render(w);
+}
+
+static void finish_clipboard_read(wl_context *ctx, clipboard_read_state *state, bool deliver);
+
+static constexpr const char *kUriListMime = "text/uri-list";
+
+static bool offer_has_mime(clipboard_offer_state *offer, const char *mime) {
+    if (!offer)
+        return false;
+    for (const auto &m : offer->mime_types)
+        if (m == mime)
+            return true;
+    return false;
+}
+
+// Accept or reject the current drag offer depending on whether the window
+// under the cursor wants a file dropped at this position.
+static void dnd_update_accept(wl_context *ctx) {
+    auto state = ctx->drag_offer;
+    if (!state)
+        return;
+    bool accept = false;
+    auto w = ctx->dnd_window;
+    if (w && !w->marked_for_closing && w->rw->accepts_file_drop && offer_has_mime(state, kUriListMime))
+        accept = w->rw->accepts_file_drop(w->rw, ctx->dnd_x, ctx->dnd_y);
+    if (accept == ctx->dnd_accepting)
+        return;
+    ctx->dnd_accepting = accept;
+    wl_data_offer_accept(state->offer, ctx->dnd_serial, accept ? kUriListMime : nullptr);
+    if (wl_data_offer_get_version(state->offer) >= WL_DATA_OFFER_SET_ACTIONS_SINCE_VERSION) {
+        const uint32_t action = accept ? WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY : WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
+        wl_data_offer_set_actions(state->offer, action, action);
+    }
+}
+
 static void clipboard_data_device_leave(void *data, wl_data_device*) {
     auto ctx = static_cast<wl_context *>(data);
+    dnd_window_leave(ctx);
+    ctx->dnd_accepting = false;
     destroy_clipboard_offer(ctx, ctx->drag_offer);
 }
 
 static void clipboard_data_device_enter(void *data, wl_data_device *device, uint32_t serial,
-                                        wl_surface*, wl_fixed_t, wl_fixed_t, wl_data_offer *offer) {
+                                        wl_surface *surface, wl_fixed_t sx, wl_fixed_t sy, wl_data_offer *offer) {
     auto ctx = static_cast<wl_context *>(data);
     clipboard_data_device_leave(data, device);
+    ctx->dnd_serial = serial;
+    ctx->dnd_x = wl_fixed_to_double(sx);
+    ctx->dnd_y = wl_fixed_to_double(sy);
+
+    for (auto w : ctx->windows) {
+        if (w->surface != surface || w->marked_for_closing)
+            continue;
+        ctx->dnd_window = w;
+        w->rw->dnd_hovering = true;
+        const double x = wl_fixed_to_double(sx);
+        const double y = wl_fixed_to_double(sy);
+        w->cur_x = x;
+        w->cur_y = y;
+        if (w->rw->on_mouse_enters)
+            w->rw->on_mouse_enters(w->rw, x, y);
+        if (w->on_render)
+            w->on_render(w);
+        break;
+    }
+
     if (!offer)
         return;
 
@@ -1718,19 +1810,92 @@ static void clipboard_data_device_enter(void *data, wl_data_device *device, uint
         break;
     }
 
-    // Drag-and-drop is not supported here. Reject the payload and actions,
-    // retaining the offer only until leave/drop so it can be destroyed safely.
+    // Start out rejecting the payload and actions; dnd_update_accept switches
+    // to accepting text/uri-list where the window wants a file drop.
     wl_data_offer_accept(offer, serial, nullptr);
     if (wl_data_offer_get_version(offer) >= WL_DATA_OFFER_SET_ACTIONS_SINCE_VERSION)
         wl_data_offer_set_actions(offer, WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE,
                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
+    dnd_update_accept(ctx);
 }
 
-static void clipboard_data_device_motion(void*, wl_data_device*, uint32_t, wl_fixed_t, wl_fixed_t) {
-    ;
+static void clipboard_data_device_motion(void *data, wl_data_device*, uint32_t, wl_fixed_t sx, wl_fixed_t sy) {
+    auto ctx = static_cast<wl_context *>(data);
+    ctx->dnd_x = wl_fixed_to_double(sx);
+    ctx->dnd_y = wl_fixed_to_double(sy);
+    dnd_window_motion(ctx, ctx->dnd_x, ctx->dnd_y);
+    dnd_update_accept(ctx);
+}
+
+// Reads the dropped uri-list and hands it to the window's on_file_drop. The
+// offer stays alive (active_reads) until the read finishes and it is finished.
+static void dnd_receive_drop(wl_context *ctx) {
+    auto offer = ctx->drag_offer;
+    auto w = ctx->dnd_window;
+    if (!offer || !w || !ctx->dnd_accepting || !w->rw->on_file_drop)
+        return;
+
+    int fds[2];
+    if (pipe2(fds, O_CLOEXEC) < 0)
+        return;
+    int flags = fcntl(fds[0], F_GETFL, 0);
+    if (flags >= 0)
+        fcntl(fds[0], F_SETFL, flags | O_NONBLOCK);
+
+    auto rw = w->rw;
+    const float x = ctx->dnd_x;
+    const float y = ctx->dnd_y;
+    auto state = new clipboard_read_state;
+    state->fd = fds[0];
+    state->offer = offer;
+    state->finish_dnd = true;
+    state->callback = [ctx, rw, x, y](std::string text) {
+        for (auto win : ctx->windows) {
+            if (win->rw != rw)
+                continue;
+            if (!win->marked_for_closing && rw->on_file_drop && !text.empty())
+                rw->on_file_drop(rw, x, y, std::move(text));
+            break;
+        }
+    };
+    ++offer->active_reads;
+
+    wl_data_offer_receive(offer->offer, kUriListMime, fds[1]);
+    close(fds[1]);
+
+    PolledFunction read_function;
+    read_function.fd = state->fd;
+    read_function.name = "Wayland drop read";
+    read_function.func = [ctx, state](PolledFunction pf) {
+        bool finished = (pf.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0;
+        char buffer[4096];
+        while (pf.revents & (POLLIN | POLLHUP)) {
+            ssize_t bytes = read(state->fd, buffer, sizeof buffer);
+            if (bytes > 0) {
+                state->text.append(buffer, static_cast<size_t>(bytes));
+                continue;
+            }
+            if (bytes == 0) {
+                finished = true;
+                break;
+            }
+            if (errno == EINTR)
+                continue;
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                finished = true;
+            break;
+        }
+        if (finished)
+            finish_clipboard_read(ctx, state, true);
+    };
+    ctx->clipboard_reads.push_back(state);
+    ctx->polled_fds.push_back(std::move(read_function));
+    wl_display_flush(ctx->display);
 }
 
 static void clipboard_data_device_drop(void *data, wl_data_device *device) {
+    auto ctx = static_cast<wl_context *>(data);
+    dnd_receive_drop(ctx);
     clipboard_data_device_leave(data, device);
 }
 
@@ -1793,6 +1958,10 @@ static void finish_clipboard_read(wl_context *ctx, clipboard_read_state *state, 
     }
     close(state->fd);
     if (state->offer) {
+        // finish is only valid once an action was negotiated.
+        if (state->finish_dnd && state->offer->dnd_action != WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE &&
+            wl_data_offer_get_version(state->offer->offer) >= WL_DATA_OFFER_FINISH_SINCE_VERSION)
+            wl_data_offer_finish(state->offer->offer);
         --state->offer->active_reads;
         if (!state->offer->selected)
             destroy_clipboard_offer(ctx, state->offer);
@@ -2035,6 +2204,8 @@ void wl_window_destroy(struct wl_window *win) {
     if (!win) return;
     if (win->ctx->pointer_scroll_window == win)
         pointer_scroll_cancel(win->ctx);
+    if (win->ctx->dnd_window == win)
+        win->ctx->dnd_window = nullptr;
     if (win->frame_callback) wl_callback_destroy(win->frame_callback);
 
     if (win->xdg_popup) xdg_popup_destroy(win->xdg_popup);

@@ -154,6 +154,10 @@ void SpringAnimation::setTarget(float newTarget) {
     target = newTarget;
 }
 
+// How long a drag-and-drop must rest on a pinned icon before it raises the
+// window (or opens the preview when the app has several).
+static constexpr int kDndHoverMs = 450;
+
 struct HoverTimerData {
     RawApp *app = nullptr;
     std::string uuid;
@@ -915,6 +919,65 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         auto dock = (Dock *) root->user_data;
         if (!dock)
             return;
+
+        // A drag-and-drop is passing over the icon. After a short hover,
+        // raise its window so the drop can land there, or show the preview
+        // so the user can pick which of its windows to raise.
+        if (dock->window && dock->window->raw_window && dock->window->raw_window->dnd_hovering) {
+            if (pin->windows.empty() || pin->hover_timer_fd != -1)
+                return;
+            auto *hover = new HoverTimerData{dock->app, c->uuid};
+            pin->hover_timer_data = hover;
+            pin->hover_timer_fd = windowing::timer(dock->app, kDndHoverMs, [](void *data) {
+                auto *hover = (HoverTimerData *) data;
+                std::vector<int> ids;
+                Bounds icon;
+                std::string source;
+                bool still_dragging = false;
+                for (auto d : docks) {
+                    if (d->app != hover->app)
+                        continue;
+                    if (auto icons = container_by_name("icons", d->window->root)) {
+                        for (auto p : icons->children) {
+                            if (p->uuid != hover->uuid)
+                                continue;
+                            auto *pin = (Pin *) p->user_data;
+                            ids = pin_window_ids(pin);
+                            icon = pin_thumbnail_bounds(p, d);
+                            source = p->uuid;
+                            still_dragging = p->state.mouse_hovering && d->window->raw_window->dnd_hovering;
+                            pin->hover_timer_fd = -1;
+                            pin->hover_timer_data = nullptr;
+                            break;
+                        }
+                    }
+                    break;
+                }
+                delete hover;
+                if (ids.empty() || !still_dragging)
+                    return;
+                if (ids.size() == 1) {
+                    const int cid = ids[0];
+                    main_thread([cid]() {
+                        if (overview::is_showing())
+                            return;
+                        if (show_desktop::is_opened())
+                            show_desktop::stop_animation();
+                        if (hypriso->is_hidden(cid))
+                            hypriso->set_hidden(cid, false, true);
+                        hypriso->bring_to_front(cid);
+                        hypriso->hold_focus_during_dnd(cid);
+                        dock_thumbnails::open({});
+                    });
+                } else {
+                    main_thread([ids = std::move(ids), icon, source = std::move(source)]() {
+                        dock_thumbnails::open(ids, icon, source);
+                    });
+                }
+            }, hover);
+            return;
+        }
+
         if (pin->suppress_hover_preview)
             return;
 
@@ -2442,6 +2505,73 @@ static void write_saved_pins_to_file(Container *icons) {
 
 void total_update();
 
+// First local file path in a text/uri-list ("file:///a%20b" -> "/a b").
+static std::string first_path_from_uri_list(const std::string &uri_list) {
+    size_t pos = 0;
+    while (pos < uri_list.size()) {
+        size_t end = uri_list.find('\n', pos);
+        if (end == std::string::npos)
+            end = uri_list.size();
+        std::string line = uri_list.substr(pos, end - pos);
+        pos = end + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (line.empty() || line[0] == '#')
+            continue;
+
+        const std::string scheme = "file://";
+        if (line.compare(0, scheme.size(), scheme) != 0)
+            continue;
+        // Skip an optional host ("file://localhost/path").
+        size_t path_start = line.find('/', scheme.size());
+        if (path_start == std::string::npos)
+            continue;
+
+        std::string path;
+        for (size_t i = path_start; i < line.size(); i++) {
+            if (line[i] == '%' && i + 2 < line.size() && std::isxdigit((unsigned char) line[i + 1]) &&
+                std::isxdigit((unsigned char) line[i + 2])) {
+                path += (char) std::stoi(line.substr(i + 1, 2), nullptr, 16);
+                i += 2;
+            } else {
+                path += line[i];
+            }
+        }
+        return path;
+    }
+    return {};
+}
+
+// Files dropped onto the icons area of the dock open the pin editor with the
+// file as the command, so it can be pinned.
+static void setup_dock_file_drop(Dock *dock) {
+    auto rw = dock->window->raw_window;
+    rw->accepts_file_drop = [dock](RawWindow *rw, float x, float y) {
+        std::lock_guard<std::mutex> lock(rw->creator->mutex);
+        auto icons = container_by_name("icons", dock->window->root);
+        if (!icons)
+            return false;
+        return bounds_contains(icons->real_bounds, (int) (x * rw->dpi), (int) (y * rw->dpi));
+    };
+    rw->on_file_drop = [](RawWindow *, float, float, std::string uri_list) {
+        auto path = first_path_from_uri_list(uri_list);
+        if (path.empty())
+            return;
+        // Commands run through "sh -c": quote paths the shell would split or expand.
+        if (path.find_first_of(" \t'\"$`\\&;|<>()*?[]{}!#~") != std::string::npos) {
+            std::string quoted = "'";
+            for (char ch : path) {
+                if (ch == '\'')
+                    quoted += "'\\''";
+                else
+                    quoted += ch;
+            }
+            path = quoted + "'";
+        }
+        edit_pin::open("", "", path);
+    };
+}
+
 static void schedule_startup_audio_update(Dock *dock) {
     windowing::timer(dock->app, 1000, [](void *data) {
         auto dock = static_cast<Dock *>(data);
@@ -2489,6 +2619,7 @@ void dock_start(std::string monitor_name) {
     dock->window->root->skip_delete = true;
     dock->window->root->user_data = dock;
     fill_root(dock->window->root);
+    setup_dock_file_drop(dock);
     if (auto icons = container_by_name("icons", dock->window->root))
         load_saved_pins_from_file(icons);
     dock->window->root->alignment = ALIGN_RIGHT;

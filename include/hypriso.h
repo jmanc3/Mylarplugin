@@ -470,6 +470,11 @@ struct HyprIso {
 
     bool is_mapped(int id);
     bool is_hidden(int id);
+    // A Wayland drag-and-drop (e.g. a file being dragged) is in progress.
+    bool dnd_active();
+    // Keep this window focused (and on top) until the current drag-and-drop
+    // ends, instead of focus following the cursor over other windows.
+    void hold_focus_during_dnd(int id);
     bool resizable(int id);
     
     void set_float_state(int id, bool should_float);

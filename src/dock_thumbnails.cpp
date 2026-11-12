@@ -26,6 +26,8 @@ constexpr float kThumbMaxWidth = kThumbSize * 16.f / 9.f;
 constexpr float kMaxPageFraction = .8; // of the monitor, before shrinking
 constexpr float kDockMargin = 8;
 constexpr int kCloseGraceMs = 220;
+constexpr int kDndRaiseMs = 450;  // drag-and-drop hover time before a thumbnail raises its window
+constexpr int kDndPollMs = 30;
 constexpr float kCloseInset = 6;
 constexpr float kCloseMinSize = 12;
 constexpr float kCloseMaxSize = 22;
@@ -60,6 +62,12 @@ struct State {
     // Bumped every time a preview is (re)built so delayed screenshot refreshes
     // from an older preview become no-ops.
     int refresh_token = 0;
+
+    // Drag-and-drop hover tracking (see watch_dnd_hover).
+    bool dnd_watching = false;
+    bool dnd_over_preview = false;
+    int dnd_hover_cid = -1;
+    long dnd_hover_start = 0;
 };
 
 State &state() {
@@ -150,6 +158,8 @@ void refresh_preview_screenshots(Container *preview, int token, std::vector<int>
 
 void destroy_now() {
     auto &s = state();
+    s.dnd_hover_cid = -1;
+    s.dnd_over_preview = false;
     s.generation++;
     s.refresh_token++;
     s.pending_close = false;
@@ -201,6 +211,71 @@ int dock_edge_for(const Bounds &dock, const Bounds &monitor) {
     const double to_left = std::abs(dock.x - monitor.x);
     const double to_right = std::abs(monitor.right() - dock.right());
     return to_left < to_right ? kEdgeLeft : kEdgeRight;
+}
+
+// While a drag-and-drop is in progress the normal hover events can be held back
+// (the button that started the drag is still down), so poll the cursor instead.
+// Keeps the preview open while the drag is over it, and raises the window of a
+// thumbnail the drag has rested on for kDndRaiseMs so the drop can land there.
+void watch_dnd_hover() {
+    auto &s = state();
+    if (s.dnd_watching)
+        return;
+    s.dnd_watching = true;
+    later(kDndPollMs, [](Timer *) {
+        auto &s = state();
+        s.dnd_watching = false;
+        if (!s.container)
+            return;
+        if (!hypriso->dnd_active()) {
+            if (s.dnd_over_preview) {
+                s.dnd_over_preview = false;
+                s.hovered = false;
+                dock_thumbnails::close();
+            }
+            if (s.dnd_hover_cid != -1) {
+                s.dnd_hover_cid = -1;
+                damage_all();
+            }
+            return;
+        }
+
+        const auto m = mouse();
+        const bool over = bounds_contains(s.container->real_bounds, (int) m.x, (int) m.y);
+        if (over && !s.dnd_over_preview) {
+            s.dnd_over_preview = true;
+            s.hovered = true;
+            s.pending_close = false;
+            s.generation++;
+        } else if (!over && s.dnd_over_preview) {
+            s.dnd_over_preview = false;
+            s.hovered = false;
+            dock_thumbnails::close();
+        }
+
+        int cid = -1;
+        if (over) {
+            for (auto *thumb : s.container->children) {
+                if (bounds_contains(thumb->real_bounds, (int) m.x, (int) m.y)) {
+                    cid = *datum<int>(thumb, "cid");
+                    break;
+                }
+            }
+        }
+        const long now = get_current_time_in_ms();
+        if (cid != s.dnd_hover_cid) {
+            s.dnd_hover_cid = cid;
+            s.dnd_hover_start = now;
+            damage_all();
+        } else if (cid != -1 && now - s.dnd_hover_start >= kDndRaiseMs) {
+            hypriso->set_hidden(cid, false);
+            hypriso->bring_to_front(cid);
+            hypriso->hold_focus_during_dnd(cid);
+            destroy_now();
+            return;
+        }
+        watch_dnd_hover();
+    });
 }
 
 void paint_preview(Container *actual_root, Container *c) {
@@ -263,7 +338,7 @@ void paint_thumbnail(Container *actual_root, Container *c) {
         }
     }
 
-    if (c->state.mouse_hovering) {
+    if (c->state.mouse_hovering || (state().dnd_hover_cid != -1 && state().dnd_hover_cid == cid)) {
         auto b = c->real_bounds;
         b.grow(std::round(2 * s));
         b.round();
@@ -689,6 +764,9 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
     // Capture again shortly after so windows that are still opening produce a
     // real frame instead of a black thumbnail.
     refresh_preview_screenshots(preview, token, ids, 0);
+
+    if (hypriso->dnd_active())
+        watch_dnd_hover();
 }
 
 } // namespace

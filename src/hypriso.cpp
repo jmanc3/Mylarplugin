@@ -4260,9 +4260,22 @@ static void hook_mouse_down_kill() {
 // Keep these replacements in sync with the corresponding Hyprland functions.
 // Focus, rendering and hit testing share a bottom-to-top stack for tiled and floating windows.
 static CFunctionHook* g_pRawWindowFocusHook                   = nullptr;
+static PHLWINDOWREF dnd_held_window;
 static CFunctionHook* g_pRenderWorkspaceWindowsFullscreenHook = nullptr;
 
 static void hook_rawWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW pWindow, Desktop::eFocusReason reason, SP<CWLSurfaceResource> surface) {
+    // The dock raised a window for a drag-and-drop hovering its icon. While that
+    // drag lasts, do not let focus-follows-mouse (always_follow_on_dnd) focus and
+    // raise the windows the cursor crosses on its way to the raised window.
+    // Pointer refocuses come in as FFM, or CLICK when forced; no real click can
+    // happen while the drag holds the button.
+    if (auto held = dnd_held_window.lock()) {
+        if (!PROTO::data || !PROTO::data->dndActive() || !Desktop::View::validMapped(held))
+            dnd_held_window.reset();
+        else if ((reason == Desktop::FOCUS_REASON_FFM || (reason & Desktop::FOCUS_REASON_CLICK)) && pWindow != held)
+            return;
+    }
+
     static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PSPECIALFALLTHROUGH = CConfigValue<Config::INTEGER>("input:special_fallthrough");
 
@@ -7318,6 +7331,20 @@ bool HyprIso::resizable(int id) {
         }
     }
     return true;
+}
+
+bool HyprIso::dnd_active() {
+    return PROTO::data && PROTO::data->dndActive();
+}
+
+
+void HyprIso::hold_focus_during_dnd(int id) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id) {
+            dnd_held_window = hw->w;
+            return;
+        }
+    }
 }
 
 bool HyprIso::is_hidden(int id) {

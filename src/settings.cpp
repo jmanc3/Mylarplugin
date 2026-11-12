@@ -1437,7 +1437,10 @@ static void paint_dropdown_button(Container *root, Container *c, const std::stri
     drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
     cairo_stroke(cr);
     swifi_text(root, Bounds(b.x + 10 * dpi, b.y, b.w - 38 * dpi, b.h), label, 11, theme.text);
-    swifi_glyph(cr, b.x + b.w - 24 * dpi, b.y + b.h * .5 - 6 * dpi, "", 10 * dpi, theme.text);
+    // ChevronDown (U+E70D) marks the button as a dropdown
+    const std::string chevron = "\uE70D";
+    auto cb = draw_text(cr, 0, 0, chevron, 10 * dpi, false, icon_font, -1, -1, theme.text_secondary, false);
+    draw_text(cr, b.x + b.w - 14 * dpi - cb.w, b.y + b.h * .5 - cb.h * .5, chevron, 10 * dpi, true, icon_font, -1, -1, theme.text_secondary, false);
 }
 
 static void make_dropdown(Container *parent, std::string text_, std::vector<std::string> options, std::function<void(std::string)> func) {
@@ -1650,18 +1653,149 @@ struct MonitorOption {
     MylarMonitor             config;
 };
 
+static void commit_monitor_configs(std::vector<MylarMonitor> configs);
+
+// Where a monitor sits in the compositor layout, in logical pixels.
+static Bounds monitor_logical_bounds(const MonitorOption *o) {
+    double w = std::round(o->w / std::max(o->scale, 0.1f));
+    double h = std::round(o->h / std::max(o->scale, 0.1f));
+    if (o->transform % 2 == 1)
+        std::swap(w, h);
+    return Bounds(o->x, o->y, w, h);
+}
+
+// Tries to line [pos, pos + size] up with the edges and the center of
+// [other, other + other_size]. `best` is the closest distance found so far.
+static void monitor_snap_axis(double pos, double size, double other, double other_size, double &best, double &snapped, double &guide) {
+    const double far_edge = other + other_size;
+    const double center   = other + other_size * .5;
+    // {where pos would end up, where the guide line goes}
+    const double candidates[5][2] = {
+        {other, other},
+        {far_edge, far_edge},
+        {other - size, other},
+        {far_edge - size, far_edge},
+        {center - size * .5, center},
+    };
+    for (const auto &candidate : candidates) {
+        const double distance = std::abs(candidate[0] - pos);
+        if (distance >= best)
+            continue;
+        best    = distance;
+        snapped = candidate[0];
+        guide   = candidate[1];
+    }
+}
+
+static bool monitor_rects_overlap(const Bounds &a, const Bounds &b) {
+    const double slack = .5;
+    return a.x < b.x + b.w - slack && b.x < a.x + a.w - slack && a.y < b.y + b.h - slack && b.y < a.y + a.h - slack;
+}
+
+// True when the rects share part of an edge, a shared corner does not count.
+static bool monitor_rects_touch(const Bounds &a, const Bounds &b) {
+    const double slack     = .5;
+    const double overlap_x = std::min(a.x + a.w, b.x + b.w) - std::max(a.x, b.x);
+    const double overlap_y = std::min(a.y + a.h, b.y + b.h) - std::max(a.y, b.y);
+    return (overlap_x >= -slack && overlap_y > slack) || (overlap_y >= -slack && overlap_x > slack);
+}
+
+static void monitor_push_out(Bounds &me, const std::vector<Bounds> &others) {
+    for (int pass = 0; pass < 8; pass++) {
+        bool moved = false;
+        for (const auto &other : others) {
+            if (!monitor_rects_overlap(me, other))
+                continue;
+            // Leave through the side that needs the least movement.
+            const double moves[4] = {other.x - (me.x + me.w), other.x + other.w - me.x, other.y - (me.y + me.h), other.y + other.h - me.y};
+            int          least    = 0;
+            for (int i = 1; i < 4; i++)
+                if (std::abs(moves[i]) < std::abs(moves[least]))
+                    least = i;
+            if (least < 2)
+                me.x += moves[least];
+            else
+                me.y += moves[least];
+            moved = true;
+        }
+        if (!moved)
+            return;
+    }
+}
+
+// Turns a dropped position into a valid layout: no overlaps, and attached to
+// another monitor so the cursor can always cross. False if no spot was found.
+static bool monitor_settle(Bounds &me, const std::vector<Bounds> &others) {
+    if (others.empty())
+        return true;
+
+    monitor_push_out(me, others);
+
+    bool attached = false;
+    for (const auto &other : others)
+        attached |= monitor_rects_touch(me, other);
+
+    if (!attached) {
+        const Bounds *nearest      = nullptr;
+        double        nearest_dist = 0;
+        double        nearest_gx   = 0;
+        double        nearest_gy   = 0;
+        for (const auto &other : others) {
+            const double gx   = std::max({other.x - (me.x + me.w), me.x - (other.x + other.w), 0.0});
+            const double gy   = std::max({other.y - (me.y + me.h), me.y - (other.y + other.h), 0.0});
+            const double dist = std::hypot(gx, gy);
+            if (nearest && dist >= nearest_dist)
+                continue;
+            nearest      = &other;
+            nearest_dist = dist;
+            nearest_gx   = gx;
+            nearest_gy   = gy;
+        }
+        const bool before = me.x < nearest->x;
+        const bool above  = me.y < nearest->y;
+        if (nearest_gx > 0 && nearest_gy > 0) {
+            // Diagonal: close the horizontal gap and share the top or bottom edge.
+            me.x += before ? nearest_gx : -nearest_gx;
+            me.y = above ? nearest->y : nearest->y + nearest->h - me.h;
+        } else if (nearest_gx > 0) {
+            me.x += before ? nearest_gx : -nearest_gx;
+        } else {
+            me.y += above ? nearest_gy : -nearest_gy;
+        }
+        monitor_push_out(me, others);
+    }
+
+    for (const auto &other : others)
+        if (monitor_rects_overlap(me, other))
+            return false;
+    return true;
+}
+
+// The monitor layout at the top of the display page. Monitors can be dragged
+// around, they snap to the edges and centers of the others, and dropping one
+// applies the new layout.
 static void make_screen_positioner(Container *parent, std::vector<MonitorOption *> &options, std::function<void (std::string)> on_clicked) {
     static int height = 300;
     auto c = parent->child(::fullycustom, FILL_SPACE, height);
+    struct MonitorCanvas : UserData {
+        // Logical to canvas pixels. Frozen while dragging so the view holds still.
+        double scale    = .1;
+        double origin_x = 0; // logical point shown at the center of the canvas
+        double origin_y = 0;
+        bool   dragging = false;
+        bool   guide_x_on = false;
+        bool   guide_y_on = false;
+        double guide_x    = 0; // logical
+        double guide_y    = 0;
+    };
     struct MonitorInfo : UserData {
-        int base_offset_x = 0;
-        int base_offset_y = 0;
-        int mouse_offset_x = 0;
-        int mouse_offset_y = 0;
         MonitorOption *o = nullptr;
         bool selected = false;
+        bool dragging = false;
+        double drag_x = 0; // logical position while dragging
+        double drag_y = 0;
     };
-    static float scale_down = .1;
+    c->user_data = new MonitorCanvas;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto dpi = mylar->raw_window->dpi;
@@ -1670,33 +1804,40 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         if (c->children.empty())
             return;
 
-        auto main = c->children[0];
-
-        int min_x = INT_MAX;
-        int min_y = INT_MAX;
-        int max_x = 0;
-        int max_y = 0;
-        for (auto ch : c->children) {
-            auto data = (MonitorInfo *) ch->user_data;
-            if (data->o->x < min_x)
-                min_x = data->o->x;
-             if (data->o->y < min_y)
-                min_y = data->o->y;
-             if (data->o->x + data->o->w > max_x)
-                max_x = data->o->x + data->o->w;
-             if (data->o->y + data->o->h > max_y)
-                max_y = data->o->y + data->o->h;
+        auto canvas = (MonitorCanvas *) c->user_data;
+        if (!canvas->dragging) {
+            double min_x = INT_MAX;
+            double min_y = INT_MAX;
+            double max_x = INT_MIN;
+            double max_y = INT_MIN;
+            for (auto ch : c->children) {
+                auto r = monitor_logical_bounds(((MonitorInfo *) ch->user_data)->o);
+                min_x  = std::min(min_x, r.x);
+                min_y  = std::min(min_y, r.y);
+                max_x  = std::max(max_x, r.x + r.w);
+                max_y  = std::max(max_y, r.y + r.h);
+            }
+            const double total_w = std::max(max_x - min_x, 1.0);
+            const double total_h = std::max(max_y - min_y, 1.0);
+            canvas->origin_x     = min_x + total_w * .5;
+            canvas->origin_y     = min_y + total_h * .5;
+            // Leave room around the layout to drag monitors into.
+            canvas->scale = std::min(c->real_bounds.w * .5 / total_w, c->real_bounds.h * .5 / total_h);
+            if (canvas->scale <= 0)
+                canvas->scale = .1;
         }
-        float sizew = (float) (max_x - min_x) * scale_down;
-        float sizeh = (float) (max_y - min_y) * scale_down;
-        
+
+        const double center_x = c->real_bounds.x + c->real_bounds.w * .5;
+        const double center_y = c->real_bounds.y + c->real_bounds.h * .5;
         for (auto ch : c->children) {
             auto data = (MonitorInfo *) ch->user_data;
-            float offsetx = data->base_offset_x + data->mouse_offset_x;
-            float offsety = data->base_offset_y + data->mouse_offset_y;
-            ch->real_bounds = Bounds(c->real_bounds.x + c->real_bounds.w * .5 + offsetx - sizew * .5,
-                                       c->real_bounds.y + c->real_bounds.h * .5 + offsety - sizeh * .5,
-                                       ch->wanted_bounds.w, ch->wanted_bounds.h);
+            auto r    = monitor_logical_bounds(data->o);
+            if (data->dragging) {
+                r.x = data->drag_x;
+                r.y = data->drag_y;
+            }
+            ch->real_bounds = Bounds(center_x + (r.x - canvas->origin_x) * canvas->scale, center_y + (r.y - canvas->origin_y) * canvas->scale, r.w * canvas->scale,
+                                     r.h * canvas->scale);
             ch->wanted_bounds = ch->real_bounds;
             layout(root, ch, ch->real_bounds);
         }
@@ -1710,22 +1851,54 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
         cairo_fill(cr);
     };
+    // Alignment guides, drawn over the monitors while one is snapped.
+    c->after_paint = paint {
+        auto canvas = (MonitorCanvas *) c->user_data;
+        if (!canvas->dragging || (!canvas->guide_x_on && !canvas->guide_y_on))
+            return;
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        auto b = c->real_bounds;
+
+        cairo_save(cr);
+        set_rect(cr, b);
+        cairo_clip(cr);
+        set_argb(cr, theme.accent);
+        cairo_set_line_width(cr, std::max(1.0, std::floor(1.0 * dpi)));
+        if (canvas->guide_x_on) {
+            const double x = std::round(b.x + b.w * .5 + (canvas->guide_x - canvas->origin_x) * canvas->scale) + .5;
+            cairo_move_to(cr, x, b.y);
+            cairo_line_to(cr, x, b.y + b.h);
+            cairo_stroke(cr);
+        }
+        if (canvas->guide_y_on) {
+            const double y = std::round(b.y + b.h * .5 + (canvas->guide_y - canvas->origin_y) * canvas->scale) + .5;
+            cairo_move_to(cr, b.x, y);
+            cairo_line_to(cr, b.x + b.w, y);
+            cairo_stroke(cr);
+        }
+        cairo_restore(cr);
+    };
 
     bool first = true;
     for (auto option : options) {
-        auto main = c->child(option->w * scale_down, option->h * scale_down);
+        auto main = c->child(10, 10);
         main->when_paint = paint {
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->cr;
             auto dpi = mylar->raw_window->dpi;
             auto data = (MonitorInfo *) c->user_data;
-            set_argb(cr, theme.monitor_surface);
             auto b = c->real_bounds;
             
             cairo_save(cr);
             set_rect(cr, c->parent->real_bounds);
             cairo_clip(cr);
             
+            auto surface = theme.monitor_surface;
+            if (data->dragging)
+                surface.a *= .85;
+            set_argb(cr, surface);
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0 * dpi);
             cairo_fill(cr);
 
@@ -1736,6 +1909,8 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             }
 
             auto text = fz("{}\n({}x{})", data->o->name, data->o->w, data->o->h);
+            if (data->dragging)
+                text += fz("\n{}, {}", (int) std::round(data->drag_x), (int) std::round(data->drag_y));
             auto tb = draw_text(cr, 0, 0, text, 12 * dpi, false, set->font, c->real_bounds.w, -1, theme.text, false, 1);
             
             draw_text(cr, 
@@ -1746,34 +1921,96 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
             cairo_reset_clip(cr);
             cairo_restore(cr);
         };
-        main->when_drag_start = [on_clicked](Container *root, Container *c) {
-            c->z_index = 100;
+        auto select = [on_clicked](Container *root, Container *c) {
             auto data = (MonitorInfo *) c->user_data;
-            for (auto ch : c->parent->children) {
-                auto data = (MonitorInfo *) ch->user_data;
-                data->selected = false;
-            }
+            if (data->selected)
+                return;
+            for (auto ch : c->parent->children)
+                ((MonitorInfo *) ch->user_data)->selected = false;
             data->selected = true;
             if (on_clicked)
                 on_clicked(data->o->name);
         };
+        main->when_clicked = select;
+        main->when_drag_end_is_click = false;
+        main->when_drag_start = [select](Container *root, Container *c) {
+            select(root, c);
+            auto canvas = (MonitorCanvas *) c->parent->user_data;
+            auto data   = (MonitorInfo *) c->user_data;
+            c->z_index       = 100;
+            canvas->dragging = true;
+            data->dragging   = true;
+            data->drag_x     = data->o->x;
+            data->drag_y     = data->o->y;
+        };
         main->when_drag = [](Container *root, Container *c) {
-            auto data = (MonitorInfo *) c->user_data;
-            data->mouse_offset_x = root->mouse_current_x - root->mouse_initial_x;
-            data->mouse_offset_y = root->mouse_current_y - root->mouse_initial_y;
+            auto mylar  = (MylarWindow*)root->user_data;
+            auto dpi    = mylar->raw_window->dpi;
+            auto canvas = (MonitorCanvas *) c->parent->user_data;
+            auto data   = (MonitorInfo *) c->user_data;
+            auto me     = monitor_logical_bounds(data->o);
+
+            const double x = me.x + (root->mouse_current_x - root->mouse_initial_x) / canvas->scale;
+            const double y = me.y + (root->mouse_current_y - root->mouse_initial_y) / canvas->scale;
+
+            // Snap distance is constant on screen, whatever the zoom of the layout.
+            const double threshold = 10 * dpi / canvas->scale;
+            double       best_x    = threshold;
+            double       best_y    = threshold;
+            data->drag_x           = x;
+            data->drag_y           = y;
+            for (auto ch : c->parent->children) {
+                if (ch == c)
+                    continue;
+                auto other = monitor_logical_bounds(((MonitorInfo *) ch->user_data)->o);
+                monitor_snap_axis(x, me.w, other.x, other.w, best_x, data->drag_x, canvas->guide_x);
+                monitor_snap_axis(y, me.h, other.y, other.h, best_y, data->drag_y, canvas->guide_y);
+            }
+            canvas->guide_x_on = best_x < threshold;
+            canvas->guide_y_on = best_y < threshold;
         };
-        main->when_drag_end = [](Container *root, Container *c) {
-            c->z_index = 0;
-            auto data = (MonitorInfo *) c->user_data;
-            data->mouse_offset_x = 0;
-            data->mouse_offset_y = 0;
+        main->when_drag_end = [on_clicked](Container *root, Container *c) {
+            auto canvas = (MonitorCanvas *) c->parent->user_data;
+            auto data   = (MonitorInfo *) c->user_data;
+            c->z_index         = 0;
+            canvas->dragging   = false;
+            canvas->guide_x_on = false;
+            canvas->guide_y_on = false;
+            data->dragging     = false;
+
+            auto me = monitor_logical_bounds(data->o);
+            me.x    = data->drag_x;
+            me.y    = data->drag_y;
+            std::vector<Bounds> others;
+            for (auto ch : c->parent->children)
+                if (ch != c)
+                    others.push_back(monitor_logical_bounds(((MonitorInfo *) ch->user_data)->o));
+            if (!monitor_settle(me, others))
+                return;
+
+            const int x = (int) std::round(me.x);
+            const int y = (int) std::round(me.y);
+            if (x == data->o->x && y == data->o->y)
+                return;
+            data->o->x = x;
+            data->o->y = y;
+
+            // Pin every monitor, ones left on "auto" would shuffle around the moved one.
+            std::vector<MylarMonitor> configs;
+            for (auto ch : c->parent->children) {
+                auto o             = ((MonitorInfo *) ch->user_data)->o;
+                o->config.position = fz("{}x{}", o->x, o->y);
+                configs.push_back(o->config);
+            }
+            commit_monitor_configs(configs);
+
+            // Rebuild the option rows so the position field shows the new value.
+            if (on_clicked)
+                on_clicked(data->o->name);
         };
-        main->when_clicked = main->when_drag_start;
      
         auto monitor_info = new MonitorInfo;
         monitor_info->o = option;
-        monitor_info->base_offset_x = monitor_info->o->x * scale_down;
-        monitor_info->base_offset_y = monitor_info->o->y * scale_down;
         monitor_info->selected = first;
         first = false;
         
@@ -1806,22 +2043,72 @@ static bool monitor_float_from_text(const std::string& text, float& value) {
     } catch (...) { return false; }
 }
 
-static void commit_monitor_config(const MylarMonitor& config) {
-    main_thread([config]() {
-        auto existing = std::ranges::find(set->monitors, config.output, &MylarMonitor::output);
-        if (existing != set->monitors.end() && *existing == config)
+// Applies the configs as one change: a single trial and a single reload.
+static void commit_monitor_configs(std::vector<MylarMonitor> configs) {
+    main_thread([configs = std::move(configs)]() {
+        auto find = [](const MylarMonitor& config) { return std::ranges::find(set->monitors, config.output, &MylarMonitor::output); };
+
+        const bool changed = std::ranges::any_of(configs, [&find](const MylarMonitor& config) {
+            auto existing = find(config);
+            return existing == set->monitors.end() || *existing != config;
+        });
+        if (!changed)
             return;
 
         settings::display_change_begin();
-        // Starting the trial may not touch set->monitors, `existing` is still valid.
-        if (existing != set->monitors.end())
-            *existing = config;
-        else
-            set->monitors.push_back(config);
+        for (const auto& config : configs) {
+            auto existing = find(config);
+            if (existing != set->monitors.end())
+                *existing = config;
+            else
+                set->monitors.push_back(config);
+        }
 
         settings::load_save_settings(true, set);
         hypriso->reload();
     });
+}
+
+static void commit_monitor_config(const MylarMonitor& config) {
+    commit_monitor_configs({config});
+}
+
+struct AccordionData : UserData {
+    std::vector<Container *> rows;
+    bool *open = nullptr;
+};
+
+// A row that shows or hides the rows listed in its AccordionData when clicked.
+static Container *make_accordion(Container *parent, std::string title, std::string description, std::string icon, bool *open) {
+    auto p = make_self_height_sized_parent(parent);
+    auto data = new AccordionData;
+    data->open = open;
+    p->user_data = data;
+    make_label_like(p, title, description, icon);
+
+    auto right = p->child(FILL_SPACE, FILL_SPACE);
+    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto dpi = mylar->raw_window->dpi;
+        c->real_bounds.w = 30 * dpi;
+        c->real_bounds.h = 70 * dpi;
+    };
+    right->when_paint = [open](Container *root, Container *c) {
+        auto mylar = (MylarWindow*)root->user_data;
+        auto cr = mylar->raw_window->cr;
+        auto dpi = mylar->raw_window->dpi;
+        const std::string chevron = *open ? "\uE70E" : "\uE70D";
+        auto b = draw_text(cr, 0, 0, chevron, 12 * dpi, false, icon_font, -1, -1, theme.text_secondary, false);
+        draw_text(cr, c->real_bounds.x + c->real_bounds.w * .5 - b.w * .5, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, chevron, 12 * dpi, true, icon_font, -1, -1,
+                  theme.text_secondary, false);
+    };
+    // The row receives clicks even when a child is under the cursor.
+    p->when_clicked = [data](Container *root, Container *c) {
+        *data->open = !*data->open;
+        for (auto row : data->rows)
+            row->exists = *data->open;
+    };
+    return p;
 }
 
 static void add_monitor_int_field(Container* parent, std::string title, std::string description, std::string icon, int initial_value, int reset_value, int min_value, int max_value,
@@ -1963,6 +2250,24 @@ static void change_display_options(MonitorOption *m) {
 
     make_vert_space(padded_right, 4);
 
+    const bool hdr_on = m->config.cm == "hdr" || m->config.cm == "hdredid";
+    make_bool(padded_right, "HDR", "High dynamic range, for displays that support it", hdr_on, [m, commit](bool value) {
+        m->config.cm = value ? "hdr" : "srgb";
+        // HDR needs 10 bit output.
+        if (value)
+            m->config.bitdepth = 10;
+        commit();
+    });
+
+    make_vert_space(padded_right, 4);
+
+    // Everything below is rarely touched, keep it folded away until asked for.
+    static bool advanced_open = false;
+    auto        advanced      = make_accordion(padded_right, "Advanced", "Bit depth, color management, VRR and luminance overrides", "\ue93a", &advanced_open);
+    const size_t first_advanced = padded_right->children.size();
+
+    make_vert_space(padded_right, 4);
+
     make_dropdown_option(padded_right, "Bit depth", "Color bit depth", "\ue93a", std::to_string(m->config.bitdepth), {"8", "10"}, [m, commit](std::string selected) {
         m->config.bitdepth = selected == "10" ? 10 : 8;
         commit();
@@ -2078,6 +2383,12 @@ static void change_display_options(MonitorOption *m) {
                               m->config.max_avg_luminance = value;
                               commit();
                           });
+
+    auto accordion = (AccordionData *) advanced->user_data;
+    for (size_t i = first_advanced; i < padded_right->children.size(); i++) {
+        accordion->rows.push_back(padded_right->children[i]);
+        padded_right->children[i]->exists = advanced_open;
+    }
 
     for (size_t i = first_new; i < padded_right->children.size(); i++)
         padded_right->children[i]->name = "removable";

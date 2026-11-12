@@ -133,6 +133,10 @@ struct RawWindow {
     std::vector<RawWindow *> children;
     bool keyboard_focus_on_click = false;
 
+    // True while a drag-and-drop from another client is over this window.
+    // The motion is delivered through the regular mouse callbacks.
+    bool dnd_hovering = false;
+
     cairo_t *cr = nullptr;
 
     std::function<bool(RawWindow *, float x, float y)> on_mouse_move = nullptr;
@@ -156,6 +160,13 @@ struct RawWindow {
     std::function<void(RawWindow *, float dpi)> on_scale_change = nullptr;
     
     std::function<void(RawWindow *)> on_close = nullptr;
+
+    // Drag-and-drop of files (text/uri-list). Coordinates are surface-local
+    // logical pixels. accepts_file_drop decides, per position, whether the drop
+    // is accepted; on_file_drop gets the raw uri-list after a drop.
+    std::function<bool(RawWindow *, float x, float y)> accepts_file_drop = nullptr;
+
+    std::function<void(RawWindow *, float x, float y, std::string uri_list)> on_file_drop = nullptr;
 };
 
 enum struct WindowType {
