@@ -666,9 +666,11 @@ void overview::update_workspace_gesture(int monitor, double delta_x) {
     if (order.empty())
         return;
     // One full swipe spans the visible workspace strip, regardless of its
-    // length or the monitor resolution.
+    // length or the monitor resolution. Short strips move at least as fast
+    // as a three-workspace strip so one or two workspaces don't feel sluggish.
     constexpr double swipe_distance = 750.0;
-    const double travel = std::max(1.0, double(order.size() - 1));
+    constexpr double min_travel = 2.0;
+    const double travel = std::max(min_travel, double(order.size() - 1));
     const double first = state->workspaces.at(order.front()).position.value;
     const double last = state->workspaces.at(order.back()).position.value;
     const double span = std::max(0.0, last - first);

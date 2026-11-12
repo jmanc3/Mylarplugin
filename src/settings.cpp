@@ -217,7 +217,10 @@ struct LineParser {
 };
 
 struct RightData : UserData {
-    float scroll = 0.0;
+    float scroll         = 0.0;
+    float applied_scroll = 0.0;
+    float overflow       = 0.0;
+    float content_h      = 0.0;
 };
 
 std::vector<MylarWindow *> popups;
@@ -1848,6 +1851,62 @@ static void change_display_options(MonitorOption *m) {
         padded_right->children[i]->name = "removable";
 }
 
+// Height of the page content inside `right`. `right` holds a single FILL_SPACE
+// child whose own bounds always match the viewport, so the real extent has to
+// be measured from that child's children.
+static float right_content_height(Container *right) {
+    double content_h = 0;
+    for (auto child : right->children) {
+        if (!child->exists)
+            continue;
+        double h  = child->children.empty() ? child->real_bounds.h : actual_true_height(child) + 1;
+        content_h = std::max(content_h, (child->real_bounds.y - right->real_bounds.y) + h);
+    }
+    return (float) (content_h + right->wanted_pad.h);
+}
+
+// Lays out a settings page as a vbox and offsets it by the current scroll.
+// layout_hbox calls pre_layout once with the parent's bounds before the real
+// layout, so this must not clamp the stored scroll: doing so in that bogus
+// pass permanently cut off the bottom of the page.
+static void layout_right_page(Container *root, Container *c, const Bounds &b) {
+    auto mylar    = (MylarWindow *) root->user_data;
+    auto dpi      = mylar->raw_window->dpi;
+    c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
+    c->type       = ::vbox;
+    layout(root, c, b);
+    c->type = ::fullycustom;
+
+    auto d            = (RightData *) c->user_data;
+    d->content_h      = right_content_height(c);
+    d->overflow       = std::max(0.0f, d->content_h - (float) c->real_bounds.h);
+    d->applied_scroll = std::clamp(d->scroll, -d->overflow, 0.0f);
+
+    for (auto child : c->children)
+        modify_all(child, 0, d->applied_scroll);
+}
+
+static void paint_right_scrollbar(Container *root, Container *c) {
+    auto d = (RightData *) c->user_data;
+    if (d->overflow <= 0 || d->content_h <= 0)
+        return;
+    auto   mylar   = (MylarWindow *) root->user_data;
+    auto   cr      = mylar->raw_window->cr;
+    auto   dpi     = mylar->raw_window->dpi;
+    auto   track   = c->real_bounds;
+    double w       = 6 * dpi;
+    double x       = track.x + track.w - w - 4 * dpi;
+    double thumb_h = std::min(track.h, std::max(30.0 * dpi, track.h * (track.h / d->content_h)));
+    double t       = -d->applied_scroll / d->overflow;
+    double y       = track.y + t * (track.h - thumb_h);
+
+    RGBA color = theme.text_secondary;
+    color.a *= .5;
+    drawRoundedRect(cr, x, y, w, thumb_h, w * .5, 1.0);
+    set_argb(cr, color);
+    cairo_fill(cr);
+}
+
 static void fill_display_settings(Container *root) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -1856,22 +1915,7 @@ static void fill_display_settings(Container *root) {
         delete child;
     right->children.clear();
 
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
+    right->pre_layout = layout_right_page;
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
 
     make_section_title(padded_right, "Display Settings");
@@ -1970,22 +2014,7 @@ static void fill_desktop_settings(Container *root, Container *c) {
         delete child;
     right->children.clear();
 
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
+    right->pre_layout = layout_right_page;
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
 
     make_section_title(padded_right, "Desktop Settings");
@@ -2216,22 +2245,7 @@ static void fill_keyboard_settings(Container *root, Container *c) {
         delete child;
     right->children.clear();
 
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
+    right->pre_layout = layout_right_page;
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
 
     make_section_title(padded_right, "Keyboard Settings");
@@ -2264,22 +2278,7 @@ static void fill_mouse_settings(Container *root, Container *c) {
         delete child;
     right->children.clear();
 
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
+    right->pre_layout = layout_right_page;
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
     
     make_section_title(padded_right, "Mouse");
@@ -2438,22 +2437,7 @@ static void fill_shortcuts_settings(Container *root) {
         delete child;
     right->children.clear();
 
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->cr;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children) {
-            modify_all(child, 0, d->scroll);
-        }
-    };
+    right->pre_layout = layout_right_page;
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
     
     make_section_title(padded_right, "Shortcuts");
@@ -2485,20 +2469,7 @@ static void fill_multitasking_settings(Container *root) {
         delete child;
     right->children.clear();
 
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto dpi = mylar->raw_window->dpi;
-        c->wanted_pad = Bounds(16 * dpi, 16 * dpi, 16 * dpi, 16 * dpi);
-        c->type = ::vbox;
-        layout(root, c, b);
-        c->type = ::fullycustom;
-        auto d = (RightData *) c->user_data;
-        float overflow = -actual_true_height(c);
-        d->scroll = std::min(std::max(overflow, d->scroll), 0.0f);
-
-        for (auto child : c->children)
-            modify_all(child, 0, d->scroll);
-    };
+    right->pre_layout = layout_right_page;
     auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
 
     make_section_title(padded_right, "Multitasking Settings");
@@ -2665,8 +2636,10 @@ void fill_root(Container *root) {
     right->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         auto d = (RightData *) c->user_data;
         auto mylar = (MylarWindow*)root->user_data;
-        d->scroll += scroll_y * 3 * mylar->raw_window->dpi;
+        // Clamp against the limits from the last real layout pass.
+        d->scroll = std::clamp(d->applied_scroll + (float) (scroll_y * 3 * mylar->raw_window->dpi), -d->overflow, 0.0f);
     };
+    right->after_paint = paint_right_scrollbar;
 }
 
 void actual_start() {
