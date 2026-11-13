@@ -62,7 +62,7 @@ static RGBA color_titlebar_text_unfocused() {
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_text_color", default_color);
 }
 static float titlebar_unfocus_fade_ms() {
-    return 350;
+    return 180;
 }
 
 static RGBA lerp_rgba(const RGBA &from, const RGBA &to, float t) {

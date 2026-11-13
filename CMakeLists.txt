@@ -84,7 +84,7 @@ target_compile_options(Mylardesktop PRIVATE
 
 install(
     DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/res/"
-    DESTINATION "share/mylardesktop/fonts"
+    DESTINATION "share/mylardesktop"
 )
 
 install(TARGETS Mylardesktop)

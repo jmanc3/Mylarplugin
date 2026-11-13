@@ -436,9 +436,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 {
                     if (parent_data->visibility == 1.0) {
                         clip(to_parent(root, c), s);
-                        render_drop_shadow(rid, 1.0, {0, 0, 0, fadea}, 10 * s, 2.0, full);
+                        render_drop_shadow(rid, 1.0, {0, 0, 0, .06f * fadea}, 10 * s, 2.0, full, std::round(6 * s));
                     } else {
-                        render_drop_shadow(rid, 1.0, {0, 0, 0, fadea}, 10 * s, 2.0, full);
+                        render_drop_shadow(rid, 1.0, {0, 0, 0, .06f * fadea}, 10 * s, 2.0, full, std::round(6 * s));
                     }
                 }
                 
@@ -717,7 +717,7 @@ void paint_snap_helper_actual(Container *actual_root, Container *c) {
     float alpha = data->visibility;
 
     auto sha = c->real_bounds;
-    render_drop_shadow(rid, 1.0, {0, 0, 0, alpha}, std::round(8 * s), 2.0, sha);
+    render_drop_shadow(rid, 1.0, {0, 0, 0, .08f * alpha}, std::round(8 * s), 2.0, sha, std::round(6 * s));
     auto inside_color = color_sel_color();
     inside_color.a *= alpha;
     auto pos = c->real_bounds;

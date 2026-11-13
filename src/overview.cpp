@@ -557,7 +557,7 @@ static void paint_monitor(int monitor_id) {
             continue;
         hypriso->clipbox = render_bounds(mb, monitor_id);
         auto b = render_bounds(wallpaper, monitor_id);
-        render_drop_shadow(monitor_id, 1, {.1, .1, .1, progress}, 14 * s * progress, 2.0, b, 50 * s);
+        render_drop_shadow(monitor_id, 1, {0, 0, 0, .18f * progress}, 14 * s * progress, 2.0, b, std::round(32 * s));
         hypriso->draw_wallpaper(monitor_id, b, 14 * s * progress);
         // Fade the live icon layer every frame instead of baking its opacity
         // into the wallpaper capture, which refreshes much less frequently.

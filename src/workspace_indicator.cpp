@@ -71,7 +71,7 @@ void workspace_indicator::on_change(int cid) {
         {
             auto sm = b;
             sm.shrink(1.0);
-            render_drop_shadow(rid, 1, {0, 0, 0, 1.0}, h * .5, 2.0, sm);
+            render_drop_shadow(rid, 1, {0, 0, 0, .35f}, h * .5, 2.0, sm, std::round(10 * s));
 
             // Each dot occupies an h-by-h cell, including the rounded end caps.
             rect(b, {.14, .14, .14, 1}, 0, h * .5, 2.0, true);
@@ -93,7 +93,9 @@ void workspace_indicator::on_change(int cid) {
             
             start_x += h;
         }
-        hypriso->damage_box(b.scale(1.0 / s));
+        auto damage = b.scale(1.0 / s);
+        damage.grow(12); // include the drop shadow
+        hypriso->damage_box(damage);
     };
 
     later(650.0f, [indicator](Timer *) {

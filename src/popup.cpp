@@ -244,7 +244,7 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
             renderfix
             auto pud = (PopupUserData *) c->user_data;
             auto b = c->real_bounds;
-            render_drop_shadow(rid, 1.0, {0, 0, 0, 1.0f}, 7 * s, 2.0f, b);
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .30f}, 7 * s, 2.0f, b, std::round(16 * s));
             rect(b, {1, 1, 1, .75}, 0, 7 * s, 2.0, true);
         }
     };

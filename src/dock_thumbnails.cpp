@@ -289,7 +289,7 @@ void paint_preview(Container *actual_root, Container *c) {
         return;
 
     renderfix
-    render_drop_shadow(rid, 1.0, {0, 0, 0, .45}, std::round(12 * s), 2.0f, c->real_bounds, std::round(18 * s));
+    render_drop_shadow(rid, 1.0, {0, 0, 0, .40f}, std::round(12 * s), 2.0f, c->real_bounds, std::round(20 * s));
     rect(c->real_bounds, {.11, .11, .12, .92}, 0, std::round(12 * s), 2.0f, true);
     border(c->real_bounds, {1, 1, 1, .1}, std::max(1.0f, std::round(s)), 0, std::round(12 * s));
 }

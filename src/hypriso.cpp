@@ -3437,9 +3437,9 @@ hl.config({
 
         shadow = {
             enabled      = true,
-            range        = 4,
+            range        = 10,
             render_power = 2,
-            color        = 0x171a1a1a,
+            color        = 0x38000000,
         },
 
         blur = {
@@ -3903,12 +3903,188 @@ static void hook_use_shader() {
     }
 }
 
+// Replacement for Hyprland's shadow.glsl (served through hook_LoadShader).
+// Hyprland's version fades with pow(1 - d/range, power), which leaves a hard line
+// at the window edge, different curves on edges vs corners, and 8-bit banding.
+// This one is an analytic gaussian-blurred rounded rectangle (Evan Wallace's
+// "fast rounded rectangle shadows", generalised to superellipse corners) with dithering.
+// Same getShadow() signature/uniforms as upstream so shadow.frag works unchanged.
+static const char *mylar_shadow_glsl = R"#(#ifndef ALLOW_INCLUDES
+#define ALLOW_INCLUDES
+#extension GL_ARB_shading_language_include : enable
+#endif
+#ifndef SHADOW_GLSL
+#define SHADOW_GLSL
+
+#include "defines.h"
+#include "cm_helpers.glsl"
+#include "gradient.glsl"
+
+#define SHADOW_Y_SAMPLES 8
+#define SHADOW_PI        3.1415926535897932384626433832795
+
+float shadowLength(vec2 a, float roundingPower) {
+    return pow(pow(abs(a.x), roundingPower) + pow(abs(a.y), roundingPower), 1.0 / roundingPower);
+}
+
+vec2 shadowErf(vec2 x) {
+    // Abramowitz & Stegun 7.1.27, max error ~5e-4
+    vec2 s = sign(x);
+    vec2 a = abs(x);
+    x      = 1.0 + (0.278393 + (0.230389 + 0.078108 * (a * a)) * a) * a;
+    x *= x;
+    return s - s / (x * x);
+}
+
+float shadowGaussian(float x, float sigma) {
+    return exp(-(x * x) / (2.0 * sigma * sigma)) / (sqrt(2.0 * SHADOW_PI) * sigma);
+}
+
+// coverage of one row of the rounded rect, convolved with a gaussian in x (exact via erf)
+float roundedBoxShadowRow(float x, float y, float sigma, float corner, float roundingPower, vec2 halfSize) {
+    float delta  = min(halfSize.y - corner - abs(y), 0.0);
+    float curved = halfSize.x;
+
+    if (corner > 0.0) {
+        // superellipse corner: |dx/r|^p + |dy/r|^p = 1
+        float t = clamp(-delta / corner, 0.0, 1.0);
+        curved  = halfSize.x - corner + corner * pow(max(1.0 - pow(t, roundingPower), 0.0), 1.0 / roundingPower);
+    }
+
+    vec2 integral = 0.5 + 0.5 * shadowErf((x + vec2(-curved, curved)) * (sqrt(0.5) / sigma));
+    return integral.y - integral.x;
+}
+
+// rows are integrated numerically along y with gaussian weights
+float roundedBoxShadow(vec2 lower, vec2 upper, vec2 point, float sigma, float corner, float roundingPower) {
+    vec2 center   = (lower + upper) * 0.5;
+    vec2 halfSize = (upper - lower) * 0.5;
+    point -= center;
+
+    corner = clamp(corner, 0.0, min(halfSize.x, halfSize.y));
+
+    float low   = point.y - halfSize.y;
+    float high  = point.y + halfSize.y;
+    float start = clamp(-3.0 * sigma, low, high);
+    float end   = clamp(3.0 * sigma, low, high);
+
+    float step  = (end - start) / float(SHADOW_Y_SAMPLES);
+    float y     = start + step * 0.5;
+    float value = 0.0;
+
+    for (int i = 0; i < SHADOW_Y_SAMPLES; i++) {
+        value += roundedBoxShadowRow(point.x, point.y - y, sigma, corner, roundingPower, halfSize) * shadowGaussian(y, sigma) * step;
+        y += step;
+    }
+
+    return clamp(value, 0.0, 1.0);
+}
+
+// signed distance to a rounded rect (negative inside), superellipse corners
+float shadowRoundedRectSDF(vec2 point, vec2 lower, vec2 upper, float radius, float roundingPower) {
+    vec2 halfSize = (upper - lower) * 0.5;
+    radius        = clamp(radius, 0.0, min(halfSize.x, halfSize.y));
+    vec2 q        = abs(point - (lower + upper) * 0.5) - halfSize + radius;
+    vec2 qp       = max(q, 0.0);
+    float outside = (qp.x + qp.y > 0.0) ? shadowLength(qp, roundingPower) : 0.0;
+    return outside + min(max(q.x, q.y), 0.0) - radius;
+}
+
+// per-pixel noise in [-0.5, 0.5] (interleaved gradient noise) to break up 8-bit banding
+float shadowDither(vec2 fragCoord) {
+    return fract(52.9829189 * fract(dot(fragCoord, vec2(0.06711056, 0.00583715)))) - 0.5;
+}
+
+#if USE_MIRROR
+vec4[2]
+#else
+vec4
+#endif
+    getShadow(vec4 pixColor, vec4 colorSRGB, vec2 v_texcoord, float borderRadius, float roundingPower, vec2 topLeft, vec2 fullSize, float range, float shadowPower,
+              vec2 bottomRight, vec2 windowTopLeft, vec2 windowBottomRight, float windowRadius, int gradientLength, vec4 gradient[10], float angle, int gradient2Length,
+              vec4 gradient2[10], float angle2, float gradientLerp, float alpha
+#if USE_CM
+              ,
+              int srcTF
+#endif
+    ) {
+    vec2 pixCoord = fullSize * v_texcoord;
+
+    if (gradientLength > 0 || gradient2Length > 0)
+        pixColor = getColorForCoord(v_texcoord, gradientLength, gradient, angle, gradient2Length, gradient2, angle2, gradientLerp);
+
+    pixColor.a *= alpha;
+
+    // the caster (the window): the shadow box inset by range
+    vec2  casterLower = topLeft - vec2(borderRadius);
+    vec2  casterUpper = bottomRight + vec2(borderRadius);
+
+    float safeRange = max(range, 1.0);
+
+    // more power = faster falloff = tighter gaussian
+    float sigma = safeRange / (2.5 + 0.5 * clamp(shadowPower, 1.0, 4.0));
+
+    // grow the caster slightly so the shadow is still dense right at the window edge
+    // (~70% instead of 50%); its tail (spread + 3 sigma) still fits inside range
+    float spread = 0.5 * sigma;
+
+    float shadow = roundedBoxShadow(casterLower - vec2(spread), casterUpper + vec2(spread), pixCoord, sigma, borderRadius + spread, roundingPower);
+
+    // fade the last bit of the tail to exactly 0 at the quad edge so it never clips
+    float edgeDist = -shadowRoundedRectSDF(pixCoord, vec2(0.0), fullSize, borderRadius + range, roundingPower);
+    shadow *= smoothstep(0.0, max(sigma, 1.0), edgeDist);
+
+    pixColor.a *= shadow;
+
+    // optional cutout of the window itself, antialiased
+    if (windowBottomRight.x > windowTopLeft.x && windowBottomRight.y > windowTopLeft.y)
+        pixColor.a *= clamp(shadowRoundedRectSDF(pixCoord, windowTopLeft, windowBottomRight, windowRadius, roundingPower) + 0.5, 0.0, 1.0);
+
+    if (pixColor.a <= 0.0) {
+        discard;
+#if USE_MIRROR
+        vec4[2] pixColors;
+        pixColors[0] = pixColor;
+        pixColors[1] = pixColor;
+        return pixColors;
+#else
+        return pixColor;
+#endif
+    }
+
+    pixColor.a = clamp(pixColor.a + shadowDither(gl_FragCoord.xy) / 255.0, 0.0, 1.0);
+
+    // premultiply
+#if USE_CM
+    pixColor.rgb = toLinearRGB(pixColor.rgb, srcTF);
+    pixColor.rgb *= pixColor.a;
+    pixColor.rgb = fromLinearRGB(pixColor.rgb, srcTF);
+#else
+    pixColor.rgb *= pixColor.a;
+#endif
+
+#if USE_MIRROR
+    vec4[2] pixColors;
+    pixColors[0]   = pixColor;
+    pixColors[1]   = colorSRGB;
+    pixColors[1].a = pixColor.a;
+    pixColors[1].rgb *= pixColors[1].a;
+    return pixColors;
+#else
+    return pixColor;
+#endif
+}
+#endif
+)#";
+
 inline CFunctionHook* g_pLoadShader = nullptr;
 typedef std::string (*orLoadShader)(Render::CShaderLoader *, const std::string& filename);
 std::string hook_LoadShader(void *thisptr, const std::string& filename) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (filename == "shadow.glsl")
+        return mylar_shadow_glsl;
     if (filename == "rounding.glsl") {
         return (*(orLoadShader)g_pLoadShader->m_original)((Render::CShaderLoader *) thisptr, "corner_rounding.glsl");
     }
@@ -10334,9 +10510,10 @@ void render_drop_shadow(int mon, float const& a, RGBA b, float ROUNDINGBASE, flo
     }
     if (!pMonitor)
         return;
-    //CHyprColor colorb = CHyprColor(b.r, b.g, b.b, b.a);
-    CHyprColor colorb = CHyprColor(0.0, 0.0, 0.0, 0.1 * b.a);
-    const auto PSHADOWSIZE = size > 0 ? size : 3 * scale(mon);
+    CHyprColor colorb = CHyprColor(b.r, b.g, b.b, std::clamp(b.a, 0.0, 1.0));
+    if (colorb.a <= 0.0)
+        return;
+    const auto PSHADOWSIZE = size > 0 ? size : std::round(12 * scale(mon));
 
     drawDropShadow(pMonitor, a, colorb, ROUNDINGBASE, ROUNDINGPOWER, tocbox(fullB), PSHADOWSIZE, false);
 }

@@ -23,6 +23,8 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 
 #include <fontconfig/fontconfig.h>
 #include <filesystem>
+#include <random>
+#include <vector>
 
 void load_in_fonts() {
     //char *home = getenv("HOME");
@@ -43,6 +45,30 @@ void load_in_fonts() {
     FcConfigBuildFonts(now);
 }
 
+// Give a fresh install a wallpaper: pick a random bundled one if the user has none yet.
+void install_default_wallpaper() {
+    const char *home = getenv("HOME");
+    if (!home)
+        return;
+    std::error_code ec;
+    std::filesystem::path wall = std::filesystem::path(home) / ".config/mylar/wall.png";
+    if (std::filesystem::exists(wall, ec))
+        return;
+
+    std::vector<std::filesystem::path> candidates;
+    for (const auto &entry : std::filesystem::directory_iterator("/usr/share/mylardesktop/wallpapers", ec)) {
+        if (entry.is_regular_file(ec))
+            candidates.push_back(entry.path());
+    }
+    if (candidates.empty())
+        return;
+
+    std::random_device rd;
+    std::uniform_int_distribution<size_t> pick(0, candidates.size() - 1);
+    std::filesystem::create_directories(wall.parent_path(), ec);
+    std::filesystem::copy_file(candidates[pick(rd)], wall, std::filesystem::copy_options::skip_existing, ec);
+}
+
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When started as a plugin
 #ifdef TRACY_ENABLE
     TracyAppInfo("Mylar Desktop", 13);
@@ -53,6 +79,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
     settings::load_save_settings(false, set); // load
     settings::load_save_settings(true, set); // save
     load_in_fonts();
+    install_default_wallpaper();
 
     try {
         heart::begin();

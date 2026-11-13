@@ -2237,7 +2237,7 @@ void on_audio_change() {
     dock::change_in_audio();
 }
 
-static constexpr float dock_popup_shadow_size = 12.0f;
+static constexpr float dock_popup_shadow_size = 16.0f;
 
 static void damage_popup_shadow(const Bounds &bounds) {
     if (bounds.w <= 0 || bounds.h <= 0)
@@ -2293,7 +2293,7 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
             renderfix
             const auto radius = std::min(std::round(dock::popup_corner_radius * s),
                                          std::floor(std::min(c->real_bounds.w, c->real_bounds.h) * .5));
-            render_drop_shadow(rid, 1.0, {0, 0, 0, 0.2}, radius, 2.0, c->real_bounds, dock_popup_shadow_size * s);
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .30f}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
         };
         *datum<int>(c, "cid") = id; 
         *datum<int>(c, "parent_cid") = parent_id; 
