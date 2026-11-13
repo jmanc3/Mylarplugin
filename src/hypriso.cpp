@@ -2845,7 +2845,8 @@ void hook_onShadowRender(void* thisptr, Render::CRenderContext& ctx, PHLMONITOR 
     auto ptr = (CHyprDropShadowDecoration *) thisptr;
     
     static auto PSHADOWSIZE = CConfigValue<Hyprlang::INT>("decoration:shadow:range");
-    static auto PSHADOWS = CConfigValue<Hyprlang::INT>("decoration:shadow:enabled");
+    // decoration:shadow:enabled is a Bool option: writing through an INT ptr() overflows the heap value
+    static auto PSHADOWS = CConfigValue<Config::BOOL>("decoration:shadow:enabled");
 
     int before = *PSHADOWSIZE;
     bool before_shadows = *PSHADOWS;
@@ -2858,7 +2859,7 @@ void hook_onShadowRender(void* thisptr, Render::CRenderContext& ctx, PHLMONITOR 
             for (auto h : hyprwindows) {
                 if (h->w == w) {
                     if (hypriso->is_snapped(h->id)) {
-                        *PSHADOWS.ptr() = 0;
+                        *PSHADOWS.ptr() = false;
                     }
                 }
             }
@@ -9353,8 +9354,9 @@ void HyprIso::overwrite_defaults() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    *(CConfigValue<Config::FLOAT>("cursor:zoom_rigid").ptr()) = false;
-    *(CConfigValue<Config::INTEGER>("cursor:zoom_disable_aa").ptr()) = true;
+    // Both options are Bool: writing them through a FLOAT/INTEGER ptr() overflows the heap value
+    *(CConfigValue<Config::BOOL>("cursor:zoom_rigid").ptr()) = false;
+    *(CConfigValue<Config::BOOL>("cursor:zoom_disable_aa").ptr()) = true;
     //g_pConfigManager->handleWindowRule("windowrulev2", "float, class:.*");
 }
 
