@@ -4271,6 +4271,17 @@ static void hook_rawWindowFocus(Desktop::CFocusState* thisptr, PHLWINDOW pWindow
             return;
     }
 
+    // A drag-and-drop started from a window above a fullscreen window must not
+    // hand focus to that fullscreen window as the cursor leaves its source:
+    // that would raise the fullscreen window and hide the dock mid-drag.
+    if (pWindow && pWindow != thisptr->m_focusWindow && PROTO::data && PROTO::data->dndActive() &&
+        (reason == Desktop::FOCUS_REASON_FFM || (reason & Desktop::FOCUS_REASON_CLICK))) {
+        const auto current = thisptr->m_focusWindow.lock();
+        if (current && Desktop::View::validMapped(current) && current->m_workspace == pWindow->m_workspace &&
+            Fullscreen::controller()->isFullscreen(pWindow, Fullscreen::FSMODE_FULLSCREEN) && !Fullscreen::controller()->isFullscreen(current))
+            return;
+    }
+
     static auto PFOLLOWMOUSE        = CConfigValue<Config::INTEGER>("input:follow_mouse");
     static auto PSPECIALFALLTHROUGH = CConfigValue<Config::INTEGER>("input:special_fallthrough");
 
@@ -11200,7 +11211,8 @@ static bool window_focused_over_fullscreen(PHLMONITOR pMonitor) {
     if (!fs || Fullscreen::controller()->getFullscreenModes(fs).internal != Fullscreen::FSMODE_FULLSCREEN)
         return over = false;
     const auto focused = Desktop::focusState()->window();
-    if (!focused)
+    // A drag-and-drop in flight never changes the answer, whatever it hovers.
+    if (!focused || (PROTO::data && PROTO::data->dndActive()))
         return over;
     if (focused == fs || focused->m_monitor != pMonitor)
         return over = false;
