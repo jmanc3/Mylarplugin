@@ -2014,6 +2014,111 @@ static void on_server(pa_context *, const pa_server_info *i, void *) {
     sort();
 }
 
+// A by-index info reply can arrive after the REMOVE event for that object (pipewire-pulse batches
+// subscription events), which re-adds an object that no longer exists. To recover, every sink/source/card
+// change is followed by a full list query, and anything the server no longer reports is pruned.
+struct PaResync {
+    bool in_flight = false;
+    bool again = false;
+    std::vector<uint32_t> seen;
+};
+static PaResync pa_sink_resync;
+static PaResync pa_source_resync;
+
+static void pa_resync_sinks(pa_context *c);
+static void pa_resync_sources(pa_context *c);
+
+static void on_sink_resync(pa_context *c, const pa_sink_info *l, int eol, void *) {
+    if (eol == 0 && l) {
+        pa_sink_resync.seen.push_back(l->index);
+        on_sink(c, l, eol, nullptr);
+        return;
+    }
+    auto &seen = pa_sink_resync.seen;
+    auto was_seen = [&seen](uint32_t index) { return std::find(seen.begin(), seen.end(), index) != seen.end(); };
+    bool removed = false;
+    for (size_t i = 0; eol > 0 && i < audio_clients.size();) {
+        if (audio_clients[i]->is_master && !was_seen((uint32_t) audio_clients[i]->index)) {
+            delete audio_clients[i];
+            audio_clients.erase(audio_clients.begin() + (long) i);
+            removed = true;
+        } else {
+            i++;
+        }
+    }
+    if (eol > 0) {
+        std::lock_guard<std::mutex> lock(mixer_mutex);
+        for (size_t i = 0; i < mixer_nodes.size();) {
+            if (mixer_nodes[i]->info.kind == AudioNodeKind::Sink && !was_seen(mixer_nodes[i]->info.index)) {
+                mixer_delete_node(mixer_nodes[i]);
+                mixer_nodes.erase(mixer_nodes.begin() + (long) i);
+                mixer_changed();
+            } else {
+                i++;
+            }
+        }
+    }
+    if (removed) {
+        sort();
+        if (audio_change_callback)
+            audio_change_callback();
+    }
+    pa_sink_resync.in_flight = false;
+    if (pa_sink_resync.again)
+        pa_resync_sinks(c);
+}
+
+static void pa_resync_sinks(pa_context *c) {
+    if (pa_sink_resync.in_flight) {
+        pa_sink_resync.again = true;
+        return;
+    }
+    pa_sink_resync.again = false;
+    pa_sink_resync.seen.clear();
+    if (auto o = pa_context_get_sink_info_list(c, on_sink_resync, nullptr)) {
+        pa_sink_resync.in_flight = true;
+        pa_operation_unref(o);
+    }
+}
+
+static void on_source_resync(pa_context *c, const pa_source_info *l, int eol, void *) {
+    if (eol == 0 && l) {
+        pa_source_resync.seen.push_back(l->index);
+        on_mixer_source(c, l, eol, nullptr);
+        return;
+    }
+    if (eol > 0) {
+        auto &seen = pa_source_resync.seen;
+        std::lock_guard<std::mutex> lock(mixer_mutex);
+        for (size_t i = 0; i < mixer_nodes.size();) {
+            if (mixer_nodes[i]->info.kind == AudioNodeKind::Source &&
+                std::find(seen.begin(), seen.end(), mixer_nodes[i]->info.index) == seen.end()) {
+                mixer_delete_node(mixer_nodes[i]);
+                mixer_nodes.erase(mixer_nodes.begin() + (long) i);
+                mixer_changed();
+            } else {
+                i++;
+            }
+        }
+    }
+    pa_source_resync.in_flight = false;
+    if (pa_source_resync.again)
+        pa_resync_sources(c);
+}
+
+static void pa_resync_sources(pa_context *c) {
+    if (pa_source_resync.in_flight) {
+        pa_source_resync.again = true;
+        return;
+    }
+    pa_source_resync.again = false;
+    pa_source_resync.seen.clear();
+    if (auto o = pa_context_get_source_info_list(c, on_source_resync, nullptr)) {
+        pa_source_resync.in_flight = true;
+        pa_operation_unref(o);
+    }
+}
+
 // Callback function to handle volume events
 static void change_callback(pa_context *c, pa_subscription_event_type_t event_type, uint32_t index, void *userdata) {
     pa_subscription_event_type_t event_type_masked;
@@ -2044,6 +2149,8 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
                 }
                 pa_operation_unref(o);
             }
+            if (event_type_masked != PA_SUBSCRIPTION_EVENT_CHANGE)
+                pa_resync_sinks(c);
             break;
         }
         case PA_SUBSCRIPTION_EVENT_SINK_INPUT: {
@@ -2076,6 +2183,8 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
             } else if ((o = pa_context_get_source_info_by_index(c, index, on_mixer_source, userdata))) {
                 pa_operation_unref(o);
             }
+            if (event_type_masked != PA_SUBSCRIPTION_EVENT_CHANGE)
+                pa_resync_sources(c);
             break;
         }
         case PA_SUBSCRIPTION_EVENT_SOURCE_OUTPUT: {
@@ -2092,6 +2201,8 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
             } else if ((o = pa_context_get_card_info_by_index(c, index, on_mixer_card, userdata))) {
                 pa_operation_unref(o);
             }
+            pa_resync_sinks(c);
+            pa_resync_sources(c);
             break;
         }
         case PA_SUBSCRIPTION_EVENT_SERVER: {
@@ -2163,6 +2274,8 @@ static bool try_establishing_connection_with_pulseaudio() {
     pa_context_set_state_callback(context, [](pa_context *c, void *) {
         pa_context_state_t state = pa_context_get_state(c);
         if (state == PA_CONTEXT_READY) {
+            pa_sink_resync = PaResync();
+            pa_source_resync = PaResync();
             pa_context_set_subscribe_callback(c, change_callback, nullptr);
             auto mask = (pa_subscription_mask_t) (PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SINK_INPUT |
                                                   PA_SUBSCRIPTION_MASK_SOURCE | PA_SUBSCRIPTION_MASK_SOURCE_OUTPUT |

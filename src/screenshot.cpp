@@ -53,6 +53,8 @@ static int draw_bubble_corner = 0;
 static int draw_color_index = 0;
 static bool draw_picking_color = false; // the current press landed on a color box, so it doesn't draw
 static std::vector<Bounds> draw_color_boxes; // global logical bounds of the color boxes, from the last paint
+static Bounds draw_copy_button; // global logical bounds of the "Copy (Ctrl+C)" button, from the last paint
+static bool draw_pressing_copy = false; // the current press landed on the copy button
 static std::vector<DrawStrokes> draw_undo;
 static std::vector<DrawStrokes> draw_redo;
 static constexpr size_t DRAW_HISTORY_LIMIT = 100;
@@ -138,6 +140,11 @@ static int draw_color_box_at(float x, float y) {
             return i;
     }
     return -1;
+}
+
+static bool draw_copy_button_at(float x, float y) {
+    auto b = draw_copy_button;
+    return b.w > 0 && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
 static void draw_start_stroke(float x, float y) {
@@ -281,6 +288,8 @@ void actual_open_screenshot_tool() {
     draw_color_index = 0;
     draw_picking_color = false;
     draw_color_boxes.clear();
+    draw_copy_button = Bounds();
+    draw_pressing_copy = false;
     draw_undo.clear();
     draw_redo.clear();
     
@@ -724,14 +733,25 @@ void actual_open_screenshot_tool() {
                     const float palette_gap = std::round(8.0f * s);
                     Bounds palette{0, 0, palette_pad * 2 + box * DRAW_PALETTE_SIZE + box_gap * (DRAW_PALETTE_SIZE - 1), bubble.h};
 
+                    // A "Copy (Ctrl+C)" button on the other side of the bubble from the color boxes (toward the screen edge).
+                    auto copy_text = gen_text_texture(set->font, "Copy (Ctrl+C)", 14.0f * s, {.96, .97, 1, .96});
+                    Bounds copy_btn{0, 0, std::round((float) copy_text.w + 26.0f * s), bubble.h};
+
                     auto place_bubble = [&](int corner) {
                         const bool right_side = corner == 0 || corner == 1;
-                        const float x = right_side ? (mb.w * s - bubble.w - margin) : margin;
-                        const float y = (corner == 1 || corner == 2) ? (mb.h * s - bubble.h - margin) : margin;
-                        bubble.x = std::round(x);
-                        bubble.y = std::round(y);
-                        palette.x = right_side ? bubble.x - palette_gap - palette.w : bubble.x + bubble.w + palette_gap;
-                        palette.y = bubble.y;
+                        const float y = std::round((corner == 1 || corner == 2) ? (mb.h * s - bubble.h - margin) : margin);
+                        if (right_side) {
+                            copy_btn.x = std::round(mb.w * s - copy_btn.w - margin);
+                            bubble.x = copy_btn.x - palette_gap - bubble.w;
+                            palette.x = bubble.x - palette_gap - palette.w;
+                        } else {
+                            copy_btn.x = std::round(margin);
+                            bubble.x = copy_btn.x + copy_btn.w + palette_gap;
+                            palette.x = bubble.x + bubble.w + palette_gap;
+                        }
+                        bubble.y = y;
+                        palette.y = y;
+                        copy_btn.y = y;
                     };
                     place_bubble(draw_bubble_corner);
 
@@ -750,6 +770,19 @@ void actual_open_screenshot_tool() {
                         draw_texture(text, {bubble.x + (bubble.w - text.w) * .5, bubble.y + (bubble.h - text.h) * .5,
                                             (double) text.w, (double) text.h});
                         free_text_texture(text.id);
+                    }
+
+                    const bool copy_hovered = mx >= copy_btn.x && mx <= copy_btn.x + copy_btn.w && my >= copy_btn.y && my <= copy_btn.y + copy_btn.h;
+                    draw_copy_button = {mb.x + copy_btn.x / s, mb.y + copy_btn.y / s, copy_btn.w / s, copy_btn.h / s};
+                    RGBA copy_bg = copy_hovered ? RGBA(.2, .2, .24, .92) : RGBA(.08, .08, .1, .84);
+                    if (copy_hovered && draw_pressing_copy)
+                        copy_bg = RGBA(.28, .28, .33, .95);
+                    rect(copy_btn, copy_bg, 0, copy_btn.h * .5f, 2, true);
+                    border(copy_btn, {1, 1, 1, copy_hovered ? .32f : .16f}, std::max(1.0f, s), 0, copy_btn.h * .5f, 2);
+                    if (copy_text.id != -1) {
+                        draw_texture(copy_text, {copy_btn.x + (copy_btn.w - copy_text.w) * .5, copy_btn.y + (copy_btn.h - copy_text.h) * .5,
+                                                 (double) copy_text.w, (double) copy_text.h});
+                        free_text_texture(copy_text.id);
                     }
 
                     rect(palette, {.08, .08, .1, .84}, 0, palette.h * .5f, 2, true);
@@ -809,6 +842,14 @@ void actual_open_screenshot_tool() {
             return;
 
         draw_picking_color = false;
+        draw_pressing_copy = false;
+        if (draw_copy_button_at(actual_root->mouse_initial_x, actual_root->mouse_initial_y)) {
+            // Copies on release (see when_clicked), so the press never starts a stroke.
+            draw_picking_color = true;
+            draw_pressing_copy = c->state.mouse_button_pressed == BTN_LEFT;
+            damage_all();
+            return;
+        }
         int box = draw_color_box_at(actual_root->mouse_initial_x, actual_root->mouse_initial_y);
         if (box != -1) {
             draw_picking_color = true;
@@ -842,6 +883,14 @@ void actual_open_screenshot_tool() {
             draw_active = false;
             draw_erasing = false;
             draw_picking_color = false;
+            const bool copy = draw_pressing_copy && draw_copy_button_at(actual_root->mouse_current_x, actual_root->mouse_current_y);
+            draw_pressing_copy = false;
+            if (copy) {
+                copy_screenshot_to_clipboard(false, Bounds());
+                later_immediate([](Timer *) {
+                    screenshot_tool::close();
+                });
+            }
             return;
         }
         if (mode == 2) {
@@ -924,6 +973,7 @@ void actual_open_screenshot_tool() {
             draw_active = false;
             draw_erasing = false;
             draw_picking_color = false;
+            draw_pressing_copy = false;
             damage_all();
             return;
         }

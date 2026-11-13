@@ -11190,13 +11190,32 @@ void add_mylar_gesture() {
     HyprlandAPI::addConfigKeyword(globals->api, "mylar-gesture", ::mylarGestureKeyword, {});
 }
 
+// True while some other window on the monitor's fullscreen workspace holds
+// focus, e.g. after alt-tabbing away from a fullscreen game. Focus on nothing
+// (the dock itself was clicked) keeps the previous answer.
+static bool window_focused_over_fullscreen(PHLMONITOR pMonitor) {
+    static std::unordered_map<MONITORID, bool> previous;
+    bool& over = previous[pMonitor->m_id];
+    const auto fs = Fullscreen::controller()->getFullscreenWindow(pMonitor, true);
+    if (!fs || Fullscreen::controller()->getFullscreenModes(fs).internal != Fullscreen::FSMODE_FULLSCREEN)
+        return over = false;
+    const auto focused = Desktop::focusState()->window();
+    if (!focused)
+        return over;
+    if (focused == fs || focused->m_monitor != pMonitor)
+        return over = false;
+    return over = focused->m_workspace == fs->m_workspace || mw_pinned(focused);
+}
+
 // A fullscreen window fades the top layers (the dock) out and makes them
-// unfocusable. Overview and show desktop hide that window, so the top layers
-// are lifted above fullscreen for as long as either view is up. The core
-// drops the flag whenever fullscreen state changes, so it is reapplied per frame.
+// unfocusable. Overview and show desktop hide that window, and a window
+// focused above it means the user left it, so the top layers are lifted above
+// fullscreen for as long as any of those hold. The core drops the flag
+// whenever fullscreen state changes, so it is reapplied per frame.
 static void sync_top_layers_over_fullscreen(PHLMONITOR pMonitor) {
     static std::vector<PHLLSREF> lifted;
-    const bool want = overview::is_showing() || show_desktop::is_opened();
+    const bool over = window_focused_over_fullscreen(pMonitor);
+    const bool want = over || overview::is_showing() || show_desktop::is_opened();
     if (!want && lifted.empty())
         return;
 
@@ -11217,18 +11236,21 @@ static void sync_top_layers_over_fullscreen(PHLMONITOR pMonitor) {
         return;
     }
 
-    for (auto const& ref : lifted) {
+    // Release only this monitor's layers; other monitors decide for themselves.
+    std::erase_if(lifted, [&](const auto& ref) {
         const auto ls = ref.lock();
         if (!ls)
-            continue;
-        ls->m_flags &= ~Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
+            return true;
         const auto m = ls->m_monitor.lock();
+        if (m && m != pMonitor)
+            return false;
+        ls->m_flags &= ~Desktop::View::LAYER_FLAG_ABOVE_FULLSCREEN;
         if (!m || ls->m_layer != ZWLR_LAYER_SHELL_V1_LAYER_TOP)
-            continue;
+            return true;
         const bool covered = Fullscreen::controller()->hasFullscreen(m, true) && Fullscreen::controller()->getFullscreenModes(m, true).internal == Fullscreen::FSMODE_FULLSCREEN;
         *ls->alpha()[Desktop::View::LS_ALPHA_FADE] = covered ? 0.F : 1.F;
-    }
-    lifted.clear();
+        return true;
+    });
 }
 
 //  We add 2 more render stages
