@@ -5342,6 +5342,23 @@ static bool saudio_refresh(SettingsAudioPage *page) {
     return redraw;
 }
 
+// If the startup connection attempt failed (e.g. the sound server wasn't up yet), nothing else
+// retries it until the dock volume button is used; do the same here for the first 40 seconds
+// after the page is opened.
+static long saudio_connect_deadline_ms = 0;
+
+static void saudio_ensure_connected() {
+    static long last_attempt_ms = 0;
+    auto now = get_current_time_in_ms();
+    if (audio_running || now > saudio_connect_deadline_ms || now - last_attempt_ms < 1000)
+        return;
+    last_attempt_ms = now;
+    main_thread([]() {
+        if (!audio_running)
+            audio_start();
+    });
+}
+
 static void saudio_watch(unsigned generation) {
     windowing::timer(settings_app, 33, [generation](void *) {
         if (!settings_app || !settings_mylar)
@@ -5352,6 +5369,8 @@ static void saudio_watch(unsigned generation) {
             auto page = settings_audio;
             if (!page || page->generation != generation)
                 return; // Page left or rebuilt; stop polling.
+            if (page->backend.empty())
+                saudio_ensure_connected();
             redraw = saudio_refresh(page);
         }
         if (redraw)
@@ -5496,6 +5515,8 @@ static void fill_audio_settings(Container *root) {
 
     // The previous page (if any) was deleted above and stopped its meters.
     settings_audio = page;
+    saudio_connect_deadline_ms = get_current_time_in_ms() + 40000;
+    saudio_ensure_connected();
     saudio_refresh(page);
     audio_mixer_meters(true);
     saudio_watch(page->generation);

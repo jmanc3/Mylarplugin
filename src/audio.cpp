@@ -446,7 +446,7 @@ struct MixerCard {
     // PipeWire
     pw_device *pw_proxy = nullptr;
     spa_hook pw_listener = {};
-    bool pw_subscribed = false;
+    std::unordered_map<uint32_t, uint32_t> pw_param_flags; // param id -> last seen SPA_PARAM_INFO flags
     std::vector<std::pair<int, AudioProfileInfo>> pw_profiles;
     int pw_active_profile = -1;
     std::vector<MixerPwRoute> pw_routes;
@@ -1174,7 +1174,9 @@ static void mixer_pw_device_info(void *data, const pw_device_info *info) {
     if (!info)
         return;
     std::lock_guard<std::mutex> lock(mixer_mutex);
-    if (info->props) {
+    // Updates only carry the parts in change_mask; a params-only update (e.g. after a profile
+    // switch) comes with an empty props dict, which must not wipe the name and description.
+    if ((info->change_mask & PW_DEVICE_CHANGE_MASK_PROPS) && info->props) {
         auto get = [info](const char *key) -> std::string {
             const char *v = spa_dict_lookup(info->props, key);
             return v ? v : "";
@@ -1189,10 +1191,37 @@ static void mixer_pw_device_info(void *data, const pw_device_info *info) {
         if (c->info.icon_name.empty())
             c->info.icon_name = "audio-card";
     }
-    if (!c->pw_subscribed) {
-        c->pw_subscribed = true;
-        uint32_t ids[] = {SPA_PARAM_EnumProfile, SPA_PARAM_Profile, SPA_PARAM_EnumRoute, SPA_PARAM_Route};
-        pw_device_subscribe_params(c->pw_proxy, ids, SPA_N_ELEMENTS(ids));
+    // PipeWire doesn't push new param values to us when they change; it toggles the SERIAL bit
+    // in that param's info flags. Re-enumerate every param whose flags changed (or that we've
+    // never read), dropping the stale values first: switching profiles replaces the whole set
+    // of routes, and the "off" profile has no active routes at all.
+    if (info->change_mask & PW_DEVICE_CHANGE_MASK_PARAMS) {
+        bool cleared = false;
+        for (uint32_t i = 0; i < info->n_params; i++) {
+            auto id = info->params[i].id;
+            auto flags = info->params[i].flags;
+            if (id != SPA_PARAM_EnumProfile && id != SPA_PARAM_Profile && id != SPA_PARAM_EnumRoute &&
+                id != SPA_PARAM_Route)
+                continue;
+            if (!(flags & SPA_PARAM_INFO_READ))
+                continue;
+            auto it = c->pw_param_flags.find(id);
+            if (it != c->pw_param_flags.end() && it->second == flags)
+                continue;
+            c->pw_param_flags[id] = flags;
+            if (id == SPA_PARAM_EnumProfile)
+                c->pw_profiles.clear();
+            else if (id == SPA_PARAM_EnumRoute)
+                c->pw_routes.clear();
+            else if (id == SPA_PARAM_Route)
+                c->pw_active_routes.clear();
+            cleared = true;
+            pw_device_enum_params(c->pw_proxy, 0, id, 0, UINT32_MAX, nullptr);
+        }
+        if (cleared) {
+            mixer_pw_card_refresh(c);
+            return;
+        }
     }
     mixer_changed();
 }
@@ -2641,8 +2670,10 @@ static bool try_establishing_connection_with_pipewire() {
 
     ready = audio_running && pw_initial_sync_done;
     pw_thread_loop_unlock(pw_thread_loop_instance);
-    if (!ready)
+    if (!ready) {
         cleanup_pipewire_state();
+        audio_running = false;
+    }
     return ready;
 }
 
