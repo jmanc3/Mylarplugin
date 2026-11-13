@@ -11219,15 +11219,26 @@ static bool window_focused_over_fullscreen(PHLMONITOR pMonitor) {
     return over = focused->m_workspace == fs->m_workspace || mw_pinned(focused);
 }
 
+// True while a top layer on the monitor has a popup open, e.g. the dock's
+// applications menu opened from its shortcut over a fullscreen window.
+static bool top_layer_popup_open(PHLMONITOR pMonitor) {
+    for (auto const& ref : pMonitor->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP]) {
+        const auto ls = ref.lock();
+        if (ls && ls->popupMappedTreeSize() > 0)
+            return true;
+    }
+    return false;
+}
+
 // A fullscreen window fades the top layers (the dock) out and makes them
 // unfocusable. Overview and show desktop hide that window, and a window
-// focused above it means the user left it, so the top layers are lifted above
+// focused above it or an open popup of a top layer means the user left it, so the top layers are lifted above
 // fullscreen for as long as any of those hold. The core drops the flag
 // whenever fullscreen state changes, so it is reapplied per frame.
 static void sync_top_layers_over_fullscreen(PHLMONITOR pMonitor) {
     static std::vector<PHLLSREF> lifted;
     const bool over = window_focused_over_fullscreen(pMonitor);
-    const bool want = over || overview::is_showing() || show_desktop::is_opened();
+    const bool want = over || overview::is_showing() || show_desktop::is_opened() || top_layer_popup_open(pMonitor);
     if (!want && lifted.empty())
         return;
 
