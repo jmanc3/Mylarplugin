@@ -61,6 +61,42 @@ static RGBA color_titlebar_text_unfocused() {
     static RGBA default_color("303030ff");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_unfocused_text_color", default_color);
 }
+static float titlebar_unfocus_fade_ms() {
+    return 350;
+}
+
+static RGBA lerp_rgba(const RGBA &from, const RGBA &to, float t) {
+    return RGBA(from.r + (to.r - from.r) * t, from.g + (to.g - from.g) * t,
+                from.b + (to.b - from.b) * t, from.a + (to.a - from.a) * t);
+}
+
+// 0 = fully active colors, 1 = fully inactive colors. Becoming active is
+// instant; losing focus fades from active to inactive over
+// titlebar_unfocus_fade_ms, requesting damage until the fade completes.
+static float unfocus_amount(Container *client, int cid) {
+    auto was_focused = datum<bool>(client, "titlebar_was_focused");
+    auto unfocus_start = datum<long>(client, "titlebar_unfocus_start");
+    long now = get_current_time_in_ms();
+    if (hypriso->has_focus(cid)) {
+        *was_focused = true;
+        return 0.0f;
+    }
+    if (*was_focused) {
+        *was_focused = false;
+        *unfocus_start = now;
+    }
+    float dur = titlebar_unfocus_fade_ms();
+    if (dur <= 0)
+        return 1.0f;
+    float t = (now - *unfocus_start) / dur;
+    if (t >= 1.0f)
+        return 1.0f;
+    if (t < 0.0f)
+        t = 0.0f;
+    request_damage(actual_root, client);
+    return t;
+}
+
 static RGBA titlebar_button_bg_hovered_color() {
     static RGBA default_color("rgba(ff0000ff)");
     return hypriso->get_varcolor("plugin:mylardesktop:titlebar_button_bg_hovered_color", default_color);
@@ -443,14 +479,23 @@ void paint_button(Container *actual_root, Container *c, std::string name, std::s
             rect(b, color, mask, hypriso->get_rounding(cid) * s, 2.0f);
         }
 
-        auto texture_info = focused;
-        if (!hypriso->has_focus(cid))
-            texture_info = unfocused;
-        if (is_close && c->state.mouse_pressing || c->state.mouse_hovering)
-            texture_info = closed;
-        if (texture_info->id != -1) {
-            clip(to_parent(root, c), s);
-            draw_texture(*texture_info, center_x(c, texture_info->w), center_y(c, texture_info->h), a);
+        if (is_close && c->state.mouse_pressing || c->state.mouse_hovering) {
+            if (closed->id != -1) {
+                clip(to_parent(root, c), s);
+                draw_texture(*closed, center_x(c, closed->w), center_y(c, closed->h), a);
+            }
+        } else {
+            // Draw the inactive icon fully opaque underneath and fade the active one
+            // over it; fading both would let the background show through mid-fade.
+            float t = unfocus_amount(client, cid);
+            if (t > 0.0f && unfocused->id != -1) {
+                clip(to_parent(root, c), s);
+                draw_texture(*unfocused, center_x(c, unfocused->w), center_y(c, unfocused->h), a);
+            }
+            if (t < 1.0f && focused->id != -1) {
+                clip(to_parent(root, c), s);
+                draw_texture(*focused, center_x(c, focused->w), center_y(c, focused->h), a * (1.0f - t));
+            }
         }
     }
 }
@@ -529,11 +574,10 @@ void paint_titlebar(Container *actual_root, Container *c) {
             unfocused = get_cached_texture(root, client, std::to_string(rid) + "_title_unfocused", set->font,
                 title_text, color_titlebar_textunfo, titlebar_text);
             
-            auto texture_info = focused;
-            if (!hypriso->has_focus(cid))
-                texture_info = unfocused;
- 
-            if (texture_info->id != -1) {
+            float t = unfocus_amount(client, cid);
+            auto draw_title = [&](TextureInfo *texture_info, float alpha) {
+                if (texture_info->id == -1 || alpha <= 0.0f)
+                    return;
                 auto overflow = std::max((c->real_bounds.h - texture_info->h), 0.0);
                 if (icon_width != 0)
                     overflow = icon_width + 16 * s;
@@ -542,9 +586,14 @@ void paint_titlebar(Container *actual_root, Container *c) {
                 if (clip_w > 0) {
                     clip(to_parent(root, c), s);
                     draw_texture(*texture_info, 
-                        c->real_bounds.x + overflow, center_y(c, texture_info->h), a, clip_w);
+                        c->real_bounds.x + overflow, center_y(c, texture_info->h), alpha, clip_w);
                 }
-            }
+            };
+            // Inactive text fully opaque underneath, active text fading out on top;
+            // fading both would let the background show through mid-fade.
+            if (t > 0.0f)
+                draw_title(unfocused, a);
+            draw_title(focused, a * (1.0f - t));
         }
     }
 }
@@ -573,9 +622,7 @@ void create_titlebar(Container *root, Container *parent) {
 
             auto a = *datum<float>(client, "titlebar_alpha");
             
-            auto titlebar_color = color_titlebar_focused();
-            if (!hypriso->has_focus(cid))
-                titlebar_color = color_titlebar_unfocused();
+            auto titlebar_color = lerp_rgba(color_titlebar_focused(), color_titlebar_unfocused(), unfocus_amount(client, cid));
             titlebar_color.a *= a;
 
             auto bounds = c->real_bounds;
@@ -835,6 +882,14 @@ void titlebar::on_activated(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    static int previous_active = -1;
+    // Repaint the window that lost focus so its fade to inactive colors starts now
+    if (previous_active != id) {
+        if (auto c = get_cid_container(previous_active)) {
+            request_damage(actual_root, c);
+        }
+    }
+    previous_active = id;
     if (auto c = get_cid_container(id)) {
         request_damage(actual_root, c);
     }
