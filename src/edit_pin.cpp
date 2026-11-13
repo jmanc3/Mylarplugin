@@ -963,6 +963,7 @@ static void start_edit_pin(std::string stacking_rule, std::string icon, std::str
     windowing::main_loop(app);
     
     cleanup_cached_pango_fonts();
+    drawing::cleanup_thread_resources();
 }
 
 void edit_pin::open(std::string stacking_rule, std::string icon, std::string command) {

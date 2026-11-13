@@ -49,6 +49,11 @@ release: $(OUTPUT)
 $(OUTPUT): $(OBJECT_FILES)
 	@echo "Linking $@"
 	$(CXX) -shared $^ -o $@ $(PKG_LIBS) -lrt
+	@# A thread_local with a non-trivial destructor makes glibc keep the plugin
+	@# mapped after "hyprctl plugin unload", so the next load mixes old and new code.
+	@if nm -D $@ | grep -q __cxa_thread_atexit; then \
+		echo "error: $@ registers thread_local destructors (use trivially destructible thread_locals)"; \
+		rm -f $@; exit 1; fi
 
 # --- Compile step ---
 out/%.o: %.cpp

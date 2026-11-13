@@ -57,26 +57,45 @@ void invalidate_surface(cairo_surface_t *surface) {
     cairo_surface_set_user_data(surface, &token_key, nullptr, nullptr);
 }
 
+// These caches are plain thread_local pointers on purpose: a thread_local with a
+// non-trivial destructor registers a thread-exit destructor, and glibc refuses to
+// unload this plugin while any live thread (e.g. the compositor thread, which
+// reaches scratch_cairo() through get_cached_pango_font) has one pending. That
+// left the old code mapped across "hyprctl plugin unload" and mixed it with the
+// next load. Threads release them with cleanup_thread_resources().
+namespace {
+struct Scratch {
+    cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    cairo_t *cr = cairo_create(surface);
+    ~Scratch() {
+        cairo_destroy(cr);
+        cairo_surface_destroy(surface);
+    }
+};
+thread_local Scratch *scratch = nullptr;
+thread_local uint32_t placeholder_pixel = 0;
+thread_local Context *placeholder = nullptr;
+}
+
 cairo_t *scratch_cairo() {
     // ARGB32 keeps the font options (and therefore metrics) identical to the
     // window buffers the layouts were historically created against.
-    struct Scratch {
-        cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
-        cairo_t *cr = cairo_create(surface);
-        ~Scratch() {
-            cairo_destroy(cr);
-            cairo_surface_destroy(surface);
-        }
-    };
-    thread_local Scratch scratch;
-    return scratch.cr;
+    if (!scratch)
+        scratch = new Scratch;
+    return scratch->cr;
 }
 
 Context *placeholder_context() {
-    thread_local uint32_t pixel = 0;
-    thread_local std::unique_ptr<Context> context =
-        create_cairo_context(reinterpret_cast<unsigned char *>(&pixel), 1, 1, 4);
-    return context.get();
+    if (!placeholder)
+        placeholder = create_cairo_context(reinterpret_cast<unsigned char *>(&placeholder_pixel), 1, 1, 4).release();
+    return placeholder;
+}
+
+void cleanup_thread_resources() {
+    delete placeholder;
+    placeholder = nullptr;
+    delete scratch;
+    scratch = nullptr;
 }
 
 std::string layout_key(PangoLayout *layout) {

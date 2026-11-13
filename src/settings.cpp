@@ -781,19 +781,35 @@ static void drawRoundedRect(drawing::Context *cr, double x, double y, double wid
  * radii (popups, drop-down buttons). The frame is rasterized once into a small
  * image surface per (size, radius, colors) and blitted, so repaints stay cheap.
  */
+struct SmoothFrameKey {
+    int w, h;
+    int fx, fy; // sub-pixel offset, 1/8th px
+    int radius, border; // 1/8th px
+    uint32_t fill, stroke;
+    bool operator==(const SmoothFrameKey &) const = default;
+};
+struct SmoothFrameEntry {
+    SmoothFrameKey key;
+    cairo_surface_t *surface;
+};
+// A plain pointer: a thread_local with a destructor would keep the plugin from
+// unloading while its thread is alive. Freed by cleanup_smooth_frames().
+static thread_local std::vector<SmoothFrameEntry> *smooth_frames = nullptr;
+
+static void cleanup_smooth_frames() {
+    if (!smooth_frames)
+        return;
+    for (auto &entry : *smooth_frames)
+        cairo_surface_destroy(entry.surface);
+    delete smooth_frames;
+    smooth_frames = nullptr;
+}
+
 static void paint_smooth_frame(drawing::Context *cr, Bounds b, double radius, RGBA fill, RGBA border, double border_width = 1.0) {
-    struct FrameKey {
-        int w, h;
-        int fx, fy; // sub-pixel offset, 1/8th px
-        int radius, border; // 1/8th px
-        uint32_t fill, stroke;
-        bool operator==(const FrameKey &) const = default;
-    };
-    struct FrameEntry {
-        FrameKey key;
-        cairo_surface_t *surface;
-    };
-    thread_local std::vector<FrameEntry> cache;
+    using FrameKey = SmoothFrameKey;
+    if (!smooth_frames)
+        smooth_frames = new std::vector<SmoothFrameEntry>;
+    auto &cache = *smooth_frames;
 
     auto pack = [](RGBA c) {
         auto ch = [](double v) { return (uint32_t) std::lround(std::clamp(v, 0.0, 1.0) * 255); };
@@ -7057,7 +7073,9 @@ void actual_start() {
 
     windowing::main_loop(settings_app);
 
+    cleanup_smooth_frames();
     cleanup_cached_pango_fonts();
+    drawing::cleanup_thread_resources();
 
     settings_app = nullptr;
     settings_mylar = nullptr;

@@ -2650,6 +2650,7 @@ void dock_start(std::string monitor_name) {
     delete dock->window;
     delete dock;
     cleanup_cached_pango_fonts();
+    drawing::cleanup_thread_resources();
 }
 
 static int get_dock_alignment() {

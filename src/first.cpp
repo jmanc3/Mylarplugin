@@ -74,6 +74,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // The compositor thread outlives this plugin; workers release their own
     // caches when their rendering loops finish.
     cleanup_cached_pango_fonts();
+    drawing::cleanup_thread_resources();
 }
 
 void init_mylar(void* h) { // When started directly from hyprland

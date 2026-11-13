@@ -96,4 +96,9 @@ cairo_t *scratch_cairo();
 // A thread-local 1x1 throwaway drawing context. Windows hand it out until their
 // real context exists, so measuring code never sees a null context.
 Context *placeholder_context();
+
+// Frees the calling thread's scratch_cairo() and placeholder_context(). Every
+// thread that used them must call this before exiting, and the compositor
+// thread during plugin shutdown; they are lazily recreated if used again.
+void cleanup_thread_resources();
 } // namespace drawing

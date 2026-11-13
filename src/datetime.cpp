@@ -4,6 +4,7 @@
 #include "process.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -221,9 +222,11 @@ bool valid_timezone_id(const std::string &id) {
 // ---------------- Zone lookup ----------------
 
 const std::chrono::time_zone *zone_for(const std::string &id) {
-    thread_local std::string cached_id;
+    // Trivially destructible on purpose: a thread_local std::string registers a
+    // thread-exit destructor that keeps the plugin from unloading.
+    thread_local char cached_id[128];
     thread_local const std::chrono::time_zone *cached = nullptr;
-    if (cached && cached_id == id)
+    if (cached && id == cached_id)
         return cached;
     const std::chrono::time_zone *zone = nullptr;
     try {
@@ -235,8 +238,12 @@ const std::chrono::time_zone *zone_for(const std::string &id) {
             zone = nullptr;
         }
     }
-    cached_id = id;
-    cached = zone;
+    if (id.size() < sizeof(cached_id)) {
+        memcpy(cached_id, id.c_str(), id.size() + 1);
+        cached = zone;
+    } else {
+        cached = nullptr;
+    }
     return zone;
 }
 
