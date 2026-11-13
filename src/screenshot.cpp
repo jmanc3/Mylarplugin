@@ -733,7 +733,7 @@ void actual_open_screenshot_tool() {
                     const float palette_gap = std::round(8.0f * s);
                     Bounds palette{0, 0, palette_pad * 2 + box * DRAW_PALETTE_SIZE + box_gap * (DRAW_PALETTE_SIZE - 1), bubble.h};
 
-                    // A "Copy (Ctrl+C)" button on the other side of the bubble from the color boxes (toward the screen edge).
+                    // A "Copy (Ctrl+C)" button past the color boxes, on the far side from the bubble.
                     auto copy_text = gen_text_texture(set->font, "Copy (Ctrl+C)", 14.0f * s, {.96, .97, 1, .96});
                     Bounds copy_btn{0, 0, std::round((float) copy_text.w + 26.0f * s), bubble.h};
 
@@ -741,13 +741,13 @@ void actual_open_screenshot_tool() {
                         const bool right_side = corner == 0 || corner == 1;
                         const float y = std::round((corner == 1 || corner == 2) ? (mb.h * s - bubble.h - margin) : margin);
                         if (right_side) {
-                            copy_btn.x = std::round(mb.w * s - copy_btn.w - margin);
-                            bubble.x = copy_btn.x - palette_gap - bubble.w;
+                            bubble.x = std::round(mb.w * s - bubble.w - margin);
                             palette.x = bubble.x - palette_gap - palette.w;
+                            copy_btn.x = palette.x - palette_gap - copy_btn.w;
                         } else {
-                            copy_btn.x = std::round(margin);
-                            bubble.x = copy_btn.x + copy_btn.w + palette_gap;
+                            bubble.x = std::round(margin);
                             palette.x = bubble.x + bubble.w + palette_gap;
+                            copy_btn.x = palette.x + palette.w + palette_gap;
                         }
                         bubble.y = y;
                         palette.y = y;
