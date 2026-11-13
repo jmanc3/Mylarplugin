@@ -1984,6 +1984,33 @@ static void fill_root(Container *root) {
         };
     }
 
+    {
+        // Only shown while the dock's workspace is tiling, see update_tiling_menu.
+        auto info = simple_dock_item(root, ICON("\uE946"));
+        info->name = "tiling_info";
+        info->exists = false;
+        info->when_clicked = [](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            auto mylar = dock->window;
+            auto dpi = mylar->raw_window->dpi;
+
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 380, tiling_info_height(dock));
+
+            dock->tiling_info = open_mylar_popup(mylar, settings);
+            if (!dock->tiling_info)
+                return;
+            dock->tiling_info->root->on_closed = [](Container *root) {
+                auto dock = (Dock *) root->user_data;
+                dock->tiling_info = nullptr;
+            };
+            dock->tiling_info->root->user_data = dock;
+            dock->tiling_info->root->wanted_bounds.w = FILL_SPACE;
+            dock->tiling_info->root->wanted_bounds.h = FILL_SPACE;
+            fill_tiling_info_container(dock);
+            windowing::redraw(dock->tiling_info->raw_window);
+        };
+    }
+
     if (true) {
         auto active_settings = simple_dock_item(root, ICON("\uE9E9"));
         active_settings->when_clicked = paint {
@@ -2073,7 +2100,7 @@ static void fill_root(Container *root) {
             auto dpi = mylar->raw_window->dpi;
 
             RawWindowSettings settings = make_icon_anchored_popup_settings(
-                c, dpi, 420, 538);
+                c, dpi, 360, 320);
 
             dock->tiling = open_mylar_popup(mylar, settings);
             if (!dock->tiling)

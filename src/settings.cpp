@@ -511,6 +511,9 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "active_window_border_hint", &settings->active_window_border_hint);
     bind(int, "tiling_window_gap", &settings->tiling_window_gap);
     settings->tiling_window_gap = std::clamp(settings->tiling_window_gap, 0, 32);
+    bind(std::string, "tiling_layout", &settings->tiling_layout);
+    if (settings->tiling_layout != "Scrolling")
+        settings->tiling_layout = "Master";
 
     if (save) {
         for (const auto& workspace : settings->workspace_tiling)

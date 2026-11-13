@@ -5,6 +5,8 @@
 
 #include <atomic>
 #include <string>
+#include <utility>
+#include <vector>
 
 struct MylarWindow;
 struct Windows;
@@ -19,6 +21,9 @@ struct STilingMenuState {
     bool new_workspace_is_tiling = false;
     bool border_hint = true;
     int window_gap = 8;
+    std::string layout = "Master";
+    // Action and key pairs shown by the tiling info popup.
+    std::vector<std::pair<std::string, std::string>> shortcuts;
 };
 
 struct Dock : UserData {
@@ -54,6 +59,7 @@ struct Dock : UserData {
     unsigned long bluetooth_revision = 0;
 
     MylarWindow *tiling = nullptr;
+    MylarWindow *tiling_info = nullptr;
     STilingMenuState tiling_settings;
 
     MylarWindow *projection = nullptr;

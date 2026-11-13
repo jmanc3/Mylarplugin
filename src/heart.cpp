@@ -2044,7 +2044,10 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("toggle_layout", [](lua_State *) {
-        toggle_layout();
+        // Toggling reloads the Lua config, which must not happen inside this Lua call.
+        later(1, [](Timer *) {
+            toggle_layout();
+        });
         return 0;
     });
     hypriso->add_hyprctl_dispatcher("screenshot_tool", [](lua_State *) {
@@ -2293,7 +2296,7 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
             renderfix
             const auto radius = std::min(std::round(dock::popup_corner_radius * s),
                                          std::floor(std::min(c->real_bounds.w, c->real_bounds.h) * .5));
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .30f}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .036f}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
         };
         *datum<int>(c, "cid") = id; 
         *datum<int>(c, "parent_cid") = parent_id; 

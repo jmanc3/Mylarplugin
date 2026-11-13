@@ -153,6 +153,8 @@ struct ConfigSettings {
     bool new_workspace_is_tiling = false;
     bool active_window_border_hint = true;
     int tiling_window_gap = 8;
+    // Master or Scrolling.
+    std::string tiling_layout = "Master";
     std::vector<SWorkspaceTiling> workspace_tiling;
     std::vector<SShortcutOverride> shortcuts;
     std::vector<SCustomShortcut> custom_shortcuts;

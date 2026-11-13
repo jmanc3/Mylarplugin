@@ -3423,8 +3423,6 @@ hl.config({
 
         -- Please see https://wiki.hypr.land/Configuring/Advanced-and-Cool/Tearing/ before you turn this on
         allow_tearing = false,
-
-        layout = "master",
     },
 
     decoration = {
@@ -3509,14 +3507,22 @@ hl.config({
 })
 
 -- See https://wiki.hypr.land/Configuring/Layouts/Master-Layout/ for more
+-- Tuned to behave like dwm's tile layout: one master on the left taking 55%,
+-- new windows become the master and push the old master to the top of the stack.
 hl.config({
     master = {
         new_status = "master",
+        new_on_top = true,
+        new_on_active = "none",
         mfact = 0.55,
-        new_on_top = false,
         orientation = "left",
+        allow_small_split = false,
+        smart_resizing = false,
+        always_keep_position = false,
+        focus_master_on_close = false,
     },
 })
+
 
 -- See https://wiki.hypr.land/Configuring/Layouts/Scrolling-Layout/ for more
 hl.config({
@@ -3708,6 +3714,9 @@ hl.config({ input = { float_switch_override_focus = false } })
     base += "hl.config({ general = { col = { active_border = ";
     base += set->active_window_border_hint ? "\"rgba(a9a9a9aa)\"" : "\"rgba(595959aa)\"";
     base += " } } })\n\n";
+
+    const char *tiling_layout = set->tiling_layout == "Scrolling" ? "scrolling" : "master";
+    base += std::string("hl.config({ general = { layout = \"") + tiling_layout + "\" } })\n\n";
 
     const int window_gap = std::clamp(set->tiling_window_gap, 0, 32);
     base += "hl.config({ general = { gaps_in = " + std::to_string(window_gap)

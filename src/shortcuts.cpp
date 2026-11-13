@@ -87,6 +87,18 @@ static std::vector<ShortcutDefault> build_defaults() {
         {"layout_shrink_master", "Tiling: shrink main area", "SUPER + H", "hl.dsp.layout(\"mfact -0.05\")", ""},
         {"layout_grow_master", "Tiling: grow main area", "SUPER + L", "hl.dsp.layout(\"mfact +0.05\")", ""},
 
+        // Scrolling layout
+        {"scrolling_width_next", "Scrolling: next column width", "SUPER + R", "hl.dsp.layout(\"colresize +conf\")", ""},
+        {"scrolling_width_previous", "Scrolling: previous column width", "SUPER + SHIFT + R", "hl.dsp.layout(\"colresize -conf\")", ""},
+        {"scrolling_center", "Scrolling: center column", "SUPER + C", "hl.dsp.layout(\"center\")", ""},
+        {"scrolling_consume_previous", "Scrolling: move window into column on the left", "SUPER + bracketleft", "hl.dsp.layout(\"consume_or_expel prev\")", ""},
+        {"scrolling_consume_next", "Scrolling: move window into column on the right", "SUPER + bracketright", "hl.dsp.layout(\"consume_or_expel next\")", ""},
+        {"scrolling_swap_column_left", "Scrolling: move column left", "SUPER + CTRL + left", "hl.dsp.layout(\"swapcol l\")", ""},
+        {"scrolling_swap_column_right", "Scrolling: move column right", "SUPER + CTRL + right", "hl.dsp.layout(\"swapcol r\")", ""},
+        {"scrolling_full_width", "Scrolling: make column full width", "SUPER + F", "hl.dsp.layout(\"fit active\")", ""},
+        {"scrolling_fit_visible", "Scrolling: fit visible columns on screen", "SUPER + SHIFT + F", "hl.dsp.layout(\"fit visible\")", ""},
+        {"scrolling_promote", "Scrolling: move window into its own column", "SUPER + P", "hl.dsp.layout(\"promote\")", ""},
+
         // Scratchpad
         {"scratchpad_toggle", "Toggle scratchpad", "ALT + S", "hl.dsp.workspace.toggle_special(\"magic\")", ""},
         {"scratchpad_move", "Move window to scratchpad", "ALT + SHIFT + S", "hl.dsp.window.move({ workspace = \"special:magic\" })", ""},
