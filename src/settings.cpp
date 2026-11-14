@@ -256,6 +256,55 @@ static std::string trim(std::string s) {
     return s;
 }
 
+/*************************************************
+ *
+ * Search registration
+ *
+ * Every row that has a title tags its container (Container::uuid) with a key
+ * built from the section it's in and its title, so the search can find it
+ * on the live page to scroll to and flash. Rows built while a page is filled
+ * are also learned into the index, which keeps titles and descriptions of
+ * visited pages exactly as shown. The static index near the end of the file
+ * covers pages that weren't opened yet.
+ *
+ *************************************************/
+
+struct SearchEntry {
+    std::string page;        // Left tab label that opens the page
+    std::string section;     // Section title the row sits under
+    std::string title;
+    std::string description;
+    std::string keywords;    // Extra words people may search with, never shown
+    // Runs after the page is filled, before looking for the row (e.g. picking a sub tab).
+    std::function<void(Container *root)> after_open;
+};
+
+static std::string search_current_page;    // Page being filled, empty when none
+static std::string search_current_section; // Last section title seen while filling
+static std::vector<SearchEntry> search_learned;
+
+// Marks a container as an accordion whose hidden rows the search may unfold.
+static constexpr int search_accordion_type = 0x5ea4c;
+
+static std::string search_key(const std::string &section, const std::string &title) {
+    return "search:" + section + "\x1f" + title;
+}
+
+static void search_tag(Container *row, const std::string &title, const std::string &description, bool learn = true) {
+    if (!row || title.empty())
+        return;
+    row->uuid = search_key(search_current_section, title);
+    if (!learn || search_current_page.empty())
+        return;
+    for (auto &e : search_learned) {
+        if (e.page == search_current_page && e.section == search_current_section && e.title == title) {
+            e.description = description;
+            return;
+        }
+    }
+    search_learned.push_back({search_current_page, search_current_section, title, description, "", nullptr});
+}
+
 static std::string trim_newline(std::string s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(),
         [](unsigned char c){ return !std::iscntrl(c); }));
@@ -1054,6 +1103,7 @@ static Container *make_self_height_sized_parent(Container *parent) {
 }
 
 static void make_label_like(Container *parent, std::string title, std::string description, std::string icon = "") {
+    search_tag(parent, title, description);
     auto left = parent->child(FILL_SPACE, FILL_SPACE);
     //static float button_text_pad = 8; 
     left->when_paint = [title, description, icon](Container *root, Container *c) {
@@ -1119,6 +1169,8 @@ static void make_label_like(Container *parent, std::string title, std::string de
 
 static Container *make_section_title(Container *parent, std::string title) {
     auto section_title = parent->child(FILL_SPACE, FILL_SPACE);
+    search_current_section = trim(title);
+    search_tag(section_title, search_current_section, "");
     static float size = 13;
     section_title->pre_layout = [title](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -2375,6 +2427,7 @@ static Container *make_accordion(Container *parent, std::string title, std::stri
     auto data = new AccordionData;
     data->open = open;
     p->user_data = data;
+    p->custom_type = search_accordion_type;
     make_label_like(p, title, description, icon);
 
     auto right = p->child(FILL_SPACE, FILL_SPACE);
@@ -2452,6 +2505,8 @@ static void change_display_options(MonitorOption *m) {
     make_vert_space(padded_right, 20);
 
     make_section_title(padded_right, fz(" {}", m->name));
+    // Rows are the same for every monitor, so they're indexed under one name.
+    search_current_section = "Monitor";
 
     make_vert_space(padded_right, 10);
 
@@ -4099,6 +4154,8 @@ static void make_shortcut_row(Container *parent, int index) {
     auto row = parent->child(::hbox, FILL_SPACE, height);
     // Rows of the same kind form one rounded group; the filter can hide system rows.
     row->name = index < (int) sshortcut_rows.size() && sshortcut_rows[index].custom ? "custom_row" : "system_row";
+    if (index < (int) sshortcut_rows.size())
+        search_tag(row, sshortcut_rows[index].shortcut.name, sshortcut_rows[index].keys);
     // The page container is only viewport tall and moves with the scroll.
     row->parent_bounds_limit_input_bounds = false;
     // Stay hovered over the children too, so custom rows can swap name for command.
@@ -5424,6 +5481,7 @@ static void fill_audio_settings(Container *root) {
     };
     for (int i = 0; i < 5; i++) {
         auto tab = tabs->child(FILL_SPACE, FILL_SPACE);
+        search_tag(tab, saudio_tab_names[i], "", false);
         tab->when_paint = [i](Container *root, Container *c) {
             auto window = swifi_window(root);
             auto cr = window->drawing_context;
@@ -5620,6 +5678,8 @@ static Container *sdt_row(Container *parent, SdtRowSpec spec, bool is_first, boo
     auto spec_ptr = std::make_shared<SdtRowSpec>(std::move(spec));
     auto toggle = std::make_shared<ToggleAnim>();
     auto row = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
+    if (spec_ptr->title)
+        search_tag(row, spec_ptr->title(), spec_ptr->subtitle ? spec_ptr->subtitle() : "");
     row->receive_events_even_if_obstructed = true;
     row->child(FILL_SPACE, FILL_SPACE);
     auto anchor = row->child(FILL_SPACE, FILL_SPACE);
@@ -6842,6 +6902,688 @@ static void fill_keyboard_settings(Container *root, Container *c, bool reload) {
     make_vert_space(padded_right, 16);
 }
 
+/*************************************************
+ *
+ * Search
+ *
+ * The field at the top of the left column filters every setting. Results
+ * replace the page on the right; picking one opens its page, scrolls the row
+ * into view and flashes an outline around it.
+ *
+ *************************************************/
+
+static std::vector<SearchEntry> search_index;
+static std::string search_query;
+static std::vector<int> search_results;     // Indices into search_index, best first
+static int search_selected = 0;             // Result chosen by Return, moved with Up/Down
+static bool search_reveal_selected = false; // Scroll the selected result into view on the next paint
+static int search_pending_jump = -1;        // Result to open on the next layout, -1 for none
+static std::string search_last_page;        // Page shown before searching, restored when the query is cleared
+
+static constexpr long search_flash_ms = 1600;
+
+struct SearchFlash {
+    std::string key;   // Tag of the row to find
+    std::string title; // Fallback when the row sits under another section than indexed
+    bool locating = false;
+    int attempts = 0;
+    long start = 0;    // 0 while not flashing
+    bool timer = false;
+};
+static SearchFlash search_flash;
+
+static void search_add(std::string page, std::string section, std::string title, std::string description,
+                       std::string keywords = "", std::function<void(Container *)> after_open = nullptr) {
+    search_index.push_back({std::move(page), std::move(section), std::move(title), std::move(description), std::move(keywords),
+                            std::move(after_open)});
+}
+
+// Everything the search can find. Rows seen while their page was open
+// (search_learned) are merged in on top, so visited pages are always exact.
+static void search_build_index() {
+    search_index.clear();
+
+    search_add("Display", "Display Settings", "Display Settings", "Arrange monitors and change how each one is driven",
+               "monitors screens displays arrange layout position outputs");
+    search_add("Display", "Monitor", "Mode", "Resolution and refresh rate", "resolution refresh rate hz fps size");
+    search_add("Display", "Monitor", "Scale", "Scale factor, or \"auto\"", "zoom size dpi hidpi fractional scaling bigger smaller");
+    search_add("Display", "Monitor", "Transform", "Rotation and reflection applied to the display", "rotate rotation flip portrait landscape orientation");
+    search_add("Display", "Monitor", "HDR", "High dynamic range, for displays that support it", "high dynamic range color");
+    search_add("Display", "Monitor", "Advanced", "Position, mirroring, bit depth, color management, VRR and more");
+    search_add("Display", "Monitor", "Position", "Position such as \"1920x0\" or \"auto\"", "offset coordinates arrange placement");
+    search_add("Display", "Monitor", "Mirror", "Monitor output to mirror, leave empty for none", "duplicate clone same image projector");
+    search_add("Display", "Monitor", "Bit depth", "Color bit depth", "10 bit 8 bit colour");
+    search_add("Display", "Monitor", "Color management", "Color management preset", "colour gamut srgb wide preset cm");
+    search_add("Display", "Monitor", "SDR EOTF", "Transfer function used for SDR content", "gamma transfer function");
+    search_add("Display", "Monitor", "VRR", "Variable refresh rate mode (-1 default, 0 off, 1 on, 2 fullscreen, 3 fullscreen only)",
+               "variable refresh rate freesync gsync adaptive sync tearing");
+    search_add("Display", "Monitor", "ICC profile", "Path to an ICC profile, leave empty for none", "color profile calibration colour");
+    search_add("Display", "Monitor", "Reserved area", "Reserved area in pixels", "margin gap bar space");
+    search_add("Display", "Monitor", "Supports wide color", "Override wide color gamut support detection", "wide gamut colour");
+    search_add("Display", "Monitor", "Supports HDR", "Override HDR support detection", "high dynamic range");
+    search_add("Display", "Monitor", "SDR brightness", "SDR brightness multiplier (0–10)", "brighter dimmer light");
+    search_add("Display", "Monitor", "SDR saturation", "SDR saturation multiplier (0–10)", "vibrance colour color");
+    search_add("Display", "Monitor", "SDR min luminance", "Minimum SDR luminance", "brightness black level");
+    search_add("Display", "Monitor", "SDR max luminance", "Maximum SDR luminance", "brightness nits peak");
+    search_add("Display", "Monitor", "Min luminance", "Minimum luminance override (-1 uses automatic)", "brightness black level");
+    search_add("Display", "Monitor", "Max luminance", "Maximum luminance override", "brightness nits peak");
+    search_add("Display", "Monitor", "Max average luminance", "Maximum average luminance override", "brightness nits");
+    search_add("Display", "Monitor", "Disabled", "Turn this monitor off without disconnecting it", "disable turn off monitor screen enable");
+
+    search_add("Desktop", "Desktop Settings", "Desktop Settings", "", "desktop");
+    search_add("Desktop", "Desktop Settings", "Icon Cache", "Re-scan installed icons", "icons refresh rescan reload missing icon theme");
+    search_add("Desktop", "Desktop Settings", "Desktop Icons", "", "show icons files folders on desktop");
+    search_add("Desktop", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
+    search_add("Desktop", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
+    search_add("Desktop", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
+    search_add("Desktop", "Wallpaper Settings", "Wallpaper Settings", "", "wallpaper background");
+    search_add("Desktop", "Wallpaper Settings", "Draw wallpaper", "", "background image picture photo choose file wallpaper");
+    search_add("Desktop", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
+    search_add("Desktop", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
+    search_add("Desktop", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
+               "taskbar dock workspace windows monitors");
+    search_add("Desktop", "Dock Settings", "Combine taskbar buttons and hide labels", "Group all windows that belong to one dock icon under a single icon",
+               "group merge stack labels dock taskbar");
+
+    search_add("Multitasking", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
+    search_add("Multitasking", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
+               "alt tab switcher windows workspace");
+    search_add("Multitasking", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
+               "dynamic fixed workspaces virtual desktops behaviour");
+    search_add("Multitasking", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
+               "count workspaces virtual desktops amount");
+    search_add("Multitasking", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
+               "workspaces span displays screens independent together");
+    search_add("Multitasking", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
+    search_add("Multitasking", "Multitasking Settings", "Window resizing at screen edges", "Automatically resize windows dragged to screen edges",
+               "snap snapping tile tiling half maximize drag edges");
+
+    search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
+    search_add("Mouse & Touchpad", "Mouse", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert scroll wheel");
+    search_add("Mouse & Touchpad", "Mouse", "Primary mouse button", "Which side performs the main function of the mouse",
+               "left handed right handed swap buttons click");
+    search_add("Mouse & Touchpad", "Mouse", "Cursor speed", "Sets the speed factor of the cursor", "pointer sensitivity speed fast slow mouse");
+    search_add("Mouse & Touchpad", "Touchpad", "Touchpad", "", "trackpad touchpad laptop");
+    search_add("Mouse & Touchpad", "Touchpad", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert trackpad");
+    search_add("Mouse & Touchpad", "Touchpad", "Disable while typing", "Prevents touchpad from receiving input while typing", "palm rejection trackpad dwt");
+    search_add("Mouse & Touchpad", "Touchpad", "Touchpad acceleration", "Cursor moves different distances depending on how fast you flick",
+               "pointer curve flat adaptive custom trackpad speed");
+
+    search_add("Keyboard", "Keyboard Settings", "Keyboard Settings", "", "keyboard keys typing");
+    search_add("Keyboard", "Keyboard Settings", "Repeat delay", "Delay before a held key starts repeating, in milliseconds", "key repeat typing hold");
+    search_add("Keyboard", "Keyboard Settings", "Repeat rate", "Number of key repeats per second", "key repeat typing speed");
+    search_add("Keyboard", "Layouts", "Layouts", "The first layout is used when you log in",
+               "keyboard layout language input source keymap xkb add layout dvorak colemak qwerty");
+
+    search_add("Shortcuts", "Custom shortcuts", "Custom shortcuts", "Run your own commands with a key combination",
+               "add custom command keybind keybinding hotkey shortcut");
+    search_add("Shortcuts", "System shortcuts", "System shortcuts", "", "keybindings keybinds hotkeys keys shortcuts");
+    for (const auto &custom : set->custom_shortcuts)
+        search_add("Shortcuts", "Custom shortcuts", custom.name, custom.keys, "shortcut keybind hotkey " + custom.command);
+    for (const auto &shortcut : shortcuts::defaults())
+        search_add("Shortcuts", "System shortcuts", shortcut.name, shortcuts::keys_for(set, shortcut), "shortcut keybind hotkey");
+
+    search_add("Time & Date", "Time & Date", "Time & Date", "", "clock date time");
+    search_add("Time & Date", "Time & Date", "Automatic Date & Time", "Requires internet access", "ntp sync clock network time internet");
+    search_add("Time & Date", "Time & Date", "Date & Time", "", "clock set time manually change date");
+    search_add("Time & Date", "Time & Date", "Automatic Time Zone", "Requires location services enabled and internet access", "timezone location");
+    search_add("Time & Date", "Time & Date", "Time Zone", "", "timezone region city location utc gmt");
+    search_add("Time & Date", "Time & Date", "Time Format", "", "24-hour 12-hour am pm clock military");
+
+    search_add("Audio", "Audio", "Audio", "", "sound volume speakers microphone pipewire pulseaudio");
+    for (int i = 0; i < 5; i++) {
+        static const char *descriptions[] = {"Applications playing sound", "Applications using a microphone", "Speakers and headphones",
+                                             "Microphones", "Sound card profiles"};
+        static const char *keywords[] = {"streams apps applications volume sound", "streams apps microphone mic record",
+                                         "sink speakers headphones default output volume", "source mic microphone input default",
+                                         "card profile hdmi analog configuration"};
+        search_add("Audio", "Audio", saudio_tab_names[i], descriptions[i], keywords[i], [i](Container *root) {
+            if (settings_audio_tab == i)
+                return;
+            settings_audio_tab = i;
+            if (settings_audio)
+                saudio_apply(settings_audio);
+        });
+    }
+
+    search_add("Wifi", "Wi-Fi", "Wi-Fi", "", "wifi wireless network internet connect wlan");
+    search_add("Wifi", "Available networks", "Available networks", "", "wifi ssid connect password network join");
+
+    for (const auto &learned : search_learned) {
+        bool found = false;
+        for (auto &e : search_index) {
+            if (e.page == learned.page && e.section == learned.section && e.title == learned.title) {
+                e.description = learned.description;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            search_index.push_back(learned);
+    }
+}
+
+// Lower case words; anything that isn't a letter or a digit separates them.
+static std::vector<std::string> search_words(const std::string &text) {
+    std::vector<std::string> words;
+    std::string word;
+    for (unsigned char ch : text) {
+        if (std::isalnum(ch) || ch >= 0x80) {
+            word += (char) std::tolower(ch);
+        } else if (!word.empty()) {
+            words.push_back(std::move(word));
+            word.clear();
+        }
+    }
+    if (!word.empty())
+        words.push_back(std::move(word));
+    return words;
+}
+
+// Optimal string alignment distance (Levenshtein plus adjacent swaps), the
+// usual shape of a typo.
+static int search_edit_distance(const std::string &a, const std::string &b) {
+    const int n = (int) a.size(), m = (int) b.size();
+    std::vector<std::vector<int>> d(n + 1, std::vector<int>(m + 1));
+    for (int i = 0; i <= n; i++)
+        d[i][0] = i;
+    for (int j = 0; j <= m; j++)
+        d[0][j] = j;
+    for (int i = 1; i <= n; i++) {
+        for (int j = 1; j <= m; j++) {
+            int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+            d[i][j] = std::min({d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost});
+            if (i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1])
+                d[i][j] = std::min(d[i][j], d[i - 2][j - 2] + 1);
+        }
+    }
+    return d[n][m];
+}
+
+// How well one query word matches one word of the text, 0 to 1.
+static double search_word_score(const std::string &q, const std::string &w) {
+    if (q == w)
+        return 1.0;
+    if (w.size() > q.size() && w.compare(0, q.size(), q) == 0) // Still typing it
+        return 0.8 + 0.15 * q.size() / w.size();
+    if (q.size() >= 3 && w.find(q) != std::string::npos)
+        return 0.55;
+    double best = 0;
+    // Typos: one mistake from 4 letters, two from 7, against the whole word or
+    // against as much of it as has been typed so far.
+    if (q.size() >= 4) {
+        int allowed = q.size() >= 7 ? 2 : 1;
+        int whole = std::abs((int) w.size() - (int) q.size()) <= allowed ? search_edit_distance(q, w) : 99;
+        if (whole <= allowed)
+            best = std::max(best, 0.7 - 0.12 * whole);
+        if (w.size() > q.size()) {
+            int prefix = search_edit_distance(q, w.substr(0, q.size()));
+            if (prefix <= allowed)
+                best = std::max(best, 0.6 - 0.12 * prefix);
+        }
+    }
+    // Abbreviations: the letters in order, starting at the same letter ("brt" for brightness).
+    if (best == 0 && q.size() >= 3 && q[0] == w[0]) {
+        size_t at = 0, first = std::string::npos, last = 0;
+        for (char ch : q) {
+            at = w.find(ch, at);
+            if (at == std::string::npos)
+                return 0;
+            if (first == std::string::npos)
+                first = at;
+            last = at++;
+        }
+        best = 0.45 * q.size() / (double) (last - first + 1);
+    }
+    return best;
+}
+
+static double search_field_score(const std::string &q, const std::vector<std::string> &words) {
+    double best = 0;
+    for (const auto &w : words)
+        best = std::max(best, search_word_score(q, w));
+    return best;
+}
+
+// Every query word must match something; the title counts most, then the
+// keywords, section, page and description. -1 when the entry doesn't match.
+static double search_score(const SearchEntry &e, const std::vector<std::string> &query, const std::string &phrase) {
+    struct Field {
+        std::vector<std::string> words;
+        double weight;
+    };
+    Field fields[] = {
+        {search_words(e.title), 1.0},
+        {search_words(e.keywords), 0.75},
+        {search_words(e.section), 0.6},
+        {search_words(e.page), 0.55},
+        {search_words(e.description), 0.5},
+    };
+    double total = 0;
+    for (const auto &q : query) {
+        double best = 0;
+        for (const auto &f : fields)
+            best = std::max(best, f.weight * search_field_score(q, f.words));
+        if (best < 0.2)
+            return -1;
+        total += best;
+    }
+    total /= query.size();
+
+    // The whole query reads like the title.
+    auto title = sdt_lower(e.title);
+    if (title == phrase)
+        total += 1.0;
+    else if (title.compare(0, phrase.size(), phrase) == 0)
+        total += 0.6;
+    else if (phrase.size() >= 2 && (" " + title).find(" " + phrase) != std::string::npos) // Starts a later word
+        total += 0.45;
+    else if (phrase.size() >= 3 && title.find(phrase) != std::string::npos)
+        total += 0.3;
+    // There are many shortcuts, keep them from crowding out settings with similar words.
+    if (e.section == "System shortcuts" && e.title != e.section)
+        total *= 0.8;
+    return total;
+}
+
+static void search_run() {
+    search_results.clear();
+    auto query = search_words(search_query);
+    if (query.empty())
+        return;
+    auto phrase = sdt_lower(trim(search_query));
+    std::vector<std::pair<double, int>> scored;
+    for (int i = 0; i < (int) search_index.size(); i++) {
+        double score = search_score(search_index[i], query, phrase);
+        if (score >= 0)
+            scored.push_back({score, i});
+    }
+    std::stable_sort(scored.begin(), scored.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+    for (int i = 0; i < (int) scored.size() && i < 60; i++)
+        search_results.push_back(scored[i].second);
+}
+
+static std::string search_breadcrumb(const SearchEntry &e) {
+    if (e.section.empty() || e.section == e.title || e.section == e.page || e.section == e.page + " Settings")
+        return e.page;
+    return e.page + "  ›  " + e.section;
+}
+
+static void fill_search_results(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child : right->children)
+        delete child;
+    right->children.clear();
+    ((RightData *) right->user_data)->scroll = 0;
+    ((RightData *) right->user_data)->smooth.stop();
+    search_flash = {};
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    padded_right->name = "search_page";
+
+    search_current_page.clear();
+    make_section_title(padded_right, "Search");
+    make_vert_space(padded_right, 6);
+
+    std::string summary;
+    if (search_results.empty())
+        summary = "No settings match “" + trim(search_query) + "”";
+    else
+        summary = std::to_string(search_results.size()) + (search_results.size() == 1 ? " result" : " results") + " for “" + trim(search_query) + "”";
+    auto caption = padded_right->child(FILL_SPACE, FILL_SPACE);
+    caption->pre_layout = [summary](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = swifi_text_height(root, summary, 11) + 4 * swifi_window(root)->dpi;
+    };
+    caption->when_paint = [summary](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, summary, 11, theme.text_secondary);
+    };
+    make_vert_space(padded_right, 12);
+
+    for (int i = 0; i < (int) search_results.size(); i++) {
+        const int index = search_results[i];
+        auto row = padded_right->child(::hbox, FILL_SPACE, FILL_SPACE);
+        row->uuid = "search_result:" + std::to_string(i);
+        row->parent_bounds_limit_input_bounds = false;
+        row->receive_events_even_if_obstructed = true;
+        row->pre_layout = [index](Container *root, Container *c, const Bounds &) {
+            const auto &e = search_index[index];
+            c->wanted_bounds.h = (e.description.empty() ? 52 : 68) * swifi_window(root)->dpi;
+        };
+        row->when_paint = [index, i](Container *root, Container *c) {
+            if (index >= (int) search_index.size())
+                return;
+            const auto &e = search_index[index];
+            auto window = swifi_window(root);
+            auto cr = window->drawing_context;
+            auto dpi = window->dpi;
+            auto b = c->real_bounds;
+            bool selected = i == search_selected;
+            RGBA bg = c->state.mouse_pressing ? theme.navigation_pressed : (c->state.mouse_hovering || selected) ? theme.row_hover : theme.row_background;
+            paint_smooth_frame(cr, b, 5 * dpi, bg, selected ? theme.accent : theme.row_border, std::max(1.0, (double) std::round(1 * dpi)));
+
+            double x = b.x + 18 * dpi;
+            double w = std::max(1.0, b.w - 36 * dpi);
+            // Title with the page it lives on to the right, what it does underneath.
+            auto crumb = search_breadcrumb(e);
+            double th = swifi_text_height(root, e.title, 12, true);
+            double dh = e.description.empty() ? 0 : swifi_text_height(root, e.description, 11);
+            double gap = 4 * dpi;
+            double y = b.y + std::max(0.0, (b.h - th - (dh > 0 ? gap + dh : 0)) * .5);
+            double crumb_w = std::min(w * .45, swifi_text_width(root, crumb, 10) + 4 * dpi);
+            swifi_text(root, Bounds(x, y, std::max(1.0, w - crumb_w - 12 * dpi), th), e.title, 12, theme.text, false, true);
+            swifi_text(root, Bounds(x + w - crumb_w, y, crumb_w, th), crumb, 10, theme.accent);
+            if (dh > 0)
+                swifi_text(root, Bounds(x, y + th + gap, w, dh), e.description, 11, theme.text_secondary);
+        };
+        row->when_clicked = [i](Container *root, Container *) {
+            // Opening the page deletes this row, so it happens on the next layout.
+            search_pending_jump = i;
+            swifi_redraw(root);
+        };
+    }
+    make_vert_space(padded_right, 16);
+}
+
+static Container *search_field(Container *root) {
+    return container_by_name("settings_search", root);
+}
+
+// Empties the field without restoring the page (the caller shows one).
+static void search_clear_field(Container *root) {
+    search_query.clear();
+    search_results.clear();
+    search_pending_jump = -1;
+    if (auto field = search_field(root)) {
+        auto data = static_cast<STextEditorData *>(field->user_data);
+        if (data && !data->text.empty())
+            reset_text_editor(field, "");
+    }
+}
+
+static void search_set_query(Container *root, const std::string &text) {
+    bool was_searching = !trim(search_query).empty();
+    search_query = text;
+    if (trim(text).empty()) {
+        search_results.clear();
+        if (!was_searching)
+            return;
+        // Back to where the user was before searching.
+        auto right = container_by_name("settings_right", root);
+        if (auto tab = search_last_page.empty() ? nullptr : container_by_name(search_last_page, root); tab && tab->when_clicked) {
+            if (right)
+                ((RightData *) right->user_data)->scroll = 0;
+            tab->when_clicked(root, tab);
+        } else if (right) {
+            for (auto child : right->children)
+                delete child;
+            right->children.clear();
+        }
+        swifi_redraw(root);
+        return;
+    }
+    if (!was_searching)
+        search_build_index();
+    search_run();
+    search_selected = 0;
+    fill_search_results(root);
+    swifi_redraw(root);
+}
+
+static Container *search_find_tagged(Container *c, const std::string &key) {
+    if (c->uuid == key)
+        return c;
+    for (auto child : c->children)
+        if (auto found = search_find_tagged(child, key))
+            return found;
+    return nullptr;
+}
+
+// A row with the right title under any section (e.g. the monitor's name).
+static Container *search_find_title(Container *c, const std::string &suffix) {
+    if (c->uuid.size() > suffix.size() && c->uuid.starts_with("search:") && c->uuid.ends_with(suffix))
+        return c;
+    for (auto child : c->children)
+        if (auto found = search_find_title(child, suffix))
+            return found;
+    return nullptr;
+}
+
+static void search_jump(Container *root, int result) {
+    if (result < 0 || result >= (int) search_results.size())
+        return;
+    auto e = search_index[search_results[result]];
+    auto tab = container_by_name(e.page, root);
+    if (!tab || !tab->when_clicked)
+        return;
+    // A filter on the Shortcuts page could hide the row.
+    if (e.page == "Shortcuts") {
+        sshortcut_filter.clear();
+    }
+    if (auto right = container_by_name("settings_right", root)) {
+        auto d = (RightData *) right->user_data;
+        d->scroll = 0;
+        d->smooth.stop();
+    }
+    tab->when_clicked(root, tab); // Also empties the search field
+    if (e.after_open)
+        e.after_open(root);
+    search_flash = {};
+    search_flash.key = search_key(e.section, e.title);
+    search_flash.title = e.title;
+    search_flash.locating = true;
+    swifi_redraw(root);
+}
+
+static void search_keep_animating(Container *root) {
+    if (search_flash.timer || !settings_app)
+        return;
+    search_flash.timer = true;
+    windowing::timer(settings_app, 16, [](void *) {
+        search_flash.timer = false;
+        if (settings_mylar)
+            windowing::redraw(settings_mylar->raw_window);
+    }, nullptr);
+}
+
+// Runs after the right side is painted: finds the row a result pointed at,
+// scrolls it into view, then draws the fading outline around it.
+static void paint_search_flash(Container *root, Container *right) {
+    auto d = (RightData *) right->user_data;
+    auto window = swifi_window(root);
+    auto dpi = window->dpi;
+
+    if (search_reveal_selected) {
+        search_reveal_selected = false;
+        if (auto row = search_find_tagged(right, "search_result:" + std::to_string(search_selected))) {
+            double margin = 12 * dpi;
+            double top = row->real_bounds.y - right->real_bounds.y;
+            double bottom = top + row->real_bounds.h;
+            float scroll = d->applied_scroll;
+            if (top < margin)
+                scroll += (float) (margin - top);
+            else if (bottom > right->real_bounds.h - margin)
+                scroll -= (float) (bottom - (right->real_bounds.h - margin));
+            scroll = std::clamp(scroll, -d->overflow, 0.0f);
+            if (scroll != d->applied_scroll) {
+                d->smooth.stop();
+                d->scroll = scroll;
+                swifi_redraw(root);
+            }
+        }
+    }
+
+    if (search_flash.key.empty())
+        return;
+
+    Container *target = search_find_tagged(right, search_flash.key);
+    if (!target)
+        target = search_find_title(right, "\x1f" + search_flash.title);
+
+    if (search_flash.locating) {
+        if (!target) {
+            // Pages filled in the background may need a few frames.
+            if (++search_flash.attempts > 30)
+                search_flash = {};
+            else
+                search_keep_animating(root);
+            return;
+        }
+        // Rows folded inside an accordion: unfold it and look again next frame.
+        bool hidden = false;
+        Container *top = target;
+        for (auto c = target; c && c != right; c = c->parent) {
+            if (!c->exists)
+                hidden = true;
+            if (c->parent && c->parent->parent == right)
+                top = c;
+        }
+        if (hidden) {
+            if (++search_flash.attempts > 30) {
+                search_flash = {};
+                return;
+            }
+            if (auto page = top->parent) {
+                auto it = std::find(page->children.begin(), page->children.end(), top);
+                while (it != page->children.begin()) {
+                    --it;
+                    if ((*it)->custom_type == search_accordion_type && (*it)->exists) {
+                        if ((*it)->when_clicked)
+                            (*it)->when_clicked(root, *it);
+                        break;
+                    }
+                }
+            }
+            swifi_redraw(root);
+            return;
+        }
+        // Put the row a quarter of the way down the view.
+        double content_y = target->real_bounds.y - right->real_bounds.y - d->applied_scroll;
+        float scroll = (float) -(content_y - right->real_bounds.h * .25);
+        d->smooth.stop();
+        d->scroll = std::clamp(scroll, -d->overflow, 0.0f);
+        search_flash.locating = false;
+        search_flash.start = get_current_time_in_ms();
+        right_bar_touch(right);
+        swifi_redraw(root);
+        return;
+    }
+
+    long elapsed = get_current_time_in_ms() - search_flash.start;
+    if (!target || elapsed >= search_flash_ms) {
+        search_flash = {};
+        return;
+    }
+
+    // Two pulses that fade out.
+    double t = (double) elapsed / search_flash_ms;
+    double pulse = .65 + .35 * std::cos(t * 4 * M_PI);
+    double fade = t < .75 ? 1.0 : 1.0 - (t - .75) / .25;
+    double intensity = std::clamp(pulse * fade, 0.0, 1.0);
+
+    auto cr = window->drawing_context;
+    auto b = target->real_bounds;
+    double grow = 3 * dpi;
+    b.x -= grow;
+    b.y -= grow;
+    b.w += grow * 2;
+    b.h += grow * 2;
+    cr->save();
+    cr->rectangle(right->real_bounds.x, right->real_bounds.y, right->real_bounds.w, right->real_bounds.h);
+    cr->clip_path();
+    RGBA fill = theme.accent;
+    fill.a *= .10 * intensity;
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+    set_argb(cr, fill);
+    cr->fill();
+    RGBA line = theme.accent;
+    line.a *= intensity;
+    cr->set_line_width(2 * dpi);
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+    set_argb(cr, line);
+    cr->stroke();
+    cr->set_line_width(1);
+    cr->restore();
+    search_keep_animating(root);
+}
+
+// The field in the left column, in the slot a "Search" tab would have.
+static void make_search_field(Container *left) {
+    auto slot = left->child(::vbox, FILL_SPACE, FILL_SPACE);
+    slot->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 40 * dpi;
+        c->wanted_pad = Bounds(3 * dpi, 4 * dpi, 3 * dpi, 4 * dpi);
+    };
+
+    auto field = slot->child(FILL_SPACE, FILL_SPACE);
+    field->name = "settings_search";
+    STextEditorOptions options;
+    options.multiline = false;
+    options.font_size = 11;
+    options.window = [](Container *root) { return static_cast<MylarWindow *>(root->user_data)->raw_window; };
+    options.viewport = [](Container *root, Container *c) {
+        auto dpi = static_cast<MylarWindow *>(root->user_data)->raw_window->dpi;
+        auto bounds = c->real_bounds;
+        bounds.x += 32 * dpi;
+        bounds.w = std::max(0.0, bounds.w - 32 * dpi - 11 * dpi);
+        return bounds;
+    };
+    options.on_change = [](std::string text) {
+        if (settings_mylar)
+            search_set_query(settings_mylar->root, text);
+    };
+    setup_text_editor(field, "", std::move(options));
+    field->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        paint_smooth_frame(cr, b, settings_control_rounding * dpi, theme.field_background,
+                           c->active ? theme.accent : theme.field_border, std::max(1.0, (double) std::round(1 * dpi)));
+        const std::string glyph = "\uE721"; // Search
+        auto gb = draw_text(cr, 0, 0, glyph, 12 * dpi, false, icon_font, -1, -1, theme.text_secondary, false);
+        draw_text(cr, b.x + 12 * dpi, b.y + (b.h - gb.h) * .5, glyph, 12 * dpi, true, icon_font, -1, -1,
+                  c->active ? theme.text : theme.text_secondary, false);
+        paint_text_editor(root, c, theme.text, theme.accent);
+        auto data = static_cast<STextEditorData *>(c->user_data);
+        if (data && data->text.empty() && !c->active) {
+            Bounds text(b.x + 32 * dpi, b.y, std::max(0.0, b.w - 43 * dpi), b.h);
+            swifi_text(root, text, "Search settings", 11, swifi_dim(theme.text_secondary));
+        }
+    };
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text,
+                                       std::string text) {
+        bool searching = !trim(search_query).empty();
+        if (pressed && sym == XKB_KEY_Escape) {
+            if (searching) {
+                reset_text_editor(c, "");
+                search_set_query(root, "");
+            }
+            return;
+        }
+        if (pressed && searching && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+            if (!search_results.empty()) {
+                search_pending_jump = search_selected;
+                swifi_redraw(root);
+            }
+            return;
+        }
+        if (pressed && searching && (sym == XKB_KEY_Down || sym == XKB_KEY_Up) && !search_results.empty()) {
+            int count = (int) search_results.size();
+            search_selected = (search_selected + (sym == XKB_KEY_Down ? 1 : count - 1)) % count;
+            search_reveal_selected = true;
+            swifi_redraw(root);
+            return;
+        }
+        if (edit_key)
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+    };
+}
+
 void create_tab_option(Container *parent, std::string label) {
     auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
     c->name = label;
@@ -6872,6 +7614,10 @@ void create_tab_option(Container *parent, std::string label) {
     c->when_clicked = [label](Container *root, Container *c) {
         sdt_invalidate();
         sshortcut_stop_editing();
+        search_clear_field(root);
+        search_last_page = label;
+        search_current_page = label;
+        search_current_section.clear();
         if (label == "Mouse & Touchpad") {
             fill_mouse_settings(root, c);
         } else if (label == "Keyboard") {
@@ -6891,11 +7637,12 @@ void create_tab_option(Container *parent, std::string label) {
         } else if (label == "Time & Date") {
             fill_datetime_settings(root);
         }
+        search_current_page.clear();
     };
 }
 
 void fill_left(Container *left) {
-    create_tab_option(left, "Search");
+    make_search_field(left);
     create_tab_option(left, "Display");
     create_tab_option(left, "Desktop");
     create_tab_option(left, "Multitasking");
@@ -6918,6 +7665,13 @@ void fill_root(Container *root) {
     auto left_right = root->child(::hbox, FILL_SPACE, FILL_SPACE);
     // Handle external navigation on the settings thread before laying out the page.
     left_right->pre_layout = [](Container *root, Container *, const Bounds &) {
+        // A search result was picked; open its page.
+        if (search_pending_jump >= 0) {
+            int result = search_pending_jump;
+            search_pending_jump = -1;
+            search_jump(root, result);
+        }
+
         std::string page;
         page.swap(requested_page);
         if (!page.empty()) {
@@ -7046,7 +7800,10 @@ void fill_root(Container *root) {
     };
     right->when_mouse_up = bar_release;
     right->when_drag_end = bar_release;
-    right->after_paint = paint_right_scrollbar;
+    right->after_paint = [](Container *root, Container *c) {
+        paint_search_flash(root, c);
+        paint_right_scrollbar(root, c);
+    };
 }
 
 // Usable space (logical px) on the monitor the settings window opens on, minus
