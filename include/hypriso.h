@@ -118,7 +118,8 @@ struct ConfigSettings {
     int version = 2;
     std::string touchpad_acceleration_curve = "Adaptive";
     std::string primary_mouse_button = "Left";
-    float cursor_speed = .5;
+    float touchpad_speed = .5; // saved as "cursor_speed" for older configs
+    float mouse_speed = .5;
     bool natural_scrolling_mouse = false;
     bool natural_scrolling_touchpad = false;
     bool touchpad_disable_while_typing = true;

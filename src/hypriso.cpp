@@ -553,6 +553,8 @@ static inline std::string mw_workspace_config_name(const PHLWORKSPACE& workspace
     return std::format("name:{}", workspace->displayName());
 }
 #define MYLAR_EXCLUSIVE_LSES g_pInputManager->m_exclusiveKeyboardLSes
+
+static void check_touchpads_changed();
 using MylarModifierMask = uint32_t;
 static inline MylarModifierMask mw_modmask_from_string(const std::string& value) {
     return sc<uint32_t>(Keybinds::modMaskFromString(value));
@@ -2601,6 +2603,7 @@ void HyprIso::create_callbacks() {
     }));
     
     eventListeners.emplace_back(Event::bus()->m_events.input.mouse.move.listen([this](Vector2D event, Event::SCallbackInfo &info) {
+        check_touchpads_changed();
         if (g_layoutManager->dragController()->target()) {
             if (native_tiled_drag_id != -1 && hypriso->on_tiled_drag_motion)
                 hypriso->on_tiled_drag_motion();
@@ -3295,6 +3298,32 @@ void hook_hidden_state_change() {
     }
 }
 
+// Touchpad names the generated config has per-device rules for. Checked again
+// when the pointer list changes so a touchpad plugged in later gets its speed.
+static std::vector<std::string> written_touchpads;
+static size_t seen_pointer_count = (size_t) -1;
+
+static std::vector<std::string> current_touchpads() {
+    std::vector<std::string> touchpads;
+    if (!g_pInputManager)
+        return touchpads;
+    for (const auto &pointer : g_pInputManager->m_pointers) {
+        if (!pointer || !pointer->m_isTouchpad || pointer->m_hlName.empty())
+            continue;
+        if (std::find(touchpads.begin(), touchpads.end(), pointer->m_hlName) == touchpads.end())
+            touchpads.push_back(pointer->m_hlName);
+    }
+    return touchpads;
+}
+
+static void check_touchpads_changed() {
+    if (!g_pInputManager || g_pInputManager->m_pointers.size() == seen_pointer_count)
+        return;
+    seen_pointer_count = g_pInputManager->m_pointers.size();
+    if (current_touchpads() != written_touchpads)
+        later(0, [](Timer *) { hypriso->generate_mylar_hyprland_config(); });
+}
+
 static std::string lua_string(const std::string& value) {
     std::string result = "\"";
     for (const unsigned char c : value) {
@@ -3762,17 +3791,32 @@ hl.config({ input = { float_switch_override_focus = false } })
         base += "\n";
     }
 
-    if (set->touchpad_acceleration_curve == "Custom") {
-        base += "hl.config({ input = { accel_profile = \"custom 0.5351446139 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 13.786 18.360 27.935 33.123\" }})\n\n";
-    } else if (set->touchpad_acceleration_curve == "Adaptive") {
-        base += "hl.config({ input = { accel_profile = \"adaptive\" }})\n\n";
-    } else if (set->touchpad_acceleration_curve == "Flat") {
-        base += "hl.config({ input = { accel_profile = \"flat\" }})\n\n";
-    }
+    // Mice use the global sensitivity. Touchpads get their own speed and
+    // acceleration through per-device rules: the global accel_profile only
+    // accepts the bare words adaptive/flat/custom, so a "custom <points>"
+    // profile is a Lua config error there, while hl.device takes it as is.
+    auto speed_to_sensitivity = [](float speed) {
+        return std::to_string(std::clamp(std::max((speed * 2.0f) - 1.0f, -0.7f), -1.0f, 1.0f));
+    };
+    base += "hl.config({ input = { sensitivity = " + speed_to_sensitivity(set->mouse_speed) + " }})\n\n";
 
-    base += "hl.config({ input = { sensitivity = "
-         + std::to_string(std::max((set->cursor_speed * 2.0f) - 1.0f, -0.7f))
-         + " }})\n\n";
+    std::string touchpad_accel;
+    if (set->touchpad_acceleration_curve == "Custom")
+        touchpad_accel = "custom 0.5351446139 0.000 0.252 0.503 0.824 1.203 1.581 1.960 2.338 2.888 3.463 4.038 4.613 5.187 5.762 6.337 6.912 7.487 8.061 8.636 9.211 13.786 18.360 27.935 33.123";
+    else if (set->touchpad_acceleration_curve == "Flat")
+        touchpad_accel = "flat";
+    else
+        touchpad_accel = "adaptive";
+    {
+        written_touchpads = current_touchpads();
+        if (g_pInputManager)
+            seen_pointer_count = g_pInputManager->m_pointers.size();
+        for (const auto &name : written_touchpads) {
+            base += "hl.device({ name = " + lua_string(name)
+                + ", sensitivity = " + speed_to_sensitivity(set->touchpad_speed)
+                + ", accel_profile = " + lua_string(touchpad_accel) + " })\n\n";
+        }
+    }
 
     if (set->primary_mouse_button == "Left") {
         base += "hl.config({ input = { left_handed = false }})\n\n";
@@ -3803,7 +3847,7 @@ hl.config({ input = { float_switch_override_focus = false } })
     if (set->touchpad_disable_while_typing) {
         base += "hl.config({ input = { touchpad = { disable_while_typing = true }}})\n\n";
     } else {
-        base += "hl.config({ input = { touchpad = { disable_while_typing = true }}})\n\n";
+        base += "hl.config({ input = { touchpad = { disable_while_typing = false }}})\n\n";
     }
     
     

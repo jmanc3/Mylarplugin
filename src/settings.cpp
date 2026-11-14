@@ -13,6 +13,7 @@
 #include "client/windowing.h"
 #include "dock/dock.h"
 #include "dock/dock_wifi.h"
+#include "dock/dock_brightness.h"
 #include "audio.h"
 #include "events.h"
 #include "datetime.h"
@@ -527,7 +528,8 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
         
     bind(std::string, "touchpad_acceleration_curve", &settings->touchpad_acceleration_curve);
     bind(std::string, "primary_mouse_button", &settings->primary_mouse_button);
-    bind(float, "cursor_speed", &settings->cursor_speed);
+    bind(float, "cursor_speed", &settings->touchpad_speed);
+    bind(float, "mouse_speed", &settings->mouse_speed);
     bind(bool, "natural_scrolling_mouse", &settings->natural_scrolling_mouse);
     bind(bool, "natural_scrolling_touchpad", &settings->natural_scrolling_touchpad);
     bind(bool, "touchpad_disable_while_typing", &settings->touchpad_disable_while_typing);
@@ -1248,6 +1250,58 @@ static constexpr float toggle_w = 40;
 static constexpr float toggle_h = 20;
 static constexpr float toggle_anim_ms = 70;
 
+// Sliding highlight for segmented controls (button groups, the Audio tabs).
+// The choice takes effect immediately; only the raised pill glides from the
+// old option to the new one, advanced while painting like ToggleAnim.
+struct SegmentSlide {
+    ToggleTween tween;
+    Bounds from_rel;          // where the pill started, relative to the group
+    Bounds last_rel;          // where it was last painted, relative to the group
+    bool painted = false;
+};
+
+static constexpr float segment_slide_ms = 180;
+
+// Call before changing the selection so the pill leaves from where it is now.
+static void segment_slide_start(SegmentSlide *s) {
+    if (!s->painted)
+        return;
+    s->from_rel = s->last_rel;
+    s->tween.jump(0);
+}
+
+// Paints the pill for `selected` (a child of `group`) and keeps redrawing while it moves.
+static void segment_slide_paint(Container *root, Container *group, SegmentSlide *s, Container *selected) {
+    if (!selected)
+        return;
+    auto mylar = (MylarWindow *) root->user_data;
+    auto cr = mylar->raw_window->drawing_context;
+    auto dpi = mylar->raw_window->dpi;
+    auto g = group->real_bounds;
+    auto t_abs = selected->real_bounds;
+    Bounds target(t_abs.x - g.x, t_abs.y - g.y, t_abs.w, t_abs.h);
+
+    if (!s->painted) {
+        s->tween.value = s->tween.from = s->tween.target = 1;
+        s->from_rel = target;
+    }
+    if (s->tween.step(1, segment_slide_ms, get_current_time_in_ms()))
+        windowing::redraw(mylar->raw_window);
+    float t = s->tween.value;
+    float e = 1 - (1 - t) * (1 - t) * (1 - t); // ease out
+    Bounds r(s->from_rel.x + (target.x - s->from_rel.x) * e,
+             s->from_rel.y + (target.y - s->from_rel.y) * e,
+             s->from_rel.w + (target.w - s->from_rel.w) * e,
+             s->from_rel.h + (target.h - s->from_rel.h) * e);
+    s->last_rel = r;
+    s->painted = true;
+
+    set_argb(cr, theme.segment_selected);
+    drawRoundedRect(cr, g.x + r.x, g.y + r.y, r.w, r.h, 8 * dpi, 1.0);
+    cr->fill();
+}
+
+
 static void paint_toggle(Container *root, Container *c, ToggleAnim *t, Bounds check, bool on, bool row_hovered, bool pressing, bool enabled = true) {
     auto mylar = (MylarWindow *) root->user_data;
     auto cr = mylar->raw_window->drawing_context;
@@ -1409,14 +1463,20 @@ static void make_slider(Container *parent, std::string title, std::string descri
 
     Container *right = nullptr;
     Container *row = nullptr;
+    // The slider's width comes from the whole option row. The hbox holding the
+    // slider and its Reset button runs the slider's pre_layout again with the
+    // (narrower) hbox bounds, so the width is decided once per row layout and
+    // remembered; recomputing it there shrank the slider and left a gap.
+    auto row_slider_w = std::make_shared<float>(0);
     if (reset_value >= 0) {
         // Slider and Reset button side by side.
         row = p->child(::hbox, FILL_SPACE, FILL_SPACE);
         row->alignment = container_alignment::ALIGN_CENTER;
-        row->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        row->pre_layout = [row_slider_w](Container *root, Container *c, const Bounds &b) {
             auto mylar = (MylarWindow*)root->user_data;
             auto dpi = mylar->raw_window->dpi;
             c->spacing = 24 * dpi;
+            *row_slider_w = 0;
             float w = 0;
             for (auto child : c->children) {
                 if (child->pre_layout)
@@ -1515,13 +1575,15 @@ static void make_slider(Container *parent, std::string title, std::string descri
     right->when_drag_end = right->when_mouse_down;
     
     bool has_reset = row != nullptr;
-    right->pre_layout = [has_reset](Container *root, Container *c, const Bounds &b) {
+    right->pre_layout = [has_reset, row_slider_w](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto dpi = mylar->raw_window->dpi;
         // `b` is the whole row. Narrow windows shrink the slider so the label
         // (and the Reset button) keep their room.
         double room = (has_reset ? 360 : 260) * dpi;
-        c->real_bounds.w = std::clamp(b.w - room, 120.0 * dpi, 350.0 * dpi);
+        if (!has_reset || *row_slider_w <= 0)
+            *row_slider_w = std::clamp(b.w - room, 80.0 * dpi, 350.0 * dpi);
+        c->real_bounds.w = *row_slider_w;
         c->real_bounds.h = 20 * dpi;
         c->wanted_bounds.w = c->real_bounds.w;
         c->wanted_bounds.h = c->real_bounds.h;
@@ -1549,7 +1611,16 @@ static void make_button_group(Container *parent, std::string title, std::string 
     
     // Drawn like the Audio page's tabs: a tray with the selected option raised and the others dimmed.
     static const float option_text_size = 11;
+    struct GroupData : UserData {
+        SegmentSlide slide;
+        int selected = -1;
+    };
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    auto group_data = new GroupData;
+    for (int i = 0; i < options.size(); i++)
+        if (options[i] == default_value)
+            group_data->selected = i;
+    right->user_data = group_data;
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->drawing_context;
@@ -1558,6 +1629,9 @@ static void make_button_group(Container *parent, std::string title, std::string 
         set_argb(cr, theme.segment_background);
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
         cr->fill();
+        auto data = (GroupData *) c->user_data;
+        if (data->selected >= 0 && data->selected < (int) c->children.size())
+            segment_slide_paint(root, c, &data->slide, c->children[data->selected]);
     };
     right->pre_layout = [options](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
@@ -1579,34 +1653,27 @@ static void make_button_group(Container *parent, std::string title, std::string 
     for (int i = 0; i < options.size(); i++) {
         auto o = options[i];
         auto option = right->child(FILL_SPACE, FILL_SPACE);
-        struct OptionData : UserData {
-            bool selected = false;
-        };
-        auto option_data = new OptionData;
-        if (o == default_value)
-            option_data->selected = true;
-        option->user_data = option_data;
-        option->when_paint = [o](Container *root, Container *c) {
-            auto data = (OptionData *) c->user_data;
+        option->when_paint = [o, i](Container *root, Container *c) {
+            auto group = (GroupData *) c->parent->user_data;
             auto mylar = (MylarWindow*)root->user_data;
             auto cr = mylar->raw_window->drawing_context;
             auto dpi = mylar->raw_window->dpi;
             auto b = c->real_bounds;
-            bool selected = data->selected;
-            if (selected || c->state.mouse_hovering) {
-                set_argb(cr, selected ? theme.segment_selected : swifi_mix(theme.segment_background, theme.segment_selected, .5));
+            bool selected = group->selected == i;
+            // The selected pill is painted (and slid) by the group.
+            if (!selected && c->state.mouse_hovering) {
+                set_argb(cr, swifi_mix(theme.segment_background, theme.segment_selected, .5));
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
                 cr->fill();
             }
             swifi_text(root, b, o, option_text_size, selected ? theme.text : theme.text_secondary, true);
         };
-        option->when_clicked = [o, on_selected](Container *root, Container *c) {
-            for (auto ch : c->parent->children) {
-                auto data = (OptionData *) ch->user_data;
-                data->selected = false;
-            }
-            auto data = (OptionData *) c->user_data;
-            data->selected = true;
+        option->when_clicked = [o, i, on_selected](Container *root, Container *c) {
+            auto group = (GroupData *) c->parent->user_data;
+            if (group->selected == i)
+                return;
+            segment_slide_start(&group->slide);
+            group->selected = i;
             if (on_selected)
                 on_selected(o);
         };
@@ -3022,8 +3089,116 @@ static void display_trial_watch() {
     }, nullptr);
 }
 
+// Copies an image to ~/.config/mylar/wall.png, the wallpaper. Non-images are
+// ignored. Blocking (runs `file`), so call it off the UI thread.
+static bool set_wallpaper_from_file(const std::string &file) {
+    if (file.empty() || !std::filesystem::is_regular_file(file))
+        return false;
+    std::string quoted = "'";
+    for (char ch : file) {
+        if (ch == '\'')
+            quoted += "'\\''";
+        else
+            quoted += ch;
+    }
+    quoted += "'";
+    auto mime = trim_newline(execAndGet(std::string("file --mime-type -b " + quoted).c_str()));
+    if (!mime.starts_with("image/"))
+        return false;
+    const char* home = std::getenv("HOME");
+    if (!home)
+        return false;
+    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/wall.png";
+    std::error_code ec;
+    std::filesystem::create_directories(filepath.parent_path(), ec);
+    std::filesystem::copy_file(file, filepath, std::filesystem::copy_options::overwrite_existing, ec);
+    return !ec;
+}
+
+// Local file paths in a text/uri-list ("file:///a%20b" -> "/a b").
+static std::vector<std::string> paths_from_uri_list(const std::string &uri_list) {
+    std::vector<std::string> paths;
+    std::istringstream in(uri_list);
+    std::string line;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+            line.pop_back();
+        if (line.empty() || line[0] == '#')
+            continue;
+        std::string rest;
+        const std::string scheme = "file://";
+        if (line.compare(0, scheme.size(), scheme) == 0) {
+            // Skip an optional host ("file://localhost/path").
+            size_t path_start = line.find('/', scheme.size());
+            if (path_start == std::string::npos)
+                continue;
+            rest = line.substr(path_start);
+        } else if (line[0] == '/') {
+            rest = line;
+        } else {
+            continue;
+        }
+        std::string path;
+        for (size_t i = 0; i < rest.size(); i++) {
+            if (rest[i] == '%' && i + 2 < rest.size() && std::isxdigit((unsigned char) rest[i + 1]) &&
+                std::isxdigit((unsigned char) rest[i + 2])) {
+                path += (char) std::stoi(rest.substr(i + 1, 2), nullptr, 16);
+                i += 2;
+            } else {
+                path += rest[i];
+            }
+        }
+        paths.push_back(path);
+    }
+    return paths;
+}
+
+// Files dropped anywhere on the Display page: the first image becomes the
+// wallpaper, as if it had been picked with "Choose file".
+static void wallpaper_file_dropped(std::string uri_list) {
+    std::thread t([uri_list]() {
+        for (const auto &path : paths_from_uri_list(uri_list))
+            if (set_wallpaper_from_file(path))
+                break;
+    });
+    t.detach();
+}
+
+// Shown over the Display page while files are dragged over the window.
+static void paint_wallpaper_drop_hint(Container *root, Container *right) {
+    auto window = swifi_window(root);
+    if (!window->dnd_hovering || !container_by_name("display_wallpaper_row", right))
+        return;
+    auto cr = window->drawing_context;
+    auto dpi = window->dpi;
+    auto b = right->real_bounds;
+    double inset = 10 * dpi;
+    Bounds r(b.x + inset, b.y + inset, b.w - inset * 2, b.h - inset * 2);
+    if (r.w <= 0 || r.h <= 0)
+        return;
+    RGBA fill = theme.accent;
+    fill.a = .12;
+    drawRoundedRect(cr, r.x, r.y, r.w, r.h, 10 * dpi, 1.0);
+    set_argb(cr, fill);
+    cr->fill();
+    drawRoundedRect(cr, r.x, r.y, r.w, r.h, 10 * dpi, std::max(1.0, (double) std::floor(2 * dpi)));
+    set_argb(cr, theme.accent);
+    cr->stroke();
+
+    std::string text = "Drop image to set as wallpaper";
+    double size = 14;
+    double tw = swifi_text_width(root, text, size);
+    double th = swifi_text_height(root, text, size, true);
+    double pad = 14 * dpi;
+    Bounds pill(r.x + r.w * .5 - tw * .5 - pad, r.y + r.h * .5 - th * .5 - pad * .7, tw + pad * 2, th + pad * 1.4);
+    drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 8 * dpi, 1.0);
+    set_argb(cr, theme.accent);
+    cr->fill();
+    swifi_text(root, pill, text, size, RGBA(1, 1, 1, 1), true);
+}
+
 static void make_wallpaper_row(Container *padded_right) {
-    make_bool_with_button(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
+    make_bool_with_button(padded_right, "Draw wallpaper", "Can drag and drop image here", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
         damage_all();
     }, "Choose file", []() {
@@ -3034,27 +3209,21 @@ static void make_wallpaper_row(Container *padded_right) {
         chooser_open = true;
 
         std::thread t([]() {
-            const auto file = trim_newline(choose_file());
-            if (!file.empty() && std::filesystem::exists(file)) {
-                auto mime = trim_newline(execAndGet(std::string("file --mime-type -b \"" + file + "\"").c_str()));
-
-                if (mime.starts_with("image/")) {
-                    const char* home = std::getenv("HOME");
-                    std::filesystem::path filepath =
-                        std::filesystem::path(home) / ".config/mylar/wall.png";
- 
-                    std::error_code ec;
-                    std::filesystem::create_directories(filepath.parent_path(), ec);
-                    std::filesystem::copy_file(file, filepath,
-                                               std::filesystem::copy_options::overwrite_existing, ec);
-                }
-            }
-
+            set_wallpaper_from_file(trim_newline(choose_file()));
             chooser_open = false;
         });
 
         t.detach();
     }, "\uE8b9");
+    padded_right->children.back()->name = "display_wallpaper_row";
+
+    make_vert_space(padded_right, 4);
+
+    // Same mechanism as the dock's brightness popup (brightnessctl). The dock
+    // keeps brightness_level current, so reading it here doesn't block.
+    make_slider(padded_right, "Brightness", "Screen backlight level", std::clamp(brightness_level / 100.0f, 0.0f, 1.0f), [](float value) {
+        set_brightness(std::round(value * 100.0f));
+    }, 0, "\uE706");
 }
 
 static void fill_display_settings(Container *root) {
@@ -3457,13 +3626,13 @@ static void fill_mouse_settings(Container *root, Container *c) {
     
     make_vert_space(padded_right, 4); 
     
-    make_slider(padded_right, "Cursor speed", "Sets the speed factor of the cursor", set->cursor_speed, [](float value) {
-        set->cursor_speed = value;
+    make_slider(padded_right, "Mouse speed", "How far the pointer moves when you move the mouse", set->mouse_speed, [](float value) {
+        set->mouse_speed = value;
         // Writing the config makes Hyprland reload it, so wait until the slider settles.
-        debounce_main("cursor_speed", 200, []() {
+        debounce_main("mouse_speed", 200, []() {
             hypriso->generate_mylar_hyprland_config();
         });
-    }, 0, "\uec49", ConfigSettings().cursor_speed);
+    }, 0, "\uec49", ConfigSettings().mouse_speed);
 
     make_vert_space(padded_right, 10); 
     
@@ -3499,6 +3668,15 @@ static void fill_mouse_settings(Container *root, Container *c) {
                 hypriso->generate_mylar_hyprland_config();
             });
         }, set->touchpad_acceleration_curve, "\uec49");
+
+    make_vert_space(padded_right, 4); 
+
+    make_slider(padded_right, "Touchpad speed", "How far the pointer moves when you slide on the touchpad", set->touchpad_speed, [](float value) {
+        set->touchpad_speed = value;
+        debounce_main("touchpad_speed", 200, []() {
+            hypriso->generate_mylar_hyprland_config();
+        });
+    }, 0, "\uec49", ConfigSettings().touchpad_speed);
 
 }
 
@@ -5578,12 +5756,17 @@ static void fill_audio_settings(Container *root) {
         c->wanted_pad = Bounds(4 * dpi, 4 * dpi, 4 * dpi, 4 * dpi);
         c->spacing = 4 * dpi;
     };
+    // Kept across page rebuilds so a tab change still slides.
+    static SegmentSlide audio_tab_slide;
+    audio_tab_slide.painted = false;
     tabs->when_paint = [](Container *root, Container *c) {
         auto window = swifi_window(root);
         auto b = c->real_bounds;
         set_argb(window->drawing_context, theme.segment_background);
         drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 10 * window->dpi, 1.0);
         window->drawing_context->fill();
+        if (settings_audio_tab >= 0 && settings_audio_tab < (int) c->children.size())
+            segment_slide_paint(root, c, &audio_tab_slide, c->children[settings_audio_tab]);
     };
     for (int i = 0; i < 5; i++) {
         auto tab = tabs->child(FILL_SPACE, FILL_SPACE);
@@ -5594,8 +5777,8 @@ static void fill_audio_settings(Container *root) {
             auto dpi = window->dpi;
             auto b = c->real_bounds;
             bool selected = settings_audio_tab == i;
-            if (selected || c->state.mouse_hovering) {
-                set_argb(cr, selected ? theme.segment_selected : swifi_mix(theme.segment_background, theme.segment_selected, .5));
+            if (!selected && c->state.mouse_hovering) {
+                set_argb(cr, swifi_mix(theme.segment_background, theme.segment_selected, .5));
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
                 cr->fill();
             }
@@ -5604,6 +5787,7 @@ static void fill_audio_settings(Container *root) {
         tab->when_clicked = [i](Container *root, Container *) {
             if (settings_audio_tab == i || !settings_audio)
                 return;
+            segment_slide_start(&audio_tab_slide);
             settings_audio_tab = i;
             if (auto right = container_by_name("settings_right", root))
                 ((RightData *) right->user_data)->scroll = 0;
@@ -7372,7 +7556,8 @@ static void search_build_index() {
 
     search_add("Display", "Display Settings", "Display Settings", "Arrange monitors and change how each one is driven",
                "monitors screens displays arrange layout position outputs");
-    search_add("Display", "Display Settings", "Draw wallpaper", "", "background image picture photo choose file wallpaper");
+    search_add("Display", "Display Settings", "Draw wallpaper", "Can drag and drop image here", "background image picture photo choose file wallpaper drop");
+    search_add("Display", "Display Settings", "Brightness", "Screen backlight level", "brightness backlight dim bright screen");
     search_add("Display", "Monitor", "Mode", "Resolution and refresh rate", "resolution refresh rate hz fps size");
     search_add("Display", "Monitor", "Scale", "Scale factor, or \"auto\"", "zoom size dpi hidpi fractional scaling bigger smaller");
     search_add("Display", "Monitor", "Transform", "Rotation and reflection applied to the display", "rotate rotation flip portrait landscape orientation");
@@ -7428,12 +7613,14 @@ static void search_build_index() {
     search_add("Mouse & Touchpad", "Mouse", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert scroll wheel");
     search_add("Mouse & Touchpad", "Mouse", "Primary mouse button", "Which side performs the main function of the mouse",
                "left handed right handed swap buttons click");
-    search_add("Mouse & Touchpad", "Mouse", "Cursor speed", "Sets the speed factor of the cursor", "pointer sensitivity speed fast slow mouse");
+    search_add("Mouse & Touchpad", "Mouse", "Mouse speed", "How far the pointer moves when you move the mouse", "cursor pointer sensitivity speed fast slow mouse");
     search_add("Mouse & Touchpad", "Touchpad", "Touchpad", "", "trackpad touchpad laptop");
     search_add("Mouse & Touchpad", "Touchpad", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert trackpad");
     search_add("Mouse & Touchpad", "Touchpad", "Disable while typing", "Prevents touchpad from receiving input while typing", "palm rejection trackpad dwt");
     search_add("Mouse & Touchpad", "Touchpad", "Touchpad acceleration", "Cursor moves different distances depending on how fast you flick",
                "pointer curve flat adaptive custom trackpad speed");
+    search_add("Mouse & Touchpad", "Touchpad", "Touchpad speed", "How far the pointer moves when you slide on the touchpad",
+               "cursor pointer sensitivity speed fast slow trackpad");
 
     search_add("Keyboard", "Keyboard Settings", "Keyboard Settings", "", "keyboard keys typing");
     search_add("Keyboard", "Keyboard Settings", "Repeat delay", "Delay before a held key starts repeating, in milliseconds", "key repeat typing hold");
@@ -8383,6 +8570,7 @@ void fill_root(Container *root) {
     right->after_paint = [](Container *root, Container *c) {
         paint_search_flash(root, c);
         paint_right_scrollbar(root, c);
+        paint_wallpaper_drop_hint(root, c);
     };
 }
 
@@ -8398,8 +8586,10 @@ void actual_start() {
     RawWindowSettings settings;
     settings.pos.w = 1000;
     settings.pos.h = 760;
-    settings.pos.min_w = (int) settings_page_min_w; // Narrow windows fold the page list away
-    settings.pos.min_h = 600;
+    // Narrow windows fold the page list away, so the window can get much
+    // smaller than the page's comfortable width (80% under the old minimum).
+    settings.pos.min_w = (int) (settings_page_min_w * .2);
+    settings.pos.min_h = (int) (600 * .2);
     // On displays too small for the defaults, shrink the minimum and the
     // starting size so the window fits in the usable area.
     int fit_w = settings_fit_w.load();
@@ -8418,6 +8608,32 @@ void actual_start() {
     mylar->root->user_data = mylar;
     settings_mylar = mylar;
     fill_root(mylar->root);
+    // Ctrl+L clears the search query and puts the cursor in the search field.
+    auto forward_key = mylar->raw_window->on_key_press;
+    mylar->raw_window->on_key_press = [forward_key](RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if ((sym == XKB_KEY_l || sym == XKB_KEY_L) && (mods & MOD_CTRL) && !(mods & ~(MOD_CTRL | MOD_SHIFT))) {
+            if (pressed) {
+                std::lock_guard<std::mutex> lock(rw->creator->mutex);
+                if (settings_mylar) {
+                    auto root = settings_mylar->root;
+                    search_set_query(root, "");
+                    search_clear_field(root);
+                    search_focus_requested = true;
+                    windowing::redraw(rw);
+                }
+            }
+            return true;
+        }
+        return forward_key ? forward_key(rw, key, pressed, sym, mods, is_text, text) : false;
+    };
+    // Files can be dropped anywhere on the Display page to set the wallpaper.
+    mylar->raw_window->accepts_file_drop = [](RawWindow *rw, float, float) {
+        std::lock_guard<std::mutex> lock(rw->creator->mutex);
+        return settings_mylar && container_by_name("display_wallpaper_row", settings_mylar->root) != nullptr;
+    };
+    mylar->raw_window->on_file_drop = [](RawWindow *, float, float, std::string uri_list) {
+        wallpaper_file_dropped(uri_list);
+    };
     mylar->raw_window->on_close = [](RawWindow *w) {
         settings_wifi_release();
         settings_audio_release();
@@ -8445,6 +8661,9 @@ void actual_start() {
 void settings::start(std::string page, bool focus_search) {
     if (!page.empty()) {
         requested_page = page;
+    } else if (!settings_app) {
+        // Opening fresh without a page: show Display rather than a blank page.
+        requested_page = "Display";
     }
     if (focus_search)
         search_focus_requested = true;

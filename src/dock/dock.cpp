@@ -511,6 +511,28 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
     return c;
 }
 
+// Right click menu on a dock status item: one entry that opens its Settings page.
+static void settings_page_right_click(Container *root, std::string label, std::string page) {
+    auto dock = (Dock *) root->user_data;
+    float dpi = dock->window->raw_window->dpi;
+    float yoff = root->mouse_current_y;
+    main_thread([label, page, dpi, yoff] {
+        auto m = mouse();
+        std::vector<PopOption> options;
+        PopOption pop;
+        pop.text = label;
+        pop.icon_left = "\uE713";
+        pop.is_text_icon = true;
+        pop.on_clicked = [page]() {
+            settings::start(page);
+        };
+        options.push_back(pop);
+        popup::open(options,
+            m.x - (277 * .5) + 1.4,
+            m.y - (yoff / dpi) - 5 - (24 * options.size() * dpi));
+    });
+}
+
 static void icons_right_click(int startoff, int cw, std::string uuid, float dpi, float yoff) {
     main_thread([startoff, cw, uuid, dpi, yoff] {
         auto m = mouse();
@@ -2142,6 +2164,10 @@ static void fill_root(Container *root) {
         });
         wifi->name = "wifi";
         wifi->when_clicked = [](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                settings_page_right_click(root, "Wifi settings", "Wifi");
+                return;
+            }
             auto dock = (Dock *) root->user_data;
             auto settings = make_icon_anchored_popup_settings(c, dock->window->raw_window->dpi, 376, 520);
             // The password field needs keyboard input.
@@ -2180,6 +2206,10 @@ static void fill_root(Container *root) {
             set_brightness(brightness_data->value);
         };
         brightness->when_clicked = [](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                settings_page_right_click(root, "Display settings", "Display");
+                return;
+            }
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
@@ -2227,6 +2257,10 @@ static void fill_root(Container *root) {
         volume->name = "volume";
         volume_level = 100;
         volume->when_clicked = paint {
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                settings_page_right_click(root, "Sound settings", "Audio");
+                return;
+            }
             if (!audio_running)
                 audio_start();
             auto dock = (Dock *) root->user_data;
@@ -2352,6 +2386,10 @@ static void fill_root(Container *root) {
             c->wanted_bounds.w = bounds.w + 20;
         };
         date->when_clicked = [](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                settings_page_right_click(root, "Date & time settings", "Time & Date");
+                return;
+            }
             auto dock = static_cast<Dock *>(root->user_data);
             if (dock->date_menu)
                 return;
