@@ -2294,6 +2294,19 @@ void main_thread(std::function<void()> func) {
     write(main_wake_pipe[1], "x", 1);
 }
 
+// Last-call-wins counters for debounce_main(); only touched on the main thread.
+static std::unordered_map<std::string, uint64_t> debounce_generations;
+
+void debounce_main(const std::string &key, float delay_ms, std::function<void()> func) {
+    main_thread([key, delay_ms, func = std::move(func)]() {
+        const uint64_t generation = ++debounce_generations[key];
+        later(delay_ms, [key, generation, func](Timer *) {
+            if (debounce_generations[key] == generation)
+                func();
+        });
+    });
+}
+
 void setup_wake_main_thread() {
     std::lock_guard<std::mutex> lock(funcs_mutex);
     if (main_wake_source)
@@ -3296,6 +3309,12 @@ static std::string lua_string(const std::string& value) {
     return result + "\"";
 }
 
+// Lua color string for an RGBA, e.g. "rgba(76b9edff)".
+static std::string lua_rgba(const RGBA& color) {
+    auto channel = [](float v) { return (int)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
+    return std::format("\"rgba({:02x}{:02x}{:02x}{:02x})\"", channel(color.r), channel(color.g), channel(color.b), channel(color.a));
+}
+
 static std::string monitor_lua(const MylarMonitor& monitor) {
     std::string out = "hl.monitor({\n";
     out += "    output = " + lua_string(monitor.output) + ",\n";
@@ -3700,21 +3719,34 @@ hl.config({ input = { float_switch_override_focus = false } })
 
 
 
+    // Tiling workspaces paint the active border with the dock accent color
+    // (the bar under pinned icons that have windows); floating workspaces
+    // keep the regular active border.
+    const std::string floating_border = set->active_window_border_hint ? "\"rgba(a9a9a9aa)\"" : "\"rgba(595959aa)\"";
+    const std::string tiling_border = lua_rgba(hypriso->get_varcolor("plugin:mylardesktop:dock_sel_accent_color", RGBA("76b9edff")));
+
     // The fallback covers workspaces that have not been created yet.
     const bool default_tiling = set->new_workspace_is_tiling;
     base += "hl.window_rule({ name = \"float-default\", match = { class = \".*\" }, float = ";
     base += default_tiling ? "false" : "true";
+    if (default_tiling)
+        base += ", border_color = " + tiling_border;
     base += " })\n\n";
     for (const auto& workspace : set->workspace_tiling) {
         const bool tiling = workspace.is_tiling;
         base += "hl.window_rule({\n    name = " + lua_string("float-" + workspace.workspace)
             + ",\n    match = { workspace = " + lua_string(workspace.workspace)
-            + " },\n    float = " + (tiling ? "false" : "true") + ",\n})\n\n";
+            + " },\n    float = " + (tiling ? "false" : "true") + ",\n";
+        // A floating workspace only needs an explicit color to undo the
+        // fallback rule's accent border.
+        if (tiling)
+            base += "    border_color = " + tiling_border + ",\n";
+        else if (default_tiling)
+            base += "    border_color = " + floating_border + ",\n";
+        base += "})\n\n";
     }
 
-    base += "hl.config({ general = { col = { active_border = ";
-    base += set->active_window_border_hint ? "\"rgba(a9a9a9aa)\"" : "\"rgba(595959aa)\"";
-    base += " } } })\n\n";
+    base += "hl.config({ general = { col = { active_border = " + floating_border + " } } })\n\n";
 
     const char *tiling_layout = set->tiling_layout == "Scrolling" ? "scrolling" : "master";
     base += std::string("hl.config({ general = { layout = \"") + tiling_layout + "\" } })\n\n";

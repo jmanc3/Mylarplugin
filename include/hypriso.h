@@ -145,7 +145,9 @@ struct ConfigSettings {
     bool desktop_sort_ascending = true;
     std::string desktop_folder = "~/Desktop";
     std::string overview_layout_type = "Grid";
-    std::string font = "Segoe UI Variable";
+    std::string font = "Segoe UI Variable, Cantarell, Adwaita Sans, Ubuntu, Roboto, Liberation Sans, Noto Sans";
+    // Draw each font suggestion in the font it names (off: use the UI font, which is faster).
+    bool font_suggestions_in_own_font = true;
 
     bool is_tiling = false;
     // Scope of explicit toggle changes; new workspaces use their own default.
@@ -721,6 +723,11 @@ void request_refresh();
 void request_refresh_only();
 
 void main_thread(std::function<void()> func);
+
+// Runs func on the main thread once calls with the same key stop arriving for
+// delay_ms. Safe to call from any thread. Use it for sliders and other rapid
+// changes that would otherwise rewrite and reload the Hyprland config per step.
+void debounce_main(const std::string &key, float delay_ms, std::function<void()> func);
 
 void load_icon_full_path(cairo_surface_t** surface, std::string path, int target_size);
 

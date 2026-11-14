@@ -795,7 +795,7 @@ void fill_applications_container(Container *root) {
         if (i == 0) {
             windowing::close_window(dock->applications->raw_window);
             main_thread([]() {
-                settings::start();
+                settings::start("", true);
             });
         } else {
             open_power_menu(root, c, via_keyboard);

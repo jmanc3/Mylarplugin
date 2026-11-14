@@ -260,10 +260,13 @@ void fill_tiling_container(Dock *dock) {
             return;
         dock->tiling_settings.window_gap = gap;
         windowing::redraw(dock->tiling->raw_window);
-        main_thread([gap]() {
-            if (set->tiling_window_gap == gap)
+        main_thread([gap]() { set->tiling_window_gap = gap; });
+        // Applying reloads the whole config, so wait until the slider settles.
+        debounce_main("tiling_window_gap", 200, []() {
+            static int applied_gap = -1;
+            if (applied_gap == set->tiling_window_gap)
                 return;
-            set->tiling_window_gap = gap;
+            applied_gap = set->tiling_window_gap;
             hypriso->apply_tiling_settings();
         });
     };

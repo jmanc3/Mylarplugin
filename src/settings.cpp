@@ -554,6 +554,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(std::string, "desktop_folder", &settings->desktop_folder);
     bind(std::string, "overview_layout_type", &settings->overview_layout_type);
     bind(std::string, "font", &settings->font);
+    bind(bool, "font_suggestions_in_own_font", &settings->font_suggestions_in_own_font);
     bind(bool, "is_tiling", &settings->is_tiling);
     bind(bool, "tile_all_workspaces", &settings->tile_all_workspaces);
     bind(bool, "new_workspace_is_tiling", &settings->new_workspace_is_tiling);
@@ -938,10 +939,11 @@ static RGBA swifi_dim(RGBA color) {
     return color;
 }
 
-static void swifi_text(Container *root, Bounds b, const std::string &text, double size, RGBA color,
-                       bool centered = false, bool bold = false) {
+// Like swifi_text, but in the font `family` instead of the UI font.
+static void swifi_text_in_family(Container *root, Bounds b, const std::string &text, const std::string &family, double size,
+                                 RGBA color, bool centered = false, bool bold = false) {
     auto window = swifi_window(root);
-    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi,
+    auto font = get_cached_pango_font(window->drawing_context, family, size * window->dpi,
         bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(font, text.c_str(), -1);
     pango_layout_set_width(font, std::max(1.0, b.w) * PANGO_SCALE);
@@ -959,6 +961,11 @@ static void swifi_text(Container *root, Bounds b, const std::string &text, doubl
     window->drawing_context->show_layout(font);
     window->drawing_context->restore();
     pango_layout_set_alignment(font, PANGO_ALIGN_LEFT);
+}
+
+static void swifi_text(Container *root, Bounds b, const std::string &text, double size, RGBA color,
+                       bool centered = false, bool bold = false) {
+    swifi_text_in_family(root, b, text, set->font, size, color, centered, bold);
 }
 
 // Pages measure their labels on every layout (the Shortcuts page alone has
@@ -1301,7 +1308,13 @@ static void paint_toggle(Container *root, Container *c, ToggleAnim *t, Bounds ch
     knob.h = circ_size * dpi;
     RGBA knob_color = on ? theme.toggle_knob_on : theme.toggle_knob_off;
     knob_color.a *= enabled ? 1.0 : .6;
-    drawRoundedRect(cr, knob.x, knob.y, knob.w, knob.h, (circ_size * .5) * dpi, 1.0);
+    // A true pill: drawRoundedRect trims a pixel off the height but keeps the
+    // full radius, which made the knob look lopsided and pointy.
+    double r = knob.h * .5;
+    cr->new_path();
+    cr->arc(knob.x + knob.w - r, knob.y + r, r, -M_PI / 2, M_PI / 2);
+    cr->arc(knob.x + r, knob.y + r, r, M_PI / 2, 3 * M_PI / 2);
+    cr->close_path();
     set_argb(cr, knob_color);
     cr->fill();
 }
@@ -1382,7 +1395,10 @@ static void make_bool(Container *parent, std::string title, std::string descript
     make_bool_control(p, initial_value, on_change);
 }
 
-static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, int notches = 0, std::string icon = "") {
+static void make_button(Container *parent, std::string text, std::function<void()> func, std::function<bool()> is_enabled);
+
+// A negative reset_value means no Reset button.
+static void make_slider(Container *parent, std::string title, std::string description, float initial_value, std::function<void(float)> on_change, int notches = 0, std::string icon = "", float reset_value = -1) {
     auto p = make_self_height_sized_parent(parent);
     
     make_label_like(p, title, description, icon);
@@ -1391,7 +1407,29 @@ static void make_slider(Container *parent, std::string title, std::string descri
         float value = .5;
     };
 
-    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    Container *right = nullptr;
+    Container *row = nullptr;
+    if (reset_value >= 0) {
+        // Slider and Reset button side by side.
+        row = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+        row->alignment = container_alignment::ALIGN_CENTER;
+        row->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto dpi = mylar->raw_window->dpi;
+            c->spacing = 24 * dpi;
+            float w = 0;
+            for (auto child : c->children) {
+                if (child->pre_layout)
+                    child->pre_layout(root, child, b);
+                w += child->wanted_bounds.w;
+            }
+            c->real_bounds.w = w + c->spacing * (c->children.size() - 1);
+            c->real_bounds.h = 40 * dpi;
+        };
+        right = row->child(FILL_SPACE, FILL_SPACE);
+    } else {
+        right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
+    }
     auto slider_info = new SliderInfo;
     if (notches != 0) {
         float snap_percentage = 1.0f / ((float) notches);
@@ -1476,13 +1514,32 @@ static void make_slider(Container *parent, std::string title, std::string descri
     right->when_drag = right->when_mouse_down;
     right->when_drag_end = right->when_mouse_down;
     
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+    bool has_reset = row != nullptr;
+    right->pre_layout = [has_reset](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
-        c->real_bounds.w = 350 * dpi;
+        // `b` is the whole row. Narrow windows shrink the slider so the label
+        // (and the Reset button) keep their room.
+        double room = (has_reset ? 360 : 260) * dpi;
+        c->real_bounds.w = std::clamp(b.w - room, 120.0 * dpi, 350.0 * dpi);
         c->real_bounds.h = 20 * dpi;
+        c->wanted_bounds.w = c->real_bounds.w;
+        c->wanted_bounds.h = c->real_bounds.h;
     };
+
+    if (row) {
+        make_button(row, "Reset", [slider_info, reset_value, on_change, notches]() {
+            float value = reset_value;
+            if (notches != 0) {
+                float snap_percentage = 1.0f / ((float) notches);
+                value = std::round(value / snap_percentage) * snap_percentage;
+            }
+            value = std::clamp(value, 0.0f, 1.0f);
+            slider_info->value = value;
+            if (on_change)
+                on_change(value);
+        }, {});
+    }
 }
 
 static void make_button_group(Container *parent, std::string title, std::string description, std::vector<std::string> options, std::function<void(std::string)> on_selected, std::string default_value, std::string icon = "") {
@@ -2360,8 +2417,10 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
     }
 }
 
-static void make_reset_textfield(Container* parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value,
-                                 std::string reset_value, std::function<void(std::string)> on_change);
+static Container *make_reset_textfield(Container* parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value,
+                                 std::string reset_value, std::function<void(std::string)> on_change, std::function<std::string()> left_text = nullptr);
+static std::string resolved_font_family(const std::string &name);
+static void attach_font_completions(Container *field, std::function<void(std::string)> on_pick);
 
 static bool monitor_int_from_text(const std::string& text, int& value) {
     try {
@@ -2963,6 +3022,41 @@ static void display_trial_watch() {
     }, nullptr);
 }
 
+static void make_wallpaper_row(Container *padded_right) {
+    make_bool_with_button(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
+        set->draw_wallpaper = c;
+        damage_all();
+    }, "Choose file", []() {
+        static bool chooser_open = false;
+        if (chooser_open)
+            return;
+
+        chooser_open = true;
+
+        std::thread t([]() {
+            const auto file = trim_newline(choose_file());
+            if (!file.empty() && std::filesystem::exists(file)) {
+                auto mime = trim_newline(execAndGet(std::string("file --mime-type -b \"" + file + "\"").c_str()));
+
+                if (mime.starts_with("image/")) {
+                    const char* home = std::getenv("HOME");
+                    std::filesystem::path filepath =
+                        std::filesystem::path(home) / ".config/mylar/wall.png";
+ 
+                    std::error_code ec;
+                    std::filesystem::create_directories(filepath.parent_path(), ec);
+                    std::filesystem::copy_file(file, filepath,
+                                               std::filesystem::copy_options::overwrite_existing, ec);
+                }
+            }
+
+            chooser_open = false;
+        });
+
+        t.detach();
+    }, "\uE8b9");
+}
+
 static void fill_display_settings(Container *root) {
     display_trial.page_stale = false;
     auto right = container_by_name("settings_right", root);
@@ -3057,6 +3151,9 @@ static void fill_display_settings(Container *root) {
         
         make_vert_space(padded_right, 10);
     }
+
+    make_wallpaper_row(padded_right);
+    make_vert_space(padded_right, 10);
         
     for (auto m : options) {
         change_display_options(m);
@@ -3156,47 +3253,14 @@ static void fill_desktop_settings(Container *root, Container *c) {
     });
     
     make_vert_space(padded_right, 4); 
-    make_reset_textfield(padded_right, "Font", "User interface font", "\uE8D2", false, set->font, "Segoe UI Variable", [](std::string value) {
+    auto font_field = make_reset_textfield(padded_right, "Font", "User interface font", "\uE8D2", false, set->font, ConfigSettings().font, [](std::string value) {
+        set->font = value;
+    }, []() { return resolved_font_family(set->font); });
+    attach_font_completions(font_field, [](std::string value) {
         set->font = value;
     });
+
     
-    make_vert_space(padded_right, 24);
-    make_section_title(padded_right, "Wallpaper Settings");
-
-    make_vert_space(padded_right, 10);
-    make_bool_with_button(padded_right, "Draw wallpaper", "", set->draw_wallpaper, [](bool c) {
-        set->draw_wallpaper = c;
-        damage_all();
-    }, "Choose file", []() {
-        static bool chooser_open = false;
-        if (chooser_open)
-            return;
-
-        chooser_open = true;
-
-        std::thread t([]() {
-            const auto file = trim_newline(choose_file());
-            if (!file.empty() && std::filesystem::exists(file)) {
-                auto mime = trim_newline(execAndGet(std::string("file --mime-type -b \"" + file + "\"").c_str()));
-
-                if (mime.starts_with("image/")) {
-                    const char* home = std::getenv("HOME");
-                    std::filesystem::path filepath =
-                        std::filesystem::path(home) / ".config/mylar/wall.png";
- 
-                    std::error_code ec;
-                    std::filesystem::create_directories(filepath.parent_path(), ec);
-                    std::filesystem::copy_file(file, filepath,
-                                               std::filesystem::copy_options::overwrite_existing, ec);
-                }
-            }
-
-            chooser_open = false;
-        });
-
-        t.detach();
-    }, "\uE8b9");
-
     make_vert_space(padded_right, 24);
     make_section_title(padded_right, "Dock Settings");
 
@@ -3242,7 +3306,35 @@ static void fill_desktop_settings(Container *root, Container *c) {
 
 
 
-static void make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change) {
+// Returns the family Pango actually uses for `name`, after fontconfig fallback.
+static std::string resolved_font_family(const std::string &name) {
+    static std::string cached_name;
+    static std::string cached_family;
+    if (!cached_family.empty() && cached_name == name)
+        return cached_family;
+
+    std::string family = name;
+    PangoFontMap *map = pango_cairo_font_map_get_default();
+    PangoContext *ctx = pango_font_map_create_context(map);
+    PangoFontDescription *desc = pango_font_description_new();
+    pango_font_description_set_family(desc, name.c_str());
+    pango_font_description_set_size(desc, 11 * PANGO_SCALE);
+    if (PangoFont *font = pango_font_map_load_font(map, ctx, desc)) {
+        PangoFontDescription *actual = pango_font_describe(font);
+        if (const char *f = pango_font_description_get_family(actual))
+            family = f;
+        pango_font_description_free(actual);
+        g_object_unref(font);
+    }
+    pango_font_description_free(desc);
+    g_object_unref(ctx);
+
+    cached_name = name;
+    cached_family = family;
+    return family;
+}
+
+static Container *make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change, std::function<std::string()> left_text) {
     auto p = make_self_height_sized_parent(parent);
     
     make_label_like(p, title, description, icon);
@@ -3250,14 +3342,43 @@ static void make_reset_textfield(Container *parent, std::string title, std::stri
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     right->alignment = container_alignment::ALIGN_CENTER;
     
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+    right->pre_layout = [left_text](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
-        c->real_bounds.w = 340 * dpi;
         c->real_bounds.h = 70 * dpi;
         c->spacing = 5 * dpi;
+        // `b` is the whole row; leave the title its room. In narrow windows the
+        // hint before the field goes first, then the field shrinks.
+        double max_w = std::max(260.0 * dpi, b.w - 260.0 * dpi);
+        c->real_bounds.w = std::min(340.0 * dpi, max_w);
+        if (left_text) {
+            auto tb = draw_text(cr, 0, 0, left_text(), 11 * dpi, false, set->font, -1, -1, theme.text_secondary, false);
+            bool fits = c->real_bounds.w + tb.w + 5 * dpi <= max_w;
+            c->children[0]->exists = fits;
+            if (fits)
+                c->real_bounds.w += tb.w + 5 * dpi;
+        }
     };
+
+    if (left_text) {
+        auto label = right->child(FILL_SPACE, FILL_SPACE);
+        label->pre_layout = [left_text](Container *root, Container *c, const Bounds &b) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto dpi = mylar->raw_window->dpi;
+            auto tb = draw_text(mylar->raw_window->drawing_context, 0, 0, left_text(), 11 * dpi, false, set->font, -1, -1, theme.text_secondary, false);
+            c->wanted_bounds.w = tb.w;
+            c->real_bounds.w = tb.w;
+        };
+        label->when_paint = [left_text](Container *root, Container *c) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->drawing_context;
+            auto dpi = mylar->raw_window->dpi;
+            auto text = left_text();
+            auto tb = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font, -1, -1, theme.text_secondary, false);
+            draw_text(cr, c->real_bounds.x, c->real_bounds.y + c->real_bounds.h * .5 - tb.h * .5, text, 11 * dpi, true, set->font, -1, -1, theme.text_secondary, false);
+        };
+    }
 
     auto field = make_field(right, only_numbers, initial_value, [](std::string latest_text) {
     });
@@ -3271,6 +3392,7 @@ static void make_reset_textfield(Container *parent, std::string title, std::stri
         auto value = static_cast<STextEditorData *>(field->user_data)->text;
         on_change(value);
     });
+    return field;
 }
 
 static void reset_conf() {
@@ -3337,27 +3459,11 @@ static void fill_mouse_settings(Container *root, Container *c) {
     
     make_slider(padded_right, "Cursor speed", "Sets the speed factor of the cursor", set->cursor_speed, [](float value) {
         set->cursor_speed = value;
-        static long last_time = 0;
-        static bool already_queued = false;
-        long current = get_current_time_in_ms();
-        long delta = current - last_time;
-        if (delta > 200) {
-            last_time = current;
-            main_thread([]() {
-                hypriso->generate_mylar_hyprland_config();
-            });
-        } else {
-            if (!already_queued) {
-                already_queued = true;
-                main_thread([]() {
-                    later(100, [](Timer *) {
-                        hypriso->generate_mylar_hyprland_config();
-                        already_queued = false;
-                    });
-                });
-            }
-        }
-    }, 0, "\uec49");
+        // Writing the config makes Hyprland reload it, so wait until the slider settles.
+        debounce_main("cursor_speed", 200, []() {
+            hypriso->generate_mylar_hyprland_config();
+        });
+    }, 0, "\uec49", ConfigSettings().cursor_speed);
 
     make_vert_space(padded_right, 10); 
     
@@ -3460,8 +3566,8 @@ static void fill_multitasking_settings(Container *root) {
         save_multitasking_settings();
     }, "\ue8b0");
     make_vert_space(padded_right, 4);
-    make_bool(padded_right, "Window resizing at screen edges",
-        "Automatically resize windows dragged to screen edges", set->resize_at_screen_edges, [](bool value) {
+    make_bool(padded_right, "Snap windows",
+        "Drag a window to a screen edge or corner to fill half or a quarter of the screen", set->resize_at_screen_edges, [](bool value) {
             set->resize_at_screen_edges = value;
             save_multitasking_settings();
         });
@@ -6141,6 +6247,317 @@ static void list_bar_install(Container *list) {
     };
 }
 
+/*
+ * Font completions: while the Font field is typed in, a popup under it lists the installed
+ * font families that continue the text (then the ones containing it elsewhere). Each row is
+ * drawn in the font it names unless set->font_suggestions_in_own_font is off.
+ * The popup's xdg grab includes the settings window, so typing keeps reaching the field.
+ */
+
+struct FontCompletionList : UserData {
+    std::vector<std::string> shown;
+    float scroll = 0;
+    float overflow = 0;
+    float view_h = 0;
+    int highlighted = -1;
+    ListScrollbar bar;
+    SmoothScroll smooth;
+};
+
+static constexpr int font_completion_row_h = 32;
+static constexpr int font_completion_max_rows = 8;
+
+static MylarWindow *font_completion_popup = nullptr;
+static FontCompletionList *font_completion_list = nullptr;
+static RawWindowSettings font_completion_settings;
+
+static std::string font_completion_lower(std::string s) {
+    for (auto &ch : s)
+        ch = (char) std::tolower((unsigned char) ch);
+    return s;
+}
+
+struct InstalledFontFamilies {
+    std::vector<std::string> names;
+    std::vector<std::string> lowered;
+};
+
+// Loaded once: fontconfig's family list doesn't change while the settings are open.
+static const InstalledFontFamilies &installed_font_families() {
+    static InstalledFontFamilies families;
+    static bool loaded = false;
+    if (loaded)
+        return families;
+    loaded = true;
+    PangoFontFamily **list = nullptr;
+    int count = 0;
+    pango_font_map_list_families(pango_cairo_font_map_get_default(), &list, &count);
+    for (int i = 0; i < count; i++)
+        if (const char *name = pango_font_family_get_name(list[i]))
+            families.names.emplace_back(name);
+    g_free(list);
+    std::sort(families.names.begin(), families.names.end(), [](const std::string &a, const std::string &b) {
+        return font_completion_lower(a) < font_completion_lower(b);
+    });
+    families.names.erase(std::unique(families.names.begin(), families.names.end()), families.names.end());
+    for (auto &name : families.names)
+        families.lowered.push_back(font_completion_lower(name));
+    return families;
+}
+
+// Families starting with `query`, followed by families containing it elsewhere.
+static std::vector<std::string> font_completions(const std::string &query) {
+    std::vector<std::string> prefix;
+    if (query.empty())
+        return prefix;
+    std::vector<std::string> inner;
+    auto q = font_completion_lower(query);
+    const auto &families = installed_font_families();
+    for (size_t i = 0; i < families.names.size(); i++) {
+        auto pos = families.lowered[i].find(q);
+        if (pos == std::string::npos)
+            continue;
+        (pos == 0 ? prefix : inner).push_back(families.names[i]);
+    }
+    prefix.insert(prefix.end(), inner.begin(), inner.end());
+    return prefix;
+}
+
+static int font_completion_popup_h(size_t rows) {
+    return (int) std::min<size_t>(rows, font_completion_max_rows) * font_completion_row_h + 8;
+}
+
+static bool font_completions_open() {
+    return font_completion_popup && font_completion_list && dropdown_popup == font_completion_popup;
+}
+
+static void close_font_completions() {
+    if (font_completions_open())
+        close_dropdown_menu();
+    font_completion_popup = nullptr;
+    font_completion_list = nullptr;
+}
+
+static void pick_font_completion(Container *field, const std::string &family, const std::function<void(std::string)> &on_pick) {
+    close_font_completions();
+    reset_text_editor(field, family);
+    if (on_pick)
+        on_pick(family);
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+// Scrolls the list so the highlighted row is fully visible.
+static void reveal_font_completion(FontCompletionList *data) {
+    if (!font_completion_popup || data->highlighted < 0)
+        return;
+    double row_h = font_completion_row_h * font_completion_popup->raw_window->dpi;
+    double top = data->highlighted * row_h;
+    data->smooth.stop();
+    if (top + data->scroll < 0)
+        data->scroll = (float) -top;
+    else if (top + row_h + data->scroll > data->view_h)
+        data->scroll = (float) -(top + row_h - data->view_h);
+    data->scroll = std::clamp(data->scroll, -data->overflow, 0.0f);
+}
+
+static void open_font_completions(Container *root, Container *field, std::vector<std::string> shown,
+                                  std::function<void(std::string)> on_pick) {
+    auto mylar = (MylarWindow *) root->user_data;
+    if (dropdown_popup || mylar->popup_window)
+        return;
+    auto dpi = mylar->raw_window->dpi;
+    int w = (int) std::max(240.0, field->real_bounds.w / dpi);
+    font_completion_settings = make_icon_anchored_popup_settings(field, dpi, w, font_completion_popup_h(shown.size()));
+    font_completion_settings.popup.offset_y = 4;
+    auto popup = open_mylar_popup(mylar, font_completion_settings);
+    if (!popup)
+        return;
+    dropdown_popup = popup;
+    popups.push_back(popup);
+    popup->root->skip_delete = true;
+    popup->root->user_data = popup;
+    popup->root->wanted_bounds.w = FILL_SPACE;
+    popup->root->wanted_bounds.h = FILL_SPACE;
+    popup->root->on_closed = [popup](Container *) {
+        if (dropdown_popup == popup)
+            dropdown_popup = nullptr;
+        if (font_completion_popup == popup) {
+            font_completion_popup = nullptr;
+            font_completion_list = nullptr;
+        }
+        std::erase(popups, popup);
+    };
+    popup->root->when_paint = [](Container *root, Container *c) {
+        auto window = ((MylarWindow *) root->user_data)->raw_window;
+        paint_smooth_frame(window->drawing_context, c->real_bounds, 8 * window->dpi, theme.popup_background, theme.dropdown_border);
+    };
+    // Keys normally stay with the settings window; if the compositor hands them to the
+    // popup instead, pass them on to the field so typing continues.
+    popup->root->when_key_event = [field](Container *, Container *, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text,
+                                          std::string text) {
+        if (!settings_mylar || !field->when_key_event)
+            return;
+        field->when_key_event(settings_mylar->root, field, key, pressed, sym, mods, is_text, text);
+        windowing::redraw(settings_mylar->raw_window);
+    };
+
+    auto data = new FontCompletionList;
+    data->shown = std::move(shown);
+    font_completion_popup = popup;
+    font_completion_list = data;
+
+    auto body = popup->root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    body->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(4 * dpi, 4 * dpi, 4 * dpi, 4 * dpi);
+    };
+
+    auto list = body->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    list->user_data = data;
+    list->receive_events_even_if_obstructed = true;
+    list->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto data = (FontCompletionList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        double content = data->shown.size() * font_completion_row_h * dpi;
+        data->view_h = (float) b.h;
+        data->overflow = (float) std::max(0.0, std::floor(content - b.h));
+        if (data->smooth.step(data->scroll))
+            swifi_redraw(root);
+        data->scroll = std::clamp(data->scroll, -data->overflow, 0.0f);
+    };
+    list->when_fine_scrolled = [](Container *root, Container *c, double, double scroll_y, bool touchpad) {
+        auto data = (FontCompletionList *) c->user_data;
+        float delta = (float) (scroll_y * 3 * swifi_window(root)->dpi);
+        if (touchpad) {
+            data->smooth.stop();
+            data->scroll = std::clamp(data->scroll + delta, -data->overflow, 0.0f);
+        } else {
+            data->smooth.scroll_by(data->scroll, delta, -data->overflow, 0.0f);
+        }
+        swifi_redraw(root);
+    };
+    // Rows are painted directly and hit-tested by position; only visible ones are drawn,
+    // so at most font_completion_max_rows + 1 fonts are shaped per frame.
+    list->when_paint = [](Container *root, Container *c) {
+        auto data = (FontCompletionList *) c->user_data;
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        cr->save();
+        cr->rectangle(b.x, b.y, b.w, b.h);
+        cr->clip_path();
+        double row_h = font_completion_row_h * dpi;
+        int first = std::max(0, (int) std::floor(-data->scroll / row_h));
+        for (int i = first; i < (int) data->shown.size(); i++) {
+            double y = b.y + data->scroll + i * row_h;
+            if (y > b.y + b.h)
+                break;
+            Bounds rb(b.x, y, b.w - list_bar_hit_w * dpi, row_h);
+            bool hovered = c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) && root->mouse_current_y >= y &&
+                root->mouse_current_y < y + row_h;
+            if (hovered || i == data->highlighted) {
+                set_argb(cr, hovered && c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
+                drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
+                cr->fill();
+            }
+            if (font_completion_lower(data->shown[i]) == font_completion_lower(set->font)) {
+                set_argb(cr, theme.accent);
+                drawRoundedRect(cr, rb.x + 4 * dpi, rb.y + rb.h * .3, 3 * dpi, rb.h * .4, 1.5 * dpi, 1.0);
+                cr->fill();
+            }
+            Bounds tb(rb.x + 16 * dpi, rb.y, rb.w - 24 * dpi, rb.h);
+            if (set->font_suggestions_in_own_font)
+                swifi_text_in_family(root, tb, data->shown[i], data->shown[i], 11, theme.text);
+            else
+                swifi_text(root, tb, data->shown[i], 11, theme.text);
+        }
+        cr->restore();
+        list_bar_paint(root, c, data->scroll, data->overflow, data->bar);
+    };
+    list->when_clicked = [field, on_pick](Container *root, Container *c) {
+        auto data = (FontCompletionList *) c->user_data;
+        auto dpi = swifi_window(root)->dpi;
+        int i = (int) std::floor((root->mouse_current_y - c->real_bounds.y - data->scroll) / (font_completion_row_h * dpi));
+        if (i >= 0 && i < (int) data->shown.size())
+            pick_font_completion(field, data->shown[i], on_pick);
+    };
+    list_bar_install<FontCompletionList>(list);
+    windowing::redraw(popup->raw_window);
+}
+
+// Shows, refreshes or hides the popup for the field's current text.
+static void update_font_completions(Container *root, Container *field, const std::function<void(std::string)> &on_pick) {
+    auto text = static_cast<STextEditorData *>(field->user_data)->text;
+    auto shown = font_completions(text);
+    if (shown.empty() || (shown.size() == 1 && font_completion_lower(shown[0]) == font_completion_lower(text))) {
+        close_font_completions();
+        return;
+    }
+    if (!font_completions_open()) {
+        open_font_completions(root, field, std::move(shown), on_pick);
+        return;
+    }
+    auto data = font_completion_list;
+    int old_h = font_completion_popup_h(data->shown.size());
+    data->shown = std::move(shown);
+    data->scroll = 0;
+    data->highlighted = -1;
+    data->smooth.stop();
+    int h = font_completion_popup_h(data->shown.size());
+    if (h != old_h) {
+        font_completion_settings.pos.h = h;
+        windowing::set_popup_size(font_completion_popup->raw_window, font_completion_settings.pos.w, h, font_completion_settings);
+    }
+    windowing::redraw(font_completion_popup->raw_window);
+}
+
+static void attach_font_completions(Container *field, std::function<void(std::string)> on_pick) {
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key, on_pick](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods,
+                                                bool is_text, std::string text) {
+        auto data = font_completion_list;
+        if (pressed && c->active && font_completions_open()) {
+            if (sym == XKB_KEY_Escape) {
+                close_font_completions();
+                return;
+            }
+            if (sym == XKB_KEY_Down || sym == XKB_KEY_Up) {
+                int count = (int) data->shown.size();
+                if (data->highlighted < 0)
+                    data->highlighted = sym == XKB_KEY_Down ? 0 : count - 1;
+                else
+                    data->highlighted = (data->highlighted + (sym == XKB_KEY_Down ? 1 : -1) + count) % count;
+                reveal_font_completion(data);
+                windowing::redraw(font_completion_popup->raw_window);
+                return;
+            }
+            if ((sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) && data->highlighted >= 0 &&
+                data->highlighted < (int) data->shown.size()) {
+                pick_font_completion(c, data->shown[data->highlighted], on_pick);
+                return;
+            }
+        }
+        auto editor = static_cast<STextEditorData *>(c->user_data);
+        auto before = editor->text;
+        if (edit_key)
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+        if (editor->text != before && c->active)
+            update_font_completions(root, c, on_pick);
+    };
+    // A plain function pointer, so the editor's own handler (the same for every text field)
+    // is kept in a static rather than captured.
+    static void (*editor_active_changed)(Container *, Container *) = nullptr;
+    editor_active_changed = field->when_active_status_changed;
+    field->when_active_status_changed = [](Container *root, Container *c) {
+        if (editor_active_changed)
+            editor_active_changed(root, c);
+        if (!c->active)
+            close_font_completions();
+    };
+}
+
 struct SdtZoneList : UserData {
     std::vector<SdtZoneRow> all;
     std::vector<const SdtZoneRow *> shown;
@@ -6919,6 +7336,16 @@ static int search_selected = 0;             // Result chosen by Return, moved wi
 static bool search_reveal_selected = false; // Scroll the selected result into view on the next paint
 static int search_pending_jump = -1;        // Result to open on the next layout, -1 for none
 static std::string search_last_page;        // Page shown before searching, restored when the query is cleared
+// Narrow windows fold the page list behind a hamburger button; settings_nav_open
+// is whether it is currently expanded over the page.
+// The page list is this wide when shown beside the page; pages need
+// settings_page_min_w. Below their sum the list folds behind the hamburger.
+static constexpr double settings_left_w     = 200;
+static constexpr double settings_page_min_w = 600;
+static bool settings_narrow   = false;
+// Set by settings::start from the main thread; the settings thread focuses the search field.
+static std::atomic<bool> search_focus_requested = false;
+static bool settings_nav_open = false;
 
 static constexpr long search_flash_ms = 1600;
 
@@ -6945,6 +7372,7 @@ static void search_build_index() {
 
     search_add("Display", "Display Settings", "Display Settings", "Arrange monitors and change how each one is driven",
                "monitors screens displays arrange layout position outputs");
+    search_add("Display", "Display Settings", "Draw wallpaper", "", "background image picture photo choose file wallpaper");
     search_add("Display", "Monitor", "Mode", "Resolution and refresh rate", "resolution refresh rate hz fps size");
     search_add("Display", "Monitor", "Scale", "Scale factor, or \"auto\"", "zoom size dpi hidpi fractional scaling bigger smaller");
     search_add("Display", "Monitor", "Transform", "Rotation and reflection applied to the display", "rotate rotation flip portrait landscape orientation");
@@ -6976,8 +7404,6 @@ static void search_build_index() {
     search_add("Desktop", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
     search_add("Desktop", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
     search_add("Desktop", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
-    search_add("Desktop", "Wallpaper Settings", "Wallpaper Settings", "", "wallpaper background");
-    search_add("Desktop", "Wallpaper Settings", "Draw wallpaper", "", "background image picture photo choose file wallpaper");
     search_add("Desktop", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
     search_add("Desktop", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
     search_add("Desktop", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
@@ -6995,8 +7421,8 @@ static void search_build_index() {
     search_add("Multitasking", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
                "workspaces span displays screens independent together");
     search_add("Multitasking", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
-    search_add("Multitasking", "Multitasking Settings", "Window resizing at screen edges", "Automatically resize windows dragged to screen edges",
-               "snap snapping tile tiling half maximize drag edges");
+    search_add("Multitasking", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
+               "window resizing screen edges corners quarter snap snapping tile tiling half maximize drag edges");
 
     search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
     search_add("Mouse & Touchpad", "Mouse", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert scroll wheel");
@@ -7283,6 +7709,7 @@ static void fill_search_results(Container *root) {
             search_pending_jump = i;
             swifi_redraw(root);
         };
+        make_vert_space(padded_right, 3);
     }
     make_vert_space(padded_right, 16);
 }
@@ -7315,7 +7742,9 @@ static void search_set_query(Container *root, const std::string &text) {
         if (auto tab = search_last_page.empty() ? nullptr : container_by_name(search_last_page, root); tab && tab->when_clicked) {
             if (right)
                 ((RightData *) right->user_data)->scroll = 0;
+            bool nav_open = settings_nav_open;
             tab->when_clicked(root, tab);
+            settings_nav_open = nav_open;
         } else if (right) {
             for (auto child : right->children)
                 delete child;
@@ -7612,6 +8041,15 @@ void create_tab_option(Container *parent, std::string label) {
         paint_label(root, c, label);
     };
     c->when_clicked = [label](Container *root, Container *c) {
+        settings_nav_open = false;
+        // A different page starts at its top.
+        if (label != search_last_page) {
+            if (auto right = container_by_name("settings_right", root)) {
+                auto d = (RightData *) right->user_data;
+                d->scroll = 0;
+                d->smooth.stop();
+            }
+        }
         sdt_invalidate();
         sshortcut_stop_editing();
         search_clear_field(root);
@@ -7654,6 +8092,69 @@ void fill_left(Container *left) {
     create_tab_option(left, "Wifi");
 }
 
+static drawing::Context *cr_of(Container *root) {
+    return swifi_window(root)->drawing_context;
+}
+
+// Lays out left_right's children (it is fullycustom).
+// Wide windows show the page list beside the page. Narrow ones replace it with
+// a hamburger bar above the page; the list then opens over the page from there.
+static void place_settings_columns(Container *root, Container *c, const Bounds &b) {
+    auto left  = container_by_name("settings_left", c);
+    auto scrim = container_by_name("settings_nav_scrim", c);
+    auto bar   = container_by_name("settings_nav_bar", c);
+    auto right = container_by_name("settings_right", c);
+    if (!left || !scrim || !bar || !right)
+        return;
+    auto dpi        = swifi_window(root)->dpi;
+    bool was_narrow = settings_narrow;
+    settings_narrow = b.w < (settings_left_w + settings_page_min_w) * dpi;
+    auto field      = search_field(root);
+    if (!settings_narrow) {
+        settings_nav_open = false;
+    } else if (!was_narrow) {
+        // Shrunk while typing in the search field: keep the field on screen.
+        settings_nav_open = field && field->active;
+    }
+    bool searching = settings_narrow && settings_nav_open && !trim(search_query).empty();
+    // While searching, only the search field stays open, so the results show.
+    for (int i = 1; i < (int) left->children.size(); i++)
+        left->children[i]->exists = !searching;
+
+    if (!settings_narrow) {
+        double left_w = settings_left_w * dpi;
+        left->exists  = true;
+        scrim->exists = false;
+        bar->exists   = false;
+        left->wanted_pad = Bounds();
+        layout(root, left, Bounds(b.x, b.y, left_w, b.h));
+        layout(root, right, Bounds(b.x + left_w, b.y, std::max(0.0, b.w - left_w), b.h));
+        return;
+    }
+
+    double bar_h = 48 * dpi;
+    bar->exists      = true;
+    bar->wanted_pad  = Bounds(6 * dpi, 4 * dpi, 6 * dpi, 4 * dpi);
+    bar->alignment   = container_alignment::ALIGN_CENTER;
+    layout(root, bar, Bounds(b.x, b.y, b.w, bar_h));
+    Bounds below(b.x, b.y + bar_h, b.w, std::max(0.0, b.h - bar_h));
+    left->exists     = settings_nav_open;
+    left->wanted_pad = Bounds(4 * dpi, 4 * dpi, 4 * dpi, 4 * dpi);
+    if (searching) {
+        double field_h = 48 * dpi;
+        scrim->exists  = false;
+        layout(root, left, Bounds(below.x, below.y, below.w, field_h));
+        layout(root, right, Bounds(below.x, below.y + field_h, below.w, std::max(0.0, below.h - field_h)));
+        return;
+    }
+    layout(root, right, below);
+    scrim->exists = settings_nav_open;
+    if (settings_nav_open) {
+        layout(root, scrim, below);
+        layout(root, left, Bounds(below.x, below.y, std::min(below.w, 260.0 * dpi), below.h));
+    }
+}
+
 void fill_root(Container *root) {
     root->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
@@ -7662,14 +8163,16 @@ void fill_root(Container *root) {
         set_rect(cr, c->real_bounds);
         cr->fill();
     };
-    auto left_right = root->child(::hbox, FILL_SPACE, FILL_SPACE);
-    // Handle external navigation on the settings thread before laying out the page.
-    left_right->pre_layout = [](Container *root, Container *, const Bounds &) {
+    auto left_right = root->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    // Handle external navigation on the settings thread, then lay out the page.
+    left_right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+
         // A search result was picked; open its page.
         if (search_pending_jump >= 0) {
             int result = search_pending_jump;
             search_pending_jump = -1;
             search_jump(root, result);
+            settings_nav_open = false;
         }
 
         std::string page;
@@ -7700,22 +8203,99 @@ void fill_root(Container *root) {
             container_by_name("display_trial_banner", root)->exists = active;
             container_by_name("display_trial_space", root)->exists  = active;
         }
+
+        // Last, so pages rebuilt above are laid out in this pass.
+        place_settings_columns(root, c, b);
+        if (search_focus_requested.exchange(false)) {
+            if (auto field = search_field(root)) {
+                if (settings_narrow) {
+                    // The field lives in the folded page list.
+                    settings_nav_open = true;
+                    place_settings_columns(root, c, b);
+                }
+                set_active(root, {field}, root, true, false);
+            }
+        }
     };
     
-    auto left = left_right->child(::vbox, 300, FILL_SPACE);
-    left->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        c->wanted_bounds.w = 200 * mylar->raw_window->dpi;
-    };
+    // Children come first in hit testing in this order, so the expanded page
+    // list must be ahead of the scrim, which must be ahead of the page.
+    // z_index: page 0, bar 1, scrim 2, list 3.
+    auto left = left_right->child(::vbox, FILL_SPACE, FILL_SPACE);
+    left->name = "settings_left";
+    left->z_index = 3;
     left->when_paint = paint {
-        return;
+        if (!settings_narrow)
+            return;
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->drawing_context;
+        auto dpi = mylar->raw_window->dpi;
+        auto b = c->real_bounds;
         set_argb(cr, theme.background);
-        set_rect(cr, c->real_bounds);
+        set_rect(cr, b);
+        cr->fill();
+        double line = std::max(1.0, (double) std::round(1 * dpi));
+        set_argb(cr, theme.field_border);
+        cr->rectangle(b.x + b.w - line, b.y, line, b.h);
         cr->fill();
     };
     fill_left(left);
+
+    auto scrim = left_right->child(FILL_SPACE, FILL_SPACE);
+    scrim->name = "settings_nav_scrim";
+    scrim->z_index = 2;
+    scrim->when_paint = paint {
+        RGBA dim(0, 0, 0, set->dark_theme ? .35f : .2f);
+        set_argb(cr_of(root), dim);
+        set_rect(cr_of(root), c->real_bounds);
+        cr_of(root)->fill();
+    };
+    scrim->when_clicked = [](Container *root, Container *) {
+        settings_nav_open = false;
+        swifi_redraw(root);
+    };
+    scrim->when_fine_scrolled = [](Container *, Container *, double, double, bool) {};
+
+    auto bar = left_right->child(::hbox, FILL_SPACE, FILL_SPACE);
+    bar->name = "settings_nav_bar";
+    bar->z_index = 1; // Covers page rows scrolled up past the top
+    bar->when_paint = paint {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        set_argb(window->drawing_context, theme.background);
+        set_rect(window->drawing_context, b);
+        window->drawing_context->fill();
+        Bounds title(b.x + 52 * dpi, b.y, std::max(0.0, b.w - 60 * dpi), b.h);
+        if (!search_last_page.empty())
+            swifi_text(root, title, search_last_page, 12, theme.text);
+    };
+    auto hamburger = bar->child(FILL_SPACE, FILL_SPACE);
+    hamburger->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.w = 40 * dpi;
+        c->wanted_bounds.h = 40 * dpi;
+    };
+    hamburger->when_paint = paint {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        if (c->state.mouse_pressing || c->state.mouse_hovering || settings_nav_open) {
+            auto hb = b;
+            hb.shrink(2 * dpi);
+            drawRoundedRect(cr, hb.x, hb.y, hb.w, hb.h, 5 * dpi, 1.0);
+            set_argb(cr, c->state.mouse_pressing ? theme.navigation_pressed : theme.navigation_hover);
+            cr->fill();
+        }
+        const std::string glyph = "\uE700"; // GlobalNavigationButton
+        auto gb = draw_text(cr, 0, 0, glyph, 12 * dpi, false, icon_font, -1, -1, theme.text, false);
+        draw_text(cr, b.x + (b.w - gb.w) * .5, b.y + (b.h - gb.h) * .5, glyph, 12 * dpi, true, icon_font, -1, -1, theme.text, false);
+    };
+    hamburger->when_clicked = [](Container *root, Container *) {
+        settings_nav_open = !settings_nav_open;
+        swifi_redraw(root);
+    };
 
     auto right = left_right->child(::fullycustom, FILL_SPACE, FILL_SPACE);
     right->name = "settings_right";
@@ -7818,7 +8398,7 @@ void actual_start() {
     RawWindowSettings settings;
     settings.pos.w = 1000;
     settings.pos.h = 760;
-    settings.pos.min_w = 800;
+    settings.pos.min_w = (int) settings_page_min_w; // Narrow windows fold the page list away
     settings.pos.min_h = 600;
     // On displays too small for the defaults, shrink the minimum and the
     // starting size so the window fits in the usable area.
@@ -7862,10 +8442,12 @@ void actual_start() {
     settings_mylar = nullptr;
 };
 
-void settings::start(std::string page) {
+void settings::start(std::string page, bool focus_search) {
     if (!page.empty()) {
         requested_page = page;
     }
+    if (focus_search)
+        search_focus_requested = true;
     if (settings_app) {
         if (settings_mylar)
             windowing::redraw(settings_mylar->raw_window);
