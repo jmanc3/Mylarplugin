@@ -8588,8 +8588,8 @@ void actual_start() {
     settings.pos.h = 760;
     // Narrow windows fold the page list away, so the window can get much
     // smaller than the page's comfortable width (80% under the old minimum).
-    settings.pos.min_w = (int) (settings_page_min_w * .2);
-    settings.pos.min_h = (int) (600 * .2);
+    settings.pos.min_w = (int) (settings_page_min_w * .8);
+    settings.pos.min_h = (int) (600 * .8);
     // On displays too small for the defaults, shrink the minimum and the
     // starting size so the window fits in the usable area.
     int fit_w = settings_fit_w.load();

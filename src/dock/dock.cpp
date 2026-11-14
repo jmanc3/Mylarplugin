@@ -524,7 +524,7 @@ static void settings_page_right_click(Container *root, std::string label, std::s
         pop.icon_left = "\uE713";
         pop.is_text_icon = true;
         pop.on_clicked = [page]() {
-            settings::start(page);
+            settings::start(page, false);
         };
         options.push_back(pop);
         popup::open(options,
@@ -553,7 +553,7 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
             pop.icon_left = "\uE713";
             pop.is_text_icon = true;
             pop.on_clicked = []() {
-                settings::start();
+                settings::start("", true);
             };
             root.push_back(pop);
         }
