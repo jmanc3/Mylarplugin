@@ -5459,7 +5459,14 @@ Bounds tobounds(CBox box) {
 // Transform the clip box exactly like the geometry it clips.
 static CBox clip_box_for_current_pass(CBox box) {
     g_pHyprRenderer->context().m_data.renderModif.applyToBox(box);
-    return box;
+    // Hyprland turns clipBox into a pixman region, which truncates x, y, w and
+    // h separately. A fractional box would lose up to a pixel on its right and
+    // bottom edges, so snap outward to whole pixels first.
+    const double x1 = std::floor(box.x);
+    const double y1 = std::floor(box.y);
+    const double x2 = std::ceil(box.x + box.w);
+    const double y2 = std::ceil(box.y + box.h);
+    return CBox(x1, y1, x2 - x1, y2 - y1);
 }
 
 void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPower, bool blur, float blurA) {
