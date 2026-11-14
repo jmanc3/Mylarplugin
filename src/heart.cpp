@@ -449,13 +449,18 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
         toggle_layout();
     }
 
-    key_press(actual_root, key, state, key, key, false, std::to_string(key));
-    
+    // Only this key's handlers decide whether it is consumed. A flag left over from an
+    // earlier key (e.g. the screenshot tool consuming the Esc that closed it) would
+    // otherwise swallow every following key, SUPER_L included, until the mouse moved.
     auto root = actual_root;
+    root->consumed_event = false;
+    key_press(actual_root, key, state, key, key, false, std::to_string(key));
+
     if (root->consumed_event) {
+        root->consumed_event = false;
         return true;
     }
-    
+
     return false;
 }
 
