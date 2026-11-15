@@ -973,7 +973,40 @@ void heart::remember_window_positions() {
     });
 }
 
+// Keeps Xft.dpi in the X resource database in line with the display scale, so
+// Xwayland apps (which aren't scaled when force_zero_scaling is on) size their text right.
+static int xrdb_applied_dpi = 0;
+static bool xrdb_update_pending = false;
+
+static void update_xrdb_dpi() {
+    if (xrdb_update_pending)
+        return;
+    xrdb_update_pending = true;
+    // Coalesce bursts of monitor events, and wait for Xwayland to set DISPLAY.
+    later(300, [](Timer *t) {
+        const char *display = std::getenv("DISPLAY");
+        if (!display || !*display) {
+            t->keep_running = true;
+            t->delay = 1000;
+            return;
+        }
+        t->keep_running = false;
+        xrdb_update_pending = false;
+        float max_scale = 0;
+        for (auto m : actual_monitors)
+            max_scale = std::max(max_scale, scale(*datum<int>(m, "cid")));
+        if (max_scale <= 0)
+            return;
+        int dpi = (int) std::round(96.0f * max_scale);
+        if (dpi == xrdb_applied_dpi)
+            return;
+        xrdb_applied_dpi = dpi;
+        launch_command(fz("echo 'Xft.dpi: {}' | xrdb -merge", dpi));
+    });
+}
+
 static void on_monitor_layout_change() {
+    update_xrdb_dpi();
     if (remembered_window_positions.empty())
         return;
     later_immediate([](Timer *) {
@@ -1136,6 +1169,7 @@ static void on_monitor_open(int id) {
     heart::layout_containers();
     if (set->show_docks)
         dock::start(hypriso->monitor_name(id));
+    update_xrdb_dpi();
     auto t = datum<TextureInfo>(c, "bg_wall1");
     auto t2 = datum<TextureInfo>(c, "bg_wall2");
     auto wall1_active = datum<bool>(c, "bg_wall1_active");
@@ -2123,6 +2157,35 @@ void add_hyprctl_dispatchers() {
         }
         return 0;
     });
+
+    // Cycles the focused window: normal -> fake fullscreen -> fullscreen -> normal.
+    hypriso->add_hyprctl_dispatcher("cycle_fullscreen", [](lua_State *) {
+        for (auto m : actual_root->children) {
+            if (m->custom_type != (int) TYPE::CLIENT)
+                continue;
+            auto cid = *datum<int>(m, "cid");
+            if (!hypriso->has_focus(cid))
+                continue;
+            if (hypriso->is_fullscreen(cid)) {
+                hypriso->set_fullscreen(cid, false);
+            } else if (hypriso->is_fake_fullscreen(cid)) {
+                hypriso->set_fullscreen(cid, true);
+            } else {
+                hypriso->fake_fullscreen(cid, true);
+            }
+            // Fullscreen geometry belongs to the layout; only pin the floating box otherwise.
+            // Fullscreen bounds would also overwrite the remembered floating size.
+            if (!hypriso->is_fullscreen(cid)) {
+                auto b = bounds_client(cid);
+                hypriso->move_resize(cid, b.x, b.y, b.w, b.h);
+                update_restore_info_for(cid);
+            }
+            // Some clients don't pick up the new size on their own, so force a configure.
+            hypriso->force_send_window_size(cid);
+            return 0;
+        }
+        return 0;
+    });
 }
 
 void on_requests_max_or_min(int cid, int wants) {
@@ -2321,6 +2384,7 @@ void watch_wallpaper_change() {
         if (update == FileWatchUpdate::REMOVED) {
             later(500, [](Timer *) {
                 watch_wallpaper_change();
+            update_xrdb_dpi();
             });
         }
         if (!t) {

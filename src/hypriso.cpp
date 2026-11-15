@@ -6436,6 +6436,13 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool
         }
     }
 }
+void HyprIso::force_send_window_size(int id) {
+    for (auto c : hyprwindows) {
+        if (c->id == id && c->w && c->w->m_monitor)
+            c->w->sendWindowSize(true);
+    }
+}
+
 void HyprIso::move_resize(int id, Bounds b, bool instant, bool follow_monitor, bool notify_effects) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

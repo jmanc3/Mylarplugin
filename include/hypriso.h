@@ -470,6 +470,8 @@ struct HyprIso {
     // controller so effects like wobble see plugin-driven moves.
     void move_resize(int id, int x, int y, int w, int h, bool instant = true, bool follow_monitor = false, bool notify_effects = false);
     void move_resize(int id, Bounds b, bool instant = true, bool follow_monitor = false, bool notify_effects = false);
+    // Sends the client a configure for its target size even if Hyprland thinks it already has it.
+    void force_send_window_size(int id);
 
     float fps(int monitor_id);
     
