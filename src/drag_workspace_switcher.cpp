@@ -343,7 +343,9 @@ void drag_switcher_actual_open() {
         auto b = bounds_monitor(monitor);
         auto new_h = 30;
         {
-            auto new_w = b.w * .45;
+            // The hint text is ~385 logical px wide at any scale, so 45% alone
+            // clipped it on narrow logical widths (e.g. 1280x720 at 1.5).
+            auto new_w = std::min<double>(b.w - 16, std::max<double>(b.w * .45, 440));
             b.x += b.w * .5 - new_w * .5;
             b.w = new_w;
         }
@@ -375,6 +377,10 @@ void drag_switcher_actual_open() {
                 return !b.empty() && bounds_contains(b, x, y);
             };
             *datum<int>(c, "workspace") = space;
+            c->on_closed = [](Container *c) {
+                free_text_texture(datum<TextureInfo>(c, "desktop_label")->id);
+                free_text_texture(datum<TextureInfo>(c, "plus")->id);
+            };
             *datum<bool>(c, "was_active") = false;
             *datum<float>(c, "active_amount") = 0.0;
             *datum<bool>(c, "was_pressed") = false;
@@ -437,13 +443,13 @@ void drag_switcher_actual_open() {
 
                         auto num = hypriso->space_id_to_raw(space);
 
-                        auto text = gen_text_texture(set->font, fz("Desktop {}", num), 12 * s, {1, 1, 1, 1});
+                        // Cached on the thumbnail; only regenerated when the number or scale changes.
+                        auto text = *get_cached_texture(root, c, "desktop_label", set->font, fz("Desktop {}", num), {1, 1, 1, 1}, 12);
                         b.w = text.w;
                         b.h = text.h;
                         b.x += 6 * s;
                         b.y += (c->real_bounds.h * bar_perc) * .5 - text.h * .5;
                         draw_texture(text, b, 1.0, c->real_bounds.w - 8 * s);
-                        free_text_texture(text.id);
                     }
                 }
                 

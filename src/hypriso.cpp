@@ -1380,6 +1380,35 @@ void fix_window_corner_rendering() {
 }
 
 
+// Hyprland's "auto" scale only goes up from 1 (by PPI), so monitors under
+// 1080p get 1.0 and everything is huge on them. For those, scale by
+// shorter side / 1080 instead (the shorter side, so portrait monitors
+// work too), laying the desktop out as if it were 1080 tall
+// (720p -> 0.667). Hyprland then snaps it to a scale that divides the
+// mode into whole logical pixels.
+inline CFunctionHook* g_pOnDefaultScale = nullptr;
+typedef float (*origDefaultScale)(void*);
+float hook_onDefaultScale(void* thisptr) {
+    const auto original = (*(origDefaultScale)g_pOnDefaultScale->m_original)(thisptr);
+    const auto monitor  = (Monitor::CMonitor*)thisptr;
+    const double shorter = std::min(monitor->m_pixelSize.x, monitor->m_pixelSize.y);
+    if (shorter <= 0 || shorter >= 1080)
+        return original;
+    return std::min<float>(original, shorter / 1080.0);
+}
+
+void hook_default_monitor_scale() {
+    static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "getDefaultScale");
+    for (auto m : METHODS) {
+        if (m.demangled.find("CMonitor::getDefaultScale") != std::string::npos) {
+            g_pOnDefaultScale = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onDefaultScale);
+            g_pOnDefaultScale->hook();
+            return;
+        }
+    }
+    notify("Couldn't hook the default monitor scale; monitors under 1080p will use 1.0");
+}
+
 inline CFunctionHook* g_pOnReadProp = nullptr;
 typedef void (*origOnReadProp)(void*, SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply);
     //void CXWM::readProp(SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply) {
@@ -5243,6 +5272,7 @@ void HyprIso::create_hooks() {
     previously_seen_instance_signature = get_previous_instance_signature();
     // detect_csd_request_change();
     fix_window_corner_rendering();
+    hook_default_monitor_scale();
     hook_shadow_decorations();
     //disable_default_alt_tab_behaviour();
     detect_x11_move_resize_requests();    
@@ -6887,7 +6917,6 @@ void free_text_texture(int id) {
         auto h = hyprtextures[i];
         if (h->info.id == id) {
             h->texture.reset();
-            printf("free: %d\n", h->info.id);
             hyprtextures.erase(hyprtextures.begin() + i);
             delete h;
         }

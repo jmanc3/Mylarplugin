@@ -373,11 +373,10 @@ void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
 
     int y = m.y;
     if (bottom_y >= 0) {
-        // Same height calculation popup's build_menu uses.
-        auto s = scale(hypriso->monitor_from_cursor());
+        // Same (logical) height calculation popup's build_menu uses.
         float height = 0;
         for (const auto &option : root)
-            height += option.seperator ? 5 * s : 24 * s;
+            height += option.seperator ? 5 : 24;
         y = bottom_y - height;
     }
 

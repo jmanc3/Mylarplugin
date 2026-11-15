@@ -344,6 +344,7 @@ struct wl_window {
     
     int pending_width, pending_height; // recieved from configured event
     int min_width = 0, min_height = 0; // applied after first configure so initial size is (w,h)
+    int max_width = 0, max_height = 0;
 
     int logical_width, logical_height;
     int scaled_w, scaled_h;
@@ -508,6 +509,8 @@ static void handle_surface_configure(void *data,
     bool first_configure = !win->configured;
     if (first_configure && win->xdg_toplevel) {
         xdg_toplevel_set_min_size(win->xdg_toplevel, win->min_width, win->min_height);
+        if (win->max_width > 0 || win->max_height > 0)
+            xdg_toplevel_set_max_size(win->xdg_toplevel, win->max_width, win->max_height);
     }
     win->configured = true;
     if (painted)
@@ -886,7 +889,9 @@ bool still_need_work(wl_context *ctx) {
 struct wl_window *wl_window_create(struct wl_context *ctx,
                                    int width, int height,
                                    int min_width, int min_height,
-                                   const char *title, RawWindow *rw, std::string app_id)
+                                   const char *title, RawWindow *rw, std::string app_id,
+                                   struct xdg_toplevel *parent_toplevel = nullptr,
+                                   int max_width = 0, int max_height = 0)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -899,6 +904,8 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     win->pending_height = height;
     win->min_width = min_width;
     win->min_height = min_height;
+    win->max_width = max_width;
+    win->max_height = max_height;
     win->pool = NULL;
     win->rw = rw;
     win->app_id = app_id;
@@ -942,6 +949,9 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     xdg_toplevel_set_title(win->xdg_toplevel, title ? title : "Wayland Window");
     
     xdg_toplevel_set_app_id(win->xdg_toplevel, win->app_id.c_str()); 
+    // Before the initial commit, so the compositor knows it is a child when it maps.
+    if (parent_toplevel)
+        xdg_toplevel_set_parent(win->xdg_toplevel, parent_toplevel);
 
     // 7️⃣ Single initial commit
     log("surface commit");
@@ -1226,9 +1236,9 @@ static void pointer_scroll_tick(wl_context *ctx) {
         const double delta = axis.advance(seconds);
         if (delta != 0.0 && w->rw->on_scrolled) {
             const uint32_t kind = ctx->pointer_axis_pending.axes[i].axis;
+            // Raw Wayland sign on both axes, like the compositor-side path.
             w->rw->on_scrolled(w->rw, WL_POINTER_AXIS_SOURCE_FINGER, kind,
-                axis.direction, kind == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? -delta : delta,
-                0, false);
+                axis.direction, delta, 0, false);
         }
         if (!ctx->running || w->marked_for_closing) {
             pointer_scroll_cancel(ctx);
@@ -1396,13 +1406,10 @@ static void pointer_handle_frame(void *data,
             } else {
                 motion = {};
             }
-            if (w->rw->on_scrolled) {
-                if (pending.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL) {
-                    w->rw->on_scrolled(w->rw, source, pending.axis, direction, -delta, discrete, mouse);
-                } else {
-                    w->rw->on_scrolled(w->rw, source, pending.axis, direction, delta, discrete, mouse);
-                }
-            }
+            // Raw Wayland sign on both axes (positive = right/down), like the
+            // compositor-side path; events.cpp maps the axis to scroll_x/scroll_y.
+            if (w->rw->on_scrolled)
+                w->rw->on_scrolled(w->rw, source, pending.axis, direction, delta, discrete, mouse);
             if (w->on_render) {
                 w->on_render(w);
             }
@@ -2758,7 +2765,13 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     rw->id = unique_id++;
 
     if (type == WindowType::NORMAL) {
-        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str(), rw, settings.app_id);
+        struct xdg_toplevel *parent_toplevel = nullptr;
+        if (settings.parent_window)
+            for (auto w : windows)
+                if (w->id == settings.parent_window->id && w->xdg_toplevel)
+                    parent_toplevel = w->xdg_toplevel;
+        auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str(), rw, settings.app_id,
+                                       parent_toplevel, settings.pos.max_w, settings.pos.max_h);
         rw->drawing_context = window->cr;
         window->id = rw->id;
         window->on_render = on_window_render;  // set now that rw is set (resize_buffer skipped it)

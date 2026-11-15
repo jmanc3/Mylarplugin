@@ -46,12 +46,12 @@ static std::vector<ShortcutDefault> build_defaults() {
     static const char *directions[] = {"left", "right", "up", "down"};
     for (auto direction : directions) {
         std::string d = direction;
-        list.push_back({"focus_" + d, "Focus window " + d, "ALT + " + d, "hl.dsp.focus({ direction = \"" + d + "\" })", ""});
+        list.push_back({"focus_" + d, "Focus window " + d, "SUPER + " + d, "hl.dsp.focus({ direction = \"" + d + "\" })", ""});
     }
-    for (auto direction : directions) {
-        std::string d = direction;
-        list.push_back({"focus_" + d + "_alt", "Focus window " + d + " (alternate)", "SUPER + " + d, "hl.dsp.focus({ direction = \"" + d + "\" })", ""});
-    }
+    // for (auto direction : directions) {
+    //     std::string d = direction;
+    //     list.push_back({"focus_" + d + "_alt", "Focus window " + d + " (alternate)", "SUPER + " + d, "hl.dsp.focus({ direction = \"" + d + "\" })", ""});
+    // }
     for (auto direction : directions) {
         std::string d = direction;
         list.push_back({"move_" + d, "Move window " + d, "SHIFT + SUPER + " + d, "hl.dsp.window.move({ direction = \"" + d + "\" })", ""});

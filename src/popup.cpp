@@ -174,17 +174,26 @@ bool popup::contains(int x, int y) {
     return false;
 }
 
+static constexpr float OPTION_HEIGHT = 36;
+static constexpr float SEPERATOR_SIZE = 5;
+
+float popup::menu_height(const std::vector<PopOption>& options) {
+    float height = 0;
+    for (const auto& option : options)
+        height += option.seperator ? SEPERATOR_SIZE : OPTION_HEIGHT;
+    return height;
+}
+
 namespace {
 
 Container *build_menu(const std::vector<PopOption>& options, int x, int y, int mid, int cid,
                       Container *parent, Container *owner) {
     // Container geometry is logical; painting applies the monitor scale once.
-    auto s = scale(mid);
-    float option_height = 24 * s;
-    float seperator_size = 5 * s;
-    float height = 0;
-    for (const auto& option : options)
-        height += option.seperator ? seperator_size : option_height;
+    // Heights are logical like the width (277): scaling them here as well
+    // made rows twice as tall at scale 2 (painting scales them again).
+    float option_height = OPTION_HEIGHT;
+    float seperator_size = SEPERATOR_SIZE;
+    float height = popup::menu_height(options);
 
     auto p = actual_root->child(::vbox, 277, height);
     p->z_index = parent ? parent->z_index + 1 : 100;

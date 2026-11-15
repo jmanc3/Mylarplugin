@@ -49,9 +49,13 @@ struct PositioningInfo {
     int h = 600;
     int min_w = 0;
     int min_h = 0;
+    int max_w = 0; // 0: unbounded
+    int max_h = 0;
 
     int side = 0; // for docks
 };
+
+struct RawWindow;
 
 struct RawWindowSettings {
     enum struct PopupAnchor {
@@ -119,6 +123,9 @@ struct RawWindowSettings {
     int alignment = 0; // 0 none, 1 top, clockwise + 1
     PopupPositioner popup;
     bool keyboard_focus_on_click = false;
+    // NORMAL windows: makes this a child (dialog) of that window through
+    // xdg_toplevel.set_parent; the compositor centers it over the parent.
+    RawWindow *parent_window = nullptr;
 };
 
 struct RawWindow {    

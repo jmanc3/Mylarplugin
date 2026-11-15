@@ -529,7 +529,7 @@ static void settings_page_right_click(Container *root, std::string label, std::s
         options.push_back(pop);
         popup::open(options,
             m.x - (277 * .5) + 1.4,
-            m.y - (yoff / dpi) - 5 - (24 * options.size() * dpi));
+            m.y - (yoff / dpi) - 5 - popup::menu_height(options));
     });
 }
 
@@ -559,7 +559,7 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
         }
         popup::open(root,
             m.x - (277 * .5) + 1.4,
-            m.y - (yoff / dpi) - 5 - (24 * root.size() * dpi));
+            m.y - (yoff / dpi) - 5 - popup::menu_height(root));
     });
 }
 
@@ -722,7 +722,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             }
         }
 
-        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y - (yoff / dpi) - 5 - (24 * root.size() * dpi));
+        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y - (yoff / dpi) - 5 - popup::menu_height(root));
     });
 }
 

@@ -18,6 +18,7 @@
 #include "events.h"
 #include "datetime.h"
 #include "smooth_scroll.h"
+#include "wallpaper_layout.h"
 #include <chrono>
 #include <csetjmp>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
@@ -425,6 +426,7 @@ struct DisplayTrial {
     unsigned                  generation = 0;     // main thread only, invalidates older timers
 };
 static DisplayTrial display_trial;
+static void trial_dialog_sync_soon();
 
 // Main thread only.
 static void display_trial_finish(bool keep) {
@@ -453,6 +455,7 @@ static void display_trial_finish(bool keep) {
     }
     if (settings_mylar)
         windowing::redraw(settings_mylar->raw_window);
+    trial_dialog_sync_soon();
 }
 
 void settings::display_change_begin() {
@@ -470,6 +473,7 @@ void settings::display_change_begin() {
         if (display_trial.generation == generation)
             display_trial_finish(false);
     });
+    trial_dialog_sync_soon();
 }
 
 void settings::load_save_settings(bool save, ConfigSettings* settings) {
@@ -545,6 +549,12 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "dock_current_workspace_only", &settings->dock_current_workspace_only);
     bind(bool, "dock_merge_windows", &settings->dock_merge_windows);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
+    bind(std::string, "wallpaper_scaling", &settings->wallpaper_scaling);
+    bind(float, "wallpaper_zoom", &settings->wallpaper_zoom);
+    bind(float, "wallpaper_center_x", &settings->wallpaper_center_x);
+    bind(float, "wallpaper_center_y", &settings->wallpaper_center_y);
+    bind(bool, "wallpaper_span", &settings->wallpaper_span);
+    bind(std::string, "wallpaper_monitors", &settings->wallpaper_monitors);
     bind(bool, "dark_theme", &settings->dark_theme);
     bind(bool, "clock_24h", &settings->clock_24h);
     bind(bool, "hotcorners", &settings->hotcorners);
@@ -1917,16 +1927,23 @@ static void paint_dropdown_button(Container *root, Container *c, const std::stri
     draw_text(cr, b.x + b.w - 14 * dpi - cb.w, b.y + b.h * .5 - cb.h * .5, chevron, 10 * dpi, true, icon_font, -1, -1, theme.text_secondary, false);
 }
 
-static void make_dropdown(Container *parent, std::string text_, std::vector<std::string> options, std::function<void(std::string)> func) {
+// live: when given, the shown value is read from it on every layout, for
+// values that can also change from outside the dropdown.
+static void make_dropdown(Container *parent, std::string text_, std::vector<std::string> options, std::function<void(std::string)> func,
+                          std::function<std::string()> live = {}) {
     struct TextData : UserData {
         std::string text;
+        std::function<std::string()> live;
     };
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     auto text_data = new TextData;
     text_data->text = text_;
+    text_data->live = live;
     pad->user_data = text_data;
     pad->pre_layout = [](Container *root, Container *c, const Bounds &) {
         auto td = (TextData *) c->user_data;
+        if (td->live)
+            td->text = td->live();
         c->wanted_bounds.w = dropdown_button_width(root, td->text);
         c->wanted_bounds.h = 34 * swifi_window(root)->dpi;
     };
@@ -1950,7 +1967,7 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
     };
 }
 
-static Container *make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::string selected, std::vector<std::string> options, std::function<void(std::string)> on_change) {
+static Container *make_dropdown_option(Container *parent, std::string title, std::string description, std::string icon, std::string selected, std::vector<std::string> options, std::function<void(std::string)> on_change, std::function<std::string()> live = {}) {
     assert(on_change);
     auto p = make_self_height_sized_parent(parent);
 
@@ -1972,7 +1989,7 @@ static Container *make_dropdown_option(Container *parent, std::string title, std
     
     make_dropdown(right, selected, options, [on_change](std::string selected) {
         on_change(selected);
-    });
+    }, live);
     
     return p;
 }
@@ -3032,55 +3049,177 @@ static void paint_right_scrollbar(Container *root, Container *c) {
     window->drawing_context->fill();
 }
 
-// Shown while a display change is on trial: a countdown plus keep / revert.
-static void make_display_trial_banner(Container *parent) {
-    static const std::string title = "Keep these display settings?";
-    auto description = []() {
-        long seconds = (display_trial.deadline - get_current_time_in_ms() + 999) / 1000;
-        seconds      = std::max(seconds, 0l);
-        return fz("Reverting to the previous settings in {} second{}", seconds, seconds == 1 ? "" : "s");
-    };
+// While a display change is on trial, a small dialog (a child window of
+// Settings, centered over it) shows the countdown with Apply and Revert.
+// Revert is the default: it has the keyboard focus when the dialog opens,
+// Tab / Shift+Tab / Left / Right move the focus, Space and Return press the
+// focused button, and Escape or closing the dialog reverts.
+// Settings thread only.
+static MylarWindow *trial_dialog = nullptr;
+static int trial_dialog_focus = 1; // 0 Apply, 1 Revert
 
-    auto p    = make_self_height_sized_parent(parent);
-    p->name   = "display_trial_banner";
-    p->exists = display_trial.active;
+static void trial_dialog_choose(bool keep) {
+    main_thread([keep]() { display_trial_finish(keep); });
+}
 
-    auto left = p->child(FILL_SPACE, FILL_SPACE);
-    left->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        c->real_bounds.h = 70 * mylar->raw_window->dpi;
-    };
-    left->when_paint = [description](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
+static void trial_dialog_button(Container *parent, std::string text, int index) {
+    auto b = parent->child(FILL_SPACE, FILL_SPACE);
+    b->pre_layout = [text](Container *root, Container *c, const Bounds &) {
+        auto mylar = (MylarWindow *) root->user_data;
         auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
-        auto text = description();
-        auto t = draw_text(cr, 0, 0, title, 12 * dpi, false, set->font, -1, -1, theme.text, false);
-        auto d = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font, -1, -1, theme.text, false);
-        float y = c->real_bounds.y + c->real_bounds.h * .5 - (t.h + d.h) * .5;
-        auto ico = draw_text(cr, 0, 0, "", 16 * dpi, false, icon_font, -1, -1, theme.text, false);
-        draw_text(cr, c->real_bounds.x + 19 * dpi, c->real_bounds.y + c->real_bounds.h * .5 - ico.h * .5, "", 16 * dpi, true, icon_font, -1, -1, theme.accent, false);
-        draw_text(cr, c->real_bounds.x + 60 * dpi, y, title, 12 * dpi, true, set->font, -1, -1, theme.text, false);
-        draw_text(cr, c->real_bounds.x + 60 * dpi, y + t.h, text, 11 * dpi, true, set->font, -1, -1, theme.text_secondary, false);
+        Bounds bounds = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font, -1, -1, theme.text, true);
+        c->wanted_bounds.w = std::max<double>(bounds.w + 22 * dpi, 96 * dpi);
+        c->wanted_bounds.h = bounds.h + 18 * dpi;
     };
-
-    auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
-    right->alignment = container_alignment::ALIGN_CENTER | container_alignment::ALIGN_RIGHT;
-    right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
+    b->when_paint = [text, index](Container *root, Container *c) {
+        auto mylar = (MylarWindow *) root->user_data;
+        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
-        c->real_bounds.w = 250 * dpi;
-        c->real_bounds.h = 70 * dpi;
-        c->spacing = 5 * dpi;
+        const bool focused = trial_dialog_focus == index;
+        RGBA fill = theme.button_background;
+        RGBA text_color = theme.text;
+        if (focused) {
+            fill = theme.accent;
+            if (c->state.mouse_pressing)
+                fill.a *= .75;
+            else if (c->state.mouse_hovering)
+                fill.a *= .88;
+            text_color = RGBA(1, 1, 1, 1);
+        } else if (c->state.mouse_pressing) {
+            fill = theme.button_pressed;
+        } else if (c->state.mouse_hovering) {
+            fill = theme.button_hover;
+        }
+        set_argb(cr, fill);
+        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, settings_control_rounding * dpi, 1.0);
+        cr->fill();
+        Bounds bounds = draw_text(cr, 0, 0, text, 11 * dpi, false, set->font, -1, -1, theme.text, false);
+        draw_text(cr, c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5, c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, text,
+                  11 * dpi, true, set->font, -1, -1, text_color, false);
     };
-    right->child(FILL_SPACE, FILL_SPACE);
-    right->parent_bounds_limit_input_bounds = false;
-    make_button(right, "Keep changes", []() { main_thread([]() { display_trial_finish(true); }); });
-    make_button(right, "Revert", []() { main_thread([]() { display_trial_finish(false); }); });
+    b->when_clicked = [index](Container *root, Container *c) {
+        trial_dialog_focus = index;
+        trial_dialog_choose(index == 0);
+    };
+}
 
-    auto space  = make_vert_space(parent, 10);
-    space->name = "display_trial_space";
-    space->exists = display_trial.active;
+static void trial_dialog_fill(Container *root) {
+    static const std::string title = "Keep these display settings?";
+    root->type = ::vbox;
+    root->when_paint = [](Container *root, Container *c) {
+        auto mylar = (MylarWindow *) root->user_data;
+        auto cr = mylar->raw_window->drawing_context;
+        set_argb(cr, theme.background);
+        cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cr->fill();
+    };
+    // pre_layout only runs for children, so the padding lives one level down.
+    auto inner = root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    inner->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = ((MylarWindow *) root->user_data)->raw_window->dpi;
+        c->wanted_pad = Bounds(20 * dpi, 20 * dpi, 20 * dpi, 20 * dpi);
+    };
+
+    auto message = inner->child(FILL_SPACE, FILL_SPACE);
+    message->when_paint = [](Container *root, Container *c) {
+        auto mylar = (MylarWindow *) root->user_data;
+        auto cr = mylar->raw_window->drawing_context;
+        auto dpi = mylar->raw_window->dpi;
+        long seconds = (display_trial.deadline - get_current_time_in_ms() + 999) / 1000;
+        seconds = std::max(seconds, 0l);
+        auto text = fz("Reverting to the previous settings in {} second{}", seconds, seconds == 1 ? "" : "s");
+        auto ico = draw_text(cr, 0, 0, "\uE7F4", 20 * dpi, false, icon_font, -1, -1, theme.text, false);
+        draw_text(cr, c->real_bounds.x, c->real_bounds.y + 2 * dpi, "\uE7F4", 20 * dpi, true, icon_font, -1, -1, theme.accent, false);
+        const float x = c->real_bounds.x + ico.w + 14 * dpi;
+        auto t = draw_text(cr, x, c->real_bounds.y, title, 13 * dpi, true, set->font, -1, -1, theme.text, false);
+        draw_text(cr, x, c->real_bounds.y + t.h + 6 * dpi, text, 11 * dpi, true, set->font, -1, -1, theme.text_secondary, false);
+    };
+
+    auto buttons = inner->child(::hbox, FILL_SPACE, FILL_SPACE);
+    buttons->alignment = container_alignment::ALIGN_RIGHT;
+    buttons->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = ((MylarWindow *) root->user_data)->raw_window->dpi;
+        c->wanted_bounds.h = 34 * dpi;
+        c->spacing = 8 * dpi;
+    };
+    trial_dialog_button(buttons, "Apply", 0);
+    trial_dialog_button(buttons, "Revert", 1);
+}
+
+static void trial_dialog_close() {
+    if (!trial_dialog)
+        return;
+    auto rw = trial_dialog->raw_window;
+    trial_dialog = nullptr; // first, so its on_close knows it wasn't the user
+    windowing::close_window(rw);
+}
+
+static void trial_dialog_open() {
+    if (trial_dialog || !settings_app || !settings_mylar)
+        return;
+    trial_dialog_focus = 1;
+    RawWindowSettings s;
+    s.pos.w = s.pos.min_w = s.pos.max_w = 440;
+    s.pos.h = s.pos.min_h = s.pos.max_h = 150;
+    s.name = "Keep display settings?";
+    s.app_id = "preferences-system"; // same class as Settings: restore rules leave dialogs alone
+    s.parent_window = settings_mylar->raw_window;
+    auto m = open_mylar_window(settings_app, WindowType::NORMAL, s);
+    m->root->user_data = m;
+    trial_dialog = m;
+    trial_dialog_fill(m->root);
+
+    auto forward_key = m->raw_window->on_key_press;
+    m->raw_window->on_key_press = [forward_key](RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        switch (sym) {
+            case XKB_KEY_Tab:
+            case XKB_KEY_ISO_Left_Tab:
+            case XKB_KEY_Left:
+            case XKB_KEY_Right:
+                if (pressed) {
+                    trial_dialog_focus = 1 - trial_dialog_focus;
+                    windowing::redraw(rw);
+                }
+                return true;
+            case XKB_KEY_space:
+            case XKB_KEY_Return:
+            case XKB_KEY_KP_Enter:
+                if (pressed)
+                    trial_dialog_choose(trial_dialog_focus == 0);
+                return true;
+            case XKB_KEY_Escape:
+                if (pressed)
+                    trial_dialog_choose(false);
+                return true;
+        }
+        return forward_key ? forward_key(rw, key, pressed, sym, mods, is_text, text) : false;
+    };
+    auto forward_close = m->raw_window->on_close;
+    m->raw_window->on_close = [forward_close](RawWindow *rw) {
+        // Closed by the user (titlebar, shortcut) rather than by the trial ending.
+        if (trial_dialog && trial_dialog->raw_window == rw) {
+            trial_dialog = nullptr;
+            trial_dialog_choose(false);
+        }
+        if (forward_close)
+            forward_close(rw);
+    };
+    windowing::request_keyboard_focus(m->raw_window);
+}
+
+// Opens or closes the dialog to match the trial. Settings thread only.
+static void trial_dialog_sync() {
+    if (display_trial.active)
+        trial_dialog_open();
+    else
+        trial_dialog_close();
+}
+
+// Runs trial_dialog_sync on the Settings thread, from any thread.
+static void trial_dialog_sync_soon() {
+    if (auto app = settings_app)
+        windowing::run_on_app(app, trial_dialog_sync);
 }
 
 // Redraws the countdown while a display change is on trial.
@@ -3088,15 +3227,98 @@ static void display_trial_watch() {
     windowing::timer(settings_app, 250, [](void *) {
         if (!settings_app || !settings_mylar)
             return;
-        if (display_trial.active)
-            windowing::redraw(settings_mylar->raw_window);
+        trial_dialog_sync();
+        if (trial_dialog)
+            windowing::redraw(trial_dialog->raw_window);
         display_trial_watch();
     }, nullptr);
 }
 
-// Copies an image to ~/.config/mylar/wall.png, the wallpaper. Non-images are
-// ignored. Blocking (runs `file`), so call it off the UI thread.
-static bool set_wallpaper_from_file(const std::string &file) {
+// ---- Wallpaper ---------------------------------------------------------------
+//
+// The Display page edits either the shared wallpaper (wall_target empty) or
+// one monitor's own. Editing a monitor that follows the shared wallpaper gives
+// it its own (an entry in wallpaper_monitors). See wallpaper_layout.h.
+
+static std::string wall_target; // "" = all monitors
+// Held Ctrl turns scrolling over the preview into zooming (otherwise it
+// scrolls the page). Tracked from the Settings window's key events.
+static bool settings_ctrl_held = false;
+// Scroll events reach every container under the pointer, the preview first;
+// a zoom sets this so the page under it doesn't also scroll.
+static bool wall_preview_ate_scroll = false;
+
+// For Settings UI callbacks, which already hold the window's lock.
+static void settings_redraw_from_ui() {
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+// For worker threads.
+static void settings_request_redraw() {
+    auto mylar = settings_mylar;
+    if (!mylar)
+        return;
+    std::lock_guard<std::mutex> lock(mylar->raw_window->creator->mutex);
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+// Applies wallpaper setting changes in the compositor, and saves them.
+static void wall_commit(bool save = true) {
+    main_thread([save]() {
+        wallpaper_settings_changed();
+        if (save)
+            debounce_main("wallpaper_settings_save", 400, []() { settings::load_save_settings(true, set); });
+    });
+}
+
+static bool wall_target_is_separate(const std::string &target) {
+    return !target.empty() && wallpaper_find_override(wallpaper_parse_overrides(set->wallpaper_monitors), target);
+}
+
+// What the target shows now.
+static WallParams wall_target_params(const std::string &target) {
+    if (!target.empty())
+        if (auto o = wallpaper_find_override(wallpaper_parse_overrides(set->wallpaper_monitors), target))
+            return o->params;
+    return wallpaper_shared_params(*set);
+}
+
+// Returns true when this gave the monitor its own wallpaper (the page then
+// needs rebuilding, but not in the middle of a drag).
+static bool wall_set_target_params(const std::string &target, const WallParams &p) {
+    if (target.empty()) {
+        wallpaper_set_shared_params(*set, p);
+        return false;
+    }
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    bool found = false;
+    for (auto &o : overrides) {
+        if (o.name == target) {
+            o.params = p;
+            found = true;
+        }
+    }
+    if (!found)
+        overrides.push_back({target, p});
+    set->wallpaper_monitors = wallpaper_serialize_overrides(overrides);
+    return !found;
+}
+
+// Makes the monitor follow the shared wallpaper again.
+static void wall_use_shared(const std::string &target) {
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    std::erase_if(overrides, [&target](const WallMonitorOverride &o) { return o.name == target; });
+    set->wallpaper_monitors = wallpaper_serialize_overrides(overrides);
+    std::error_code ec;
+    std::filesystem::remove(wallpaper_monitor_path(target), ec);
+}
+
+// Copies an image to the target's wallpaper file (~/.config/mylar/wall.png,
+// or wall-<monitor>.png). Non-images are ignored. Blocking (runs `file`), so
+// call it off the UI thread.
+static bool set_wallpaper_from_file(const std::string &file, const std::string &target) {
     if (file.empty() || !std::filesystem::is_regular_file(file))
         return false;
     std::string quoted = "'";
@@ -3110,14 +3332,388 @@ static bool set_wallpaper_from_file(const std::string &file) {
     auto mime = trim_newline(execAndGet(std::string("file --mime-type -b " + quoted).c_str()));
     if (!mime.starts_with("image/"))
         return false;
-    const char* home = std::getenv("HOME");
-    if (!home)
-        return false;
-    std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/wall.png";
+    std::filesystem::path filepath = target.empty() ? wallpaper_shared_path() : wallpaper_monitor_path(target);
     std::error_code ec;
     std::filesystem::create_directories(filepath.parent_path(), ec);
     std::filesystem::copy_file(file, filepath, std::filesystem::copy_options::overwrite_existing, ec);
-    return !ec;
+    if (ec)
+        return false;
+    if (!target.empty() && !wall_target_is_separate(target))
+        wall_set_target_params(target, wall_target_params(target));
+    wall_commit();
+    settings_request_redraw();
+    return true;
+}
+
+// Downscaled wallpaper images for the preview, by path. Loaded on worker
+// threads; the Settings thread takes finished ones in when it paints.
+struct WallThumb {
+    std::string stamp; // of the shown surface
+    cairo_surface_t *surface = nullptr;
+    int iw = 0, ih = 0; // size of the original image
+    std::string loading_stamp;
+    bool has_pending = false;
+    cairo_surface_t *pending = nullptr;
+    int pending_iw = 0, pending_ih = 0;
+    std::string pending_stamp;
+};
+
+static std::mutex wall_thumbs_mutex;
+static std::unordered_map<std::string, WallThumb> wall_thumbs;
+
+static void wall_thumb_load(std::string path, std::string stamp) {
+    std::thread([path, stamp]() {
+        cairo_surface_t *full = nullptr;
+        load_icon_full_path(&full, path);
+        cairo_surface_t *small = nullptr;
+        int iw = 0, ih = 0;
+        if (full) {
+            iw = cairo_image_surface_get_width(full);
+            ih = cairo_image_surface_get_height(full);
+            const double s = std::min(1.0, 1400.0 / std::max(1, std::max(iw, ih)));
+            const int tw = std::max(1, (int) std::round(iw * s));
+            const int th = std::max(1, (int) std::round(ih * s));
+            small = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, tw, th);
+            auto cr = cairo_create(small);
+            cairo_scale(cr, (double) tw / iw, (double) th / ih);
+            cairo_set_source_surface(cr, full, 0, 0);
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+            cairo_paint(cr);
+            cairo_destroy(cr);
+            cairo_surface_flush(small);
+            cairo_surface_destroy(full);
+        }
+        {
+            std::lock_guard<std::mutex> lock(wall_thumbs_mutex);
+            auto &t = wall_thumbs[path];
+            if (t.loading_stamp != stamp) {
+                if (small)
+                    cairo_surface_destroy(small);
+                return;
+            }
+            if (t.has_pending && t.pending)
+                cairo_surface_destroy(t.pending);
+            t.has_pending = true;
+            t.pending = small;
+            t.pending_iw = iw;
+            t.pending_ih = ih;
+            t.pending_stamp = stamp;
+            t.loading_stamp.clear();
+        }
+        settings_request_redraw();
+    }).detach();
+}
+
+// The thumbnail for path, or nullptr while it loads. Settings thread only.
+static const WallThumb *wall_thumb(const std::string &path) {
+    const auto stamp = wallpaper_file_stamp(path);
+    std::lock_guard<std::mutex> lock(wall_thumbs_mutex);
+    auto &t = wall_thumbs[path];
+    if (t.has_pending) {
+        if (t.surface) {
+            drawing::invalidate_surface(t.surface);
+            cairo_surface_destroy(t.surface);
+        }
+        t.surface = t.pending;
+        t.iw = t.pending_iw;
+        t.ih = t.pending_ih;
+        t.stamp = t.pending_stamp;
+        t.pending = nullptr;
+        t.has_pending = false;
+    }
+    if (stamp != t.stamp && stamp != t.loading_stamp && !stamp.empty()) {
+        t.loading_stamp = stamp;
+        wall_thumb_load(path, stamp);
+    }
+    if (stamp.empty() || !t.surface)
+        return nullptr;
+    return &t;
+}
+
+// Maps the monitor layout (logical) into the preview canvas.
+struct WallView {
+    std::vector<WallMonitor> monitors;
+    double k = 1, ox = 0, oy = 0;
+
+    Bounds to_canvas(double x, double y, double w, double h) const {
+        return Bounds(ox + x * k, oy + y * k, w * k, h * k);
+    }
+};
+
+static WallView wall_view(Container *c, double dpi) {
+    WallView v;
+    v.monitors = wallpaper_monitors_copy();
+    if (v.monitors.empty())
+        return v;
+    double x0 = v.monitors[0].x, y0 = v.monitors[0].y, x1 = x0 + v.monitors[0].w, y1 = y0 + v.monitors[0].h;
+    for (auto &m : v.monitors) {
+        x0 = std::min(x0, m.x), y0 = std::min(y0, m.y);
+        x1 = std::max(x1, m.x + m.w), y1 = std::max(y1, m.y + m.h);
+    }
+    const double uw = std::max(1.0, x1 - x0), uh = std::max(1.0, y1 - y0);
+    auto b = c->real_bounds;
+    // Leave room around the monitors to show the cropped off parts of the image.
+    v.k = std::min(b.w * .62 / uw, (b.h - 30 * dpi) * .72 / uh);
+    v.ox = b.x + b.w * .5 - (x0 + uw * .5) * v.k;
+    v.oy = b.y + 12 * dpi + (b.h - 12 * dpi) * .5 - (y0 + uh * .5) * v.k;
+    return v;
+}
+
+static bool wall_monitor_targeted(const WallMonitor &m, const std::vector<WallMonitorOverride> &overrides) {
+    if (wall_target.empty())
+        return !wallpaper_find_override(overrides, m.name);
+    return m.name == wall_target;
+}
+
+// The targeted monitor a pointer position edits: the one under it, else the
+// first targeted one.
+static const WallMonitor *wall_edit_monitor(const WallView &v, double x, double y) {
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    const WallMonitor *first = nullptr;
+    for (auto &m : v.monitors) {
+        if (!wall_monitor_targeted(m, overrides))
+            continue;
+        if (!first)
+            first = &m;
+        if (bounds_contains(v.to_canvas(m.x, m.y, m.w, m.h), x, y))
+            return &m;
+    }
+    return first;
+}
+
+static void wall_draw_image(drawing::Context *cr, const WallThumb *thumb, Bounds r, double alpha) {
+    const double tw = cairo_image_surface_get_width(thumb->surface);
+    const double th = cairo_image_surface_get_height(thumb->surface);
+    if (r.w <= 0 || r.h <= 0 || tw <= 0 || th <= 0)
+        return;
+    cr->save();
+    cr->new_path();
+    cr->rectangle(r.x, r.y, r.w, r.h);
+    cr->clip_path();
+    cr->translate(r.x, r.y);
+    cr->scale(r.w / tw, r.h / th);
+    cr->set_source_surface(thumb->surface, 0, 0);
+    cr->paint_source(alpha);
+    cr->restore();
+}
+
+struct WallPreviewData : UserData {
+    bool dragging = false;
+    bool became_separate = false;
+    WallParams start;
+    WallRect area;
+    double image_w = 0, image_h = 0; // image rect size (logical) at drag start
+    double iw = 0, ih = 0; // image size, for keeping the crop inside it
+};
+
+static void paint_wall_preview(Container *root, Container *c) {
+    auto window = swifi_window(root);
+    auto cr = window->drawing_context;
+    auto dpi = window->dpi;
+    auto b = c->real_bounds;
+    paint_smooth_frame(cr, b, settings_control_rounding * dpi, theme.dropdown_background, theme.dropdown_border);
+
+    auto v = wall_view(c, dpi);
+    if (v.monitors.empty())
+        return;
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    auto shared = wallpaper_shared_params(*set);
+
+    cr->save();
+    cr->new_path();
+    cr->rectangle(b.x + 1, b.y + 1, b.w - 2, b.h - 2);
+    cr->clip_path();
+
+    // Ghost of the whole image behind the targeted monitors: the parts the crop cuts off.
+    std::vector<std::string> ghosted;
+    for (auto &m : v.monitors) {
+        if (!wall_monitor_targeted(m, overrides))
+            continue;
+        auto res = wallpaper_resolve(shared, set->wallpaper_span, overrides, v.monitors, m);
+        if (res.params.mode == "Tile" || res.params.mode == "Stretch")
+            continue;
+        char id[160];
+        snprintf(id, sizeof(id), "%.1f %.1f %.1f %.1f", res.area.x, res.area.y, res.area.w, res.area.h);
+        if (std::find(ghosted.begin(), ghosted.end(), id) != ghosted.end())
+            continue;
+        ghosted.push_back(id);
+        auto thumb = wall_thumb(res.path);
+        if (!thumb)
+            continue;
+        auto r = wallpaper_image_rect(res.params, thumb->iw, thumb->ih, res.area.w, res.area.h, res.pixel_scale);
+        auto cb = v.to_canvas(res.area.x + r.x, res.area.y + r.y, r.w, r.h);
+        wall_draw_image(cr, thumb, cb, .3);
+        drawRoundedRect(cr, cb.x, cb.y, cb.w, cb.h, 0, std::max(1.0, (double) std::floor(dpi)));
+        set_argb(cr, RGBA(1, 1, 1, .25));
+        cr->stroke();
+    }
+
+    // Each monitor as it will look.
+    for (auto &m : v.monitors) {
+        auto res = wallpaper_resolve(shared, set->wallpaper_span, overrides, v.monitors, m);
+        auto mb = v.to_canvas(m.x, m.y, m.w, m.h);
+        cr->save();
+        cr->new_path();
+        cr->rectangle(mb.x, mb.y, mb.w, mb.h);
+        cr->clip_path();
+        cr->set_source_rgba(0, 0, 0, 1);
+        cr->new_path();
+        cr->rectangle(mb.x, mb.y, mb.w, mb.h);
+        cr->fill();
+        if (set->draw_wallpaper) {
+            if (auto thumb = wall_thumb(res.path)) {
+                for (auto &r : wallpaper_area_rects(res.params, thumb->iw, thumb->ih, res.area.w, res.area.h, res.pixel_scale)) {
+                    auto rb = v.to_canvas(res.area.x + r.x, res.area.y + r.y, r.w, r.h);
+                    if (rb.x > mb.x + mb.w || rb.y > mb.y + mb.h || rb.x + rb.w < mb.x || rb.y + rb.h < mb.y)
+                        continue;
+                    wall_draw_image(cr, thumb, rb, 1.0);
+                }
+            }
+        }
+        cr->restore();
+
+        const bool targeted = wall_monitor_targeted(m, overrides);
+        const double line = targeted ? std::max(2.0, (double) std::floor(2 * dpi)) : std::max(1.0, (double) std::floor(dpi));
+        drawRoundedRect(cr, mb.x, mb.y, mb.w, mb.h, 0, line);
+        set_argb(cr, targeted ? theme.accent : RGBA(1, 1, 1, .35));
+        cr->stroke();
+
+        if (v.monitors.size() > 1) {
+            std::string label = m.name;
+            if (wallpaper_find_override(overrides, m.name))
+                label += " (own)";
+            double tw = swifi_text_width(root, label, 9);
+            Bounds pill(mb.x + 6 * dpi, mb.y + mb.h - 22 * dpi, tw + 12 * dpi, 16 * dpi);
+            if (pill.w < mb.w - 8 * dpi && pill.h < mb.h - 8 * dpi) {
+                drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 4 * dpi, 1.0);
+                set_argb(cr, RGBA(0, 0, 0, .55));
+                cr->fill();
+                swifi_text(root, pill, label, 9, RGBA(1, 1, 1, .95), true);
+            }
+        }
+    }
+    cr->restore();
+
+    std::string hint = v.monitors.size() > 1 ? "Drag to move, Ctrl+scroll to zoom, click a monitor to select it" : "Drag to move, Ctrl+scroll to zoom";
+    swifi_text(root, Bounds(b.x + 10 * dpi, b.y + 6 * dpi, b.w - 20 * dpi, 18 * dpi), hint, 9, theme.text_secondary);
+}
+
+// The Custom parameters to start editing the target from, with the area and
+// image size the pointer edits in. False when the image is not loaded yet.
+static bool wall_edit_start(Container *root, Container *c, WallParams &p, WallRect &area, double &iw, double &ih, double &pixel_scale) {
+    auto dpi = swifi_window(root)->dpi;
+    auto v = wall_view(c, dpi);
+    auto m = wall_edit_monitor(v, root->mouse_current_x, root->mouse_current_y);
+    if (!m)
+        return false;
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    auto res = wallpaper_resolve(wallpaper_shared_params(*set), set->wallpaper_span, overrides, v.monitors, *m);
+    auto thumb = wall_thumb(res.path);
+    if (!thumb)
+        return false;
+    iw = thumb->iw, ih = thumb->ih;
+    area = res.area;
+    pixel_scale = res.pixel_scale;
+    p = wallpaper_custom_from(wall_target_params(wall_target), iw, ih, area.w, area.h, pixel_scale);
+    return true;
+}
+
+static void make_wall_preview(Container *parent) {
+    static const int height = 260;
+    auto c = parent->child(FILL_SPACE, height);
+    c->name = "wallpaper_preview";
+    c->receive_events_even_if_obstructed = true;
+    c->parent_bounds_limit_input_bounds = false;
+    c->user_data = new WallPreviewData;
+    c->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = height * swifi_window(root)->dpi;
+    };
+    c->when_paint = paint_wall_preview;
+    c->when_drag_end_is_click = false;
+    c->when_clicked = [](Container *root, Container *c) {
+        auto v = wall_view(c, swifi_window(root)->dpi);
+        if (v.monitors.size() < 2)
+            return;
+        std::string picked;
+        for (auto &m : v.monitors)
+            if (bounds_contains(v.to_canvas(m.x, m.y, m.w, m.h), root->mouse_current_x, root->mouse_current_y))
+                picked = m.name;
+        if (picked == wall_target)
+            return;
+        wall_target = picked;
+        display_trial.page_stale = true;
+        swifi_redraw(root);
+    };
+    c->when_drag_start = [](Container *root, Container *c) {
+        auto data = (WallPreviewData *) c->user_data;
+        WallParams p;
+        double iw, ih, pixel_scale;
+        data->dragging = wall_edit_start(root, c, p, data->area, iw, ih, pixel_scale);
+        if (!data->dragging)
+            return;
+        p = wallpaper_clamp_custom(p, iw, ih, data->area.w, data->area.h);
+        data->start = p;
+        data->iw = iw;
+        data->ih = ih;
+        auto r = wallpaper_image_rect(p, iw, ih, data->area.w, data->area.h, pixel_scale);
+        data->image_w = r.w;
+        data->image_h = r.h;
+        data->became_separate = wall_set_target_params(wall_target, p);
+        wall_commit(false);
+    };
+    c->when_drag = [](Container *root, Container *c) {
+        auto data = (WallPreviewData *) c->user_data;
+        if (!data->dragging || data->image_w <= 0 || data->image_h <= 0)
+            return;
+        auto v = wall_view(c, swifi_window(root)->dpi);
+        auto p = data->start;
+        p.center_x -= (root->mouse_current_x - root->mouse_initial_x) / v.k / data->image_w;
+        p.center_y -= (root->mouse_current_y - root->mouse_initial_y) / v.k / data->image_h;
+        p = wallpaper_clamp_custom(p, data->iw, data->ih, data->area.w, data->area.h);
+        wall_set_target_params(wall_target, p);
+        wall_commit(false);
+        swifi_redraw(root);
+    };
+    c->when_drag_end = [](Container *root, Container *c) {
+        auto data = (WallPreviewData *) c->user_data;
+        if (!data->dragging)
+            return;
+        data->dragging = false;
+        if (data->became_separate)
+            display_trial.page_stale = true;
+        data->became_separate = false;
+        wall_commit();
+        swifi_redraw(root);
+    };
+    c->when_fine_scrolled = [](Container *root, Container *c, double scroll_x, double scroll_y, bool touchpad) {
+        if (!settings_ctrl_held || scroll_y == 0)
+            return;
+        wall_preview_ate_scroll = true;
+        WallParams p;
+        WallRect area;
+        double iw, ih, pixel_scale;
+        if (!wall_edit_start(root, c, p, area, iw, ih, pixel_scale))
+            return;
+        auto v = wall_view(c, swifi_window(root)->dpi);
+        // Keep the image point under the pointer where it is.
+        const double mx = (root->mouse_current_x - v.ox) / v.k - area.x;
+        const double my = (root->mouse_current_y - v.oy) / v.k - area.y;
+        auto before = wallpaper_image_rect(p, iw, ih, area.w, area.h, pixel_scale);
+        if (before.w <= 0 || before.h <= 0)
+            return;
+        const double u = (mx - before.x) / before.w;
+        const double w = (my - before.y) / before.h;
+        p = wallpaper_clamp_custom(p, iw, ih, area.w, area.h);
+        p.zoom = std::clamp(p.zoom * std::exp(scroll_y * .012), 1.0, 40.0);
+        auto after = wallpaper_image_rect(p, iw, ih, area.w, area.h, pixel_scale);
+        p.center_x = (area.w * .5 - mx) / after.w + u;
+        p.center_y = (area.h * .5 - my) / after.h + w;
+        p = wallpaper_clamp_custom(p, iw, ih, area.w, area.h);
+        if (wall_set_target_params(wall_target, p))
+            display_trial.page_stale = true;
+        wall_commit();
+        swifi_redraw(root);
+    };
 }
 
 // Local file paths in a text/uri-list ("file:///a%20b" -> "/a b").
@@ -3161,9 +3757,10 @@ static std::vector<std::string> paths_from_uri_list(const std::string &uri_list)
 // Files dropped anywhere on the Display page: the first image becomes the
 // wallpaper, as if it had been picked with "Choose file".
 static void wallpaper_file_dropped(std::string uri_list) {
-    std::thread t([uri_list]() {
+    std::string target = wall_target;
+    std::thread t([uri_list, target]() {
         for (const auto &path : paths_from_uri_list(uri_list))
-            if (set_wallpaper_from_file(path))
+            if (set_wallpaper_from_file(path, target))
                 break;
     });
     t.detach();
@@ -3203,9 +3800,19 @@ static void paint_wallpaper_drop_hint(Container *root, Container *right) {
 }
 
 static void make_wallpaper_row(Container *padded_right) {
+    auto monitors = wallpaper_monitors_copy();
+    if (!wall_target.empty()) {
+        bool exists = false;
+        for (auto &m : monitors)
+            exists |= m.name == wall_target;
+        if (!exists)
+            wall_target.clear();
+    }
+    const bool many = monitors.size() > 1;
+
     make_bool_with_button(padded_right, "Draw wallpaper", "Can drag and drop image here", set->draw_wallpaper, [](bool c) {
         set->draw_wallpaper = c;
-        damage_all();
+        main_thread([]() { damage_all(); });
     }, "Choose file", []() {
         static bool chooser_open = false;
         if (chooser_open)
@@ -3213,14 +3820,84 @@ static void make_wallpaper_row(Container *padded_right) {
 
         chooser_open = true;
 
-        std::thread t([]() {
-            set_wallpaper_from_file(trim_newline(choose_file()));
+        std::string target = wall_target;
+        std::thread t([target]() {
+            set_wallpaper_from_file(trim_newline(choose_file()), target);
             chooser_open = false;
         });
 
         t.detach();
     }, "\uE8b9");
     padded_right->children.back()->name = "display_wallpaper_row";
+
+    if (many) {
+        make_vert_space(padded_right, 4);
+        std::vector<std::string> options = {"All monitors"};
+        for (auto &m : monitors)
+            options.push_back(m.name);
+        make_dropdown_option(padded_right, "Wallpaper for", "Monitors can each have their own wallpaper", "\uE7F4",
+                             wall_target.empty() ? "All monitors" : wall_target, options, [](std::string selected) {
+            wall_target = selected == "All monitors" ? "" : selected;
+            display_trial.page_stale = true;
+            settings_redraw_from_ui();
+        }, []() { return wall_target.empty() ? std::string("All monitors") : wall_target; });
+    }
+
+    make_vert_space(padded_right, 4);
+    make_dropdown_option(padded_right, "Scaling", "How the image fits the screen", "\uE740", wall_target_params(wall_target).mode,
+                         wallpaper_scaling_modes, [](std::string selected) {
+        auto p = wall_target_params(wall_target);
+        if (selected == p.mode)
+            return;
+        if (selected == "Custom") {
+            // Start from what the previous mode showed.
+            auto v_monitors = wallpaper_monitors_copy();
+            auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+            for (auto &m : v_monitors) {
+                if (!wall_monitor_targeted(m, overrides))
+                    continue;
+                auto res = wallpaper_resolve(wallpaper_shared_params(*set), set->wallpaper_span, overrides, v_monitors, m);
+                if (auto thumb = wall_thumb(res.path))
+                    p = wallpaper_custom_from(p, thumb->iw, thumb->ih, res.area.w, res.area.h, res.pixel_scale);
+                break;
+            }
+        }
+        p.mode = selected;
+        if (wall_set_target_params(wall_target, p))
+            display_trial.page_stale = true;
+        wall_commit();
+        settings_redraw_from_ui();
+    }, []() { return wall_target_params(wall_target).mode; });
+
+    if (many && wall_target.empty()) {
+        make_vert_space(padded_right, 4);
+        make_bool(padded_right, "Span across monitors", "Stretch one image over every monitor using the shared wallpaper", set->wallpaper_span, [](bool on) {
+            set->wallpaper_span = on;
+            wall_commit();
+            settings_redraw_from_ui();
+        }, "\uEBC6");
+    }
+
+    if (wall_target_is_separate(wall_target)) {
+        make_vert_space(padded_right, 4);
+        make_button_option(padded_right, "Own wallpaper", wall_target + " doesn't follow the shared wallpaper", "Use shared", []() {
+            wall_use_shared(wall_target);
+            wall_commit();
+            display_trial.page_stale = true;
+            settings_redraw_from_ui();
+        }, "\uE8B9");
+    }
+
+    make_vert_space(padded_right, 8);
+    make_wall_preview(padded_right);
+
+    make_vert_space(padded_right, 4);
+    make_button_option(padded_right, "Crop", "Drag the preview to move the image, Ctrl+scroll to zoom", "Reset", []() {
+        if (wall_set_target_params(wall_target, WallParams()))
+            display_trial.page_stale = true;
+        wall_commit();
+        settings_redraw_from_ui();
+    }, "\uE7A8");
 
     make_vert_space(padded_right, 4);
 
@@ -3247,7 +3924,7 @@ static void fill_display_settings(Container *root) {
     
     make_vert_space(padded_right, 10);
 
-    make_display_trial_banner(padded_right);
+    padded_right->name = "display_page";
 
     std::vector<MonitorOption *> options;
     auto data = execAndGet(std::string("hyprctl monitors").c_str());
@@ -7567,6 +8244,10 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Display", "Display Settings", "Display Settings", "Arrange monitors and change how each one is driven",
                "monitors screens displays arrange layout position outputs");
     search_add("Display", "Display Settings", "Draw wallpaper", "Can drag and drop image here", "background image picture photo choose file wallpaper drop");
+    search_add("Display", "Display Settings", "Scaling", "How the image fits the screen", "wallpaper background fill fit stretch center tile custom zoom crop scale");
+    search_add("Display", "Display Settings", "Crop", "Drag the preview to move the image, Ctrl+scroll to zoom", "wallpaper background crop zoom move position reset");
+    search_add("Display", "Display Settings", "Span across monitors", "Stretch one image over every monitor using the shared wallpaper", "wallpaper background span stretch multiple monitors displays");
+    search_add("Display", "Display Settings", "Wallpaper for", "Monitors can each have their own wallpaper", "wallpaper background per monitor display separate own");
     search_add("Display", "Display Settings", "Brightness", "Screen backlight level", "brightness backlight dim bright screen");
     search_add("Display", "Monitor", "Mode", "Resolution and refresh rate", "resolution refresh rate hz fps size");
     search_add("Display", "Monitor", "Scale", "Scale factor, or \"auto\"", "zoom size dpi hidpi fractional scaling bigger smaller");
@@ -8455,13 +9136,8 @@ void fill_root(Container *root) {
         skbd_page_stale = false;
 
         // Only present while the display page is showing.
-        if (container_by_name("display_trial_banner", root)) {
-            if (display_trial.page_stale)
-                fill_display_settings(root);
-            const bool active = display_trial.active;
-            container_by_name("display_trial_banner", root)->exists = active;
-            container_by_name("display_trial_space", root)->exists  = active;
-        }
+        if (display_trial.page_stale && container_by_name("display_page", root))
+            fill_display_settings(root);
 
         // Last, so pages rebuilt above are laid out in this pass.
         place_settings_columns(root, c, b);
@@ -8570,6 +9246,14 @@ void fill_root(Container *root) {
     };
     right->receive_events_even_if_obstructed = true;
     right->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
+        if (wall_preview_ate_scroll) {
+            wall_preview_ate_scroll = false;
+            return;
+        }
+        // Horizontal-only events (touchpad drift, wheel tilt) and axis_stop
+        // frames carry no vertical motion; don't restart the wheel easing.
+        if (scroll_y == 0)
+            return;
         auto d = (RightData *) c->user_data;
         auto mylar = (MylarWindow*)root->user_data;
         // Clamp against the limits from the last real layout pass.
@@ -8683,6 +9367,8 @@ void actual_start() {
     // Ctrl+L clears the search query and puts the cursor in the search field.
     auto forward_key = mylar->raw_window->on_key_press;
     mylar->raw_window->on_key_press = [forward_key](RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (sym == XKB_KEY_Control_L || sym == XKB_KEY_Control_R)
+            settings_ctrl_held = pressed;
         if ((sym == XKB_KEY_l || sym == XKB_KEY_L) && (mods & MOD_CTRL) && !(mods & ~(MOD_CTRL | MOD_SHIFT))) {
             if (pressed) {
                 std::lock_guard<std::mutex> lock(rw->creator->mutex);
@@ -8710,6 +9396,7 @@ void actual_start() {
         settings_wifi_release();
         settings_audio_release();
         sshortcut_stop_editing();
+        trial_dialog_close();
         dropdown_popup = nullptr;
         for (auto p : popups) {
             windowing::close_window(p->raw_window);

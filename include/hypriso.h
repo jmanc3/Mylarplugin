@@ -132,6 +132,15 @@ struct ConfigSettings {
     bool dock_current_workspace_only = true;
     bool dock_merge_windows = false;
     bool draw_wallpaper = true;
+    // Fill, Fit, Stretch, Center, Tile or Custom (see wallpaper_layout.h).
+    std::string wallpaper_scaling = "Fill";
+    float wallpaper_zoom = 1.0;
+    float wallpaper_center_x = .5;
+    float wallpaper_center_y = .5;
+    // Lay the shared wallpaper out once across all monitors that use it.
+    bool wallpaper_span = false;
+    // Monitors with their own wallpaper settings (see wallpaper_layout.h).
+    std::string wallpaper_monitors = "";
     bool dark_theme = true;
     bool clock_24h = false;
     bool hotcorners = true;
@@ -741,6 +750,8 @@ void main_thread(std::function<void()> func);
 void debounce_main(const std::string &key, float delay_ms, std::function<void()> func);
 
 void load_icon_full_path(cairo_surface_t** surface, std::string path, int target_size);
+// Full size, any format stb_image reads.
+void load_icon_full_path(cairo_surface_t** surface, std::string path);
 
 Bounds lerp(Bounds start, Bounds end, float scalar);
 

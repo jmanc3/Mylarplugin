@@ -28,6 +28,7 @@
 #include "first.h"
 #include "snap_assist.h"
 #include "overview.h"
+#include "wallpaper_layout.h"
 #include "workspace_indicator.h"
 #include "drag_workspace_switcher.h"
 #include "audio.h"
@@ -36,6 +37,7 @@
 #include "polling_thread.h"
 
 #include <cstdio>
+#include <unordered_set>
 #include <ctime>
 #include <dbus/dbus-shared.h>
 #include <gio/gio.h>
@@ -361,10 +363,35 @@ static void apply_workspace_tiling(int s, bool state) {
     }
 }
 
+void save_restore_infos();
+
+// Windows whose restore rules have run. Until then a workspace change is
+// Hyprland placing the new window, not the user moving it.
+static std::unordered_set<int> restore_rules_applied;
+
 static void on_window_workspace_change(int id) {
     const int space = hypriso->get_client_workspace_id(id);
     if (space != -1)
         apply_window_tiling(id, hypriso->is_space_tiling_id(space), false);
+
+    // "Remember workspace" used to save the workspace only on drag/resize end
+    // or when a titlebar option was toggled, so moving a window with a
+    // shortcut, the overview or the workspace switcher restored a stale one.
+    if (!restore_rules_applied.contains(id))
+        return;
+    const auto name = hypriso->class_name(id);
+    auto saved = restore_infos.find(name);
+    if (saved == restore_infos.end() || !saved->second.remember_workspace)
+        return;
+    const int parent = hypriso->parent(id);
+    if (parent != -1 && hypriso->class_name(parent) == name)
+        return; // dialogs follow their parent
+    // Special and named workspaces have non-positive ids and can't be restored.
+    const int raw = hypriso->get_client_workspace(id);
+    if (raw <= 0 || raw == saved->second.remembered_workspace)
+        return;
+    saved->second.remembered_workspace = raw;
+    save_restore_infos();
 }
 
 void toggle_layout() {
@@ -779,6 +806,7 @@ static void on_window_open(int id) {
     
     later_immediate([id](Timer *) {
         apply_restore_info(id);
+        restore_rules_applied.insert(id);
         // Restore rules can move a newly opened window to another workspace.
         on_window_workspace_change(id);
         fit_on_screen(id);
@@ -801,6 +829,7 @@ static void on_window_open(int id) {
 }
 
 static void on_window_closed(int id) {
+    restore_rules_applied.erase(id);
     possibly_update_workspace_previews();
     
     hypriso->set_corner_rendering_mask_for_window(id, 0);
@@ -1005,8 +1034,15 @@ static void update_xrdb_dpi() {
     });
 }
 
+static void publish_wall_monitors();
+struct WallSlot;
+static WallSlot *wall_slot(Container *m, bool first);
+static void wall_slot_load(int id, WallSlot *slot);
+static void wall_slot_clear(WallSlot *slot);
+
 static void on_monitor_layout_change() {
     update_xrdb_dpi();
+    publish_wall_monitors();
     if (remembered_window_positions.empty())
         return;
     later_immediate([](Timer *) {
@@ -1170,15 +1206,10 @@ static void on_monitor_open(int id) {
     if (set->show_docks)
         dock::start(hypriso->monitor_name(id));
     update_xrdb_dpi();
-    auto t = datum<TextureInfo>(c, "bg_wall1");
-    auto t2 = datum<TextureInfo>(c, "bg_wall2");
-    auto wall1_active = datum<bool>(c, "bg_wall1_active");
     *datum<long>(c, "bg_wall_change_time_ms") = 0;
-    *wall1_active = true;
-    const char* home = std::getenv("HOME");
-    std::filesystem::path filepath =
-        std::filesystem::path(home) / ".config/mylar/wall.png";
-    *t = gen_texture_png(filepath);
+    *datum<bool>(c, "bg_wall1_active") = true;
+    publish_wall_monitors();
+    wall_slot_load(id, wall_slot(c, true));
 
     later(10, [](Timer *) {
         damage_all();
@@ -1196,14 +1227,13 @@ static void on_monitor_closed(int id) {
     for (int i = actual_monitors.size() - 1; i >= 0; i--) {
         auto cid = *datum<int>(actual_monitors[i], "cid");
         if (cid == id) {
-            auto t = datum<TextureInfo>(actual_monitors[i], "bg_wall1");
-            free_text_texture(t->id);
-            auto t2 = datum<TextureInfo>(actual_monitors[i], "bg_wall2");
-            free_text_texture(t2->id);
+            wall_slot_clear(wall_slot(actual_monitors[i], true));
+            wall_slot_clear(wall_slot(actual_monitors[i], false));
             
             actual_monitors.erase(actual_monitors.begin() + i);
         }
     }
+    publish_wall_monitors();
     heart::layout_containers();
     dock::stop(hypriso->monitor_name(id));
 }
@@ -1285,20 +1315,288 @@ static bool is_snapped(int id) {
     return false;
 }
 
-static Bounds wallpaper_bounds(const TextureInfo& texture, const Bounds& monitor_bounds) {
-    if (texture.w <= 0 || texture.h <= 0)
-        return monitor_bounds;
+// ---- Wallpaper ----------------------------------------------------------------
+//
+// Each monitor holds two slots so a new wallpaper can fade in over the old one.
+// A slot draws its cached final image (monitor sized, already scaled and
+// cropped) when one matches the current settings. Otherwise it draws the source
+// image directly, scaled on the GPU, and a new cached image is made on a worker
+// thread once the settings have held still for a moment. Cached images are also
+// written to ~/.cache/mylar/wallpaper so the next start can skip decoding the
+// full sized source.
 
-    const double texture_scale = std::max(monitor_bounds.w / texture.w, monitor_bounds.h / texture.h);
-    const double width         = texture.w * texture_scale;
-    const double height        = texture.h * texture_scale;
+struct WallSlot {
+    TextureInfo source;      // the image file as loaded
+    bool source_failed = false;
+    TextureInfo cache;       // final image for cache_key
+    std::string cache_key;
+    std::string path;        // image this slot holds
+    std::string stamp;       // wallpaper_file_stamp(path) when loaded
+    std::string pending_key; // a cached image for this key is scheduled or being made
+};
 
-    return {
-        monitor_bounds.x + (monitor_bounds.w - width) * 0.5,
-        monitor_bounds.y + (monitor_bounds.h - height) * 0.5,
-        width,
-        height,
+static WallSlot *wall_slot(Container *m, bool first) {
+    return datum<WallSlot>(m, first ? "wall_slot1" : "wall_slot2");
+}
+
+static Container *wall_monitor_container(int id) {
+    for (auto m : actual_monitors)
+        if (*datum<int>(m, "cid") == id)
+            return m;
+    return nullptr;
+}
+
+static WallMonitor wall_monitor(int id) {
+    auto b = bounds_monitor(id);
+    WallMonitor m;
+    m.name = hypriso->monitor_name(id);
+    m.x = b.x, m.y = b.y, m.w = b.w, m.h = b.h;
+    m.scale = scale(id);
+    return m;
+}
+
+static std::vector<WallMonitor> wall_monitors() {
+    std::vector<WallMonitor> monitors;
+    for (auto m : actual_monitors)
+        monitors.push_back(wall_monitor(*datum<int>(m, "cid")));
+    return monitors;
+}
+
+static void publish_wall_monitors() {
+    auto monitors = wall_monitors();
+    std::lock_guard<std::mutex> lock(wallpaper_monitors_mutex);
+    wallpaper_monitors_snapshot = monitors;
+}
+
+static const std::vector<WallMonitorOverride> &wall_overrides() {
+    static std::string parsed_text;
+    static std::vector<WallMonitorOverride> parsed;
+    if (parsed_text != set->wallpaper_monitors) {
+        parsed_text = set->wallpaper_monitors;
+        parsed = wallpaper_parse_overrides(parsed_text);
+    }
+    return parsed;
+}
+
+static WallResolved wall_resolve(int id, const WallMonitor &m) {
+    return wallpaper_resolve(wallpaper_shared_params(*set), set->wallpaper_span, wall_overrides(), wall_monitors(), m);
+}
+
+static std::filesystem::path wall_disk_cache_dir() {
+    const char *home = std::getenv("HOME");
+    return std::filesystem::path(home ? home : "/tmp") / ".cache/mylar/wallpaper";
+}
+
+static std::filesystem::path wall_disk_cache_file(const std::string &monitor, const std::string &key) {
+    char hash[32];
+    snprintf(hash, sizeof(hash), "%016zx", std::hash<std::string>{}(key));
+    return wall_disk_cache_dir() / (wallpaper_safe_name(monitor) + "-" + hash + ".png");
+}
+
+static void wall_slot_clear(WallSlot *slot) {
+    if (slot->source.id != -1)
+        free_text_texture(slot->source.id);
+    if (slot->cache.id != -1)
+        free_text_texture(slot->cache.id);
+    *slot = WallSlot();
+}
+
+// Fills a slot with the image the monitor should show now: the cached image
+// from disk when it matches, the source image otherwise.
+static void wall_slot_load(int id, WallSlot *slot) {
+    wall_slot_clear(slot);
+    auto m = wall_monitor(id);
+    auto res = wall_resolve(id, m);
+    slot->path = res.path;
+    slot->stamp = wallpaper_file_stamp(res.path);
+    if (slot->stamp.empty())
+        return;
+    auto key = wallpaper_cache_key(res, m, slot->stamp);
+    std::error_code ec;
+    auto cached = wall_disk_cache_file(m.name, key);
+    if (std::filesystem::exists(cached, ec)) {
+        slot->cache = gen_texture_png(cached.string());
+        if (slot->cache.id != -1) {
+            slot->cache_key = key;
+            return;
+        }
+    }
+    slot->source = gen_texture_png(res.path);
+    slot->source_failed = slot->source.id == -1;
+}
+
+// Renders the final image on a worker thread, then swaps it in.
+static void wall_make_cache(int id, bool first_slot, std::string key, WallResolved res, WallMonitor m, std::string stamp) {
+    std::thread([id, first_slot, key, res, m, stamp]() {
+        cairo_surface_t *src = nullptr;
+        load_icon_full_path(&src, res.path);
+        const int ow = std::max(1, (int) std::round(m.w * m.scale));
+        const int oh = std::max(1, (int) std::round(m.h * m.scale));
+        cairo_surface_t *out = nullptr;
+        if (src) {
+            const double iw = cairo_image_surface_get_width(src);
+            const double ih = cairo_image_surface_get_height(src);
+            out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ow, oh);
+            auto cr = cairo_create(out);
+            cairo_set_source_rgb(cr, 0, 0, 0);
+            cairo_paint(cr);
+            for (auto &r : wallpaper_monitor_rects(res, iw, ih, m)) {
+                cairo_save(cr);
+                cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+                cairo_clip(cr);
+                cairo_translate(cr, r.x, r.y);
+                cairo_scale(cr, r.w / iw, r.h / ih);
+                cairo_set_source_surface(cr, src, 0, 0);
+                auto pattern = cairo_get_source(cr);
+                cairo_pattern_set_filter(pattern, CAIRO_FILTER_GOOD);
+                cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+                cairo_paint(cr);
+                cairo_restore(cr);
+            }
+            cairo_destroy(cr);
+            cairo_surface_flush(out);
+            cairo_surface_destroy(src);
+
+            // Keep one cached image per monitor on disk.
+            std::error_code ec;
+            auto dir = wall_disk_cache_dir();
+            std::filesystem::create_directories(dir, ec);
+            auto file = wall_disk_cache_file(m.name, key);
+            auto prefix = wallpaper_safe_name(m.name) + "-";
+            for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+                auto name = entry.path().filename().string();
+                if (name.starts_with(prefix) && entry.path() != file)
+                    std::filesystem::remove(entry.path(), ec);
+            }
+            auto tmp = file;
+            tmp += ".tmp" + std::to_string(std::hash<std::string>{}(key + std::to_string(get_current_time_in_ms())));
+            if (cairo_surface_write_to_png(out, tmp.c_str()) == CAIRO_STATUS_SUCCESS)
+                std::filesystem::rename(tmp, file, ec);
+            else
+                std::filesystem::remove(tmp, ec);
+        }
+        main_thread([id, first_slot, key, stamp, out]() {
+            auto c = wall_monitor_container(id);
+            auto slot = c ? wall_slot(c, first_slot) : nullptr;
+            if (!slot || slot->stamp != stamp) {
+                if (out)
+                    cairo_surface_destroy(out);
+                return;
+            }
+            if (slot->pending_key == key)
+                slot->pending_key.clear();
+            if (!out)
+                return;
+            auto info = gen_texture(out);
+            cairo_surface_destroy(out);
+            if (info.id == -1)
+                return;
+            if (slot->cache.id != -1)
+                free_text_texture(slot->cache.id);
+            slot->cache = info;
+            slot->cache_key = key;
+            damage_all();
+        });
+    }).detach();
+}
+
+// Makes a cached image for key once it has stayed the wanted one for a moment
+// (while the crop is being dragged it changes every frame).
+static void wall_request_cache(int id, bool first_slot, WallSlot *slot, const std::string &key) {
+    if (slot->pending_key == key)
+        return;
+    slot->pending_key = key;
+    later(350, [id, first_slot, key](Timer *) {
+        auto c = wall_monitor_container(id);
+        auto slot = c ? wall_slot(c, first_slot) : nullptr;
+        if (!slot || slot->pending_key != key)
+            return;
+        auto m = wall_monitor(id);
+        auto res = wall_resolve(id, m);
+        if (res.path != slot->path || wallpaper_cache_key(res, m, slot->stamp) != key) {
+            slot->pending_key.clear(); // the next frame asks again
+            damage_all();
+            return;
+        }
+        wall_make_cache(id, first_slot, key, res, m, slot->stamp);
+    });
+}
+
+static void draw_wall_slot(int id, Container *c, bool first_slot, bool active, double zoom, float alpha) {
+    auto slot = wall_slot(c, first_slot);
+    auto m = wall_monitor(id);
+    auto res = wall_resolve(id, m);
+    const double mw = m.w * m.scale, mh = m.h * m.scale;
+    auto zoomed = [&](const WallRect &r) {
+        const double cx = mw * .5, cy = mh * .5;
+        return Bounds(cx + (r.x - cx) * zoom, cy + (r.y - cy) * zoom, r.w * zoom, r.h * zoom);
     };
+
+    // A slot only follows setting changes for its own image; the outgoing one
+    // of a fade keeps what it had.
+    const bool same_image = res.path == slot->path;
+    const auto key = wallpaper_cache_key(res, m, slot->stamp);
+    const bool cache_ok = slot->cache.id != -1 && slot->cache_key == key;
+    if (active && same_image && !cache_ok && !slot->stamp.empty()) {
+        if (slot->source.id == -1 && !slot->source_failed && wallpaper_file_stamp(slot->path) == slot->stamp) {
+            slot->source = gen_texture_png(slot->path);
+            slot->source_failed = slot->source.id == -1;
+        }
+        wall_request_cache(id, first_slot, slot, key);
+    }
+
+    if (cache_ok || slot->source.id == -1 || !same_image) {
+        if (slot->cache.id != -1)
+            draw_texture(slot->cache, zoomed({0, 0, mw, mh}), alpha);
+        else if (slot->source.id != -1)
+            draw_texture(slot->source, zoomed({0, 0, mw, mh}), alpha);
+        return;
+    }
+
+    if (wallpaper_needs_backdrop(res.params))
+        rect(zoomed({0, 0, mw, mh}), RGBA(0, 0, 0, alpha));
+    for (auto &r : wallpaper_monitor_rects(res, slot->source.w, slot->source.h, m))
+        draw_texture(slot->source, zoomed(r), alpha);
+}
+
+// Fades to a monitor's wallpaper when its image changed.
+static void wall_refresh_monitor(Container *c) {
+    const int id = *datum<int>(c, "cid");
+    auto wall1_active = datum<bool>(c, "bg_wall1_active");
+    auto active = wall_slot(c, *wall1_active);
+    auto res = wall_resolve(id, wall_monitor(id));
+    if (res.path == active->path && wallpaper_file_stamp(res.path) == active->stamp)
+        return;
+    auto next = wall_slot(c, !*wall1_active);
+    wall_slot_load(id, next);
+    *wall1_active = !*wall1_active;
+    *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
+}
+
+void wallpaper_settings_changed() {
+    publish_wall_monitors();
+    for (auto c : actual_monitors)
+        wall_refresh_monitor(c);
+    damage_all();
+}
+
+static void paint_wallpaper(int current_monitor, Container *m) {
+    auto wall1_active = *datum<bool>(m, "bg_wall1_active");
+    auto start = *datum<long>(m, "bg_wall_change_time_ms");
+    auto delta = (float) (get_current_time_in_ms() - start);
+    // {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.08437150831111269,"y":0.011981451924641935}]}
+    static std::vector<float> curve = { 0.000, 0.139, 0.228, 0.298, 0.355, 0.404, 0.448, 0.486, 0.521, 0.553, 0.582, 0.609, 0.634, 0.657, 0.678, 0.698, 0.717, 0.735, 0.752, 0.767, 0.782, 0.796, 0.810, 0.822, 0.834, 0.845, 0.856, 0.866, 0.875, 0.884, 0.893, 0.901, 0.909, 0.916, 0.923, 0.929, 0.935, 0.941, 0.946, 0.951, 0.956, 0.961, 0.965, 0.969, 0.972, 0.976, 0.979, 0.982, 0.984, 0.987, 0.989, 0.991, 0.993, 0.994, 0.996, 0.997, 0.998, 0.999, 0.999, 1.000, 1.000 };
+    auto scalar = pull(curve, initial_fade_in_scalar);
+    const double zoom = 1 + .4 * (1.0 - scalar);
+    float trans = 700.0f;
+
+    if (delta < trans) {
+        draw_wall_slot(current_monitor, m, !wall1_active, false, zoom, 1.0); // old base
+        draw_wall_slot(current_monitor, m, wall1_active, true, zoom, delta / trans); // new fades in
+        request_refresh();
+    } else {
+        draw_wall_slot(current_monitor, m, wall1_active, true, zoom, 1.0);
+    }
 }
 
 static bool initial_fade_in_done = false;
@@ -1384,49 +1682,10 @@ static void on_render(int id, int stage) {
     int current_window = current_rendering_window();
     int active_id = current_window == -1 ? current_monitor : current_window;
 
-    if (stage == (int) STAGE::RENDER_POST_WALLPAPER) {
-        for (auto m : actual_monitors) {
-            if (*datum<int>(m, "cid") == current_monitor) {
-                if (set->draw_wallpaper) {
-                    auto first = *datum<TextureInfo>(m, "bg_wall1");
-                    auto second = *datum<TextureInfo>(m, "bg_wall2");
-                    auto wall1_active = *datum<bool>(m, "bg_wall1_active");
-                    auto start = *datum<long>(m, "bg_wall_change_time_ms");
-                    auto current = get_current_time_in_ms();
-                    auto delta = (float) (current - start);
-                    
-                    auto b = bounds_monitor(current_monitor);
-                    b.x = 0;
-                    b.y = 0;
-                    b.scale(scale(current_monitor));
-                    auto first_bounds = wallpaper_bounds(first, b);
-                    // {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.08437150831111269,"y":0.011981451924641935}]}
-                    static std::vector<float> curve = { 0.000, 0.139, 0.228, 0.298, 0.355, 0.404, 0.448, 0.486, 0.521, 0.553, 0.582, 0.609, 0.634, 0.657, 0.678, 0.698, 0.717, 0.735, 0.752, 0.767, 0.782, 0.796, 0.810, 0.822, 0.834, 0.845, 0.856, 0.866, 0.875, 0.884, 0.893, 0.901, 0.909, 0.916, 0.923, 0.929, 0.935, 0.941, 0.946, 0.951, 0.956, 0.961, 0.965, 0.969, 0.972, 0.976, 0.979, 0.982, 0.984, 0.987, 0.989, 0.991, 0.993, 0.994, 0.996, 0.997, 0.998, 0.999, 0.999, 1.000, 1.000 };
-                    auto scalar = pull(curve, initial_fade_in_scalar);
-                    first_bounds.scale_from_center(1 + .4 * (1.0 - scalar));
-                    auto second_bounds = wallpaper_bounds(second, b);
-                    second_bounds.scale_from_center(1 + .4 * (1.0 - scalar));
-                    float trans = 700.0f;
-                    
-                    if (delta < trans) {
-                        if (wall1_active) {
-                            draw_texture(second, second_bounds);              // old base
-                            draw_texture(first, first_bounds, delta / trans); // new fades in
-                        } else {
-                            draw_texture(first, first_bounds);
-                            draw_texture(second, second_bounds, delta / trans);
-                        }
-                        request_refresh();
-                    } else {
-                        if (wall1_active) {
-                            draw_texture(first, first_bounds);
-                        } else {
-                            draw_texture(second, second_bounds);
-                        }
-                    }
-                }
-            }
-        }
+    if (stage == (int) STAGE::RENDER_POST_WALLPAPER && set->draw_wallpaper) {
+        for (auto m : actual_monitors)
+            if (*datum<int>(m, "cid") == current_monitor)
+                paint_wallpaper(current_monitor, m);
     }
 
     for (auto r : actual_monitors) {
@@ -2389,22 +2648,7 @@ void watch_wallpaper_change() {
         }
         if (!t) {
             t = later(200, [](Timer *) {
-                for (auto c : actual_monitors) {
-                    auto t = datum<TextureInfo>(c, "bg_wall1");
-                    auto wall1_active = datum<bool>(c, "bg_wall1_active");
-                    if (*wall1_active) {
-                        t = datum<TextureInfo>(c, "bg_wall2");
-                    }
-                    const char* home = std::getenv("HOME");
-                    std::filesystem::path filepath =
-                        std::filesystem::path(home) / ".config/mylar/wall.png";
-                    free_text_texture(t->id);
-                    *t = gen_texture_png(filepath);
-                    *wall1_active = !*wall1_active;
-                    *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
-                }
-                
-                damage_all();
+                wallpaper_settings_changed();
                 t = nullptr;
             });
         }

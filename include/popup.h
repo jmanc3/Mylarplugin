@@ -40,6 +40,9 @@ struct PopOption {
 namespace popup {
     // Coordinates are global logical pixels.
     void open(std::vector<PopOption> root, int x, int y, int cid = -1);
+
+    // Logical height of a menu built from these options.
+    float menu_height(const std::vector<PopOption>& options);
     void close(std::string container_uuid);
     bool dismiss_outside(int x, int y);
 

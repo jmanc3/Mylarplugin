@@ -389,7 +389,13 @@ void handle_mouse_button_press(Container* root, const Event& e) {
         // Check if its a scroll event and call when_scrolled if so
         if (e.scroll) {
             if (p->when_fine_scrolled) {
-                p->when_fine_scrolled(root, p, 0, -e.delta, !e.from_mouse);
+                // Positive scroll_x/scroll_y move toward the start (left/top).
+                // Horizontal deltas must not feed scroll_y: a touchpad swipe down
+                // that drifts sideways would otherwise jump vertical lists around.
+                if (e.axis == 1) // WL_POINTER_AXIS_HORIZONTAL_SCROLL
+                    p->when_fine_scrolled(root, p, -e.delta, 0, !e.from_mouse);
+                else
+                    p->when_fine_scrolled(root, p, 0, -e.delta, !e.from_mouse);
                 handle_mouse_motion(root, e.x, e.y);
             }
             continue;
