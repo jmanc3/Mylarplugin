@@ -355,6 +355,8 @@ struct wl_window {
     std::string app_id;
     bool has_pointer_focus = false;
     bool has_keyboard_focus = false;
+    // An xdg_popup that asked for a grab; the compositor gives it keyboard focus itself.
+    bool popup_grabbed = false;
     // Last keyboard interactivity mode sent for this layer surface.
     uint32_t keyboard_interactivity = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
     bool is_layer = true;
@@ -2844,6 +2846,7 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
     }
     if (window_wl->xdg_popup && ctx->seat && ctx->last_input_serial != 0) {
         xdg_popup_grab(window_wl->xdg_popup, ctx->seat, ctx->last_input_serial);
+        window_wl->popup_grabbed = true;
     }
 
     if (!window_wl->use_gpu)
@@ -2912,6 +2915,11 @@ static void queue_keyboard_interactivity(RawWindow *window, uint32_t mode, bool 
                 return;
             if (mode != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE &&
                 (!target || target->marked_for_closing || (only_if_unfocused && target->has_keyboard_focus)))
+                return;
+            // A grabbed popup gets keyboard focus from the grab once it maps, which can take
+            // longer than callers wait (e.g. while another window held focus). Going EXCLUSIVE
+            // in the meantime makes Hyprland drop the grab and dismiss the popup right away.
+            if (mode == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE && target->popup_grabbed)
                 return;
             if (mode == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE &&
                 layer->keyboard_interactivity != ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE) {

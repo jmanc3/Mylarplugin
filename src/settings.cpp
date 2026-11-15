@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -283,6 +284,9 @@ struct SearchEntry {
 static std::string search_current_page;    // Page being filled, empty when none
 static std::string search_current_section; // Last section title seen while filling
 static std::vector<SearchEntry> search_learned;
+// Guards search_learned and building an index, which the dock's applications
+// menu also does from its own thread (settings::search).
+static std::mutex search_build_mutex;
 
 // Marks a container as an accordion whose hidden rows the search may unfold.
 static constexpr int search_accordion_type = 0x5ea4c;
@@ -297,6 +301,7 @@ static void search_tag(Container *row, const std::string &title, const std::stri
     row->uuid = search_key(search_current_section, title);
     if (!learn || search_current_page.empty())
         return;
+    std::lock_guard<std::mutex> lock(search_build_mutex);
     for (auto &e : search_learned) {
         if (e.page == search_current_page && e.section == search_current_section && e.title == title) {
             e.description = description;
@@ -7543,16 +7548,21 @@ struct SearchFlash {
 };
 static SearchFlash search_flash;
 
+// Where search_add puts entries; only changed while search_build_mutex is held.
+static std::vector<SearchEntry> *search_add_target = &search_index;
+
 static void search_add(std::string page, std::string section, std::string title, std::string description,
                        std::string keywords = "", std::function<void(Container *)> after_open = nullptr) {
-    search_index.push_back({std::move(page), std::move(section), std::move(title), std::move(description), std::move(keywords),
+    search_add_target->push_back({std::move(page), std::move(section), std::move(title), std::move(description), std::move(keywords),
                             std::move(after_open)});
 }
 
 // Everything the search can find. Rows seen while their page was open
 // (search_learned) are merged in on top, so visited pages are always exact.
-static void search_build_index() {
-    search_index.clear();
+static void search_build_into(std::vector<SearchEntry> &out) {
+    std::lock_guard<std::mutex> lock(search_build_mutex);
+    search_add_target = &out;
+    out.clear();
 
     search_add("Display", "Display Settings", "Display Settings", "Arrange monitors and change how each one is driven",
                "monitors screens displays arrange layout position outputs");
@@ -7664,7 +7674,7 @@ static void search_build_index() {
 
     for (const auto &learned : search_learned) {
         bool found = false;
-        for (auto &e : search_index) {
+        for (auto &e : out) {
             if (e.page == learned.page && e.section == learned.section && e.title == learned.title) {
                 e.description = learned.description;
                 found = true;
@@ -7672,8 +7682,13 @@ static void search_build_index() {
             }
         }
         if (!found)
-            search_index.push_back(learned);
+            out.push_back(learned);
     }
+    search_add_target = &search_index;
+}
+
+static void search_build_index() {
+    search_build_into(search_index);
 }
 
 // Lower case words; anything that isn't a letter or a digit separates them.
@@ -7799,21 +7814,27 @@ static double search_score(const SearchEntry &e, const std::vector<std::string> 
     return total;
 }
 
-static void search_run() {
-    search_results.clear();
-    auto query = search_words(search_query);
+// Indices into index matching text, best first.
+static std::vector<int> search_rank(const std::vector<SearchEntry> &index, const std::string &text, int limit) {
+    std::vector<int> results;
+    auto query = search_words(text);
     if (query.empty())
-        return;
-    auto phrase = sdt_lower(trim(search_query));
+        return results;
+    auto phrase = sdt_lower(trim(text));
     std::vector<std::pair<double, int>> scored;
-    for (int i = 0; i < (int) search_index.size(); i++) {
-        double score = search_score(search_index[i], query, phrase);
+    for (int i = 0; i < (int) index.size(); i++) {
+        double score = search_score(index[i], query, phrase);
         if (score >= 0)
             scored.push_back({score, i});
     }
     std::stable_sort(scored.begin(), scored.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
-    for (int i = 0; i < (int) scored.size() && i < 60; i++)
-        search_results.push_back(scored[i].second);
+    for (int i = 0; i < (int) scored.size() && i < limit; i++)
+        results.push_back(scored[i].second);
+    return results;
+}
+
+static void search_run() {
+    search_results = search_rank(search_index, search_query, 60);
 }
 
 static std::string search_breadcrumb(const SearchEntry &e) {
@@ -7967,10 +7988,7 @@ static Container *search_find_title(Container *c, const std::string &suffix) {
     return nullptr;
 }
 
-static void search_jump(Container *root, int result) {
-    if (result < 0 || result >= (int) search_results.size())
-        return;
-    auto e = search_index[search_results[result]];
+static void search_open_entry(Container *root, SearchEntry e) {
     auto tab = container_by_name(e.page, root);
     if (!tab || !tab->when_clicked)
         return;
@@ -7991,6 +8009,58 @@ static void search_jump(Container *root, int result) {
     search_flash.title = e.title;
     search_flash.locating = true;
     swifi_redraw(root);
+}
+
+static void search_jump(Container *root, int result) {
+    if (result < 0 || result >= (int) search_results.size())
+        return;
+    search_open_entry(root, search_index[search_results[result]]);
+}
+
+// Set by settings::open_search_result on the main thread, opened on the settings thread.
+static std::mutex search_external_mutex;
+static std::optional<settings::SearchResult> search_external_jump;
+
+static void search_open_external(Container *root) {
+    std::optional<settings::SearchResult> wanted;
+    {
+        std::lock_guard<std::mutex> lock(search_external_mutex);
+        wanted.swap(search_external_jump);
+    }
+    if (!wanted)
+        return;
+    // Rebuilt for the entry's after_open, which picks sub tabs.
+    search_build_index();
+    SearchEntry entry{wanted->page, wanted->section, wanted->title, wanted->description, "", nullptr};
+    for (const auto &e : search_index) {
+        if (e.page == entry.page && e.section == entry.section && e.title == entry.title) {
+            entry = e;
+            break;
+        }
+    }
+    search_open_entry(root, entry);
+    settings_nav_open = false;
+}
+
+std::vector<settings::SearchResult> settings::search(const std::string &query, int limit) {
+    std::vector<SearchResult> results;
+    if (trim(query).empty() || limit <= 0)
+        return results;
+    std::vector<SearchEntry> index;
+    search_build_into(index);
+    for (int i : search_rank(index, query, limit)) {
+        const auto &e = index[i];
+        results.push_back({e.page, e.section, e.title, e.description, search_breadcrumb(e)});
+    }
+    return results;
+}
+
+void settings::open_search_result(const SearchResult &result) {
+    {
+        std::lock_guard<std::mutex> lock(search_external_mutex);
+        search_external_jump = result;
+    }
+    settings::start(result.page);
 }
 
 static void search_keep_animating(Container *root) {
@@ -8373,6 +8443,8 @@ void fill_root(Container *root) {
                 }
             }
         }
+        // A setting picked from the dock's applications menu.
+        search_open_external(root);
 
         // Rows were added or removed, rebuild from the in-memory state.
         if (sshortcut_page_stale && container_by_name("shortcuts_page", root))

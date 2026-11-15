@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 struct ConfigSettings;
 
@@ -12,4 +13,19 @@ namespace settings {
     // Call on the main thread right before changing set->monitors. The change
     // is rolled back unless the user keeps it from the display settings page.
     void display_change_begin();
+
+    // A setting found by the settings search, usable outside the settings window.
+    struct SearchResult {
+        std::string page;
+        std::string section;
+        std::string title;
+        std::string description;
+        std::string breadcrumb; // "Page  ›  Section" as shown in the settings results
+    };
+    // Same matching and ranking as the search field in the settings window.
+    // Safe to call from any thread.
+    std::vector<SearchResult> search(const std::string &query, int limit = 8);
+    // Opens settings on the result's page, scrolls to the row and flashes it.
+    // Call on the main thread, like start.
+    void open_search_result(const SearchResult &result);
 };

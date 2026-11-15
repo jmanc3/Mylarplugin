@@ -8,8 +8,10 @@
 #include <dbus/dbus.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <fstream>
 #include <linux/input-event-codes.h>
 #include <sstream>
+#include <unordered_map>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -31,11 +33,82 @@ struct Script : UserData {
     bool path_is_full_command = false;
 
     bool selected = false;
+
+    // A row from the settings search instead of an executable.
+    bool is_setting = false;
+    settings::SearchResult setting;
+    // Sorting: how often and how recently it was picked, then tier
+    // (0 exact name, 1 name prefix, 2 setting), then the original order.
+    double history = 0;
+    int base_order = 0;
 };
 
 static std::vector<Script> scripts;
 static std::mutex scripts_mutex;
 static std::shared_future<std::vector<Script>> scripts_refresh;
+
+/*
+ * The last selections made in this menu, oldest first, kept in
+ * ~/.config/mylar/search.txt (one per line) and used to sort the options.
+ */
+static constexpr int selection_history_max = 100;
+static std::mutex selection_history_mutex;
+static std::vector<std::string> selection_history;
+static bool selection_history_loaded = false;
+
+static std::filesystem::path selection_history_path() {
+    const char *home = getenv("HOME");
+    return std::filesystem::path(home ? home : "") / ".config/mylar/search.txt";
+}
+
+static void selection_history_load_locked() {
+    if (selection_history_loaded)
+        return;
+    selection_history_loaded = true;
+    std::ifstream in(selection_history_path());
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (!line.empty())
+            selection_history.push_back(line);
+    }
+    if ((int) selection_history.size() > selection_history_max)
+        selection_history.erase(selection_history.begin(), selection_history.end() - selection_history_max);
+}
+
+static std::string selection_key(const Script &s) {
+    if (s.is_setting)
+        return "setting\t" + s.setting.page + "\t" + s.setting.section + "\t" + s.setting.title;
+    return "app\t" + s.name;
+}
+
+static void selection_history_record(const std::string &key) {
+    if (key.find('\n') != std::string::npos)
+        return;
+    std::lock_guard<std::mutex> lock(selection_history_mutex);
+    selection_history_load_locked();
+    selection_history.push_back(key);
+    if ((int) selection_history.size() > selection_history_max)
+        selection_history.erase(selection_history.begin(), selection_history.end() - selection_history_max);
+    auto path = selection_history_path();
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    for (const auto &entry : selection_history)
+        out << entry << "\n";
+}
+
+// Every pick counts one, plus up to a half more the more recent it was.
+static std::unordered_map<std::string, double> selection_history_scores() {
+    std::lock_guard<std::mutex> lock(selection_history_mutex);
+    selection_history_load_locked();
+    std::unordered_map<std::string, double> scores;
+    const double n = selection_history.size();
+    for (int i = 0; i < (int) selection_history.size(); i++)
+        scores[selection_history[i]] += 1.0 + .5 * (i + 1) / n;
+    return scores;
+}
 
 static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void(std::string)> on_change) {
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
@@ -194,6 +267,20 @@ static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
         // Rendering acquires the app mutex and reruns the current search filter.
         windowing::redraw_now(applications->raw_window);
     }, nullptr);
+}
+
+// Records the pick, then launches the executable or opens the setting.
+// The caller closes the menu.
+static void activate_script(const Script *s) {
+    selection_history_record(selection_key(*s));
+    if (s->is_setting) {
+        auto result = s->setting;
+        main_thread([result]() {
+            settings::open_search_result(result);
+        });
+    } else {
+        launch_command(s->full_path);
+    }
 }
 
 /*
@@ -456,196 +543,15 @@ void fill_applications_container(Container *root) {
         bool keyboard_option_changed = false;
         // The selected entry is only highlighted while the field has focus.
         Container *field = nullptr;
+        // Settings matching field_text, turned into rows on the next layout.
+        std::vector<settings::SearchResult> settings_results;
+        bool settings_rows_stale = false;
+        std::unordered_map<std::string, double> history = selection_history_scores();
     };
     auto search = std::make_shared<SearchState>();
 
-    auto field = make_field(padded, false, "", [search](std::string text) {
-        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
-        field_text = std::move(text);
-        active_option = 0;
-        keyboard_option_changed = false;
-    });
-    search->field = field;
-    field->name = "applications_search";
-    static_cast<STextEditorData *>(field->user_data)->options.on_tab = [](Container *root, Container *c, bool previous) {
-        applications_move_focus(root, c, previous);
-    };
-    auto edit_key = std::move(field->when_key_event);
-    field->when_key_event = [edit_key, search](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
-                                     int mods, bool is_text, std::string text) {
-        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
-        if (!c->active)
-            return;
-        edit_key(root, c, key, pressed, sym, mods, is_text, text);
-        if (pressed) {
-            auto dock = (Dock *) root->user_data;
-            if (sym == XKB_KEY_Escape) {
-                windowing::close_window(dock->applications->raw_window);
-                active_option = 0;
-            } else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
-                if (auto o_ = container_by_name("scroll_content", root)) {
-                    auto o = ((ScrollContainer *) o_)->content;
-                    bool none_matched = true;
-                    for (auto ch: o->children) {
-                        if (ch->exists) {
-                            auto s = (Script *) ch->user_data;
-                            if (s->selected) {
-                                launch_command(s->full_path);
-                                active_option = 0;
-                                none_matched = false;
-                            }
-                        }
-                    }
-                    if (none_matched) {
-                        if (!field_text.empty())
-                            launch_command(field_text);
-                    }
-                }
-                windowing::close_window(dock->applications->raw_window);
-            } else if (sym == XKB_KEY_Up) {
-                active_option--;
-                keyboard_option_changed = true;
-                windowing::redraw(dock->applications->raw_window);
-            } else if (sym == XKB_KEY_Down) {
-                active_option++;
-                keyboard_option_changed = true;
-                windowing::redraw(dock->applications->raw_window);
-            }
-        }
-    };
-
-    auto scroll_parent = padded->child(FILL_SPACE, FILL_SPACE);
-    ScrollPaneSettings scroll_settings(1.0);
-    scroll_settings.right_inline_track = true;
-    // Rows are 56px tall and the list can hold hundreds of entries.
-    scroll_settings.wheel_step = 84;
-    scroll_settings.wheel_max_acceleration = 4;
-    auto scroll = make_newscrollpane_as_child(scroll_parent, scroll_settings, [](Container *root) {
-        auto dock = ((Dock *) root->user_data);
-        auto applications = dock->applications;
-        return DrawContext({applications->raw_window->drawing_context, applications->raw_window->dpi, [dock, applications]() {
-            // Scroll animations can finish after this popup has closed or been replaced.
-            if (dock->applications != applications)
-                return;
-            windowing::redraw(applications->raw_window);
-        }});
-    });
-    auto scroll_content = scroll->content;
-    scroll->name = "scroll_content";
-    scroll->pre_layout = [search](Container *root, Container *c_, const Bounds &b) {
-        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
-        auto scroll = ((ScrollContainer *) c_);
-        auto animation_active = datum<bool>(scroll, "applications_scroll_animation_active");
-        if (*animation_active) {
-            auto animation_start = datum<double>(scroll, "applications_scroll_animation_start");
-            auto animation_target = datum<double>(scroll, "applications_scroll_animation_target");
-            auto animation_start_time = datum<long>(scroll, "applications_scroll_animation_start_time");
-            const auto elapsed = get_current_time_in_ms() - *animation_start_time;
-            const auto progress = std::clamp(elapsed / 180.0, 0.0, 1.0);
-            const auto eased_progress = 1.0 - (1.0 - progress) * (1.0 - progress) * (1.0 - progress);
-            scroll->scroll_v_visual = *animation_start + (*animation_target - *animation_start) * eased_progress;
-            if (progress == 1.0) {
-                scroll->scroll_v_visual = *animation_target;
-                *animation_active = false;
-            } else {
-                auto dock = (Dock *) root->user_data;
-                windowing::redraw(dock->applications->raw_window);
-            }
-        }
-        auto data = (ScrollData *) scroll->user_data;
-        auto c = scroll->content;
-        if (data->func) {
-            DrawContext ctx = data->func(root);
-            int amount = std::round(12.0f * (ctx.dpi));
-            scroll->right->children[0]->wanted_bounds.h = amount;
-            scroll->right->children[2]->wanted_bounds.h = amount;
-            scroll->bottom->children[0]->wanted_bounds.w = amount;
-            scroll->bottom->children[2]->wanted_bounds.w = amount;
-            scroll->settings.right_width = amount;
-            scroll->settings.right_arrow_height = amount;
-            scroll->settings.bottom_height = amount;
-            scroll->settings.bottom_arrow_width = amount;
-        }
-        auto dock = (Dock *) root->user_data;
-        auto dpi = dock->applications->raw_window->dpi;
-        c->spacing = 5 * dpi;
-        int alive_count = 0;
-        for (auto ch: c->children) {
-            auto s = (Script *) ch->user_data;
-            s->selected = false;
-            auto name = s->name;
-            auto full = s->full_path;
-            ch->exists = name.starts_with(field_text);
-            if (ch->exists)
-                alive_count++;
-        }
-        if (alive_count != 0) {
-            if (active_option < 0)
-                active_option = 0;
-            if (active_option > alive_count - 1)
-                active_option = alive_count - 1;
-        }
-        int index_of_alive_child = 0;
-        for (auto ch: c->children) {
-            auto s = (Script *) ch->user_data;
-            if (ch->exists) {
-                if (index_of_alive_child == active_option)
-                    s->selected = true;
-                index_of_alive_child++;
-            }
-        }
-        for (auto ch: c->children) {
-            auto s = (Script *) ch->user_data;
-            if (!s->selected)
-                continue;
-            auto animation_active = datum<bool>(scroll, "applications_scroll_animation_active");
-            auto animation_option = datum<int>(scroll, "applications_scroll_animation_option");
-            if (*animation_active && *animation_option == active_option) {
-                keyboard_option_changed = false;
-                break;
-            }
-            if (!keyboard_option_changed)
-                break;
-            const auto &viewport = scroll->real_bounds;
-            double target = scroll->scroll_v_visual;
-            if (ch->real_bounds.y < viewport.y)
-                target += viewport.y - ch->real_bounds.y;
-            else if (ch->real_bounds.y + ch->real_bounds.h > viewport.y + viewport.h)
-                target += viewport.y + viewport.h - ch->real_bounds.y - ch->real_bounds.h;
-            const auto min_offset = std::min(0.0, viewport.h - scroll->content->real_bounds.h);
-            target = std::clamp(target, min_offset, 0.0);
-            if (target != scroll->scroll_v_visual) {
-                auto animation_start = datum<double>(scroll, "applications_scroll_animation_start");
-                auto animation_target = datum<double>(scroll, "applications_scroll_animation_target");
-                auto animation_start_time = datum<long>(scroll, "applications_scroll_animation_start_time");
-                *animation_start = scroll->scroll_v_visual;
-                *animation_target = target;
-                *animation_start_time = get_current_time_in_ms();
-                *animation_option = active_option;
-                *animation_active = true;
-                scroll->scroll_v_real = target;
-                auto dock = (Dock *) root->user_data;
-                windowing::redraw(dock->applications->raw_window);
-            } else if (*animation_active) {
-                *animation_active = false;
-                scroll->scroll_v_real = scroll->scroll_v_visual;
-            }
-            keyboard_option_changed = false;
-            break;
-        }
-    };
-
-    auto rebuild_scripts = [scroll_content, scroll, search](const std::vector<Script> &entries) {
-    auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
-    for (auto child : scroll_content->children)
-        delete child;
-    scroll_content->children.clear();
-    active_option = 0;
-    keyboard_option_changed = false;
-    scroll->scroll_v_real = 0;
-    scroll->scroll_v_visual = 0;
-    *datum<bool>(scroll, "applications_scroll_animation_active") = false;
-    for (const auto &entry : entries) {
+    // One row of the list, for an executable or a setting.
+    static auto add_script_row = [](Container *scroll_content, std::shared_ptr<SearchState> search, const Script &entry) {
         auto s = new Script(entry);
         auto o = scroll_content->child(FILL_SPACE, FILL_SPACE);
         o->user_data = s;
@@ -666,7 +572,9 @@ void fill_applications_container(Container *root) {
                 s->icon_size = icon_size;
                 s->icon_surface.reset();
                 auto icon_name = c3ic_fix_wm_class(name);
-                auto path = one_shot_icon(icon_size, {
+                auto path = s->is_setting
+                    ? one_shot_icon(icon_size, {"preferences-system", "preferences-desktop", "application-x-executable"})
+                    : one_shot_icon(icon_size, {
                     name, to_lower(name), icon_name, to_lower(icon_name), "application-x-executable"
                 });
                 if (!path.empty()) {
@@ -748,11 +656,242 @@ void fill_applications_container(Container *root) {
                 return;
             auto dock = (Dock *) root->user_data;
             auto s = (Script *) c->user_data;
-            launch_command(s->full_path);
+            activate_script(s);
             search->active_option = 0;
             windowing::close_window(dock->applications->raw_window);
         };
+    };
+
+    auto field = make_field(padded, false, "", [search](std::string text) {
+        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
+        field_text = std::move(text);
+        active_option = 0;
+        keyboard_option_changed = false;
+        search->settings_results = settings::search(field_text, 8);
+        search->settings_rows_stale = true;
+    });
+    search->field = field;
+    field->name = "applications_search";
+    static_cast<STextEditorData *>(field->user_data)->options.on_tab = [](Container *root, Container *c, bool previous) {
+        applications_move_focus(root, c, previous);
+    };
+    auto edit_key = std::move(field->when_key_event);
+    field->when_key_event = [edit_key, search](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+                                     int mods, bool is_text, std::string text) {
+        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
+        if (!c->active)
+            return;
+        edit_key(root, c, key, pressed, sym, mods, is_text, text);
+        if (pressed) {
+            auto dock = (Dock *) root->user_data;
+            if (sym == XKB_KEY_Escape) {
+                windowing::close_window(dock->applications->raw_window);
+                active_option = 0;
+            } else if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+                if (auto o_ = container_by_name("scroll_content", root)) {
+                    auto o = ((ScrollContainer *) o_)->content;
+                    bool none_matched = true;
+                    for (auto ch: o->children) {
+                        if (ch->exists) {
+                            auto s = (Script *) ch->user_data;
+                            if (s->selected) {
+                                activate_script(s);
+                                active_option = 0;
+                                none_matched = false;
+                            }
+                        }
+                    }
+                    if (none_matched) {
+                        if (!field_text.empty())
+                            launch_command(field_text);
+                    }
+                }
+                windowing::close_window(dock->applications->raw_window);
+            } else if (sym == XKB_KEY_Up) {
+                active_option--;
+                keyboard_option_changed = true;
+                windowing::redraw(dock->applications->raw_window);
+            } else if (sym == XKB_KEY_Down) {
+                active_option++;
+                keyboard_option_changed = true;
+                windowing::redraw(dock->applications->raw_window);
+            }
+        }
+    };
+
+    auto scroll_parent = padded->child(FILL_SPACE, FILL_SPACE);
+    ScrollPaneSettings scroll_settings(1.0);
+    scroll_settings.right_inline_track = true;
+    // Rows are 56px tall and the list can hold hundreds of entries.
+    scroll_settings.wheel_step = 84;
+    scroll_settings.wheel_max_acceleration = 4;
+    auto scroll = make_newscrollpane_as_child(scroll_parent, scroll_settings, [](Container *root) {
+        auto dock = ((Dock *) root->user_data);
+        auto applications = dock->applications;
+        return DrawContext({applications->raw_window->drawing_context, applications->raw_window->dpi, [dock, applications]() {
+            // Scroll animations can finish after this popup has closed or been replaced.
+            if (dock->applications != applications)
+                return;
+            windowing::redraw(applications->raw_window);
+        }});
+    });
+    auto scroll_content = scroll->content;
+    scroll->name = "scroll_content";
+    scroll->pre_layout = [search](Container *root, Container *c_, const Bounds &b) {
+        auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
+        auto scroll = ((ScrollContainer *) c_);
+        auto animation_active = datum<bool>(scroll, "applications_scroll_animation_active");
+        if (*animation_active) {
+            auto animation_start = datum<double>(scroll, "applications_scroll_animation_start");
+            auto animation_target = datum<double>(scroll, "applications_scroll_animation_target");
+            auto animation_start_time = datum<long>(scroll, "applications_scroll_animation_start_time");
+            const auto elapsed = get_current_time_in_ms() - *animation_start_time;
+            const auto progress = std::clamp(elapsed / 180.0, 0.0, 1.0);
+            const auto eased_progress = 1.0 - (1.0 - progress) * (1.0 - progress) * (1.0 - progress);
+            scroll->scroll_v_visual = *animation_start + (*animation_target - *animation_start) * eased_progress;
+            if (progress == 1.0) {
+                scroll->scroll_v_visual = *animation_target;
+                *animation_active = false;
+            } else {
+                auto dock = (Dock *) root->user_data;
+                windowing::redraw(dock->applications->raw_window);
+            }
+        }
+        auto data = (ScrollData *) scroll->user_data;
+        auto c = scroll->content;
+        if (data->func) {
+            DrawContext ctx = data->func(root);
+            int amount = std::round(12.0f * (ctx.dpi));
+            scroll->right->children[0]->wanted_bounds.h = amount;
+            scroll->right->children[2]->wanted_bounds.h = amount;
+            scroll->bottom->children[0]->wanted_bounds.w = amount;
+            scroll->bottom->children[2]->wanted_bounds.w = amount;
+            scroll->settings.right_width = amount;
+            scroll->settings.right_arrow_height = amount;
+            scroll->settings.bottom_height = amount;
+            scroll->settings.bottom_arrow_width = amount;
+        }
+        auto dock = (Dock *) root->user_data;
+        auto dpi = dock->applications->raw_window->dpi;
+        c->spacing = 5 * dpi;
+        if (search->settings_rows_stale) {
+            search->settings_rows_stale = false;
+            for (int i = (int) c->children.size() - 1; i >= 0; i--) {
+                auto ch = c->children[i];
+                if (((Script *) ch->user_data)->is_setting) {
+                    c->children.erase(c->children.begin() + i);
+                    delete ch;
+                }
+            }
+            for (int i = 0; i < (int) search->settings_results.size(); i++) {
+                const auto &r = search->settings_results[i];
+                Script entry;
+                entry.is_setting = true;
+                entry.setting = r;
+                entry.name = r.title;
+                entry.full_path = "Settings  ›  " + r.breadcrumb;
+                entry.base_order = i;
+                auto it = search->history.find(selection_key(entry));
+                entry.history = it == search->history.end() ? 0 : it->second;
+                add_script_row(c, search, entry);
+            }
+        }
+        int alive_count = 0;
+        for (auto ch: c->children) {
+            auto s = (Script *) ch->user_data;
+            s->selected = false;
+            ch->exists = s->is_setting || s->name.starts_with(field_text);
+            if (ch->exists)
+                alive_count++;
+        }
+        auto tier = [&field_text](const Script *s) { return s->is_setting ? 2 : s->name == field_text ? 0 : 1; };
+        std::stable_sort(c->children.begin(), c->children.end(), [&tier](Container *a, Container *b) {
+            if (a->exists != b->exists)
+                return a->exists;
+            auto sa = (Script *) a->user_data;
+            auto sb = (Script *) b->user_data;
+            if (sa->history != sb->history)
+                return sa->history > sb->history;
+            int ta = tier(sa), tb = tier(sb);
+            if (ta != tb)
+                return ta < tb;
+            return sa->base_order < sb->base_order;
+        });
+        if (alive_count != 0) {
+            if (active_option < 0)
+                active_option = 0;
+            if (active_option > alive_count - 1)
+                active_option = alive_count - 1;
+        }
+        int index_of_alive_child = 0;
+        for (auto ch: c->children) {
+            auto s = (Script *) ch->user_data;
+            if (ch->exists) {
+                if (index_of_alive_child == active_option)
+                    s->selected = true;
+                index_of_alive_child++;
+            }
+        }
+        for (auto ch: c->children) {
+            auto s = (Script *) ch->user_data;
+            if (!s->selected)
+                continue;
+            auto animation_active = datum<bool>(scroll, "applications_scroll_animation_active");
+            auto animation_option = datum<int>(scroll, "applications_scroll_animation_option");
+            if (*animation_active && *animation_option == active_option) {
+                keyboard_option_changed = false;
+                break;
+            }
+            if (!keyboard_option_changed)
+                break;
+            const auto &viewport = scroll->real_bounds;
+            double target = scroll->scroll_v_visual;
+            if (ch->real_bounds.y < viewport.y)
+                target += viewport.y - ch->real_bounds.y;
+            else if (ch->real_bounds.y + ch->real_bounds.h > viewport.y + viewport.h)
+                target += viewport.y + viewport.h - ch->real_bounds.y - ch->real_bounds.h;
+            const auto min_offset = std::min(0.0, viewport.h - scroll->content->real_bounds.h);
+            target = std::clamp(target, min_offset, 0.0);
+            if (target != scroll->scroll_v_visual) {
+                auto animation_start = datum<double>(scroll, "applications_scroll_animation_start");
+                auto animation_target = datum<double>(scroll, "applications_scroll_animation_target");
+                auto animation_start_time = datum<long>(scroll, "applications_scroll_animation_start_time");
+                *animation_start = scroll->scroll_v_visual;
+                *animation_target = target;
+                *animation_start_time = get_current_time_in_ms();
+                *animation_option = active_option;
+                *animation_active = true;
+                scroll->scroll_v_real = target;
+                auto dock = (Dock *) root->user_data;
+                windowing::redraw(dock->applications->raw_window);
+            } else if (*animation_active) {
+                *animation_active = false;
+                scroll->scroll_v_real = scroll->scroll_v_visual;
+            }
+            keyboard_option_changed = false;
+            break;
+        }
+    };
+
+    auto rebuild_scripts = [scroll_content, scroll, search](const std::vector<Script> &entries) {
+    auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
+    for (auto child : scroll_content->children)
+        delete child;
+    scroll_content->children.clear();
+    active_option = 0;
+    keyboard_option_changed = false;
+    scroll->scroll_v_real = 0;
+    scroll->scroll_v_visual = 0;
+    *datum<bool>(scroll, "applications_scroll_animation_active") = false;
+    for (int i = 0; i < (int) entries.size(); i++) {
+        Script entry = entries[i];
+        entry.base_order = i;
+        auto it = search->history.find(selection_key(entry));
+        entry.history = it == search->history.end() ? 0 : it->second;
+        add_script_row(scroll_content, search, entry);
     }
+    // Deleted above with the rest.
+    search->settings_rows_stale = true;
 
     };
     std::shared_future<std::vector<Script>> refresh;
