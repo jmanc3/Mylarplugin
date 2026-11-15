@@ -443,10 +443,19 @@ bool handle_mouse_button_release(Container* root, const Event& e) {
     // handle_mouse_button_release can be the catalyst for sending out
     // when_mouse_up, when_drag_end, and_when_clicked
 
+    // A callback can delete containers further down the list (e.g. a click that
+    // rebuilds a page under an overlay), so take every lifetime before any runs.
+    std::vector<std::weak_ptr<bool>> lifetimes;
+    lifetimes.reserve(concerned.size());
+    for (auto c : concerned)
+        lifetimes.push_back(c->lifetime);
+
     for (int i = 0; i < concerned.size(); i++) {
-        auto                c           = concerned[i];
-        std::weak_ptr<bool> still_alive = c->lifetime;
-        bool                p           = is_pierced(c, pierced);
+        const auto &still_alive = lifetimes[i];
+        if (!still_alive.lock())
+            continue;
+        auto c = concerned[i];
+        bool p = is_pierced(c, pierced);
 
         if (c->when_mouse_leaves_container && !p) {
             c->when_mouse_leaves_container(root, c);
