@@ -1,6 +1,7 @@
 #include "dock/dock_volume.h"
 
 #include "dock/dock_internal.h"
+#include "popup.h"
 #include "settings.h"
 
 #include <unistd.h>
@@ -278,6 +279,115 @@ static Container *fill_out_volume_slider(Container *c) {
     return nullptr;
 }
 
+static const AudioNodeInfo *find_meter_node(const std::vector<AudioNodeInfo> &nodes, const MeterKey &key);
+
+static std::string audio_node_label(const AudioNodeInfo &n) {
+    return n.description.empty() ? n.name : n.description;
+}
+
+// Context menu for a row's icon: devices can become the default, playback streams can
+// move to another output device and their app can be muted while its window is unfocused.
+static void open_volume_row_menu(const AudioData *data) {
+    auto nodes = audio_mixer_nodes();
+
+    std::vector<const AudioNodeInfo *> row_nodes;
+    for (auto &key : data->meters)
+        if (auto n = find_meter_node(nodes, key))
+            if (std::find(row_nodes.begin(), row_nodes.end(), n) == row_nodes.end())
+                row_nodes.push_back(n);
+
+    const AudioNodeInfo *device = nullptr;
+    std::vector<uint32_t> streams;
+    std::vector<uint32_t> stream_sinks;
+    for (auto n : row_nodes) {
+        if (n->kind == AudioNodeKind::Sink || n->kind == AudioNodeKind::Source) {
+            if (!device)
+                device = n;
+        } else if (n->kind == AudioNodeKind::SinkInput) {
+            streams.push_back(n->index);
+            stream_sinks.push_back(n->device);
+        }
+    }
+
+    std::vector<PopOption> root;
+
+    if (device && row_nodes.size() == 1) {
+        auto kind = device->kind;
+        auto index = device->index;
+        auto current = kind == AudioNodeKind::Sink ? audio_mixer_default_sink() : audio_mixer_default_source();
+        PopOption pop;
+        pop.text = "Set as default";
+        if (!device->name.empty() && device->name == current)
+            pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+        pop.on_clicked = [kind, index]() {
+            audio_mixer_set_default(kind, index);
+        };
+        root.push_back(pop);
+    }
+
+    if (!streams.empty()) {
+        PopOption send;
+        send.text = "Send to";
+        for (auto &n : nodes) {
+            if (n.kind != AudioNodeKind::Sink)
+                continue;
+            PopOption sink;
+            sink.text = audio_node_label(n);
+            bool all_here = std::all_of(stream_sinks.begin(), stream_sinks.end(),
+                                        [&](uint32_t s) { return s == n.index; });
+            if (all_here)
+                sink.icon_left = ":Papirus:checkbox-checked-symbolic";
+            auto target = n.index;
+            sink.on_clicked = [streams, target]() {
+                for (auto s : streams)
+                    audio_mixer_move_stream(AudioNodeKind::SinkInput, s, target);
+            };
+            send.submenu.push_back(sink);
+        }
+        if (!send.submenu.empty())
+            root.push_back(send);
+    }
+
+    auto pid = data->is_mic || device ? -1 : data->pid;
+
+    main_thread([root, pid]() mutable {
+        if (pid > 0) {
+            // The setting is per window class, like the titlebar menu's.
+            int cid = 0;
+            for (auto window : get_window_stacking_order()) {
+                if (hypriso->get_pid(window) == pid) {
+                    cid = window;
+                    break;
+                }
+            }
+            if (cid != 0) {
+                auto cls = hypriso->class_name(cid);
+                PopOption pop;
+                if (restore_infos[cls].mute_when_unfocused)
+                    pop.icon_left = ":Papirus:checkbox-checked-symbolic";
+                pop.text = "Mute when unfocused";
+                pop.on_clicked = [cid, cls]() {
+                    auto info = &restore_infos[cls];
+                    info->mute_when_unfocused = !info->mute_when_unfocused;
+                    update_mute_states_for_pids(cid);
+                };
+                if (!root.empty()) {
+                    PopOption sep;
+                    sep.seperator = true;
+                    root.push_back(sep);
+                }
+                root.push_back(pop);
+            }
+        }
+        if (root.empty())
+            return;
+        auto m = mouse();
+        popup::open(root, m.x - 1, m.y + 1);
+        // The volume popup is a layer popup; keep the menu above it.
+        popup::set_above_overlays();
+    });
+}
+
 static Container *add_volume_option(Container *parent) {
     auto line = parent->child(::vbox, FILL_SPACE, 40);
     line->custom_type = audio_container;
@@ -299,6 +409,15 @@ static Container *add_volume_option(Container *parent) {
         auto dock = (Dock *) root->user_data;
         auto audio_c = first_above_of(c, audio_container);
         auto audio_data = (AudioData *) audio_c->user_data;
+
+        auto dpi = dock->volume->raw_window->dpi;
+        double icon_x = c->real_bounds.x + (audio_data->indent_level > 0 ? volume_indent * dpi : 0);
+        double mx = root->mouse_current_x;
+        if (mx >= icon_x - volume_gap * dpi * .5 && mx <= icon_x + (volume_icon_col + volume_gap * .5) * dpi) {
+            open_volume_row_menu(audio_data);
+            return;
+        }
+
         if (audio_data->is_mic || !audio_data->merged || audio_data->pid <= 0)
             return;
 
