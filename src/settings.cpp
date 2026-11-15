@@ -572,6 +572,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(std::string, "overview_layout_type", &settings->overview_layout_type);
     bind(std::string, "font", &settings->font);
     bind(bool, "font_suggestions_in_own_font", &settings->font_suggestions_in_own_font);
+    bind(bool, "applications_show_other_desktops", &settings->applications_show_other_desktops);
     bind(bool, "is_tiling", &settings->is_tiling);
     bind(bool, "tile_all_workspaces", &settings->tile_all_workspaces);
     bind(bool, "new_workspace_is_tiling", &settings->new_workspace_is_tiling);
@@ -2087,7 +2088,57 @@ static void make_bool_with_button(Container *parent, std::string title, std::str
     make_button(right, button_text, on_click);
 }
 
-static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (std::string)> on_change) {
+// What the focused field expects ("1 is 100%", "Whole number from 1 to 20"),
+// one line per '\n'. Set when a field with a hint paints while focused and
+// drawn in a box under it once the page is painted (paint_field_hint), so the
+// box lies over the rows below.
+static std::string field_hint_text;
+static Bounds field_hint_anchor;
+
+static void paint_field_hint(Container *root, Container *right) {
+    if (field_hint_text.empty())
+        return;
+    std::vector<std::string> lines;
+    std::stringstream ss(field_hint_text);
+    for (std::string line; std::getline(ss, line);)
+        lines.push_back(line);
+    field_hint_text.clear();
+
+    auto window = swifi_window(root);
+    auto cr = window->drawing_context;
+    auto dpi = window->dpi;
+    static const std::string info_icon = "\uE946";
+    const double text_size = 10;
+    const double pad = 10 * dpi;
+    const double line_h = 18 * dpi;
+    const int icon_size = std::round(12 * dpi);
+    auto icon = draw_text(cr, 0, 0, info_icon, icon_size, false, icon_font, -1, -1, theme.accent, false);
+    const double text_x = pad + icon.w + 8 * dpi;
+    double text_w = 0;
+    for (const auto &line : lines)
+        text_w = std::max(text_w, swifi_text_width(root, line, text_size));
+
+    const auto page = right->real_bounds;
+    const auto field = field_hint_anchor;
+    const double gap = 6 * dpi;
+    Bounds box(field.x, field.y + field.h + gap, text_x + text_w + pad + 2 * dpi, lines.size() * line_h + 12 * dpi);
+    box.w = std::min(box.w, page.w - 2 * gap);
+    // Stay inside the page: slide left, and go above a field at the bottom.
+    box.x = std::max(page.x + gap, std::min(box.x, page.x + page.w - gap - box.w));
+    if (box.y + box.h > page.y + page.h - gap)
+        box.y = field.y - gap - box.h;
+
+    paint_smooth_frame(cr, box, 8 * dpi, theme.popup_background, theme.dropdown_border);
+    draw_text(cr, box.x + pad, box.y + 6 * dpi + line_h * .5 - icon.h * .5, info_icon, icon_size, true, icon_font, -1, -1,
+              theme.accent, false);
+    for (int i = 0; i < (int) lines.size(); i++) {
+        Bounds line(box.x + text_x, box.y + 6 * dpi + i * line_h, box.w - text_x - pad, line_h);
+        swifi_text(root, line, lines[i], text_size, i == 0 ? theme.text : theme.text_secondary);
+    }
+}
+
+static Container *make_field(Container *parent, bool only_numbers, std::string initial_value, std::function<void (std::string)> on_change,
+                             std::string hint = "") {
     auto pad = parent->child(FILL_SPACE, FILL_SPACE);
     STextEditorOptions options;
     options.multiline = false;
@@ -2109,13 +2160,17 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         c->wanted_bounds.w = FILL_SPACE;
         c->wanted_bounds.h = bounds.h + 11 * dpi * 2 * .8;
     };
-    pad->when_paint = [](Container *root, Container *c) {
+    pad->when_paint = [hint](Container *root, Container *c) {
         auto mylar = static_cast<MylarWindow *>(root->user_data);
         auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         paint_smooth_frame(cr, c->real_bounds, settings_control_rounding * dpi, theme.field_background,
                            c->active ? theme.accent : theme.field_border, std::max(1.0, (double) std::round(1 * dpi)));
         paint_text_editor(root, c, theme.text, theme.accent);
+        if (c->active && !hint.empty()) {
+            field_hint_text = hint;
+            field_hint_anchor = c->real_bounds;
+        }
     };
     return pad;
 }
@@ -2507,7 +2562,8 @@ static void make_screen_positioner(Container *parent, std::vector<MonitorOption 
 }
 
 static Container *make_reset_textfield(Container* parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value,
-                                 std::string reset_value, std::function<void(std::string)> on_change, std::function<std::string()> left_text = nullptr);
+                                 std::string reset_value, std::function<void(std::string)> on_change, std::function<std::string()> left_text = nullptr,
+                                 std::string hint = "");
 static std::string resolved_font_family(const std::string &name);
 static void attach_font_completions(Container *field, std::function<void(std::string)> on_pick);
 
@@ -2603,8 +2659,25 @@ static Container *make_accordion(Container *parent, std::string title, std::stri
     return p;
 }
 
+// The kind of number a field takes and its range, then `note` on its own line.
+template <typename T>
+static std::string number_hint(const char *kind, T min_value, T max_value, const std::string &note) {
+    std::string hint = kind;
+    const bool has_min = min_value != std::numeric_limits<T>::lowest();
+    const bool has_max = max_value != std::numeric_limits<T>::max();
+    if (has_min && has_max)
+        hint += fz(" from {} to {}", min_value, max_value);
+    else if (has_min)
+        hint += fz(", {} or more", min_value);
+    else if (has_max)
+        hint += fz(", {} or less", max_value);
+    if (!note.empty())
+        hint += "\n" + note;
+    return hint;
+}
+
 static void add_monitor_int_field(Container* parent, std::string title, std::string description, std::string icon, int initial_value, int reset_value, int min_value, int max_value,
-                                  std::function<void(int)> on_change) {
+                                  std::function<void(int)> on_change, std::string note = "") {
     make_reset_textfield(parent, std::move(title), std::move(description), std::move(icon), false, std::to_string(initial_value), std::to_string(reset_value),
                          [min_value, max_value, on_change = std::move(on_change)](std::string value) {
                              int parsed = 0;
@@ -2613,11 +2686,11 @@ static void add_monitor_int_field(Container* parent, std::string title, std::str
                                  return;
                              }
                              on_change(std::clamp(parsed, min_value, max_value));
-                         });
+                         }, nullptr, number_hint("Whole number", min_value, max_value, note));
 }
 
 static void add_monitor_float_field(Container* parent, std::string title, std::string description, std::string icon, float initial_value, float reset_value,
-                                    float min_value, float max_value, std::function<void(float)> on_change) {
+                                    float min_value, float max_value, std::function<void(float)> on_change, std::string note = "") {
     make_reset_textfield(parent, std::move(title), std::move(description), std::move(icon), false, fz("{}", initial_value), fz("{}", reset_value),
                          [min_value, max_value, on_change = std::move(on_change)](std::string value) {
                              float parsed = 0;
@@ -2630,7 +2703,7 @@ static void add_monitor_float_field(Container* parent, std::string title, std::s
                                  return;
                              }
                              on_change(std::clamp(parsed, min_value, max_value));
-                         });
+                         }, nullptr, number_hint("Decimal number", min_value, max_value, note));
 }
 
 static void change_display_options(MonitorOption *m) {
@@ -2705,7 +2778,7 @@ static void change_display_options(MonitorOption *m) {
             m->config.scale = fz("{}", std::min(scale, 6.0f));
         }
         commit();
-    });
+    }, nullptr, "Decimal number from 0.3 to 6, or \"auto\"\nA multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
 
     make_vert_space(padded_right, 4);
 
@@ -2744,7 +2817,7 @@ static void change_display_options(MonitorOption *m) {
         value              = trim(value);
         m->config.position = value.empty() ? "auto" : value;
         commit();
-    });
+    }, nullptr, "Two whole numbers as XxY, or \"auto\"\nPixels from the left and from the top, such as 1920x0");
 
     make_vert_space(padded_right, 4);
 
@@ -2800,7 +2873,7 @@ static void change_display_options(MonitorOption *m) {
     add_monitor_int_field(padded_right, "Reserved area", "Reserved area in pixels", "\uE9A6", m->config.reserved_area, 0, 0, INT_MAX, [m, commit](int value) {
         m->config.reserved_area = value;
         commit();
-    });
+    }, "In pixels");
 
     make_vert_space(padded_right, 4);
 
@@ -2826,42 +2899,42 @@ static void change_display_options(MonitorOption *m) {
     add_monitor_float_field(padded_right, "SDR brightness", "SDR brightness multiplier (0–10)", "\uE706", m->config.sdrbrightness, 1.0f, 0.0f, 10.0f, [m, commit](float value) {
         m->config.sdrbrightness = value;
         commit();
-    });
+    }, "A multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
 
     make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "SDR saturation", "SDR saturation multiplier (0–10)", "\uEB42", m->config.sdrsaturation, 1.0f, 0.0f, 10.0f, [m, commit](float value) {
         m->config.sdrsaturation = value;
         commit();
-    });
+    }, "A multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
 
     make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "SDR min luminance", "Minimum SDR luminance", "\uF08C", m->config.sdr_min_luminance, 0.2f, 0.0f, 10000.0f, [m, commit](float value) {
         m->config.sdr_min_luminance = value;
         commit();
-    });
+    }, "In nits");
 
     make_vert_space(padded_right, 4);
 
     add_monitor_int_field(padded_right, "SDR max luminance", "Maximum SDR luminance", "\uE9A9", m->config.sdr_max_luminance, 80, INT_MIN, INT_MAX, [m, commit](int value) {
         m->config.sdr_max_luminance = value;
         commit();
-    });
+    }, "In nits");
 
     make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "Min luminance", "Minimum luminance override (-1 uses automatic)", "\uEA80", m->config.min_luminance, -1.0f, -1.0f, 10000.0f, [m, commit](float value) {
         m->config.min_luminance = value;
         commit();
-    });
+    }, "In nits, -1 for automatic");
 
     make_vert_space(padded_right, 4);
 
     add_monitor_int_field(padded_right, "Max luminance", "Maximum luminance override", "\uEA80", m->config.max_luminance, -1, INT_MIN, INT_MAX, [m, commit](int value) {
         m->config.max_luminance = value;
         commit();
-    });
+    }, "In nits, -1 for automatic");
 
     make_vert_space(padded_right, 4);
 
@@ -2869,7 +2942,7 @@ static void change_display_options(MonitorOption *m) {
                           [m, commit](int value) {
                               m->config.max_avg_luminance = value;
                               commit();
-                          });
+                          }, "In nits, -1 for automatic");
 
     make_vert_space(padded_right, 4);
 
@@ -4153,6 +4226,21 @@ static void fill_desktop_settings(Container *root, Container *c) {
             });
         },
         "\ue75b");
+
+    make_vert_space(padded_right, 4);
+
+    // Read by the applications menu each time it opens.
+    make_bool(padded_right,
+        "Show applications from other desktops",
+        "List applications in the applications menu that are meant only for GNOME, KDE or another desktop",
+        set->applications_show_other_desktops,
+        [](bool value) {
+            main_thread([value]() {
+                set->applications_show_other_desktops = value;
+                settings::load_save_settings(true, set);
+            });
+        },
+        "\ue75b");
 }
 
 
@@ -4185,7 +4273,7 @@ static std::string resolved_font_family(const std::string &name) {
     return family;
 }
 
-static Container *make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change, std::function<std::string()> left_text) {
+static Container *make_reset_textfield(Container *parent, std::string title, std::string description, std::string icon, bool only_numbers, std::string initial_value, std::string reset_value, std::function<void(std::string)> on_change, std::function<std::string()> left_text, std::string hint) {
     auto p = make_self_height_sized_parent(parent);
     
     make_label_like(p, title, description, icon);
@@ -4232,7 +4320,7 @@ static Container *make_reset_textfield(Container *parent, std::string title, std
     }
 
     auto field = make_field(right, only_numbers, initial_value, [](std::string latest_text) {
-    });
+    }, std::move(hint));
     
     make_button(right, "Apply", [field, on_change]() {
         auto value = static_cast<STextEditorData *>(field->user_data)->text;
@@ -4412,7 +4500,7 @@ static void fill_multitasking_settings(Container *root) {
                     notify("Enter a workspace count from 1 to 20");
                 });
             }
-        });
+        }, nullptr, "Whole number from 1 to 20");
     make_vert_space(padded_right, 4);
     make_button_group(padded_right, "Multiple monitors",
         "Switch workspaces independently or on all monitors together",
@@ -5294,7 +5382,7 @@ static void make_shortcut_row(Container *parent, int index) {
     })->name = "typing";
 }
 
-// A make_field that shows `placeholder` while empty and not focused.
+// A make_field that shows `placeholder` until something is typed.
 static Container *make_placeholder_field(Container *parent, std::string placeholder,
                                         std::string initial_value, std::function<void(std::string)> on_change) {
     if (!on_change)
@@ -5306,7 +5394,7 @@ static Container *make_placeholder_field(Container *parent, std::string placehol
         if (paint_field)
             paint_field(root, c);
         auto data = static_cast<STextEditorData *>(c->user_data);
-        if (c->active || !data || !data->text.empty())
+        if (!data || !data->text.empty())
             return;
         auto dpi = swifi_window(root)->dpi;
         auto b = c->real_bounds;
@@ -8136,14 +8224,14 @@ static void fill_keyboard_settings(Container *root, Container *c, bool reload) {
     make_reset_textfield(padded_right, "Repeat delay", "Delay before a held key starts repeating, in milliseconds", "", only_numbers, std::to_string(set->repeat_delay), "600", [](std::string value) {
         set->repeat_delay = std::atoi(value.c_str());
         reset_conf();
-    });
+    }, nullptr, "Whole number of milliseconds\n1000 is one second");
 
     make_vert_space(padded_right, 4);
 
     make_reset_textfield(padded_right, "Repeat rate", "Number of key repeats per second", "", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
         set->repeat_rate = std::atoi(value.c_str());
         reset_conf();
-    });
+    }, nullptr, "Whole number of repeats per second");
 
     make_vert_space(padded_right, 28);
 
@@ -8284,6 +8372,9 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Desktop", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
     search_add("Desktop", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
                "taskbar dock workspace windows monitors");
+    search_add("Desktop", "Dock Settings", "Show applications from other desktops",
+               "List applications in the applications menu that are meant only for GNOME, KDE or another desktop",
+               "applications menu launcher desktop files gnome kde xfce session onlyshowin apps all");
     search_add("Desktop", "Dock Settings", "Combine taskbar buttons and hide labels", "Group all windows that belong to one dock icon under a single icon",
                "group merge stack labels dock taskbar");
 
@@ -8916,7 +9007,7 @@ static void make_search_field(Container *left) {
                   c->active ? theme.text : theme.text_secondary, false);
         paint_text_editor(root, c, theme.text, theme.accent);
         auto data = static_cast<STextEditorData *>(c->user_data);
-        if (data && data->text.empty() && !c->active) {
+        if (data && data->text.empty()) {
             Bounds text(b.x + 32 * dpi, b.y, std::max(0.0, b.w - 43 * dpi), b.h);
             swifi_text(root, text, "Search settings", 11, swifi_dim(theme.text_secondary));
         }
@@ -9327,6 +9418,7 @@ void fill_root(Container *root) {
         paint_search_flash(root, c);
         paint_right_scrollbar(root, c);
         paint_wallpaper_drop_hint(root, c);
+        paint_field_hint(root, c);
     };
 }
 

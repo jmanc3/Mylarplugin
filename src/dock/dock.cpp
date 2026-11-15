@@ -2432,7 +2432,7 @@ static void fill_root(Container *root) {
             set_rect(cr, {c->real_bounds.x, c->real_bounds.y, 1, c->real_bounds.h});
             cr->fill();
         };
-        show_desktop->when_clicked = [](Container *root, Container *c) {
+        static auto toggle_show_desktop = []() {
             main_thread([]() {
                 if (show_desktop::is_opened()) {
                     show_desktop::stop_animation();
@@ -2441,6 +2441,43 @@ static void fill_root(Container *root) {
                 }
                 damage_all();
             });
+        };
+        show_desktop->when_clicked = [](Container *root, Container *c) {
+            toggle_show_desktop();
+        };
+        // A drag-and-drop resting on the button toggles it like a click, once
+        // per visit: hide the windows to reach the desktop, leave and come
+        // back to return them.
+        auto dnd_hover_timer = std::make_shared<int>(-1);
+        show_desktop->when_mouse_enters_container = [dnd_hover_timer](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            if (!dock || !dock->window || !dock->window->raw_window || !dock->window->raw_window->dnd_hovering)
+                return;
+            if (*dnd_hover_timer != -1)
+                return;
+            auto app = dock->app;
+            std::weak_ptr<bool> lifetime = c->lifetime;
+            *dnd_hover_timer = windowing::timer(app, kDndHoverMs, [dnd_hover_timer, app, root, c, lifetime](void *) {
+                {
+                    std::lock_guard<std::mutex> lock(app->mutex);
+                    *dnd_hover_timer = -1;
+                    if (lifetime.expired())
+                        return;
+                    auto dock = (Dock *) root->user_data;
+                    if (!dock || !dock->window || !dock->window->raw_window)
+                        return;
+                    if (!c->state.mouse_hovering || !dock->window->raw_window->dnd_hovering)
+                        return;
+                }
+                toggle_show_desktop();
+            }, nullptr);
+        };
+        show_desktop->when_mouse_leaves_container = [dnd_hover_timer](Container *root, Container *c) {
+            auto dock = (Dock *) root->user_data;
+            if (*dnd_hover_timer == -1 || !dock)
+                return;
+            windowing::timer_stop(dock->app, *dnd_hover_timer);
+            *dnd_hover_timer = -1;
         };
         show_desktop->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;

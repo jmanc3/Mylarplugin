@@ -158,6 +158,9 @@ struct ConfigSettings {
     std::string font = "Segoe UI Variable, Cantarell, Adwaita Sans, Ubuntu, Roboto, Liberation Sans, Noto Sans";
     // Draw each font suggestion in the font it names (off: use the UI font, which is faster).
     bool font_suggestions_in_own_font = true;
+    // List applications in the applications menu whose .desktop file keeps
+    // them to other desktops (OnlyShowIn / NotShowIn), such as GNOME's or KDE's.
+    bool applications_show_other_desktops = false;
 
     bool is_tiling = false;
     // Scope of explicit toggle changes; new workspaces use their own default.

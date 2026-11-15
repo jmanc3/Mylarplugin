@@ -16,6 +16,9 @@ STextEditorData::~STextEditorData() {
         g_object_unref(layout);
 }
 
+// How long a blinking caret shows, and then hides.
+static constexpr long caret_blink_ms = 530;
+
 static bool editor_active(Container *c, const STextEditorData &data) {
     return c->active || (data.options.parent_activates && c->parent && c->parent->active);
 }
@@ -505,7 +508,19 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
     set_argb(cr, color);
     cr->move_to(x, y);
     cr->show_layout(layout);
-    if (data.options.editable && editor_active(c, data)) {
+    const bool active = editor_active(c, data);
+    bool caret_showing = true;
+    if (data.options.blink_caret && active) {
+        const long now = get_current_time_in_ms();
+        if (!data.blink_was_active || data.blink_cursor != data.cursor || data.blink_text_size != data.text.size()) {
+            data.blink_cursor = data.cursor;
+            data.blink_text_size = data.text.size();
+            data.blink_start = now;
+        }
+        caret_showing = ((now - data.blink_start) / caret_blink_ms) % 2 == 0;
+    }
+    data.blink_was_active = active;
+    if (data.options.editable && active && caret_showing) {
         PangoRectangle cursor = {};
         pango_layout_get_cursor_pos(layout, layout_index(data, data.cursor), &cursor, nullptr);
         set_rect(cr, Bounds(x + cursor.x / static_cast<double>(PANGO_SCALE),
@@ -514,6 +529,12 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
         cr->fill();
     }
     cr->restore();
+}
+
+long text_editor_ms_until_blink(Container *c) {
+    auto &data = *static_cast<STextEditorData *>(c->user_data);
+    const long elapsed = std::max(0L, get_current_time_in_ms() - data.blink_start);
+    return caret_blink_ms - elapsed % caret_blink_ms;
 }
 
 void reset_text_editor(Container *c, std::string value) {

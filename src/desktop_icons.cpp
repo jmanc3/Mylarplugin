@@ -200,21 +200,34 @@ static std::string remove_desktop_exec_field_codes(const std::string& exec) {
             continue;
         }
 
-        if (i + 1 < exec.size())
+        if (i + 1 < exec.size()) {
             ++i;
+            // "%%" is a literal percent sign.
+            if (exec[i] == '%')
+                result += '%';
+        }
     }
 
     return trim_copy(std::move(result));
 }
 
-static void read_desktop_file(DesktopItem& item, const std::filesystem::path& path) {
+std::string desktop_file::exec_without_field_codes(const std::string& exec) {
+    return remove_desktop_exec_field_codes(exec);
+}
+
+std::unordered_map<std::string, std::string> desktop_file::read_entry(const std::filesystem::path& path) {
+    std::unordered_map<std::string, std::string> entry;
     std::ifstream file(path);
     if (!file)
-        return;
+        return entry;
 
     std::string line;
     bool inDesktopEntry = false;
     while (std::getline(file, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty() || line[0] == '#')
+            continue;
         if (line.starts_with('[') && line.ends_with(']')) {
             inDesktopEntry = line == "[Desktop Entry]";
             continue;
@@ -226,15 +239,22 @@ static void read_desktop_file(DesktopItem& item, const std::filesystem::path& pa
         if (separator == std::string::npos)
             continue;
 
-        const std::string_view key(line.data(), separator);
-        const std::string value = line.substr(separator + 1);
-        if (key == "Name")
-            item.name = value;
-        else if (key == "Icon")
-            item.icon = value;
-        else if (key == "Exec")
-            item.exec = remove_desktop_exec_field_codes(value);
+        // Spaces around the '=' are not part of the key or the value.
+        auto key = trim_copy(line.substr(0, separator));
+        if (!key.empty())
+            entry[std::move(key)] = trim_copy(line.substr(separator + 1));
     }
+    return entry;
+}
+
+static void read_desktop_file(DesktopItem& item, const std::filesystem::path& path) {
+    auto entry = desktop_file::read_entry(path);
+    if (auto it = entry.find("Name"); it != entry.end())
+        item.name = it->second;
+    if (auto it = entry.find("Icon"); it != entry.end())
+        item.icon = it->second;
+    if (auto it = entry.find("Exec"); it != entry.end())
+        item.exec = remove_desktop_exec_field_codes(it->second);
 }
 
 static void refresh_desktop_item(DesktopItem& item, const std::filesystem::path& path, bool isFolder) {

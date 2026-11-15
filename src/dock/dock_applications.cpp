@@ -2,6 +2,7 @@
 
 #include "dock/dock_internal.h"
 
+#include "desktop_icons.h"
 #include "settings.h"
 #include "text_editor.h"
 
@@ -12,6 +13,7 @@
 #include <linux/input-event-codes.h>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -37,10 +39,29 @@ struct Script : UserData {
     // A row from the settings search instead of an executable.
     bool is_setting = false;
     settings::SearchResult setting;
-    // Sorting: how often and how recently it was picked, then tier
-    // (0 exact name, 1 name prefix, 2 setting), then the original order.
+    // Sorting: how often and how recently it was picked, then match_level
+    // (see match_script), then the original order.
     double history = 0;
     int base_order = 0;
+
+    // An installed application (a .desktop file) instead of a $PATH executable.
+    // full_path is the .desktop file, exec what it runs.
+    bool is_desktop = false;
+    std::string desktop_id;
+    std::string exec;
+    std::string icon;
+    bool terminal = false;
+    // Its .desktop file keeps it to other desktops (OnlyShowIn / NotShowIn).
+    // Only listed with set->applications_show_other_desktops.
+    bool other_desktop = false;
+
+    // The "Run as command..." row, listed last while there is search text:
+    // runs the text as typed, arguments included. full_path holds the text.
+    bool is_run_command = false;
+
+    // First seen by the rescan made while the menu was already open. Kept
+    // below everything that was listed, so rows don't move under the user.
+    bool late = false;
 };
 
 static std::vector<Script> scripts;
@@ -80,6 +101,8 @@ static void selection_history_load_locked() {
 static std::string selection_key(const Script &s) {
     if (s.is_setting)
         return "setting\t" + s.setting.page + "\t" + s.setting.section + "\t" + s.setting.title;
+    if (s.is_desktop)
+        return "desktop\t" + s.desktop_id;
     return "app\t" + s.name;
 }
 
@@ -115,13 +138,15 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     STextEditorOptions options;
     options.multiline = false;
     options.only_numbers = only_numbers;
+    options.blink_caret = true;
     options.font_size = 11;
     options.window = [](Container *root) { return static_cast<Dock *>(root->user_data)->applications->raw_window; };
     options.viewport = [](Container *root, Container *c) {
         auto dpi = static_cast<Dock *>(root->user_data)->applications->raw_window->dpi;
+        // The search icon sits before the text.
         auto bounds = c->real_bounds;
-        bounds.x += 11 * dpi;
-        bounds.w = std::max(0.0, bounds.w - 22 * dpi);
+        bounds.x += 38 * dpi;
+        bounds.w = std::max(0.0, bounds.w - 38 * dpi - 11 * dpi);
         return bounds;
     };
     options.on_change = std::move(on_change);
@@ -150,6 +175,21 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 10 * dpi, 1.0);
         //set_rect(cr, minus_border);
         cr->fill();
+
+        const std::string glyph = "\uE721"; // Search
+        const RGBA glyph_color(0, 0, 0, c->active ? .9 : .5);
+        auto gb = draw_text(cr, 0, 0, glyph, 13 * dpi, false, icon_font, -1, -1, glyph_color);
+        draw_text(cr, c->real_bounds.x + 14 * dpi, c->real_bounds.y + (c->real_bounds.h - gb.h) * .5, glyph, 13 * dpi, true,
+                  icon_font, -1, -1, glyph_color);
+
+        // Says what can be searched until something is typed.
+        if (static_cast<STextEditorData *>(c->user_data)->text.empty()) {
+            const std::string prompt = "Desktop files, Scripts, Settings...";
+            const RGBA prompt_color(0, 0, 0, .4);
+            auto pb = draw_text(cr, 0, 0, prompt, 11 * dpi, false, set->font, -1, -1, prompt_color);
+            draw_text(cr, c->real_bounds.x + 38 * dpi, c->real_bounds.y + (c->real_bounds.h - pb.h) * .5, prompt, 11 * dpi,
+                      true, set->font, -1, -1, prompt_color);
+        }
 
         paint_text_editor(root, c, RGBA(0, 0, 0, 1), accent);
     };
@@ -242,42 +282,255 @@ static void scripts_load(std::vector<Script> &temp_scripts) {
         return;
 }
 
+static std::vector<std::string> split_list(const char *text, char separator) {
+    std::vector<std::string> parts;
+    std::stringstream ss(text ? text : "");
+    std::string part;
+    while (std::getline(ss, part, separator))
+        if (!part.empty())
+            parts.push_back(part);
+    return parts;
+}
+
+/*
+ * Where .desktop files live, most important first: the user's data directory,
+ * then $XDG_DATA_DIRS, then the usual places in case the session's
+ * environment doesn't list them (flatpak, snap, nix).
+ */
+static std::vector<std::filesystem::path> application_directories() {
+    std::vector<std::filesystem::path> dirs;
+    auto add = [&dirs](const std::filesystem::path &data_dir) {
+        if (data_dir.empty() || !data_dir.is_absolute())
+            return;
+        std::error_code ec;
+        auto dir = std::filesystem::canonical(data_dir / "applications", ec);
+        if (ec || !std::filesystem::is_directory(dir, ec))
+            return;
+        if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end())
+            dirs.push_back(dir);
+    };
+    const char *home_env = getenv("HOME");
+    const std::filesystem::path home = home_env ? home_env : "";
+    const char *data_home = getenv("XDG_DATA_HOME");
+    if (data_home && *data_home)
+        add(data_home);
+    else if (!home.empty())
+        add(home / ".local/share");
+    const char *data_dirs = getenv("XDG_DATA_DIRS");
+    for (const auto &dir : split_list(data_dirs && *data_dirs ? data_dirs : "/usr/local/share:/usr/share", ':'))
+        add(dir);
+    if (!home.empty()) {
+        add(home / ".local/share");
+        add(home / ".local/share/flatpak/exports/share");
+        add(home / ".nix-profile/share");
+    }
+    add("/usr/local/share");
+    add("/usr/share");
+    add("/var/lib/flatpak/exports/share");
+    add("/var/lib/snapd/desktop");
+    add("/run/current-system/sw/share");
+    return dirs;
+}
+
+static bool program_exists(const std::string &program) {
+    if (program.find('/') != std::string::npos)
+        return access(program.c_str(), X_OK) == 0;
+    for (const auto &dir : split_list(getenv("PATH"), ':'))
+        if (access((dir + "/" + program).c_str(), X_OK) == 0)
+            return true;
+    return false;
+}
+
+// The applications a menu should offer, sorted by name. The ones for other
+// desktops are included, marked Script::other_desktop.
+static void desktop_entries_load(std::vector<Script> &entries) {
+    entries.clear();
+    const auto current_desktops = split_list(getenv("XDG_CURRENT_DESKTOP"), ':');
+    auto names_current_desktop = [&current_desktops](const std::string &list) {
+        for (const auto &desktop : split_list(list.c_str(), ';'))
+            if (std::find(current_desktops.begin(), current_desktops.end(), desktop) != current_desktops.end())
+                return true;
+        return false;
+    };
+
+    // Desktop file ids. A file overrides the ones with its id in later
+    // directories, even when all it does is hide them.
+    std::unordered_set<std::string> seen;
+    for (const auto &dir : application_directories()) {
+        std::error_code ec;
+        std::filesystem::recursive_directory_iterator it(
+            dir, std::filesystem::directory_options::follow_directory_symlink |
+                 std::filesystem::directory_options::skip_permission_denied, ec);
+        for (; !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            // Applications aren't nested deep, and a symlink could loop.
+            if (it.depth() >= 3)
+                it.disable_recursion_pending();
+            const auto &path = it->path();
+            if (path.extension() != ".desktop")
+                continue;
+            std::error_code file_ec;
+            if (!it->is_regular_file(file_ec))
+                continue;
+            std::string id = path.lexically_relative(dir).string();
+            std::replace(id.begin(), id.end(), '/', '-');
+            if (!seen.insert(id).second)
+                continue;
+
+            auto entry = desktop_file::read_entry(path);
+            auto value = [&entry](const char *key) {
+                auto found = entry.find(key);
+                return found == entry.end() ? std::string() : found->second;
+            };
+            auto type = value("Type");
+            if (!type.empty() && type != "Application")
+                continue;
+            if (value("Hidden") == "true" || value("NoDisplay") == "true")
+                continue;
+            auto exec = desktop_file::exec_without_field_codes(value("Exec"));
+            if (exec.empty())
+                continue;
+            auto try_exec = value("TryExec");
+            if (!try_exec.empty() && !program_exists(try_exec))
+                continue;
+            // Old LSP Plugins packages (EasyEffects pulls them in) install
+            // one launcher per audio plugin, hundreds of them.
+            if (id.starts_with("in.lsp_plug.lsp_plugins_"))
+                continue;
+
+            Script script;
+            script.is_desktop = true;
+            if (!current_desktops.empty()) {
+                auto only_show_in = value("OnlyShowIn");
+                script.other_desktop = (!only_show_in.empty() && !names_current_desktop(only_show_in)) ||
+                                       names_current_desktop(value("NotShowIn"));
+            }
+            script.desktop_id = id;
+            script.name = value("Name");
+            if (script.name.empty())
+                script.name = path.stem().string();
+            script.lowercase_name = to_lower(script.name);
+            script.generic_name = to_lower(value("GenericName"));
+            for (auto &keyword : split_list(value("Keywords").c_str(), ';'))
+                script.keywords.push_back(to_lower(keyword));
+            script.full_path = path.string();
+            script.exec = exec;
+            script.icon = value("Icon");
+            script.terminal = value("Terminal") == "true";
+            entries.push_back(std::move(script));
+        }
+    }
+    std::stable_sort(entries.begin(), entries.end(), [](const Script &a, const Script &b) {
+        return a.lowercase_name < b.lowercase_name;
+    });
+}
+
+// Applications first, then everything executable in $PATH.
 static std::shared_future<std::vector<Script>> load_scripts_async() {
     return std::async(std::launch::async, [] {
         std::vector<Script> loaded;
-        scripts_load(loaded);
+        desktop_entries_load(loaded);
+        std::vector<Script> executables;
+        scripts_load(executables);
+        loaded.insert(loaded.end(), std::make_move_iterator(executables.begin()),
+                      std::make_move_iterator(executables.end()));
         return loaded;
     }).share();
 }
 
+// True when text starts the string or any later word of it.
+static bool starts_a_word(const std::string &words, const std::string &text) {
+    for (size_t at = words.find(text); at != std::string::npos; at = words.find(text, at + 1))
+        if (at == 0 || !isalnum((unsigned char) words[at - 1]))
+            return true;
+    return false;
+}
+
+/*
+ * How well an entry matches the search text: 0 exact name, 1 name prefix,
+ * 2 a later word of the name, the generic name or a keyword, -1 not at all.
+ * Executables are matched as typed, applications ignoring case.
+ */
+static int match_script(const Script &s, const std::string &text, const std::string &lowercase_text) {
+    if (!s.is_desktop)
+        return s.name == text ? 0 : s.name.starts_with(text) ? 1 : -1;
+    if (s.lowercase_name == lowercase_text)
+        return 0;
+    if (s.lowercase_name.starts_with(lowercase_text))
+        return 1;
+    if (starts_a_word(s.lowercase_name, lowercase_text) || starts_a_word(s.generic_name, lowercase_text))
+        return 2;
+    for (const auto &keyword : s.keywords)
+        if (keyword.starts_with(lowercase_text))
+            return 2;
+    return -1;
+}
+
 static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
                                       std::shared_future<std::vector<Script>> refresh,
-                                      std::function<void(const std::vector<Script> &)> rebuild) {
-    windowing::timer(dock->app, 30, [dock, applications, refresh, rebuild](void *) {
+                                      std::function<void(const std::vector<Script> &)> merge) {
+    windowing::timer(dock->app, 30, [dock, applications, refresh, merge](void *) {
         {
             std::lock_guard<std::mutex> lock(dock->app->mutex);
             if (dock->applications != applications)
                 return;
             if (refresh.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
-                watch_applications_scripts(dock, applications, refresh, rebuild);
+                watch_applications_scripts(dock, applications, refresh, merge);
                 return;
             }
-            rebuild(refresh.get());
+            merge(refresh.get());
         }
         // Rendering acquires the app mutex and reruns the current search filter.
         windowing::redraw_now(applications->raw_window);
     }, nullptr);
 }
 
-// Records the pick, then launches the executable or opens the setting.
-// The caller closes the menu.
+static std::string shell_quote(const std::string &text) {
+    std::string quoted = "'";
+    for (char ch : text) {
+        if (ch == '\'')
+            quoted += "'\\''";
+        else
+            quoted += ch;
+    }
+    return quoted + "'";
+}
+
+// For applications that ask for a terminal: $TERMINAL when set, otherwise
+// the first common emulator that is installed.
+static std::string run_in_terminal(const std::string &command) {
+    return "for t in \"$TERMINAL\" alacritty kitty foot konsole xterm; do "
+           "command -v \"$t\" >/dev/null 2>&1 && exec \"$t\" -e sh -c " + shell_quote(command) + "; done";
+}
+
+// Repaints the menu every time the search field's caret shows or hides,
+// for as long as the menu is open.
+static void blink_applications_caret(Dock *dock, MylarWindow *applications, Container *field) {
+    std::weak_ptr<bool> lifetime = field->lifetime;
+    windowing::timer(dock->app, text_editor_ms_until_blink(field) + 1, [dock, applications, field, lifetime](void *) {
+        std::lock_guard<std::mutex> lock(dock->app->mutex);
+        if (lifetime.expired() || dock->applications != applications)
+            return;
+        blink_applications_caret(dock, applications, field);
+        if (field->active)
+            windowing::redraw(applications->raw_window);
+    }, nullptr);
+}
+
+// Records the pick, then launches the application or executable, or opens
+// the setting. The caller closes the menu.
 static void activate_script(const Script *s) {
+    if (s->is_run_command) {
+        launch_command(s->full_path);
+        return;
+    }
     selection_history_record(selection_key(*s));
     if (s->is_setting) {
         auto result = s->setting;
         main_thread([result]() {
             settings::open_search_result(result);
         });
+    } else if (s->is_desktop) {
+        launch_command(s->terminal ? run_in_terminal(s->exec) : s->exec);
     } else {
         launch_command(s->full_path);
     }
@@ -348,17 +601,6 @@ static void login1_call(std::string method) {
         dbus_connection_close(connection);
         dbus_connection_unref(connection);
     }).detach();
-}
-
-static std::string shell_quote(const std::string &text) {
-    std::string quoted = "'";
-    for (char ch : text) {
-        if (ch == '\'')
-            quoted += "'\\''";
-        else
-            quoted += ch;
-    }
-    return quoted + "'";
 }
 
 // Path of the loaded plugin .so, so it can be unloaded and loaded again.
@@ -572,11 +814,29 @@ void fill_applications_container(Container *root) {
                 s->icon_size = icon_size;
                 s->icon_surface.reset();
                 auto icon_name = c3ic_fix_wm_class(name);
-                auto path = s->is_setting
-                    ? one_shot_icon(icon_size, {"preferences-system", "preferences-desktop", "application-x-executable"})
-                    : one_shot_icon(icon_size, {
-                    name, to_lower(name), icon_name, to_lower(icon_name), "application-x-executable"
-                });
+                std::string path;
+                if (s->is_setting) {
+                    path = one_shot_icon(icon_size, {"preferences-system", "preferences-desktop", "application-x-executable"});
+                } else if (s->is_run_command) {
+                    path = one_shot_icon(icon_size, {"system-run", "utilities-terminal", "application-x-executable"});
+                } else if (s->is_desktop) {
+                    // Icon= is a theme icon name or the path of an image.
+                    if (s->icon.starts_with('/') && access(s->icon.c_str(), R_OK) == 0)
+                        path = s->icon;
+                    if (path.empty()) {
+                        std::vector<std::string> candidates;
+                        auto stem = std::filesystem::path(s->full_path).stem().string();
+                        for (const auto &candidate : {s->icon, to_lower(s->icon), stem, to_lower(stem)})
+                            if (!candidate.empty())
+                                candidates.push_back(candidate);
+                        candidates.push_back("application-x-executable");
+                        path = one_shot_icon(icon_size, candidates);
+                    }
+                } else {
+                    path = one_shot_icon(icon_size, {
+                        name, to_lower(name), icon_name, to_lower(icon_name), "application-x-executable"
+                    });
+                }
                 if (!path.empty()) {
                     cairo_surface_t *surface = nullptr;
                     load_icon_full_path(&surface, path, icon_size);
@@ -695,6 +955,9 @@ void fill_applications_container(Container *root) {
                         if (ch->exists) {
                             auto s = (Script *) ch->user_data;
                             if (s->selected) {
+                                // The row's copy is from the last layout.
+                                if (s->is_run_command)
+                                    s->full_path = field_text;
                                 activate_script(s);
                                 active_option = 0;
                                 none_matched = false;
@@ -797,24 +1060,34 @@ void fill_applications_container(Container *root) {
             }
         }
         int alive_count = 0;
+        const auto lowercase_text = to_lower(field_text);
         for (auto ch: c->children) {
             auto s = (Script *) ch->user_data;
             s->selected = false;
-            ch->exists = s->is_setting || s->name.starts_with(field_text);
+            if (s->is_run_command) {
+                s->full_path = field_text;
+                s->match_level = field_text.find_first_not_of(' ') == std::string::npos ? -1 : 4;
+            } else {
+                // Settings come after every application and executable.
+                s->match_level = s->is_setting ? 3 : match_script(*s, field_text, lowercase_text);
+            }
+            ch->exists = s->match_level >= 0;
             if (ch->exists)
                 alive_count++;
         }
-        auto tier = [&field_text](const Script *s) { return s->is_setting ? 2 : s->name == field_text ? 0 : 1; };
-        std::stable_sort(c->children.begin(), c->children.end(), [&tier](Container *a, Container *b) {
+        std::stable_sort(c->children.begin(), c->children.end(), [](Container *a, Container *b) {
             if (a->exists != b->exists)
                 return a->exists;
             auto sa = (Script *) a->user_data;
             auto sb = (Script *) b->user_data;
+            if (sa->is_run_command != sb->is_run_command)
+                return sb->is_run_command;
+            if (sa->late != sb->late)
+                return sb->late;
             if (sa->history != sb->history)
                 return sa->history > sb->history;
-            int ta = tier(sa), tb = tier(sb);
-            if (ta != tb)
-                return ta < tb;
+            if (sa->match_level != sb->match_level)
+                return sa->match_level < sb->match_level;
             return sa->base_order < sb->base_order;
         });
         if (alive_count != 0) {
@@ -884,15 +1157,61 @@ void fill_applications_container(Container *root) {
     scroll->scroll_v_visual = 0;
     *datum<bool>(scroll, "applications_scroll_animation_active") = false;
     for (int i = 0; i < (int) entries.size(); i++) {
+        if (entries[i].other_desktop && !set->applications_show_other_desktops)
+            continue;
         Script entry = entries[i];
         entry.base_order = i;
         auto it = search->history.find(selection_key(entry));
         entry.history = it == search->history.end() ? 0 : it->second;
         add_script_row(scroll_content, search, entry);
     }
+    Script run_command;
+    run_command.is_run_command = true;
+    run_command.name = "Run as command...";
+    add_script_row(scroll_content, search, run_command);
     // Deleted above with the rest.
     search->settings_rows_stale = true;
 
+    };
+    /*
+     * The list is first filled from the previous scan and a new scan starts
+     * every time the menu opens. When it finishes, entries the list doesn't
+     * have yet go to the end (see Script::late) and the ones it has stay where
+     * they are, so nothing moves under a selection the user is making.
+     * Entries that are gone stay until the menu is opened again.
+     */
+    auto merge_scripts = [scroll_content, search](const std::vector<Script> &entries) {
+        std::unordered_map<std::string, Script *> listed;
+        for (auto child : scroll_content->children) {
+            auto s = (Script *) child->user_data;
+            if (!s->is_setting && !s->is_run_command)
+                listed[selection_key(*s)] = s;
+        }
+        int order = scroll_content->children.size();
+        for (const auto &fresh : entries) {
+            if (fresh.other_desktop && !set->applications_show_other_desktops)
+                continue;
+            auto key = selection_key(fresh);
+            if (auto found = listed.find(key); found != listed.end()) {
+                // What it launches and its icon may have changed.
+                auto s = found->second;
+                s->full_path = fresh.full_path;
+                s->path = fresh.path;
+                s->exec = fresh.exec;
+                s->terminal = fresh.terminal;
+                if (s->icon != fresh.icon) {
+                    s->icon = fresh.icon;
+                    s->icon_size = 0;
+                }
+                continue;
+            }
+            Script entry = fresh;
+            entry.late = true;
+            entry.base_order = order++;
+            auto it = search->history.find(key);
+            entry.history = it == search->history.end() ? 0 : it->second;
+            add_script_row(scroll_content, search, entry);
+        }
     };
     std::shared_future<std::vector<Script>> refresh;
     {
@@ -907,9 +1226,11 @@ void fill_applications_container(Container *root) {
         refresh = scripts_refresh;
     }
     auto dock = static_cast<Dock *>(root->user_data);
-    watch_applications_scripts(dock, dock->applications, refresh, rebuild_scripts);
+    watch_applications_scripts(dock, dock->applications, refresh, merge_scripts);
 
+    // The menu opens with the caret in the search field, blinking.
     set_active(root, {field}, root, true, false);
+    blink_applications_caret(dock, dock->applications, field);
 
     auto bottom = padded->child(::hbox, FILL_SPACE, 32);
     bottom->alignment = ALIGN_RIGHT;
