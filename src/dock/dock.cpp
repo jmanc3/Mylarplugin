@@ -2871,6 +2871,18 @@ void dock::add_window(int cid) {
 void dock::remove_window(int cid) {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
+        std::lock_guard<std::mutex> guard(d->collection->mut);
+        // merge_to_be_into_list applies removals before additions. If this
+        // window's add is still pending (opened and closed before the dock
+        // thread laid out), the removal would be a no-op and the add would
+        // then insert a dead window that never goes away. Cancel the add.
+        auto &pending = d->collection->to_be_added;
+        for (int i = pending.size() - 1; i >= 0; i--) {
+            if (pending[i]->cid == cid) {
+                delete pending[i];
+                pending.erase(pending.begin() + i);
+            }
+        }
         d->collection->to_be_removed.push_back(cid);
         windowing::redraw(d->window->raw_window);
     }
