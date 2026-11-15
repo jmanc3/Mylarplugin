@@ -855,6 +855,10 @@ struct XembedIcon {
     xcb_damage_damage_t damage = 0;
     bool mapped = true;
     long capture_due = 0; // 0 when no capture is scheduled
+    // Where the container should be (root coordinates); off screen unless it is being clicked.
+    int x = XEMBED_OFFSCREEN;
+    int y = XEMBED_OFFSCREEN;
+    long park_due = 0;    // when to move the container back off screen, 0 when it already is
     std::string title;
     TrayIconPixels pixels;
     unsigned long icon_revision = 0;
@@ -863,6 +867,9 @@ struct XembedIcon {
 struct XembedRequest {
     xcb_window_t window = 0;
     int button = 1;
+    bool has_position = false; // cursor position in Xwayland root coordinates
+    int x = 0;
+    int y = 0;
 };
 
 // Shared between the X thread and the main thread.
@@ -1009,7 +1016,8 @@ static void dock_xicon(xcb_window_t window) {
     XembedIcon icon;
     icon.window = window;
     icon.container = xcb_generate_id(xconn);
-    uint32_t values[] = {xscreen->black_pixel, 1, XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY};
+    // STRUCTURE_NOTIFY: Hyprland places the container on a monitor when it maps, which is undone in handle_x_event.
+    uint32_t values[] = {xscreen->black_pixel, 1, XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY};
     xcb_create_window(xconn, XCB_COPY_FROM_PARENT, icon.container, xscreen->root, XEMBED_OFFSCREEN, XEMBED_OFFSCREEN, XEMBED_ICON_SIZE,
                       XEMBED_ICON_SIZE, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT,
                       XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK, values);
@@ -1060,25 +1068,35 @@ static void forget_xicon(xcb_window_t window, bool window_gone) {
     }
 }
 
-static void xembed_click(XembedIcon &icon, int button) {
-    int x = XEMBED_ICON_SIZE / 2, y = XEMBED_ICON_SIZE / 2;
-    for (int i = 0; i < 2; i++) {
-        xcb_button_press_event_t event{};
-        event.response_type = i == 0 ? XCB_BUTTON_PRESS : XCB_BUTTON_RELEASE;
-        event.detail = button;
-        event.time = XCB_CURRENT_TIME;
-        event.root = xscreen->root;
-        event.event = icon.window;
-        event.child = XCB_NONE;
-        event.root_x = XEMBED_OFFSCREEN + x;
-        event.root_y = XEMBED_OFFSCREEN + y;
-        event.event_x = x;
-        event.event_y = y;
-        event.state = i == 0 ? 0 : (uint16_t) (XCB_BUTTON_MASK_1 << (button - 1));
-        event.same_screen = 1;
-        xcb_send_event(xconn, 0, icon.window, i == 0 ? XCB_EVENT_MASK_BUTTON_PRESS : XCB_EVENT_MASK_BUTTON_RELEASE, (const char *) &event);
-    }
-    xcb_flush(xconn);
+static void move_container(XembedIcon &icon, int x, int y) {
+    icon.x = x;
+    icon.y = y;
+    uint32_t values[] = {(uint32_t) x, (uint32_t) y, XCB_STACK_MODE_ABOVE};
+    xcb_configure_window(xconn, icon.container, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_STACK_MODE, values);
+}
+
+// Toolkits ignore synthetic (XSendEvent) button events and Xwayland drops XTest input, so the
+// click has to come from the compositor as real Wayland pointer input. The container is first
+// moved under the cursor: Xwayland places its pointer at the container's X position plus the
+// surface-local point, and apps position their menus relative to the icon.
+static void xembed_click(XembedIcon &icon, const XembedRequest &request) {
+    if (request.has_position)
+        move_container(icon, request.x - XEMBED_ICON_SIZE / 2, request.y - XEMBED_ICON_SIZE / 2);
+    else if (icon.x == XEMBED_OFFSCREEN)
+        move_container(icon, 0, 0);
+    // Round trip so the move is done before the input reaches Xwayland over Wayland.
+    free(xcb_get_input_focus_reply(xconn, xcb_get_input_focus(xconn), nullptr));
+    icon.park_due = now_ms() + 2000;
+
+    auto container = icon.container;
+    auto button = request.button;
+    auto gen = generation;
+    main_thread([gen, container, button]() {
+        if (gen != generation || !running)
+            return;
+        if (hypriso->send_pointer_to_x11_window(container, XEMBED_ICON_SIZE / 2, XEMBED_ICON_SIZE / 2, button))
+            later(150, [](Timer *) { hypriso->refocus_pointer(); });
+    });
 }
 
 // Returns false when the thread should exit (another tray took the selection).
@@ -1130,7 +1148,12 @@ static bool handle_x_event(xcb_generic_event_t *event) {
         }
         case XCB_CONFIGURE_NOTIFY: {
             auto configure = (xcb_configure_notify_event_t *) event;
-            if (auto icon = find_xicon(configure->window); icon && icon->window == configure->window) {
+            if (auto icon = find_xicon(configure->window); icon && icon->container == configure->window) {
+                if (configure->x != icon->x || configure->y != icon->y) {
+                    move_container(*icon, icon->x, icon->y);
+                    xcb_flush(xconn);
+                }
+            } else if (icon && icon->window == configure->window) {
                 if (configure->width != XEMBED_ICON_SIZE || configure->height != XEMBED_ICON_SIZE) {
                     uint32_t size[] = {XEMBED_ICON_SIZE, XEMBED_ICON_SIZE};
                     xcb_configure_window(xconn, icon->window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
@@ -1252,9 +1275,12 @@ static void xembed_thread_main() {
         while (!xembed_stop_requested) {
             long now = now_ms();
             long next_due = 0;
-            for (auto &icon : xicons)
+            for (auto &icon : xicons) {
                 if (icon.capture_due && (!next_due || icon.capture_due < next_due))
                     next_due = icon.capture_due;
+                if (icon.park_due && (!next_due || icon.park_due < next_due))
+                    next_due = icon.park_due;
+            }
             int timeout = next_due ? (int) std::clamp(next_due - now, 0l, 1000l) : 1000;
             pollfd fds[2] = {{xfd, POLLIN, 0}, {xembed_wake[0], POLLIN, 0}};
             poll(fds, 2, timeout);
@@ -1272,7 +1298,7 @@ static void xembed_thread_main() {
             }
             for (auto &request : requests)
                 if (auto icon = find_xicon(request.window))
-                    xembed_click(*icon, request.button);
+                    xembed_click(*icon, request);
 
             bool keep_going = true;
             while (auto event = xcb_poll_for_event(xconn)) {
@@ -1283,6 +1309,16 @@ static void xembed_thread_main() {
                 break;
 
             now = now_ms();
+            bool parked = false;
+            for (auto &icon : xicons) {
+                if (icon.park_due && icon.park_due <= now) {
+                    icon.park_due = 0;
+                    move_container(icon, XEMBED_OFFSCREEN, XEMBED_OFFSCREEN);
+                    parked = true;
+                }
+            }
+            if (parked)
+                xcb_flush(xconn);
             bool captured = false;
             for (auto &icon : xicons) {
                 if (icon.capture_due && icon.capture_due <= now) {
@@ -1358,10 +1394,13 @@ static void xembed_try_start() {
 }
 
 static void xembed_request(const std::string &key, int button) {
-    auto window = (xcb_window_t) std::strtoul(key.c_str() + 7, nullptr, 10);
+    XembedRequest request;
+    request.window = (xcb_window_t) std::strtoul(key.c_str() + 7, nullptr, 10);
+    request.button = button;
+    request.has_position = hypriso->cursor_in_xwayland_coords(&request.x, &request.y);
     {
         std::lock_guard<std::mutex> lock(xembed_mutex);
-        xembed_requests.push_back({window, button});
+        xembed_requests.push_back(request);
     }
     xembed_wake_up();
 }

@@ -628,6 +628,14 @@ struct HyprIso {
     void apply_workspace_settings();
     // True once Xwayland has finished starting (its window manager is connected).
     bool xwayland_ready();
+    // Cursor position in Xwayland's root coordinates.
+    bool cursor_in_xwayland_coords(int *x, int *y);
+    // Delivers a click (X button 1-3) or scroll (4-7) to a mapped X11 toplevel at a point local to it.
+    // Leaves the pointer focus on that window: call refocus_pointer() once Xwayland had time to
+    // process the input (it handles the leave right away but queues the buttons).
+    bool send_pointer_to_x11_window(uint32_t xid, int local_x, int local_y, int button);
+    // Gives the pointer focus back to whatever is under the cursor.
+    void refocus_pointer();
 };
 
 extern HyprIso *hypriso;

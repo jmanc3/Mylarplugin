@@ -1811,6 +1811,9 @@ void hook_RenderWindow(void* thisptr, Render::CRenderContext& ctx, PHLWINDOW pWi
 #endif
     if (capturing_workspace && !standalone && drag_workspace_switcher::omit_from_workspace_snapshot(get_wid(pWindow)))
         return;
+    // The system tray's XEmbed containers are moved on screen briefly to be clicked; never draw them.
+    if (mw_is_x11(pWindow) && mw_appid(pWindow) == "mylar-xembed-tray")
+        return;
     if (!hypriso->render_whitelist.empty() || hypriso->whitelist_on) {
         for (auto hw : hyprwindows) {
             if (hw->w == pWindow) {
@@ -2480,6 +2483,62 @@ static void sync_monitor_workspaces(PHLWORKSPACE active) {
 
 bool HyprIso::xwayland_ready() {
     return g_pXWayland && g_pXWayland->m_wm;
+}
+
+bool HyprIso::cursor_in_xwayland_coords(int *x, int *y) {
+    if (!g_pInputManager || !g_pXWaylandManager)
+        return false;
+    auto pos = g_pXWaylandManager->waylandToXWaylandCoords(g_pInputManager->getMouseCoordsInternal());
+    *x = (int) std::round(pos.x);
+    *y = (int) std::round(pos.y);
+    return true;
+}
+
+static PHLWINDOW x11_window_by_xid(uint32_t xid) {
+    for (const auto &w : Desktop::windowState()->windows()) {
+        if (!mw_is_x11(w) || !mw_is_mapped(w))
+            continue;
+        const auto X11BACKEND = dynamic_cast<Desktop::View::CX11Backend*>(&w->backend());
+        if (X11BACKEND && X11BACKEND->m_xwaylandSurface && X11BACKEND->m_xwaylandSurface->m_xID == xid)
+            return w;
+    }
+    return nullptr;
+}
+
+// Xwayland only trusts input that arrives over Wayland (synthetic X events and XTest are
+// dropped by toolkits or by Xwayland itself), so the system tray's XEmbed icons are clicked
+// by pointing the seat at their container's surface for a moment.
+bool HyprIso::send_pointer_to_x11_window(uint32_t xid, int local_x, int local_y, int button) {
+    auto w = x11_window_by_xid(xid);
+    if (!w)
+        return false;
+    auto surface = mw_window_surface(w);
+    if (!surface)
+        return false;
+    const Vector2D local = {(double) local_x, (double) local_y};
+    const auto     now   = (uint32_t) Time::millis(Time::steadyNow());
+    g_pSeatManager->setPointerFocus(surface, local);
+    g_pSeatManager->sendPointerMotion(now, local);
+    g_pSeatManager->sendPointerFrame();
+    if (button >= 4 && button <= 7) {
+        // X buttons 4/5 scroll vertically, 6/7 horizontally.
+        auto   axis  = button <= 5 ? WL_POINTER_AXIS_VERTICAL_SCROLL : WL_POINTER_AXIS_HORIZONTAL_SCROLL;
+        double sign  = (button == 4 || button == 6) ? -1.0 : 1.0;
+        g_pSeatManager->sendPointerAxis(now, axis, sign * 10.0, (int32_t) sign, (int32_t) sign * 120, WL_POINTER_AXIS_SOURCE_WHEEL,
+                                        WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+        g_pSeatManager->sendPointerFrame();
+    } else {
+        uint32_t code = button == 3 ? BTN_RIGHT : button == 2 ? BTN_MIDDLE : BTN_LEFT;
+        g_pSeatManager->sendPointerButton(now, code, WL_POINTER_BUTTON_STATE_PRESSED);
+        g_pSeatManager->sendPointerFrame();
+        g_pSeatManager->sendPointerButton(now + 1, code, WL_POINTER_BUTTON_STATE_RELEASED);
+        g_pSeatManager->sendPointerFrame();
+    }
+    return true;
+}
+
+void HyprIso::refocus_pointer() {
+    g_pInputManager->simulateMouseMovement();
 }
 
 void HyprIso::apply_workspace_settings() {
