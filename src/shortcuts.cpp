@@ -30,7 +30,7 @@ static std::vector<ShortcutDefault> build_defaults() {
         {"snap_down", "Restore window", "", "hl.plugin.mylar.snap_down", "", true},
 
         // Overview
-        {"overview_open_or_show_desktop", "Open overview", "", "hl.plugin.mylar.overview_open_or_show_desktop", "", true},
+        {"overview_open_or_show_desktop", "Open overview", "SUPER + O", "hl.plugin.mylar.overview_open_or_show_desktop", "", true},
         {"overview_close_or_hide_desktop", "Close overview, or hide windows", "", "hl.plugin.mylar.overview_close_or_hide_desktop", "", true},
 
         // Floating and focus
