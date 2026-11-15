@@ -362,7 +362,7 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
                 std::erase(running_dbus_services, std::string(name));
                 if (*new_owner) running_dbus_services.emplace_back(name);
             }
-            return DBUS_HANDLER_RESULT_HANDLED;
+            return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
         }
 
         if (strcmp(old_owner, "") == 0) {
@@ -382,7 +382,8 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
         }
         // TODO: do I have to free "name" and others???
         
-        return DBUS_HANDLER_RESULT_HANDLED;
+        // Other filters (e.g. the systray, which drops items whose owner left) need this signal too.
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     } else if (dbus_message_is_signal(message, "org.freedesktop.DBus",
                                       "NameAcquired")) {
         const char *name;
