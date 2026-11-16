@@ -22,9 +22,11 @@ struct STextEditorOptions {
     bool parent_activates = false;
     // Draws one bullet per character and refuses to copy or cut the text.
     bool password = false;
-    // Blink the caret. The owner repaints the window when it flips, see
-    // text_editor_ms_until_blink.
-    bool blink_caret = false;
+    // Blink the caret. The editor schedules the repaints itself while focused.
+    bool blink_caret = true;
+    // Single-line editable fields show an 'x' at the right end that clears the text
+    // while they hold text and are focused or hovered.
+    bool clear_button = true;
     // Maximum text length in bytes (never splitting a character); 0 means unlimited.
     int max_length = 0;
     int font_size = 13;
@@ -53,6 +55,10 @@ struct STextEditorData : UserData {
     int blink_cursor = -1;
     size_t blink_text_size = 0;
     bool blink_was_active = false;
+    bool blink_timer_pending = false;
+    // The clear button was pressed and the release has not happened yet.
+    bool clear_pressed = false;
+    bool clear_hovered = false;
     float scroll_x = 0;
     _PangoLayout *layout = nullptr;
     STextEditorOptions options;

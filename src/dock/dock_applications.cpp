@@ -3,6 +3,7 @@
 #include "dock/dock_internal.h"
 
 #include "desktop_icons.h"
+#include "icon_browser.h"
 #include "settings.h"
 #include "text_editor.h"
 
@@ -58,6 +59,9 @@ struct Script : UserData {
     // The "Run as command..." row, listed last while there is search text:
     // runs the text as typed, arguments included. full_path holds the text.
     bool is_run_command = false;
+
+    // One of our own programs, listed like an application. Names which one.
+    std::string builtin;
 
     // First seen by the rescan made while the menu was already open. Kept
     // below everything that was listed, so rows don't move under the user.
@@ -138,7 +142,6 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     STextEditorOptions options;
     options.multiline = false;
     options.only_numbers = only_numbers;
-    options.blink_caret = true;
     options.font_size = 11;
     options.window = [](Container *root) { return static_cast<Dock *>(root->user_data)->applications->raw_window; };
     options.viewport = [](Container *root, Container *c) {
@@ -419,6 +422,19 @@ static void desktop_entries_load(std::vector<Script> &entries) {
             entries.push_back(std::move(script));
         }
     }
+    // Our own programs, sorted in with the applications.
+    Script icon_browser;
+    icon_browser.is_desktop = true;
+    icon_browser.builtin = "icon_browser";
+    icon_browser.desktop_id = "mylar-icon-browser";
+    icon_browser.name = "Mylar Icon Browser";
+    icon_browser.lowercase_name = to_lower(icon_browser.name);
+    icon_browser.generic_name = "icon browser";
+    icon_browser.keywords = {"icons", "icon theme", "yad"};
+    icon_browser.full_path = "Browse the icons of every installed theme";
+    icon_browser.icon = "preferences-desktop-icons";
+    entries.push_back(std::move(icon_browser));
+
     std::stable_sort(entries.begin(), entries.end(), [](const Script &a, const Script &b) {
         return a.lowercase_name < b.lowercase_name;
     });
@@ -502,20 +518,6 @@ static std::string run_in_terminal(const std::string &command) {
            "command -v \"$t\" >/dev/null 2>&1 && exec \"$t\" -e sh -c " + shell_quote(command) + "; done";
 }
 
-// Repaints the menu every time the search field's caret shows or hides,
-// for as long as the menu is open.
-static void blink_applications_caret(Dock *dock, MylarWindow *applications, Container *field) {
-    std::weak_ptr<bool> lifetime = field->lifetime;
-    windowing::timer(dock->app, text_editor_ms_until_blink(field) + 1, [dock, applications, field, lifetime](void *) {
-        std::lock_guard<std::mutex> lock(dock->app->mutex);
-        if (lifetime.expired() || dock->applications != applications)
-            return;
-        blink_applications_caret(dock, applications, field);
-        if (field->active)
-            windowing::redraw(applications->raw_window);
-    }, nullptr);
-}
-
 // Records the pick, then launches the application or executable, or opens
 // the setting. The caller closes the menu.
 static void activate_script(const Script *s) {
@@ -524,7 +526,9 @@ static void activate_script(const Script *s) {
         return;
     }
     selection_history_record(selection_key(*s));
-    if (s->is_setting) {
+    if (s->builtin == "icon_browser") {
+        icon_browser::open();
+    } else if (s->is_setting) {
         auto result = s->setting;
         main_thread([result]() {
             settings::open_search_result(result);
@@ -829,6 +833,10 @@ void fill_applications_container(Container *root) {
                         for (const auto &candidate : {s->icon, to_lower(s->icon), stem, to_lower(stem)})
                             if (!candidate.empty())
                                 candidates.push_back(candidate);
+                        if (!s->builtin.empty()) {
+                            candidates.push_back("preferences-desktop-theme");
+                            candidates.push_back("applications-graphics");
+                        }
                         candidates.push_back("application-x-executable");
                         path = one_shot_icon(icon_size, candidates);
                     }
@@ -1230,7 +1238,6 @@ void fill_applications_container(Container *root) {
 
     // The menu opens with the caret in the search field, blinking.
     set_active(root, {field}, root, true, false);
-    blink_applications_caret(dock, dock->applications, field);
 
     auto bottom = padded->child(::hbox, FILL_SPACE, 32);
     bottom->alignment = ALIGN_RIGHT;

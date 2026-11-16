@@ -612,7 +612,7 @@ void search_icons(std::vector<IconTarget>& targets) {
                 std::string name;
                 IconContext context;
             };
-            std::vector<ICMap> ics = {
+            static const std::vector<ICMap> ics = {
                 {"/actions", IconContext::Actions},     {"/animations", IconContext::Animations}, {"/apps", IconContext::Apps},       {"/categories", IconContext::Categories},
                 {"/devices", IconContext::Devices},     {"/emblems", IconContext::Emblems},       {"/emotes", IconContext::Emotes},   {"/intl", IconContext::Intl},
                 {"/mimetypes", IconContext::Mimetypes}, {"/places", IconContext::Places},         {"/status", IconContext::Statuses}, {"/panel", IconContext::Panel}};

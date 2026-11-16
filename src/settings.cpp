@@ -320,7 +320,7 @@ static std::string trim_newline(std::string s) {
     return s;
 }
 
-std::string choose_file(bool folder = false, GtkWindow* parent = nullptr) {
+std::string choose_file(bool folder, GtkWindow* parent) {
     std::string filename;
 
     if (!gtk_init_check(nullptr, nullptr))

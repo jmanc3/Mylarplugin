@@ -3,6 +3,8 @@
 #include "client/raw_windowing.h"
 #include "dock/dock.h"
 #include "heart.h"
+#include "hypriso.h"
+#include "pango_font_cache.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,6 +26,48 @@ static bool editor_active(Container *c, const STextEditorData &data) {
 }
 
 static constexpr std::string_view password_bullet = "\u2022";
+
+// The same close glyph the titlebar uses.
+static constexpr std::string_view clear_glyph = "\uE8BB";
+
+static bool editor_hovered(Container *c, const STextEditorData &data) {
+    return c->state.mouse_hovering || (data.options.parent_activates && c->parent && c->parent->state.mouse_hovering);
+}
+
+static bool clear_button_visible(Container *c, const STextEditorData &data) {
+    if (!data.options.clear_button || !data.options.editable || data.options.multiline || data.text.empty())
+        return false;
+    return editor_active(c, data) || editor_hovered(c, data) || data.clear_pressed;
+}
+
+// A square at the right end of the owner's viewport, reaching a little into its padding.
+static Bounds clear_button_bounds(Container *root, Container *c, const STextEditorData &data) {
+    auto viewport = data.options.viewport(root, c);
+    double dpi = data.options.window(root)->dpi;
+    double size = std::round(20 * dpi);
+    double right = viewport.x + viewport.w + std::round(5 * dpi);
+    return Bounds(right - size, std::round(viewport.y + (viewport.h - size) * .5), size, size);
+}
+
+static bool over_clear_button(Container *root, Container *c, const STextEditorData &data) {
+    if (!clear_button_visible(c, data))
+        return false;
+    auto b = clear_button_bounds(root, c, data);
+    double x = root->mouse_current_x;
+    double y = root->mouse_current_y;
+    return x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
+}
+
+// Where the text goes: the owner's viewport, minus the clear button while it shows.
+static Bounds text_viewport(Container *root, Container *c, const STextEditorData &data) {
+    auto viewport = data.options.viewport(root, c);
+    if (clear_button_visible(c, data)) {
+        auto button = clear_button_bounds(root, c, data);
+        double dpi = data.options.window(root)->dpi;
+        viewport.w = std::max(0.0, std::min(viewport.w, button.x - viewport.x - 2 * dpi));
+    }
+    return viewport;
+}
 
 // Password layouts hold one bullet per character, so byte offsets differ between the
 // text and the layout. Every Pango index goes through these two conversions.
@@ -222,13 +266,13 @@ static void insert_text(STextEditorData &data, const std::string &input, bool co
 static void clamp_scroll(Container *root, Container *c, STextEditorData &data) {
     int width = 0;
     pango_layout_get_pixel_size(editor_layout(root, data), &width, nullptr);
-    auto viewport = data.options.viewport(root, c);
+    auto viewport = text_viewport(root, c, data);
     auto overflow = std::max(0.0, width + 1.0 - viewport.w);
     data.scroll_x = std::clamp<double>(data.scroll_x, 0, overflow);
 }
 
 static void keep_cursor_in_view(Container *root, Container *c, STextEditorData &data) {
-    auto viewport = data.options.viewport(root, c);
+    auto viewport = text_viewport(root, c, data);
     if (viewport.w <= 0)
         return;
     PangoRectangle cursor = {};
@@ -252,7 +296,7 @@ static void move_cursor(STextEditorData &data, int cursor, bool selecting) {
 static void update_mouse_cursor(Container *root, Container *c, bool selecting) {
     auto &data = *static_cast<STextEditorData *>(c->user_data);
     auto layout = editor_layout(root, data);
-    auto viewport = data.options.viewport(root, c);
+    auto viewport = text_viewport(root, c, data);
     int height = 0;
     pango_layout_get_pixel_size(layout, nullptr, &height);
     double x = root->mouse_current_x - viewport.x + data.scroll_x;
@@ -407,6 +451,23 @@ static void editor_key(Container *root, Container *c, xkb_keysym_t sym, int mods
     move_cursor(data, cursor, shift);
 }
 
+// The clear button: one undoable edit that empties the field.
+static void clear_text_editor(Container *root, Container *c) {
+    auto &data = *static_cast<STextEditorData *>(c->user_data);
+    if (data.text.empty())
+        return;
+    record_edit(data);
+    data.text.clear();
+    data.cursor = 0;
+    data.selection = 0;
+    data.selecting = false;
+    data.scroll_x = 0;
+    data.clear_hovered = false;
+    windowing::redraw(data.options.window(root));
+    if (data.options.on_change)
+        data.options.on_change(data.text);
+}
+
 void setup_text_editor(Container *c, std::string initial_value, STextEditorOptions options) {
     auto data = new STextEditorData;
     data->options = std::move(options);
@@ -426,16 +487,49 @@ void setup_text_editor(Container *c, std::string initial_value, STextEditorOptio
             data.options.on_change(data.text);
     };
     c->when_mouse_down = [](Container *root, Container *c) {
+        auto &data = *static_cast<STextEditorData *>(c->user_data);
+        data.clear_pressed = over_clear_button(root, c, data);
+        if (data.clear_pressed)
+            return;
         update_mouse_cursor(root, c, false);
     };
     auto drag = [](Container *root, Container *c) {
+        auto &data = *static_cast<STextEditorData *>(c->user_data);
+        if (data.clear_pressed)
+            return;
         update_mouse_cursor(root, c, true);
     };
     c->when_drag_start = drag;
     c->when_drag = drag;
-    c->when_drag_end = drag;
+    c->when_drag_end = [](Container *root, Container *c) {
+        auto &data = *static_cast<STextEditorData *>(c->user_data);
+        if (data.clear_pressed) {
+            data.clear_pressed = false;
+            return;
+        }
+        update_mouse_cursor(root, c, true);
+    };
+    c->when_mouse_motion = [](Container *root, Container *c) {
+        auto &data = *static_cast<STextEditorData *>(c->user_data);
+        bool hovered = over_clear_button(root, c, data);
+        if (hovered != data.clear_hovered) {
+            data.clear_hovered = hovered;
+            windowing::redraw(data.options.window(root));
+        }
+    };
+    c->when_mouse_leaves_container = [](Container *root, Container *c) {
+        auto &data = *static_cast<STextEditorData *>(c->user_data);
+        data.clear_hovered = false;
+        windowing::redraw(data.options.window(root));
+    };
     c->when_clicked = [](Container *root, Container *c) {
         auto &data = *static_cast<STextEditorData *>(c->user_data);
+        if (data.clear_pressed) {
+            data.clear_pressed = false;
+            if (over_clear_button(root, c, data))
+                clear_text_editor(root, c);
+            return;
+        }
         long current = get_current_time_in_ms();
         if (current - data.last_time < 400 && current - data.last_activation > 800) {
             data.last_activation = current;
@@ -472,7 +566,7 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
     auto window = data.options.window(root);
     auto cr = window->drawing_context;
     auto layout = editor_layout(root, data);
-    auto viewport = data.options.viewport(root, c);
+    auto viewport = text_viewport(root, c, data);
     int height = 0;
     pango_layout_get_pixel_size(layout, nullptr, &height);
     double x = viewport.x - data.scroll_x;
@@ -529,6 +623,41 @@ void paint_text_editor(Container *root, Container *c, const RGBA &color, const R
         cr->fill();
     }
     cr->restore();
+
+    if (clear_button_visible(c, data)) {
+        auto b = clear_button_bounds(root, c, data);
+        bool hovered = over_clear_button(root, c, data);
+        if (hovered || data.clear_pressed) {
+            set_argb(cr, RGBA(color.r, color.g, color.b, color.a * (data.clear_pressed ? .2 : .1)));
+            cr->new_path();
+            cr->arc(b.x + b.w * .5, b.y + b.h * .5, b.w * .5, 0, 2 * M_PI);
+            cr->fill();
+        }
+        auto glyph = get_cached_pango_font(cr, icon_font, std::round(8 * window->dpi), PANGO_WEIGHT_NORMAL, false);
+        pango_layout_set_text(glyph, clear_glyph.data(), clear_glyph.size());
+        pango_layout_set_width(glyph, -1);
+        PangoRectangle ink = {};
+        pango_layout_get_pixel_extents(glyph, &ink, nullptr);
+        set_argb(cr, RGBA(color.r, color.g, color.b, color.a * (hovered ? .9 : .55)));
+        cr->move_to(std::round(b.x + (b.w - ink.width) * .5 - ink.x), std::round(b.y + (b.h - ink.height) * .5 - ink.y));
+        cr->show_layout(glyph);
+    }
+
+    // Repaint when the caret next flips, for as long as the field stays focused.
+    if (data.options.blink_caret && data.options.editable && active && !data.blink_timer_pending) {
+        data.blink_timer_pending = true;
+        auto app = window->creator;
+        std::weak_ptr<bool> lifetime = c->lifetime;
+        windowing::timer(app, text_editor_ms_until_blink(c) + 1, [app, window, c, lifetime](void *) {
+            std::lock_guard<std::mutex> lock(app->mutex);
+            if (lifetime.expired())
+                return;
+            auto &data = *static_cast<STextEditorData *>(c->user_data);
+            data.blink_timer_pending = false;
+            if (windowing::has_window(window) && editor_active(c, data))
+                windowing::redraw(window);
+        }, nullptr);
+    }
 }
 
 long text_editor_ms_until_blink(Container *c) {
