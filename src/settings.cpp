@@ -9977,30 +9977,25 @@ static void fill_category_page(Container *root, const SettingsCategory &category
 }
 
 /*
- * Page transitions below the title. The page being left is kept (in `outgoing`,
- * already laid out) and painted into its own layer, while the new page is painted
- * into a second layer.
- * - Moving between a category overview and one of its pages slides: the old page
- *   slides and fades away while the new one slides and fades in from the other side.
- * - Switching to another category crossfades in place.
+ * Page slide: moving between a category overview and one of its pages slides the
+ * area below the title. The page being left is kept (in `outgoing`, already laid out)
+ * and painted into a layer that slides and fades away, while the new page is painted
+ * into a layer that slides and fades in from the other side.
  */
 struct PageSlide {
     Container *outgoing = nullptr; // Holder of the old page's containers, or null
-    bool active = false;           // A transition is running
-    int dir = 0;                   // 1 into a page, -1 back to the overview, 0 crossfade
+    int dir = 0;                   // 1 into a page, -1 back to the overview, 0 idle
     long start = 0;                // Set on the first frame, so slow page builds don't eat the animation
-    float eased = 1;               // This frame's opacity for the new page
+    float eased = 1;               // This frame's progress
     bool layer_open = false;       // The incoming page's layer was pushed this frame
 };
 static PageSlide page_slide;
 static constexpr float page_slide_ms = 260;
-static constexpr float page_fade_ms = 220;
 static constexpr float page_slide_distance = 56;
 
 static void page_slide_finish() {
     delete page_slide.outgoing;
     page_slide.outgoing = nullptr;
-    page_slide.active = false;
     page_slide.dir = 0;
     page_slide.start = 0;
 }
@@ -10013,20 +10008,20 @@ static int settings_view_depth(const std::string &view) {
     return view == category->name && category->pages.size() > 1 ? 0 : 1;
 }
 
-// Called before the new page is built: keeps the current one around to animate away.
+// Called before the new page is built: keeps the current one around to slide away.
 static void page_slide_begin(Container *root, const std::string &from, const std::string &to) {
     auto from_category = settings_category_of(from);
-    auto to_category = settings_category_of(to);
     int from_depth = settings_view_depth(from);
     int to_depth = settings_view_depth(to);
     int dir = 0;
-    if (from_category && from_category == to_category && from_depth >= 0 && to_depth >= 0)
+    if (from_category && from_category == settings_category_of(to) && from_depth >= 0 && to_depth >= 0)
         dir = to_depth - from_depth;
-    bool fade = from_category && to_category && from_category != to_category;
     auto right = container_by_name("settings_right", root);
-    page_slide_finish();
-    if ((dir == 0 && !fade) || !right || !trim(search_query).empty())
+    if (dir == 0 || !right || !trim(search_query).empty()) {
+        page_slide_finish();
         return;
+    }
+    page_slide_finish();
     auto holder = new Container;
     holder->name = "settings_outgoing";
     holder->real_bounds = right->real_bounds;
@@ -10035,59 +10030,45 @@ static void page_slide_begin(Container *root, const std::string &from, const std
     for (auto child : holder->children)
         child->parent = holder;
     page_slide.outgoing = holder;
-    page_slide.active = true;
     page_slide.dir = dir;
 }
 
-// settings_right's when_paint: paints the old page leaving, then opens the layer
+// settings_right's when_paint: paints the old page sliding out, then opens the layer
 // the new page (its children) paints into.
 static void page_slide_paint_before(Container *root, Container *c) {
-    if (!page_slide.active)
+    if (page_slide.dir == 0)
         return;
     auto window = swifi_window(root);
     auto cr = window->drawing_context;
     long now = get_current_time_in_ms();
     if (page_slide.start == 0)
         page_slide.start = now;
-    const bool sliding = page_slide.dir != 0;
-    float t = std::clamp((float) (now - page_slide.start) / (sliding ? page_slide_ms : page_fade_ms), 0.0f, 1.0f);
+    float t = std::clamp((float) (now - page_slide.start) / page_slide_ms, 0.0f, 1.0f);
     if (t >= 1) {
         page_slide_finish();
         return;
     }
+    float e = 1 - (1 - t) * (1 - t) * (1 - t); // ease out
+    page_slide.eased = e;
     double distance = page_slide_distance * window->dpi * page_slide.dir;
-    float slide_e = 1 - (1 - t) * (1 - t) * (1 - t); // ease out
-    float out_alpha;
-    if (sliding) {
-        page_slide.eased = slide_e;
-        // Gone a bit before the new page arrives, so the two don't muddle.
-        out_alpha = std::max(0.0f, 1 - slide_e * 1.4f);
-    } else {
-        // The old page is gone by 45%, the new one fades in from 30%.
-        float out = std::clamp(t / 0.45f, 0.0f, 1.0f);
-        float in = std::clamp((t - 0.3f) / 0.7f, 0.0f, 1.0f);
-        out_alpha = (1 - out) * (1 - out);
-        page_slide.eased = 1 - (1 - in) * (1 - in) * (1 - in);
-    }
 
     cr->save();
     cr->new_path();
     cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
     cr->clip_path();
-    if (page_slide.outgoing && out_alpha > 0) {
+    if (page_slide.outgoing) {
         cr->push_group();
         cr->save();
-        if (sliding)
-            cr->translate(-distance * slide_e, 0);
+        cr->translate(-distance * e, 0);
         paint_outline(root, page_slide.outgoing);
         cr->restore();
         cr->pop_group_to_source();
-        cr->paint_source(out_alpha);
+        // Gone a bit before the new page arrives, so the two don't muddle.
+        cr->paint_source(std::max(0.0f, 1 - e * 1.4f));
     }
     cr->push_group();
     cr->save();
-    if (sliding)
-        cr->translate(distance * (1 - slide_e), 0);
+    cr->translate(distance * (1 - e), 0);
     page_slide.layer_open = true;
     windowing::redraw(window);
 }
