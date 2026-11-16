@@ -6,27 +6,6 @@
 
 // D-Bus state belongs to the compositor main thread. The dock threads only see
 // value snapshots captured by their controls and post actions back to that thread.
-struct BluetoothMenuView {
-    unsigned long revision = 0;
-    std::vector<Adapter> adapters;
-    std::vector<Device> devices;
-    bool running = true;
-    bool agent_ready = true;
-    bool busy = false;
-    bool scanning = false;
-    bool scan_pending = false;
-    bool scan_stopping = false;
-    bool showing_paired = true;
-    std::map<std::string, std::string> actions;
-    bool error = false;
-    std::string message;
-    std::string pairing_path;
-    std::string request_type;
-    std::string request_device;
-    std::string pin;
-    unsigned long request_id = 0;
-};
-
 // The compositor publishes values only; the Wayland dock thread owns all UI work.
 static std::atomic<std::shared_ptr<const BluetoothMenuView>> bluetooth_latest_view;
 static unsigned long bluetooth_view_revision = 0;
@@ -74,6 +53,14 @@ static Adapter *bluetooth_adapter(const std::string &path) {
 
 static std::string bluetooth_name(const BluetoothInterface &device) {
     return !device.alias.empty() ? device.alias : !device.name.empty() ? device.name : device.mac_address;
+}
+
+std::string bluetooth_display_name(const BluetoothInterface &device) {
+    return bluetooth_name(device);
+}
+
+std::shared_ptr<const BluetoothMenuView> bluetooth_latest() {
+    return bluetooth_latest_view.load();
 }
 
 static void bluetooth_reply(BluetoothRequest *request, const char *error = nullptr, const std::string &input = "") {
@@ -183,7 +170,7 @@ static void bluetooth_stop_scanning() {
         }
 }
 
-static void bluetooth_command(const std::string &path, const std::string &command) {
+void bluetooth_command(const std::string &path, const std::string &command) {
     main_thread([path, command]() {
         if (!bluetooth_menu_count || !bluetooth_running) return;
         if (command == "Scan") {
@@ -233,7 +220,7 @@ static void bluetooth_command(const std::string &path, const std::string &comman
     });
 }
 
-static void bluetooth_submit(unsigned long id, bool accept, std::string input) {
+void bluetooth_submit(unsigned long id, bool accept, std::string input) {
     main_thread([id, accept, input]() {
         if (!bluetooth_request || id != bluetooth_request_id) return;
         auto type = bluetooth_request->type;
@@ -428,7 +415,7 @@ static Container *bluetooth_button(Container *parent, std::string text, bool ena
     return row;
 }
 
-static std::string bluetooth_action_label(const std::string &action) {
+std::string bluetooth_action_label(const std::string &action) {
     if (action == "Connect") return "Connecting…";
     if (action == "Disconnect") return "Disconnecting…";
     if (action == "Unpair") return "Forgetting…";
@@ -862,15 +849,7 @@ void fill_bluetooth_container(Dock *dock) {
             delete window->root;
             delete window;
         }
-        main_thread([]() {
-            if (bluetooth_menu_count > 0) --bluetooth_menu_count;
-            if (bluetooth_menu_count) return;
-            bluetooth_clear_request(true);
-            for (const auto &[path, command] : bluetooth_actions)
-                if (command == "Pair")
-                    if (auto device = bluetooth_device(path)) device->cancel_pair(nullptr);
-            bluetooth_stop_scanning();
-        });
+        bluetooth_menu_closed();
     };
     if (previous) {
         bluetooth_rebuild(dock, *previous);
@@ -878,6 +857,10 @@ void fill_bluetooth_container(Dock *dock) {
         BluetoothMenuView empty;
         bluetooth_rebuild(dock, empty);
     }
+    bluetooth_menu_opened();
+}
+
+void bluetooth_menu_opened() {
     main_thread([]() {
         if (finished) return;
         if (!bluetooth_menu_count) bluetooth_showing_paired = true;
@@ -896,6 +879,19 @@ void fill_bluetooth_container(Dock *dock) {
             }
             update_devices();
         }
+        bluetooth_refresh();
+    });
+}
+
+void bluetooth_menu_closed() {
+    main_thread([]() {
+        if (bluetooth_menu_count > 0) --bluetooth_menu_count;
+        if (bluetooth_menu_count) return;
+        bluetooth_clear_request(true);
+        for (const auto &[path, command] : bluetooth_actions)
+            if (command == "Pair")
+                if (auto device = bluetooth_device(path)) device->cancel_pair(nullptr);
+        bluetooth_stop_scanning();
         bluetooth_refresh();
     });
 }

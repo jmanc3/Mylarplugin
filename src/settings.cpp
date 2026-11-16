@@ -13,6 +13,7 @@
 #include "client/windowing.h"
 #include "dock/dock.h"
 #include "dock/dock_wifi.h"
+#include "dock/dock_bluetooth.h"
 #include "dock/dock_brightness.h"
 #include "audio.h"
 #include "events.h"
@@ -311,6 +312,89 @@ static void search_tag(Container *row, const std::string &title, const std::stri
     }
     search_learned.push_back({search_current_page, search_current_section, title, description, "", nullptr});
 }
+
+/*************************************************
+ *
+ * Categories
+ *
+ * The left column lists categories (like Windows 11). A category with
+ * several pages opens an overview linking to them; one with a single page
+ * opens that page directly. Page ids are what settings::start and search
+ * entries use, so they stay stable even where the shown title differs.
+ *
+ *************************************************/
+
+struct SettingsPageInfo {
+    std::string id;
+    std::string title;
+    std::string description;
+    std::string glyph; // Icon on the category overview
+};
+
+struct SettingsCategory {
+    std::string name;
+    std::string icon;     // res/icons/<icon>.svg, installed to /usr/share/mylardesktop/icons
+    std::string fallback; // Icon theme name used when the bundled icon is missing
+    std::vector<SettingsPageInfo> pages;
+};
+
+static const std::vector<SettingsCategory> &settings_categories() {
+    static const std::vector<SettingsCategory> categories = {
+        {"System", "settings-system", "preferences-desktop-display", {
+            {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper", "\uE7F4"},
+            {"Multitasking", "Multitasking", "Workspaces, snap windows, app switching, hot corners", "\uE7C4"},
+        }},
+        {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
+            {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
+        }},
+        {"Devices", "settings-devices", "preferences-desktop-peripherals", {
+            {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
+            {"Keyboard", "Keyboard", "Layouts, repeat delay and rate", "\uE765"},
+            {"Shortcuts", "Keyboard shortcuts", "System and custom key combinations", "\uEDA7"},
+        }},
+        {"Network & internet", "settings-network", "network-wireless", {
+            {"Wifi", "Wi-Fi", "Connect to wireless networks", "\uE701"},
+        }},
+        {"Sound", "settings-sound", "preferences-desktop-sound", {
+            {"Audio", "Sound", "Volume, output and input devices, app volume", "\uE767"},
+        }},
+        {"Personalization", "settings-personalization", "preferences-desktop-wallpaper", {
+            {"Desktop", "Desktop & dock", "Theme, font, desktop icons, overview, dock", "\uE771"},
+        }},
+        {"Time & language", "settings-time", "preferences-system-time", {
+            {"Time & Date", "Date & time", "Time zone, clock format, automatic time", "\uEC92"},
+        }},
+    };
+    return categories;
+}
+
+// The category holding `id`, which is either a page id or a category name.
+static const SettingsCategory *settings_category_of(const std::string &id) {
+    for (const auto &category : settings_categories()) {
+        if (category.name == id)
+            return &category;
+        for (const auto &page : category.pages)
+            if (page.id == id)
+                return &category;
+    }
+    return nullptr;
+}
+
+static const SettingsPageInfo *settings_page_info(const std::string &id) {
+    for (const auto &category : settings_categories())
+        for (const auto &page : category.pages)
+            if (page.id == id)
+                return &page;
+    return nullptr;
+}
+
+static std::string settings_page_title(const std::string &id) {
+    auto page = settings_page_info(id);
+    return page ? page->title : id;
+}
+
+// Opens a page or a category; false when `id` is neither.
+static bool settings_show(Container *root, const std::string &id);
 
 static std::string trim_newline(std::string s) {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(),
@@ -1054,8 +1138,44 @@ static void swifi_glyph(drawing::Context *cr, double x, double y, const char *gl
 // Creates a container that sizes itself based on children size
 // It takes full width of parent
 // It lays out right child first and then left with remainder of space
+// Marks rows made by make_self_height_sized_parent, so neighbouring rows can find each other.
+static const int settings_option_row_type = 0x5e770;
+
+// Rows placed directly after one another (no make_vert_space between) join into one
+// block: they share their border line and only the block's outer corners are rounded.
+// Accordion rows are option rows too, they only carry a different type for search.
+static bool is_option_row(Container *c) {
+    return c->custom_type == settings_option_row_type || c->custom_type == search_accordion_type;
+}
+
+static void option_row_neighbours(Container *c, bool *is_first, bool *is_last) {
+    *is_first = true;
+    *is_last = true;
+    auto parent = c->parent;
+    if (!parent)
+        return;
+    auto &siblings = parent->children;
+    auto it = std::find(siblings.begin(), siblings.end(), c);
+    if (it == siblings.end())
+        return;
+    for (auto prev = it; prev != siblings.begin();) {
+        --prev;
+        if (!(*prev)->exists)
+            continue;
+        *is_first = !is_option_row(*prev);
+        break;
+    }
+    for (auto next = it + 1; next != siblings.end(); ++next) {
+        if (!(*next)->exists)
+            continue;
+        *is_last = !is_option_row(*next);
+        break;
+    }
+}
+
 static Container *make_self_height_sized_parent(Container *parent) {
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
+    c->custom_type = settings_option_row_type;
     c->receive_events_even_if_obstructed = true;
     // The page container is only viewport tall and moves with the scroll, so rows
     // scrolled into view lie outside it and would otherwise never be hit (no hover,
@@ -1106,20 +1226,25 @@ static Container *make_self_height_sized_parent(Container *parent) {
         auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
 
-        RGBA bg_color;
-        if (c->state.mouse_hovering || c->state.mouse_pressing) {
-            bg_color = theme.row_hover;
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
-            set_argb(cr, bg_color);
-            cr->fill();
-        } else {
-            bg_color = theme.row_background;
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
-            set_argb(cr, bg_color);
-            cr->fill();
+        bool is_first, is_last;
+        option_row_neighbours(c, &is_first, &is_last);
+        // Joined rows overlap by their border so the shared line is drawn once.
+        if (!is_first || !is_last) {
+            const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
+            if (!is_first) {
+                b.y -= overlap;
+                b.h += overlap;
+            }
+            if (!is_last)
+                b.h += overlap;
         }
 
-        drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0);
+        RGBA bg_color = (c->state.mouse_hovering || c->state.mouse_pressing) ? theme.row_hover : theme.row_background;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 0, is_first, is_first, is_last, is_last);
+        set_argb(cr, bg_color);
+        cr->fill();
+
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, border_rounding * dpi, 1.0, is_first, is_first, is_last, is_last);
         set_argb(cr, theme.row_border);
         cr->stroke();
     };
@@ -2763,7 +2888,6 @@ static void change_display_options(MonitorOption *m) {
         commit();
     });
 
-    make_vert_space(padded_right, 4);
 
     make_reset_textfield(padded_right, "Scale", "Scale factor, or \"auto\"", "\uE740", false, m->config.scale, "auto", [m, commit](std::string value) {
         value           = trim(value);
@@ -2780,7 +2904,6 @@ static void change_display_options(MonitorOption *m) {
         commit();
     }, nullptr, "Decimal number from 0.3 to 6, or \"auto\"\nA multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
 
-    make_vert_space(padded_right, 4);
 
     const std::vector<std::string> transforms = {"Normal (0°)", "Rotate 90°", "Rotate 180°", "Rotate 270°", "Flipped", "Flipped + 90°", "Flipped + 180°", "Flipped + 270°"};
     const int transform_index = std::clamp(m->config.transform, 0, 7);
@@ -2793,7 +2916,6 @@ static void change_display_options(MonitorOption *m) {
                              commit();
                          });
 
-    make_vert_space(padded_right, 4);
 
     const bool hdr_on = m->config.cm == "hdr" || m->config.cm == "hdredid";
     make_bool(padded_right, "HDR", "High dynamic range, for displays that support it", hdr_on, [m, commit](bool value) {
@@ -2804,14 +2926,12 @@ static void change_display_options(MonitorOption *m) {
         commit();
     }, "\uE793");
 
-    make_vert_space(padded_right, 4);
 
     // Everything below is rarely touched, keep it folded away until asked for.
     static bool advanced_open = false;
     auto        advanced      = make_accordion(padded_right, "Advanced", "Position, mirroring, bit depth, color management, VRR and more", "\uE9E9", &advanced_open);
     const size_t first_advanced = padded_right->children.size();
 
-    make_vert_space(padded_right, 4);
 
     make_reset_textfield(padded_right, "Position", "Position such as \"1920x0\" or \"auto\"", "\uE7C2", false, m->config.position, "auto", [m, commit](std::string value) {
         value              = trim(value);
@@ -2819,21 +2939,18 @@ static void change_display_options(MonitorOption *m) {
         commit();
     }, nullptr, "Two whole numbers as XxY, or \"auto\"\nPixels from the left and from the top, such as 1920x0");
 
-    make_vert_space(padded_right, 4);
 
     make_reset_textfield(padded_right, "Mirror", "Monitor output to mirror, leave empty for none", "\uEBC6", false, m->config.mirror, "", [m, commit](std::string value) {
         m->config.mirror = trim(value);
         commit();
     });
 
-    make_vert_space(padded_right, 4);
 
     make_dropdown_option(padded_right, "Bit depth", "Color bit depth", "\uE81E", std::to_string(m->config.bitdepth), {"8", "10"}, [m, commit](std::string selected) {
         m->config.bitdepth = selected == "10" ? 10 : 8;
         commit();
     });
 
-    make_vert_space(padded_right, 4);
 
     const std::vector<std::string> cm_options = {"auto", "srgb", "wide", "edid", "hdr", "hdredid", "dcip3", "dp3", "adobe"};
     make_dropdown_option(padded_right, "Color management", "Color management preset", "\uE790", m->config.cm, cm_options, [m, commit](std::string selected) {
@@ -2841,7 +2958,6 @@ static void change_display_options(MonitorOption *m) {
         commit();
     });
 
-    make_vert_space(padded_right, 4);
 
     const std::vector<std::string> eotf_options = {"default", "auto", "srgb", "gamma22", "gamma22force"};
     make_dropdown_option(padded_right, "SDR EOTF", "Transfer function used for SDR content", "\uE9D2", m->config.sdr_eotf, eotf_options, [m, commit](std::string selected) {
@@ -2849,7 +2965,6 @@ static void change_display_options(MonitorOption *m) {
         commit();
     });
 
-    make_vert_space(padded_right, 4);
 
     const std::vector<std::string> vrr_options = {"-1", "0", "1", "2", "3"};
     make_dropdown_option(padded_right, "VRR", "Variable refresh rate mode (-1 default, 0 off, 1 on, 2 fullscreen, 3 fullscreen only)", "\uEC4A", std::to_string(m->config.vrr),
@@ -2861,21 +2976,18 @@ static void change_display_options(MonitorOption *m) {
                              commit();
                          });
 
-    make_vert_space(padded_right, 4);
 
     make_reset_textfield(padded_right, "ICC profile", "Path to an ICC profile, leave empty for none", "\uE8A5", false, m->config.icc, "", [m, commit](std::string value) {
         m->config.icc = trim(value);
         commit();
     });
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_int_field(padded_right, "Reserved area", "Reserved area in pixels", "\uE9A6", m->config.reserved_area, 0, 0, INT_MAX, [m, commit](int value) {
         m->config.reserved_area = value;
         commit();
     }, "In pixels");
 
-    make_vert_space(padded_right, 4);
 
     const std::vector<std::string> support_options = {"Auto", "Force enable", "Force disable"};
     make_dropdown_option(padded_right, "Supports wide color", "Override wide color gamut support detection", "\uE2B1",
@@ -2885,7 +2997,6 @@ static void change_display_options(MonitorOption *m) {
                              commit();
                          });
 
-    make_vert_space(padded_right, 4);
 
     make_dropdown_option(padded_right, "Supports HDR", "Override HDR support detection", "\uE793",
                          m->config.supports_hdr == 1 ? "Force enable" : (m->config.supports_hdr == -1 ? "Force disable" : "Auto"), support_options,
@@ -2894,49 +3005,42 @@ static void change_display_options(MonitorOption *m) {
                              commit();
                          });
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "SDR brightness", "SDR brightness multiplier (0–10)", "\uE706", m->config.sdrbrightness, 1.0f, 0.0f, 10.0f, [m, commit](float value) {
         m->config.sdrbrightness = value;
         commit();
     }, "A multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "SDR saturation", "SDR saturation multiplier (0–10)", "\uEB42", m->config.sdrsaturation, 1.0f, 0.0f, 10.0f, [m, commit](float value) {
         m->config.sdrsaturation = value;
         commit();
     }, "A multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "SDR min luminance", "Minimum SDR luminance", "\uF08C", m->config.sdr_min_luminance, 0.2f, 0.0f, 10000.0f, [m, commit](float value) {
         m->config.sdr_min_luminance = value;
         commit();
     }, "In nits");
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_int_field(padded_right, "SDR max luminance", "Maximum SDR luminance", "\uE9A9", m->config.sdr_max_luminance, 80, INT_MIN, INT_MAX, [m, commit](int value) {
         m->config.sdr_max_luminance = value;
         commit();
     }, "In nits");
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_float_field(padded_right, "Min luminance", "Minimum luminance override (-1 uses automatic)", "\uEA80", m->config.min_luminance, -1.0f, -1.0f, 10000.0f, [m, commit](float value) {
         m->config.min_luminance = value;
         commit();
     }, "In nits, -1 for automatic");
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_int_field(padded_right, "Max luminance", "Maximum luminance override", "\uEA80", m->config.max_luminance, -1, INT_MIN, INT_MAX, [m, commit](int value) {
         m->config.max_luminance = value;
         commit();
     }, "In nits, -1 for automatic");
 
-    make_vert_space(padded_right, 4);
 
     add_monitor_int_field(padded_right, "Max average luminance", "Maximum average luminance override", "\uEA80", m->config.max_avg_luminance, -1, INT_MIN, INT_MAX,
                           [m, commit](int value) {
@@ -2944,7 +3048,6 @@ static void change_display_options(MonitorOption *m) {
                               commit();
                           }, "In nits, -1 for automatic");
 
-    make_vert_space(padded_right, 4);
 
     make_bool(padded_right, "Disabled", "Turn this monitor off without disconnecting it", m->config.disabled, [m, commit](bool value) {
         m->config.disabled = value;
@@ -3904,7 +4007,6 @@ static void make_wallpaper_row(Container *padded_right) {
     padded_right->children.back()->name = "display_wallpaper_row";
 
     if (many) {
-        make_vert_space(padded_right, 4);
         std::vector<std::string> options = {"All monitors"};
         for (auto &m : monitors)
             options.push_back(m.name);
@@ -3916,7 +4018,6 @@ static void make_wallpaper_row(Container *padded_right) {
         }, []() { return wall_target.empty() ? std::string("All monitors") : wall_target; });
     }
 
-    make_vert_space(padded_right, 4);
     make_dropdown_option(padded_right, "Scaling", "How the image fits the screen", "\uE740", wall_target_params(wall_target).mode,
                          wallpaper_scaling_modes, [](std::string selected) {
         auto p = wall_target_params(wall_target);
@@ -3943,7 +4044,6 @@ static void make_wallpaper_row(Container *padded_right) {
     }, []() { return wall_target_params(wall_target).mode; });
 
     if (many && wall_target.empty()) {
-        make_vert_space(padded_right, 4);
         make_bool(padded_right, "Span across monitors", "Stretch one image over every monitor using the shared wallpaper", set->wallpaper_span, [](bool on) {
             set->wallpaper_span = on;
             wall_commit();
@@ -3952,7 +4052,6 @@ static void make_wallpaper_row(Container *padded_right) {
     }
 
     if (wall_target_is_separate(wall_target)) {
-        make_vert_space(padded_right, 4);
         make_button_option(padded_right, "Own wallpaper", wall_target + " doesn't follow the shared wallpaper", "Use shared", []() {
             wall_use_shared(wall_target);
             wall_commit();
@@ -3963,8 +4062,8 @@ static void make_wallpaper_row(Container *padded_right) {
 
     make_vert_space(padded_right, 8);
     make_wall_preview(padded_right);
+    make_vert_space(padded_right, 8);
 
-    make_vert_space(padded_right, 4);
     make_button_option(padded_right, "Crop", "Drag the preview to move the image, Ctrl+scroll to zoom", "Reset", []() {
         if (wall_set_target_params(wall_target, WallParams()))
             display_trial.page_stale = true;
@@ -3972,7 +4071,6 @@ static void make_wallpaper_row(Container *padded_right) {
         settings_redraw_from_ui();
     }, "\uE7A8");
 
-    make_vert_space(padded_right, 4);
 
     // Same mechanism as the dock's brightness popup (brightnessctl). The dock
     // keeps brightness_level current, so reading it here doesn't block.
@@ -4126,7 +4224,6 @@ static void fill_desktop_settings(Container *root, Container *c) {
         }).detach();
     }, "\uE71D", []() { return !icon_cache_rescan_in_progress; });
 
-    make_vert_space(padded_right, 4);
     make_bool_with_button(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
         set->desktop_icons = c;
         main_thread([]() {
@@ -4162,12 +4259,10 @@ static void fill_desktop_settings(Container *root, Container *c) {
         t.detach();
     }, "\uec6c");
     
-    make_vert_space(padded_right, 4);
     make_dropdown_option(padded_right, "Overview", "Change layout type", "\uE8A9", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
         set->overview_layout_type = new_type;
     });
     
-    make_vert_space(padded_right, 4);
     make_dropdown_option(padded_right, "Theme", "Choose the settings appearance", "\uE790", set->dark_theme ? "Dark" : "Light", {"Light", "Dark"}, [](std::string selected) {
         set->dark_theme = selected == "Dark";
         theme = set->dark_theme ? dark_theme : light_theme;
@@ -4176,7 +4271,6 @@ static void fill_desktop_settings(Container *root, Container *c) {
             windowing::redraw(settings_mylar->raw_window);
     });
     
-    make_vert_space(padded_right, 4); 
     auto font_field = make_reset_textfield(padded_right, "Font", "User interface font", "\uE8D2", false, set->font, ConfigSettings().font, [](std::string value) {
         set->font = value;
     }, []() { return resolved_font_family(set->font); });
@@ -4200,7 +4294,6 @@ static void fill_desktop_settings(Container *root, Container *c) {
         }
     }, "\ue75b");
 
-    make_vert_space(padded_right, 4);
 
     make_bool(padded_right, "Only show windows on the current workspace",
         "Turn off to show windows from all workspaces and monitors",
@@ -4212,7 +4305,6 @@ static void fill_desktop_settings(Container *root, Container *c) {
             });
         }, "\ue75b");
 
-    make_vert_space(padded_right, 4);
 
     make_bool(padded_right,
         "Combine taskbar buttons and hide labels",
@@ -4227,7 +4319,6 @@ static void fill_desktop_settings(Container *root, Container *c) {
         },
         "\ue75b");
 
-    make_vert_space(padded_right, 4);
 
     // Read by the applications menu each time it opens.
     make_bool(padded_right,
@@ -4381,7 +4472,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
         });
     }, "\uece7");
     
-    make_vert_space(padded_right, 4); 
 
     make_button_group(padded_right, 
         "Primary mouse button", 
@@ -4394,7 +4484,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
             });
         }, set->primary_mouse_button, "\ue962");
     
-    make_vert_space(padded_right, 4); 
     
     make_slider(padded_right, "Mouse speed", "How far the pointer moves when you move the mouse", set->mouse_speed, [](float value) {
         set->mouse_speed = value;
@@ -4404,8 +4493,8 @@ static void fill_mouse_settings(Container *root, Container *c) {
         });
     }, 0, "\uec49", ConfigSettings().mouse_speed);
 
-    make_vert_space(padded_right, 10); 
-    
+    make_vert_space(padded_right, 24);
+
     make_section_title(padded_right, "Touchpad");
 
     make_vert_space(padded_right, 10); 
@@ -4417,7 +4506,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
         });
     }, "\uece7");
     
-    make_vert_space(padded_right, 4); 
 
     make_bool(padded_right, "Disable while typing", "Prevents touchpad from receiving input while typing", set->touchpad_disable_while_typing, [](bool value) {
         set->touchpad_disable_while_typing = value;
@@ -4426,7 +4514,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
         });
     }, "\uefa5");
 
-    make_vert_space(padded_right, 4); 
 
     make_button_group(padded_right, 
         "Touchpad acceleration", 
@@ -4439,7 +4526,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
             });
         }, set->touchpad_acceleration_curve, "\uec49");
 
-    make_vert_space(padded_right, 4); 
 
     make_slider(padded_right, "Touchpad speed", "How far the pointer moves when you slide on the touchpad", set->touchpad_speed, [](float value) {
         set->touchpad_speed = value;
@@ -4477,14 +4563,12 @@ static void fill_multitasking_settings(Container *root) {
             set->app_switcher_current_workspace_only = selected == "Current workspace";
             save_multitasking_settings();
         }, set->app_switcher_current_workspace_only ? "Current workspace" : "All workspaces");
-    make_vert_space(padded_right, 4);
     make_button_group(padded_right, "Workspace behavior",
         "Create workspaces as needed or keep a fixed number",
         {"Dynamic", "Fixed"}, [](std::string selected) {
             set->dynamic_workspaces = selected == "Dynamic";
             save_multitasking_settings();
         }, set->dynamic_workspaces ? "Dynamic" : "Fixed");
-    make_vert_space(padded_right, 4);
     make_reset_textfield(padded_right, "Number of workspaces",
         "Per monitor in Fixed mode (1–20); occupied extras are kept", "", true,
         std::to_string(set->fixed_workspace_count), "4", [](std::string value) {
@@ -4501,19 +4585,16 @@ static void fill_multitasking_settings(Container *root) {
                 });
             }
         }, nullptr, "Whole number from 1 to 20");
-    make_vert_space(padded_right, 4);
     make_button_group(padded_right, "Multiple monitors",
         "Switch workspaces independently or on all monitors together",
         {"Independent", "Together"}, [](std::string selected) {
             set->workspaces_span_monitors = selected == "Together";
             save_multitasking_settings();
         }, set->workspaces_span_monitors ? "Together" : "Independent");
-    make_vert_space(padded_right, 4);
     make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
         set->hotcorners = value;
         save_multitasking_settings();
     }, "\ue8b0");
-    make_vert_space(padded_right, 4);
     make_bool(padded_right, "Snap windows",
         "Drag a window to a screen edge or corner to fill half or a quarter of the screen", set->resize_at_screen_edges, [](bool value) {
             set->resize_at_screen_edges = value;
@@ -4952,6 +5033,29 @@ static void swifi_watch(unsigned generation) {
             windowing::redraw(settings_mylar->raw_window);
         swifi_watch(generation);
     }, nullptr);
+}
+
+// The dock menu's scanning animation: five dots easing along the card's bottom
+// edge, clipped to the inside of the card's rounded border so they never cover it.
+static void paint_card_progress_dots(drawing::Context *cr, Bounds b, double dpi) {
+    double phase = (get_current_time_in_ms() % 2000) / 2000.0;
+    double inset = std::max(1.0, std::floor(1.0 * dpi));
+    Bounds inner(b.x + inset, b.y + inset, b.w - inset * 2, b.h - inset * 2);
+    double radius = 2 * dpi;
+    cr->save();
+    cr->new_path();
+    drawRoundedRect(cr, inner.x, inner.y, inner.w, inner.h, std::max(0.0, 5 * dpi - inset), 0.0);
+    cr->clip_path();
+    set_argb(cr, theme.accent);
+    for (int i = 0; i < 5; ++i) {
+        double step = (phase - i * .08) / .6;
+        if (step < 0 || step > 1) continue;
+        double x = .5 - .5 * std::cos(step * M_PI);
+        cr->new_path();
+        cr->arc(inner.x + x * inner.w, inner.y + inner.h - 5 * dpi, radius, 0, 2 * M_PI);
+        cr->fill();
+    }
+    cr->restore();
 }
 
 // Text-sized button for the status card.
@@ -5611,27 +5715,8 @@ static void fill_wifi_settings(Container *root) {
         cr->fill();
 
         const auto &view = settings_wifi->view;
-        if (view.scanning || view.busy) {
-            // The dock menu's scanning animation: five dots easing along the card's bottom edge,
-            // clipped to the inside of the card's rounded border.
-            double phase = (get_current_time_in_ms() % 2000) / 2000.0;
-            double inset = std::max(1.0, std::floor(1.0 * dpi));
-            Bounds inner(b.x + inset, b.y + inset, b.w - inset * 2, b.h - inset * 2);
-            cr->save();
-            cr->new_path();
-            drawRoundedRect(cr, inner.x, inner.y, inner.w, inner.h, std::max(0.0, 5 * dpi - inset), 0.0);
-            cr->clip_path();
-            set_argb(cr, theme.accent);
-            for (int i = 0; i < 5; ++i) {
-                double step = (phase - i * .08) / .6;
-                if (step < 0 || step > 1) continue;
-                double x = .5 - .5 * std::cos(step * M_PI);
-                cr->new_path();
-                cr->arc(inner.x + x * inner.w, inner.y + inner.h - 5 * dpi, 2 * dpi, 0, 2 * M_PI);
-                cr->fill();
-            }
-            cr->restore();
-        }
+        if (view.scanning || view.busy)
+            paint_card_progress_dots(cr, b, dpi);
 
         // Border last so nothing drawn inside the card can sit on top of it.
         drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
@@ -5806,6 +5891,656 @@ static void fill_wifi_settings(Container *root) {
     }
     wifi_menu_opened();
     swifi_watch(page->generation);
+}
+
+/*************************************************
+ *
+ * Bluetooth page (same behaviour as the dock's Bluetooth menu, sharing its state)
+ *
+ *************************************************/
+
+struct SettingsBluetoothPage : UserData {
+    BluetoothMenuView view;
+    unsigned long revision = 0;
+    unsigned generation = 0;
+    bool animating = false;
+    std::string selected; // Object path of the open device row
+    bool confirming_forget = false;
+    std::string prompt_key; // Pairing request the prompt was built for
+    std::string input;      // Mirror of the PIN field, kept current by its on_change
+    Container *list = nullptr;
+    Container *prompt = nullptr;
+    ~SettingsBluetoothPage() override;
+};
+
+struct SettingsBluetoothRow : UserData {
+    Device device{""};
+    std::string action;
+    bool hovered = false;
+    double expansion = 0;
+    double expansion_from = 0;
+    double expansion_target = 0;
+    long animation_start = 0;
+    cairo_surface_t *icon = nullptr;
+    std::string icon_name;
+    double icon_dpi = 0;
+    Container *buttons = nullptr;
+    Container *forget = nullptr;
+    ~SettingsBluetoothRow() override {
+        if (icon)
+            cairo_surface_destroy(icon);
+    }
+};
+
+// The live page, if the Bluetooth page is showing. Only touched on the settings thread.
+static SettingsBluetoothPage *settings_bluetooth = nullptr;
+static unsigned settings_bluetooth_generation = 0;
+
+static void settings_bluetooth_release() {
+    if (!settings_bluetooth)
+        return;
+    settings_bluetooth = nullptr;
+    bluetooth_menu_closed();
+}
+
+SettingsBluetoothPage::~SettingsBluetoothPage() {
+    if (settings_bluetooth == this)
+        settings_bluetooth_release();
+}
+
+static bool sbt_powered(const BluetoothMenuView &view) {
+    return std::any_of(view.adapters.begin(), view.adapters.end(), [](const Adapter &a) { return a.powered; });
+}
+
+static RGBA sbt_row_color(SettingsBluetoothRow *data) {
+    auto base = data->hovered ? theme.row_hover : theme.row_background;
+    return swifi_mix(base, theme.accent, .14 * data->expansion);
+}
+
+static std::string sbt_primary_label(SettingsBluetoothRow *data) {
+    if (data->action == "Pair")
+        return "Cancel";
+    if (!data->action.empty() && data->action != "Unpair")
+        return bluetooth_action_label(data->action);
+    if (!data->device.paired)
+        return "Pair";
+    return data->device.connected ? "Disconnect" : "Connect";
+}
+
+static bool sbt_primary_enabled(SettingsBluetoothRow *data) {
+    const auto &view = settings_bluetooth->view;
+    if (data->action == "Pair")
+        return true;
+    return !view.busy && (data->device.paired || view.agent_ready);
+}
+
+// Advances the row's open/close animation and returns its height.
+static double sbt_row_step(SettingsBluetoothRow *data, double dpi) {
+    auto page = settings_bluetooth;
+    const auto now = get_current_time_in_ms();
+    double elapsed = std::clamp((now - data->animation_start) / 180.0, 0.0, 1.0);
+    data->expansion = data->expansion_from + (data->expansion_target - data->expansion_from) *
+        (1 - std::pow(1 - elapsed, 3));
+    // Rows with an operation in flight stay open so its progress shows.
+    double target = page->selected == data->device.object_path || !data->action.empty() ? 1 : 0;
+    if (target != data->expansion_target) {
+        data->expansion_from = data->expansion;
+        data->expansion_target = target;
+        data->animation_start = now;
+    }
+    if (std::abs(data->expansion - data->expansion_target) > .001)
+        page->animating = true;
+    data->buttons->exists = data->expansion > .001;
+    data->forget->exists = data->device.paired;
+    return (62 + 42 * data->expansion) * dpi;
+}
+
+static Container *sbt_device_row(Container *parent) {
+    auto row = parent->child(::vbox, FILL_SPACE, 62);
+    auto data = new SettingsBluetoothRow;
+    row->user_data = data;
+    row->receive_events_even_if_obstructed = true;
+    row->when_mouse_enters_container = [data](Container *root, Container *) {
+        data->hovered = true;
+        swifi_redraw(root);
+    };
+    row->when_mouse_leaves_container = [data](Container *root, Container *) {
+        data->hovered = false;
+        swifi_redraw(root);
+    };
+    row->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        window->drawing_context->save();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        window->drawing_context->clip_path();
+        set_argb(window->drawing_context, sbt_row_color(data));
+        window->drawing_context->paint_source();
+    };
+    row->after_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        window->drawing_context->restore();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * window->dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->stroke();
+    };
+
+    auto header = row->child(FILL_SPACE, 62);
+    header->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 62 * swifi_window(root)->dpi;
+    };
+    header->when_paint = [data](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        int size = (int) std::round(24 * dpi);
+        if (icons_loaded && (data->icon_name != data->device.icon || data->icon_dpi != dpi)) {
+            data->icon_name = data->device.icon;
+            data->icon_dpi = dpi;
+            if (data->icon) {
+                cairo_surface_destroy(data->icon);
+                data->icon = nullptr;
+            }
+            auto path = one_shot_icon(size, {data->device.icon, "bluetooth"});
+            if (!path.empty())
+                load_icon_full_path(&data->icon, path, size);
+        }
+        if (data->icon) {
+            cr->set_source_surface(data->icon, std::round(b.x + 17 * dpi), std::round(b.y + (b.h - size) * .5));
+            cr->paint_source();
+        } else {
+            swifi_glyph(cr, b.x + 19 * dpi, b.y + b.h * .5 - 10 * dpi, "", 16 * dpi, theme.text);
+        }
+        std::string subtitle;
+        if (!data->device.paired) {
+            subtitle = data->action == "Pair" ? "Pairing…" : "Not paired";
+        } else {
+            subtitle = data->device.connected ? "Connected" : "Paired";
+            if (data->device.connected && !data->device.percentage.empty())
+                subtitle += " · Battery " + data->device.percentage + "%";
+        }
+        if ((data->hovered || settings_bluetooth->selected == data->device.object_path) && !data->device.mac_address.empty())
+            subtitle += " · " + data->device.mac_address;
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 9 * dpi, b.w - 76 * dpi, 22 * dpi), bluetooth_display_name(data->device), 12,
+                   theme.text);
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 31 * dpi, b.w - 76 * dpi, 22 * dpi), subtitle, 10, theme.text_secondary);
+    };
+    header->when_clicked = [data](Container *root, Container *) {
+        auto page = settings_bluetooth;
+        page->selected = page->selected == data->device.object_path ? "" : data->device.object_path;
+        page->confirming_forget = false;
+        swifi_redraw(root);
+    };
+
+    data->buttons = row->child(::hbox, FILL_SPACE, 0);
+    data->buttons->pre_layout = [data](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 42 * data->expansion * dpi;
+        c->wanted_pad = Bounds(60 * dpi, 0, 16 * dpi, 8 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    auto primary = data->buttons->child(FILL_SPACE, FILL_SPACE);
+    primary->when_paint = [data](Container *root, Container *c) {
+        swifi_paint_button(root, c, sbt_primary_label(data), sbt_primary_enabled(data));
+    };
+    primary->when_clicked = [data](Container *root, Container *) {
+        if (!sbt_primary_enabled(data))
+            return;
+        std::string command = data->action == "Pair" ? "Cancel Pair" :
+            !data->device.paired ? "Pair" : data->device.connected ? "Disconnect" : "Connect";
+        settings_bluetooth->confirming_forget = false;
+        bluetooth_command(data->device.object_path, command);
+        swifi_redraw(root);
+    };
+    data->forget = data->buttons->child(FILL_SPACE, FILL_SPACE);
+    data->forget->when_paint = [data](Container *root, Container *c) {
+        auto page = settings_bluetooth;
+        std::string label = data->action == "Unpair" ? "Forgetting…" : page->confirming_forget ? "Are you sure?" : "Forget";
+        swifi_paint_button(root, c, label, data->device.paired && !page->view.busy);
+    };
+    data->forget->when_clicked = [data](Container *root, Container *) {
+        auto page = settings_bluetooth;
+        if (!data->device.paired || page->view.busy)
+            return;
+        if (!page->confirming_forget) {
+            page->confirming_forget = true;
+        } else {
+            page->confirming_forget = false;
+            bluetooth_command(data->device.object_path, "Unpair");
+        }
+        swifi_redraw(root);
+    };
+    return row;
+}
+
+// Line of text inside the pairing prompt card.
+static void sbt_prompt_line(Container *parent, std::string text, double size, bool secondary, bool centered = false,
+                            bool bold = false) {
+    auto line = parent->child(FILL_SPACE, FILL_SPACE);
+    line->pre_layout = [text, size, bold](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = swifi_text_height(root, text.empty() ? " " : text, size, bold) + 6 * swifi_window(root)->dpi;
+    };
+    line->when_paint = [text, size, secondary, centered, bold](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, text, size, secondary ? theme.text_secondary : theme.text, centered, bold);
+    };
+}
+
+// Rebuilds the pairing prompt when BlueZ's agent asks something new.
+static void sbt_build_prompt(SettingsBluetoothPage *page) {
+    const auto &view = page->view;
+    auto prompt = page->prompt;
+    auto key = std::to_string(view.request_id) + view.request_type;
+    if (page->prompt_key == key)
+        return;
+    page->prompt_key = key;
+    page->input.clear();
+    for (auto child : prompt->children)
+        delete child;
+    prompt->children.clear();
+    if (view.request_type.empty())
+        return;
+    const bool input = view.request_type == "RequestPinCode" || view.request_type == "RequestPasskey";
+    const bool display = view.request_type == "DisplayPinCode" || view.request_type == "DisplayPasskey";
+    std::string question = input ? (view.request_type == "RequestPinCode" ? "Enter the PIN for this device" : "Enter the passkey for this device") :
+        display ? "Type this code on the device, then press Enter on it" : view.request_type == "RequestConfirmation" ?
+        "Does this passkey match the one shown on the device?" : view.request_type == "AuthorizeService" ?
+        "Allow this device to connect?" : "Allow this device to pair?";
+    sbt_prompt_line(prompt, view.request_device.empty() ? "Bluetooth device" : view.request_device, 12, false, false, true);
+    sbt_prompt_line(prompt, question, 11, true);
+    if (!view.pin.empty())
+        sbt_prompt_line(prompt, view.pin, 20, false, true, true);
+    auto id = view.request_id;
+    Container *field = nullptr;
+    if (input) {
+        auto holder = prompt->child(::hbox, FILL_SPACE, FILL_SPACE);
+        holder->pre_layout = [](Container *root, Container *c, const Bounds &) {
+            double dpi = swifi_window(root)->dpi;
+            c->wanted_bounds.h = 44 * dpi;
+            c->wanted_pad = Bounds(0, 6 * dpi, 0, 4 * dpi);
+        };
+        field = holder->child(FILL_SPACE, FILL_SPACE);
+        STextEditorOptions options;
+        options.multiline = false;
+        options.only_numbers = view.request_type == "RequestPasskey";
+        options.max_length = view.request_type == "RequestPasskey" ? 6 : 16;
+        options.font_size = 11;
+        options.window = [](Container *root) { return swifi_window(root); };
+        options.viewport = [](Container *root, Container *c) {
+            auto dpi = swifi_window(root)->dpi;
+            auto bounds = c->real_bounds;
+            bounds.x += 10 * dpi;
+            bounds.w = std::max(0.0, bounds.w - 20 * dpi);
+            return bounds;
+        };
+        options.on_change = [](std::string text) {
+            if (settings_bluetooth)
+                settings_bluetooth->input = std::move(text);
+        };
+        setup_text_editor(field, "", std::move(options));
+        field->when_paint = [](Container *root, Container *c) {
+            auto window = swifi_window(root);
+            auto dpi = window->dpi;
+            auto b = c->real_bounds;
+            paint_smooth_frame(window->drawing_context, b, settings_control_rounding * dpi, theme.field_background,
+                               c->active ? theme.accent : theme.field_border, std::max(1.0, (double) std::round(1 * dpi)));
+            if (static_cast<STextEditorData *>(c->user_data)->text.empty()) {
+                auto hint = b;
+                hint.x += 10 * dpi;
+                hint.w -= 20 * dpi;
+                swifi_text(root, hint, "Type here", 11, swifi_dim(theme.text_secondary));
+            }
+            paint_text_editor(root, c, theme.text, theme.accent);
+        };
+        auto edit_key = std::move(field->when_key_event);
+        field->when_key_event = [edit_key, id](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods,
+                                               bool is_text, std::string text) {
+            if (!c->active)
+                return;
+            if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+                if (settings_bluetooth)
+                    bluetooth_submit(id, true, settings_bluetooth->input);
+                return;
+            }
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+            swifi_redraw(root);
+        };
+    }
+    if (!display) {
+        auto buttons = prompt->child(::hbox, FILL_SPACE, FILL_SPACE);
+        buttons->pre_layout = [](Container *root, Container *c, const Bounds &) {
+            double dpi = swifi_window(root)->dpi;
+            c->wanted_bounds.h = 44 * dpi;
+            c->wanted_pad = Bounds(0, 8 * dpi, 0, 2 * dpi);
+            c->spacing = 8 * dpi;
+        };
+        std::string accept_label = input ? "Submit" : view.request_type == "RequestConfirmation" ? "Matches" : "Allow";
+        auto accept = buttons->child(FILL_SPACE, FILL_SPACE);
+        accept->when_paint = [accept_label](Container *root, Container *c) { swifi_paint_button(root, c, accept_label, true); };
+        accept->when_clicked = [id](Container *, Container *) {
+            if (settings_bluetooth)
+                bluetooth_submit(id, true, settings_bluetooth->input);
+        };
+        std::string reject_label = input ? "Cancel" : "Reject";
+        auto reject = buttons->child(FILL_SPACE, FILL_SPACE);
+        reject->when_paint = [reject_label](Container *root, Container *c) { swifi_paint_button(root, c, reject_label, true); };
+        reject->when_clicked = [id](Container *, Container *) { bluetooth_submit(id, false, ""); };
+    }
+    if (field && settings_mylar)
+        set_active(settings_mylar->root, {field}, settings_mylar->root, true, false);
+}
+
+static void sbt_apply(SettingsBluetoothPage *page, const BluetoothMenuView &view) {
+    bool mode_changed = page->view.showing_paired != view.showing_paired;
+    page->view = view;
+    auto content = page->list;
+    std::vector<const Device *> wanted;
+    for (const auto &device : view.devices) {
+        bool powered = std::any_of(view.adapters.begin(), view.adapters.end(), [&device](const Adapter &adapter) {
+            return adapter.object_path == device.adapter && adapter.powered;
+        });
+        if (powered && (device.paired == view.showing_paired || view.pairing_path == device.object_path))
+            wanted.push_back(&device);
+    }
+    std::unordered_set<std::string> paths;
+    for (auto device : wanted)
+        paths.insert(device->object_path);
+    if (mode_changed || !paths.contains(page->selected)) {
+        page->selected.clear();
+        page->confirming_forget = false;
+    }
+    std::unordered_map<std::string, Container *> rows;
+    std::erase_if(content->children, [&paths, &rows](Container *row) {
+        if (paths.contains(row->name)) {
+            rows.emplace(row->name, row);
+            return false;
+        }
+        delete row;
+        return true;
+    });
+    // Rows survive property updates (keyed by object path) so selection and animations persist.
+    std::vector<Container *> ordered;
+    for (auto device : wanted) {
+        Container *row = nullptr;
+        if (auto found = rows.find(device->object_path); found != rows.end()) {
+            row = found->second;
+        } else {
+            row = sbt_device_row(content);
+            content->children.pop_back(); // Re-inserted below in sorted order.
+            row->name = device->object_path;
+        }
+        auto data = (SettingsBluetoothRow *) row->user_data;
+        data->device = *device;
+        auto action = view.actions.find(device->object_path);
+        data->action = action == view.actions.end() ? "" : action->second;
+        ordered.push_back(row);
+    }
+    content->children = std::move(ordered);
+    sbt_build_prompt(page);
+}
+
+static void sbt_watch(unsigned generation) {
+    windowing::timer(settings_app, 16, [generation](void *) {
+        if (!settings_app || !settings_mylar)
+            return;
+        bool redraw = false;
+        {
+            std::lock_guard<std::mutex> lock(settings_app->mutex);
+            auto page = settings_bluetooth;
+            if (!page || page->generation != generation)
+                return; // Page left or rebuilt; stop polling.
+            auto view = bluetooth_latest();
+            if (view && view->revision != page->revision) {
+                sbt_apply(page, *view);
+                page->revision = view->revision;
+                redraw = true;
+            }
+            redraw |= page->animating || page->view.scanning || page->view.busy;
+            page->animating = false;
+        }
+        if (redraw)
+            windowing::redraw(settings_mylar->raw_window);
+        sbt_watch(generation);
+    }, nullptr);
+}
+
+static std::string sbt_status_line(const BluetoothMenuView &view) {
+    if (!view.running)
+        return "Bluetooth service is unavailable";
+    if (view.adapters.empty())
+        return "No Bluetooth adapter found";
+    for (const auto &[path, action] : view.actions) {
+        if (action == "Power On") return "Turning on…";
+        if (action == "Power Off") return "Turning off…";
+    }
+    if (!sbt_powered(view))
+        return "Off";
+    if (view.scanning && !view.scan_stopping)
+        return "On · Searching for devices…";
+    int connected = 0;
+    for (const auto &device : view.devices)
+        connected += device.paired && device.connected;
+    std::string line = "On";
+    for (const auto &adapter : view.adapters) {
+        if (!adapter.powered)
+            continue;
+        auto name = bluetooth_display_name(adapter);
+        if (!name.empty())
+            line += " · Visible as “" + name + "”";
+        break;
+    }
+    if (connected)
+        line += " · " + std::to_string(connected) + " connected";
+    return line;
+}
+
+static void fill_bluetooth_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+
+    make_section_title(padded_right, "Bluetooth");
+    make_vert_space(padded_right, 10);
+
+    // Status card: state, add device and on/off.
+    auto card = padded_right->child(::hbox, FILL_SPACE, 70);
+    search_tag(card, "Add device", "Search for nearby devices to pair");
+    card->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 70 * dpi;
+        c->wanted_pad = Bounds(0, 17 * dpi, 16 * dpi, 17 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    card->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(cr, theme.row_background);
+        cr->fill();
+        const auto &view = settings_bluetooth->view;
+        if (view.scanning || view.busy)
+            paint_card_progress_dots(cr, b, dpi);
+        // Border last so nothing drawn inside the card can sit on top of it.
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(cr, theme.row_border);
+        cr->stroke();
+    };
+    auto heading = card->child(FILL_SPACE, FILL_SPACE);
+    heading->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_bluetooth->view;
+        auto b = c->real_bounds;
+        bool on = view.running && sbt_powered(view);
+        swifi_glyph(window->drawing_context, b.x + 19 * dpi, b.y + b.h * .5 - 10 * dpi, "", 16 * dpi,
+            on ? theme.text : swifi_dim(theme.text_secondary));
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y - 6 * dpi, b.w - 60 * dpi, 24 * dpi), "Bluetooth", 12, theme.text);
+        swifi_text(root, Bounds(b.x + 60 * dpi, b.y + 16 * dpi, b.w - 60 * dpi, 22 * dpi), sbt_status_line(view), 10,
+            theme.text_secondary);
+    };
+    swifi_card_button(card, []() {
+        const auto &view = settings_bluetooth->view;
+        if (view.scan_pending)
+            return std::string(view.scan_stopping ? "Cancelling…" : "Starting…");
+        return std::string(view.showing_paired ? "Add device" : "Stop searching");
+    }, []() {
+        const auto &view = settings_bluetooth->view;
+        return view.running && sbt_powered(view) && !view.busy && !view.scan_pending;
+    }, []() { bluetooth_command("", "Scan"); });
+    swifi_card_button(card, []() {
+        const auto &view = settings_bluetooth->view;
+        for (const auto &[path, action] : view.actions) {
+            if (action == "Power On") return std::string("Turning on…");
+            if (action == "Power Off") return std::string("Turning off…");
+        }
+        return std::string(sbt_powered(view) ? "Turn off Bluetooth" : "Turn on Bluetooth");
+    }, []() {
+        const auto &view = settings_bluetooth->view;
+        return view.running && !view.adapters.empty() && !view.busy && !view.scanning;
+    }, []() {
+        bluetooth_command("", sbt_powered(settings_bluetooth->view) ? "Power Off" : "Power On");
+    });
+
+    // Questions from the pairing agent (PIN, passkey, confirmation).
+    auto prompt_space = padded_right->child(::vbox, FILL_SPACE, 0);
+    prompt_space->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        double dpi = swifi_window(root)->dpi;
+        auto prompt = c->children[0];
+        c->exists = !prompt->children.empty();
+        c->wanted_pad = Bounds(0, 8 * dpi, 0, 0);
+        double h = 0;
+        for (auto child : prompt->children) {
+            if (child->pre_layout)
+                child->pre_layout(root, child, b);
+            h += child->wanted_bounds.h;
+        }
+        prompt->wanted_pad = Bounds(60 * dpi, 12 * dpi, 16 * dpi, 12 * dpi);
+        prompt->wanted_bounds.h = h + 24 * dpi;
+        c->wanted_bounds.h = prompt->wanted_bounds.h + 8 * dpi;
+    };
+    auto prompt = prompt_space->child(::vbox, FILL_SPACE, 0);
+    prompt->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(cr, swifi_mix(theme.row_background, theme.accent, .14));
+        cr->fill();
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(cr, theme.row_border);
+        cr->stroke();
+        swifi_glyph(cr, b.x + 19 * dpi, b.y + 14 * dpi, "", 16 * dpi, theme.accent);
+    };
+
+    // Result of the last action (paired, connect failed, ...).
+    auto feedback = padded_right->child(FILL_SPACE, 0);
+    feedback->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_bluetooth->view;
+        c->exists = !view.message.empty();
+        auto font = get_cached_pango_font(window->drawing_context, set->font, 11 * dpi, PANGO_WEIGHT_NORMAL, false);
+        pango_layout_set_text(font, view.message.c_str(), -1);
+        pango_layout_set_width(font, std::max(1.0, b.w - 32 * dpi) * PANGO_SCALE);
+        pango_layout_set_height(font, -1);
+        pango_layout_set_wrap(font, PANGO_WRAP_WORD_CHAR);
+        pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
+        int width, height;
+        pango_layout_get_pixel_size(font, &width, &height);
+        c->wanted_bounds.h = std::min(height + 24.0 * dpi, 100.0 * dpi) + 8 * dpi;
+    };
+    feedback->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_bluetooth->view;
+        RGBA hue = view.error ? RGBA(.86, .26, .22, 1) : RGBA(.20, .66, .36, 1);
+        RGBA text = set->dark_theme ? swifi_mix(hue, RGBA(1, 1, 1, 1), .45) : swifi_mix(hue, RGBA(0, 0, 0, 1), .25);
+        auto b = c->real_bounds;
+        b.y += 8 * dpi;
+        b.h -= 8 * dpi;
+        set_argb(window->drawing_context, swifi_mix(theme.row_background, hue, .18));
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        window->drawing_context->fill();
+        b.x += 16 * dpi;
+        b.w -= 32 * dpi;
+        swifi_text(root, b, view.message, 11, text);
+    };
+
+    make_vert_space(padded_right, 20);
+    // The title follows the list: paired devices, or nearby ones while adding a device.
+    search_current_section = "Devices";
+    auto list_title = padded_right->child(FILL_SPACE, FILL_SPACE);
+    search_tag(list_title, "Devices", "");
+    list_title->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.h = swifi_text_height(root, "Devices", 13);
+    };
+    list_title->when_paint = [](Container *root, Container *c) {
+        auto title = settings_bluetooth->view.showing_paired ? "Paired devices" : "Nearby devices";
+        swifi_text(root, c->real_bounds, title, 13, theme.text);
+    };
+    make_vert_space(padded_right, 10);
+
+    auto list = padded_right->child(::vbox, FILL_SPACE, 0);
+    auto page = new SettingsBluetoothPage;
+    page->list = list;
+    page->prompt = prompt;
+    page->generation = ++settings_bluetooth_generation;
+    list->user_data = page;
+    list->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->spacing = 4 * dpi;
+        double h = 0;
+        for (auto row : c->children) {
+            row->wanted_bounds.h = sbt_row_step((SettingsBluetoothRow *) row->user_data, dpi);
+            h += row->wanted_bounds.h;
+        }
+        if (c->children.empty())
+            h = 120 * dpi;
+        else
+            h += c->spacing * (c->children.size() - 1);
+        c->wanted_bounds.h = h;
+    };
+    list->when_paint = [](Container *root, Container *c) {
+        if (!c->children.empty())
+            return;
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        const auto &view = settings_bluetooth->view;
+        std::string message = !view.running ? "Bluetooth service is unavailable" : view.adapters.empty() ?
+            "No Bluetooth adapter found" : !sbt_powered(view) ? "Turn on Bluetooth to see your devices" :
+            view.showing_paired ? "No paired devices · Use Add device to pair one" : "Searching for devices…";
+        auto b = c->real_bounds;
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_background);
+        window->drawing_context->fill();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->stroke();
+        b.x += 30 * dpi;
+        b.w -= 60 * dpi;
+        swifi_text(root, b, message, 11, theme.text_secondary, true);
+    };
+    make_vert_space(padded_right, 16);
+
+    // The previous page (if any) was deleted above and released its hold on the shared state.
+    settings_bluetooth = page;
+    // Show the last snapshot immediately; opening asks the compositor for a fresh one.
+    if (auto previous = bluetooth_latest()) {
+        sbt_apply(page, *previous);
+        page->revision = previous->revision;
+    }
+    bluetooth_menu_opened();
+    sbt_watch(page->generation);
 }
 
 /*************************************************
@@ -8226,8 +8961,6 @@ static void fill_keyboard_settings(Container *root, Container *c, bool reload) {
         reset_conf();
     }, nullptr, "Whole number of milliseconds\n1000 is one second");
 
-    make_vert_space(padded_right, 4);
-
     make_reset_textfield(padded_right, "Repeat rate", "Number of key repeats per second", "", only_numbers, std::to_string(set->repeat_rate), "25", [](std::string value) {
         set->repeat_rate = std::atoi(value.c_str());
         reset_conf();
@@ -8294,7 +9027,7 @@ static std::string search_last_page;        // Page shown before searching, rest
 // is whether it is currently expanded over the page.
 // The page list is this wide when shown beside the page; pages need
 // settings_page_min_w. Below their sum the list folds behind the hamburger.
-static constexpr double settings_left_w     = 200;
+static constexpr double settings_left_w     = 250;
 static constexpr double settings_page_min_w = 600;
 static bool settings_narrow   = false;
 // Set by settings::start from the main thread; the settings thread focuses the search field.
@@ -8443,6 +9176,13 @@ static void search_build_into(std::vector<SearchEntry> &out) {
 
     search_add("Wifi", "Wi-Fi", "Wi-Fi", "", "wifi wireless network internet connect wlan");
     search_add("Wifi", "Available networks", "Available networks", "", "wifi ssid connect password network join");
+
+    search_add("Bluetooth", "Bluetooth", "Bluetooth", "Turn Bluetooth on or off",
+               "bluetooth wireless devices headphones headset earbuds speaker controller gamepad enable disable");
+    search_add("Bluetooth", "Bluetooth", "Add device", "Search for nearby devices to pair",
+               "bluetooth pair pairing discover scan new device connect");
+    search_add("Bluetooth", "Devices", "Devices", "Connect, disconnect or forget paired devices",
+               "bluetooth paired devices connect disconnect forget unpair remove");
 
     for (const auto &learned : search_learned) {
         bool found = false;
@@ -8610,9 +9350,10 @@ static void search_run() {
 }
 
 static std::string search_breadcrumb(const SearchEntry &e) {
-    if (e.section.empty() || e.section == e.title || e.section == e.page || e.section == e.page + " Settings")
-        return e.page;
-    return e.page + "  ›  " + e.section;
+    auto title = settings_page_title(e.page);
+    if (e.section.empty() || e.section == e.title || e.section == e.page || e.section == title || e.section == e.page + " Settings")
+        return title;
+    return title + "  ›  " + e.section;
 }
 
 static void fill_search_results(Container *root) {
@@ -8719,11 +9460,11 @@ static void search_set_query(Container *root, const std::string &text) {
             return;
         // Back to where the user was before searching.
         auto right = container_by_name("settings_right", root);
-        if (auto tab = search_last_page.empty() ? nullptr : container_by_name(search_last_page, root); tab && tab->when_clicked) {
+        if (!search_last_page.empty() && settings_category_of(search_last_page)) {
             if (right)
                 ((RightData *) right->user_data)->scroll = 0;
             bool nav_open = settings_nav_open;
-            tab->when_clicked(root, tab);
+            settings_show(root, search_last_page);
             settings_nav_open = nav_open;
         } else if (right) {
             for (auto child : right->children)
@@ -8761,8 +9502,7 @@ static Container *search_find_title(Container *c, const std::string &suffix) {
 }
 
 static void search_open_entry(Container *root, SearchEntry e) {
-    auto tab = container_by_name(e.page, root);
-    if (!tab || !tab->when_clicked)
+    if (!settings_category_of(e.page))
         return;
     // A filter on the Shortcuts page could hide the row.
     if (e.page == "Shortcuts") {
@@ -8773,7 +9513,7 @@ static void search_open_entry(Container *root, SearchEntry e) {
         d->scroll = 0;
         d->smooth.stop();
     }
-    tab->when_clicked(root, tab); // Also empties the search field
+    settings_show(root, e.page); // Also empties the search field
     if (e.after_open)
         e.after_open(root);
     search_flash = {};
@@ -8985,8 +9725,8 @@ static void make_search_field(Container *left) {
     options.viewport = [](Container *root, Container *c) {
         auto dpi = static_cast<MylarWindow *>(root->user_data)->raw_window->dpi;
         auto bounds = c->real_bounds;
-        bounds.x += 32 * dpi;
-        bounds.w = std::max(0.0, bounds.w - 32 * dpi - 11 * dpi);
+        bounds.x += 12 * dpi;
+        bounds.w = std::max(0.0, bounds.w - 12 * dpi - 11 * dpi);
         return bounds;
     };
     options.on_change = [](std::string text) {
@@ -9001,15 +9741,18 @@ static void make_search_field(Container *left) {
         auto b = c->real_bounds;
         paint_smooth_frame(cr, b, settings_control_rounding * dpi, theme.field_background,
                            c->active ? theme.accent : theme.field_border, std::max(1.0, (double) std::round(1 * dpi)));
-        const std::string glyph = "\uE721"; // Search
-        auto gb = draw_text(cr, 0, 0, glyph, 12 * dpi, false, icon_font, -1, -1, theme.text_secondary, false);
-        draw_text(cr, b.x + 12 * dpi, b.y + (b.h - gb.h) * .5, glyph, 12 * dpi, true, icon_font, -1, -1,
-                  c->active ? theme.text : theme.text_secondary, false);
-        paint_text_editor(root, c, theme.text, theme.accent);
         auto data = static_cast<STextEditorData *>(c->user_data);
         if (data && data->text.empty()) {
-            Bounds text(b.x + 32 * dpi, b.y, std::max(0.0, b.w - 43 * dpi), b.h);
-            swifi_text(root, text, "Search settings", 11, swifi_dim(theme.text_secondary));
+            // The clear button takes this spot while there is text.
+            const std::string glyph = "\uE721"; // Search
+            auto gb = draw_text(cr, 0, 0, glyph, 11 * dpi, false, icon_font, -1, -1, theme.text_secondary, false);
+            draw_text(cr, b.x + b.w - 14 * dpi - gb.w, b.y + (b.h - gb.h) * .5, glyph, 11 * dpi, true, icon_font, -1, -1,
+                      c->active ? theme.text : theme.text_secondary, false);
+        }
+        paint_text_editor(root, c, theme.text, theme.accent);
+        if (data && data->text.empty()) {
+            Bounds text(b.x + 12 * dpi, b.y, std::max(0.0, b.w - 48 * dpi), b.h);
+            swifi_text(root, text, "Find a setting", 11, swifi_dim(theme.text_secondary));
         }
     };
     auto edit_key = std::move(field->when_key_event);
@@ -9042,83 +9785,471 @@ static void make_search_field(Container *left) {
     };
 }
 
-void create_tab_option(Container *parent, std::string label) {
-    auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
-    c->name = label;
-    c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto mylar = (MylarWindow*)root->user_data;
-        c->wanted_bounds.h = 40 * mylar->raw_window->dpi;
-    };
-    c->when_paint = [label](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
-        auto dpi = mylar->raw_window->dpi;
+// Category whose entry is highlighted in the left column.
+static std::string settings_current_category;
 
-        if (c->state.mouse_pressing) {
-            auto b = c->real_bounds;
-            b.shrink(3 * dpi);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-            set_argb(cr, theme.navigation_pressed);
-            cr->fill();
-        } else if (c->state.mouse_hovering) {
-            auto b = c->real_bounds;
-            b.shrink(3 * dpi);
-            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
-            set_argb(cr, theme.navigation_hover);
-            cr->fill();
-        }
-        paint_label(root, c, label);
+// Colourful category icons, keyed by icon name and pixel size. Only touched on the settings thread.
+static std::unordered_map<std::string, cairo_surface_t *> settings_icon_cache;
+
+static void settings_icon_cache_clear() {
+    for (auto &[key, surface] : settings_icon_cache)
+        if (surface)
+            cairo_surface_destroy(surface);
+    settings_icon_cache.clear();
+}
+
+static cairo_surface_t *settings_category_icon(const SettingsCategory &category, int size) {
+    auto key = category.icon + "\x1f" + std::to_string(size);
+    if (auto it = settings_icon_cache.find(key); it != settings_icon_cache.end())
+        return it->second;
+    std::string path = "/usr/share/mylardesktop/icons/" + category.icon + ".svg";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+        // Not installed yet: the icon theme's version of the same icon.
+        if (!icons_loaded)
+            return nullptr; // Try again on a later paint.
+        path = one_shot_icon(size, {category.fallback, "preferences-system"});
+    }
+    cairo_surface_t *surface = nullptr;
+    if (!path.empty())
+        load_icon_full_path(&surface, path, size);
+    settings_icon_cache[key] = surface;
+    return surface;
+}
+
+// How much of the text colour tints a left column entry for hover and press. The
+// selected entry's own tint is painted by settings_nav_indicator_paint underneath.
+static double settings_nav_hover_tint(Container *c) {
+    return c->state.mouse_pressing ? .035 : c->state.mouse_hovering ? .05 : 0;
+}
+
+// The selected entry's highlight and accent pill glide to a newly selected entry.
+struct NavIndicator {
+    ToggleTween tween;
+    Bounds from_rel; // Where it started, relative to the list
+    Bounds last_rel; // Where it was last painted, relative to the list
+    std::string selected;
+    bool painted = false;
+};
+static NavIndicator nav_indicator;
+static constexpr float nav_indicator_ms = 220;
+
+// Painted by the left column before its entries.
+static void settings_nav_indicator_paint(Container *root, Container *list) {
+    auto window = swifi_window(root);
+    auto cr = window->drawing_context;
+    auto dpi = window->dpi;
+    Container *selected = nullptr;
+    if (trim(search_query).empty())
+        selected = container_by_name("category:" + settings_current_category, list);
+    if (!selected || !selected->exists) {
+        // Nothing to slide from once it reappears.
+        nav_indicator.painted = false;
+        return;
+    }
+    auto l = list->real_bounds;
+    auto target_abs = selected->real_bounds;
+    target_abs.shrink(3 * dpi);
+    Bounds target(target_abs.x - l.x, target_abs.y - l.y, target_abs.w, target_abs.h);
+
+    long now = get_current_time_in_ms();
+    if (!nav_indicator.painted) {
+        nav_indicator.tween.value = nav_indicator.tween.from = nav_indicator.tween.target = 1;
+        nav_indicator.from_rel = target;
+        nav_indicator.selected = selected->name;
+    } else if (nav_indicator.selected != selected->name) {
+        nav_indicator.selected = selected->name;
+        nav_indicator.from_rel = nav_indicator.last_rel;
+        nav_indicator.tween.jump(0);
+    }
+    if (nav_indicator.tween.step(1, nav_indicator_ms, now))
+        windowing::redraw(window);
+    float t = nav_indicator.tween.value;
+    float e = 1 - (1 - t) * (1 - t) * (1 - t); // ease out
+    auto &f = nav_indicator.from_rel;
+    Bounds r(f.x + (target.x - f.x) * e, f.y + (target.y - f.y) * e, f.w + (target.w - f.w) * e, f.h + (target.h - f.h) * e);
+    nav_indicator.last_rel = r;
+    nav_indicator.painted = true;
+
+    Bounds b(l.x + r.x, l.y + r.y, r.w, r.h);
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+    set_argb(cr, swifi_mix(theme.background, theme.text, .075));
+    cr->fill();
+    // The pill stretches along the way, like Windows 11's.
+    double stretch = std::sin(e * M_PI) * std::min(std::abs(target.y - f.y), 40.0 * dpi) * .5;
+    double pill_h = 16 * dpi + stretch;
+    double pill_w = 3 * dpi;
+    cr->new_path();
+    drawRoundedRect(cr, b.x, b.y + (b.h - pill_h) * .5, pill_w, pill_h, pill_w * .5, 0.0);
+    set_argb(cr, theme.accent);
+    cr->fill();
+}
+
+static void create_category_option(Container *parent, const SettingsCategory &category) {
+    auto c = parent->child(::hbox, FILL_SPACE, FILL_SPACE);
+    c->name = "category:" + category.name;
+    c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        c->wanted_bounds.h = 40 * swifi_window(root)->dpi;
     };
-    c->when_clicked = [label](Container *root, Container *c) {
-        settings_nav_open = false;
-        // A different page starts at its top.
-        if (label != search_last_page) {
-            if (auto right = container_by_name("settings_right", root)) {
-                auto d = (RightData *) right->user_data;
-                d->scroll = 0;
-                d->smooth.stop();
-            }
+    c->when_paint = [&category](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        b.shrink(3 * dpi);
+        // Over the selection indicator, so it is translucent.
+        if (double tint = settings_nav_hover_tint(c); tint > 0) {
+            drawRoundedRect(cr, b.x, b.y, b.w, b.h, 5 * dpi, 1.0);
+            RGBA overlay = theme.text;
+            overlay.a *= tint;
+            set_argb(cr, overlay);
+            cr->fill();
         }
-        sdt_invalidate();
-        sshortcut_stop_editing();
-        search_clear_field(root);
-        search_last_page = label;
-        search_current_page = label;
-        search_current_section.clear();
-        if (label == "Mouse & Touchpad") {
-            fill_mouse_settings(root, c);
-        } else if (label == "Keyboard") {
-            fill_keyboard_settings(root, c);
-        } else if (label == "Desktop") {
-            fill_desktop_settings(root, c);
-        } else if (label == "Display") {
-            fill_display_settings(root);
-        } else if (label == "Shortcuts") {
-            fill_shortcuts_settings(root);
-        } else if (label == "Multitasking") {
-            fill_multitasking_settings(root);
-        } else if (label == "Wifi") {
-            fill_wifi_settings(root);
-        } else if (label == "Audio") {
-            fill_audio_settings(root);
-        } else if (label == "Time & Date") {
-            fill_datetime_settings(root);
+        int size = (int) std::round(20 * dpi);
+        if (auto icon = settings_category_icon(category, size)) {
+            cr->set_source_surface(icon, std::round(b.x + 13 * dpi), std::round(b.y + (b.h - size) * .5));
+            cr->paint_source();
         }
-        search_current_page.clear();
+        Bounds text(b.x + 46 * dpi, b.y, std::max(1.0, b.w - 50 * dpi), b.h);
+        swifi_text(root, text, category.name, 11, theme.text);
+    };
+    c->when_clicked = [&category](Container *root, Container *) {
+        // A category with several pages always opens its overview.
+        settings_show(root, category.name);
     };
 }
 
 void fill_left(Container *left) {
     make_search_field(left);
-    create_tab_option(left, "Display");
-    create_tab_option(left, "Desktop");
-    create_tab_option(left, "Multitasking");
-    create_tab_option(left, "Mouse & Touchpad");
-    create_tab_option(left, "Keyboard");
-    create_tab_option(left, "Shortcuts");
-    create_tab_option(left, "Time & Date");
-    create_tab_option(left, "Audio");
-    create_tab_option(left, "Wifi");
+    auto gap = left->child(FILL_SPACE, FILL_SPACE);
+    gap->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 6 * swifi_window(root)->dpi;
+    };
+    for (const auto &category : settings_categories())
+        create_category_option(left, category);
+}
+
+// One link on a category overview: icon, title, description and a chevron.
+static void make_category_link(Container *parent, const SettingsPageInfo &page) {
+    auto row = parent->child(FILL_SPACE, FILL_SPACE);
+    row->parent_bounds_limit_input_bounds = false;
+    row->receive_events_even_if_obstructed = true;
+    row->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 68 * swifi_window(root)->dpi;
+    };
+    row->when_paint = [&page](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        RGBA bg = c->state.mouse_pressing ? swifi_mix(theme.row_background, theme.background, .5) :
+            c->state.mouse_hovering ? theme.row_hover : theme.row_background;
+        paint_smooth_frame(cr, b, 5 * dpi, bg, theme.row_border, std::max(1.0, (double) std::round(1 * dpi)));
+        auto gb = draw_text(cr, 0, 0, page.glyph, 16 * dpi, false, icon_font, -1, -1, theme.text, false);
+        draw_text(cr, b.x + 20 * dpi, b.y + (b.h - gb.h) * .5, page.glyph, 16 * dpi, true, icon_font, -1, -1, theme.text, false);
+        swifi_two_lines(root, Bounds(b.x + 60 * dpi, b.y, std::max(1.0, b.w - 110 * dpi), b.h), page.title, page.description);
+        const std::string chevron = ""; // ChevronRight
+        auto cb = draw_text(cr, 0, 0, chevron, 10 * dpi, false, icon_font, -1, -1, theme.text, false);
+        draw_text(cr, b.x + b.w - 24 * dpi - cb.w, b.y + (b.h - cb.h) * .5, chevron, 10 * dpi, true, icon_font, -1, -1,
+                  theme.text_secondary, false);
+    };
+    row->when_clicked = [&page](Container *root, Container *) {
+        settings_show(root, page.id);
+    };
+}
+
+static void fill_category_page(Container *root, const SettingsCategory &category) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child : right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    padded_right->name = "category_page";
+    for (const auto &page : category.pages) {
+        make_category_link(padded_right, page);
+        make_vert_space(padded_right, 4);
+    }
+    make_vert_space(padded_right, 16);
+}
+
+/*
+ * Page transitions below the title. The page being left is kept (in `outgoing`,
+ * already laid out) and painted into its own layer, while the new page is painted
+ * into a second layer.
+ * - Moving between a category overview and one of its pages slides: the old page
+ *   slides and fades away while the new one slides and fades in from the other side.
+ * - Switching to another category crossfades in place.
+ */
+struct PageSlide {
+    Container *outgoing = nullptr; // Holder of the old page's containers, or null
+    bool active = false;           // A transition is running
+    int dir = 0;                   // 1 into a page, -1 back to the overview, 0 crossfade
+    long start = 0;                // Set on the first frame, so slow page builds don't eat the animation
+    float eased = 1;               // This frame's opacity for the new page
+    bool layer_open = false;       // The incoming page's layer was pushed this frame
+};
+static PageSlide page_slide;
+static constexpr float page_slide_ms = 260;
+static constexpr float page_fade_ms = 220;
+static constexpr float page_slide_distance = 56;
+
+static void page_slide_finish() {
+    delete page_slide.outgoing;
+    page_slide.outgoing = nullptr;
+    page_slide.active = false;
+    page_slide.dir = 0;
+    page_slide.start = 0;
+}
+
+// 0 for a category overview, 1 for a page (single-page categories open their page).
+static int settings_view_depth(const std::string &view) {
+    auto category = settings_category_of(view);
+    if (!category)
+        return -1;
+    return view == category->name && category->pages.size() > 1 ? 0 : 1;
+}
+
+// Called before the new page is built: keeps the current one around to animate away.
+static void page_slide_begin(Container *root, const std::string &from, const std::string &to) {
+    auto from_category = settings_category_of(from);
+    auto to_category = settings_category_of(to);
+    int from_depth = settings_view_depth(from);
+    int to_depth = settings_view_depth(to);
+    int dir = 0;
+    if (from_category && from_category == to_category && from_depth >= 0 && to_depth >= 0)
+        dir = to_depth - from_depth;
+    bool fade = from_category && to_category && from_category != to_category;
+    auto right = container_by_name("settings_right", root);
+    page_slide_finish();
+    if ((dir == 0 && !fade) || !right || !trim(search_query).empty())
+        return;
+    auto holder = new Container;
+    holder->name = "settings_outgoing";
+    holder->real_bounds = right->real_bounds;
+    holder->children = std::move(right->children);
+    right->children.clear();
+    for (auto child : holder->children)
+        child->parent = holder;
+    page_slide.outgoing = holder;
+    page_slide.active = true;
+    page_slide.dir = dir;
+}
+
+// settings_right's when_paint: paints the old page leaving, then opens the layer
+// the new page (its children) paints into.
+static void page_slide_paint_before(Container *root, Container *c) {
+    if (!page_slide.active)
+        return;
+    auto window = swifi_window(root);
+    auto cr = window->drawing_context;
+    long now = get_current_time_in_ms();
+    if (page_slide.start == 0)
+        page_slide.start = now;
+    const bool sliding = page_slide.dir != 0;
+    float t = std::clamp((float) (now - page_slide.start) / (sliding ? page_slide_ms : page_fade_ms), 0.0f, 1.0f);
+    if (t >= 1) {
+        page_slide_finish();
+        return;
+    }
+    double distance = page_slide_distance * window->dpi * page_slide.dir;
+    float slide_e = 1 - (1 - t) * (1 - t) * (1 - t); // ease out
+    float out_alpha;
+    if (sliding) {
+        page_slide.eased = slide_e;
+        // Gone a bit before the new page arrives, so the two don't muddle.
+        out_alpha = std::max(0.0f, 1 - slide_e * 1.4f);
+    } else {
+        // The old page is gone by 45%, the new one fades in from 30%.
+        float out = std::clamp(t / 0.45f, 0.0f, 1.0f);
+        float in = std::clamp((t - 0.3f) / 0.7f, 0.0f, 1.0f);
+        out_alpha = (1 - out) * (1 - out);
+        page_slide.eased = 1 - (1 - in) * (1 - in) * (1 - in);
+    }
+
+    cr->save();
+    cr->new_path();
+    cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+    cr->clip_path();
+    if (page_slide.outgoing && out_alpha > 0) {
+        cr->push_group();
+        cr->save();
+        if (sliding)
+            cr->translate(-distance * slide_e, 0);
+        paint_outline(root, page_slide.outgoing);
+        cr->restore();
+        cr->pop_group_to_source();
+        cr->paint_source(out_alpha);
+    }
+    cr->push_group();
+    cr->save();
+    if (sliding)
+        cr->translate(distance * (1 - slide_e), 0);
+    page_slide.layer_open = true;
+    windowing::redraw(window);
+}
+
+// settings_right's after_paint, before the scrollbar: composites the new page's layer.
+static void page_slide_paint_after(Container *root, Container *) {
+    if (!page_slide.layer_open)
+        return;
+    page_slide.layer_open = false;
+    auto cr = swifi_window(root)->drawing_context;
+    cr->restore();
+    cr->pop_group_to_source();
+    cr->paint_source(page_slide.eased);
+    cr->restore();
+}
+
+static bool settings_show(Container *root, const std::string &id) {
+    auto category = settings_category_of(id);
+    if (!category)
+        return false;
+    std::string page = id;
+    if (id == category->name)
+        page = category->pages.size() == 1 ? category->pages[0].id : "";
+    std::string view = page.empty() ? category->name : page;
+
+    settings_nav_open = false;
+    // A different page starts at its top.
+    if (view != search_last_page) {
+        if (auto right = container_by_name("settings_right", root)) {
+            auto d = (RightData *) right->user_data;
+            d->scroll = 0;
+            d->smooth.stop();
+        }
+    }
+    sdt_invalidate();
+    sshortcut_stop_editing();
+    page_slide_begin(root, search_last_page, view);
+    search_clear_field(root);
+    search_last_page = view;
+    settings_current_category = category->name;
+    if (page.empty()) {
+        fill_category_page(root, *category);
+        swifi_redraw(root);
+        return true;
+    }
+    search_current_page = page;
+    search_current_section.clear();
+    if (page == "Mouse & Touchpad") {
+        fill_mouse_settings(root, nullptr);
+    } else if (page == "Keyboard") {
+        fill_keyboard_settings(root, nullptr);
+    } else if (page == "Desktop") {
+        fill_desktop_settings(root, nullptr);
+    } else if (page == "Display") {
+        fill_display_settings(root);
+    } else if (page == "Shortcuts") {
+        fill_shortcuts_settings(root);
+    } else if (page == "Multitasking") {
+        fill_multitasking_settings(root);
+    } else if (page == "Wifi") {
+        fill_wifi_settings(root);
+    } else if (page == "Bluetooth") {
+        fill_bluetooth_settings(root);
+    } else if (page == "Audio") {
+        fill_audio_settings(root);
+    } else if (page == "Time & Date") {
+        fill_datetime_settings(root);
+    }
+    search_current_page.clear();
+    swifi_redraw(root);
+    return true;
+}
+
+// Title above the page: the category, then the page when the category has several.
+struct SettingsCrumbs {
+    std::string parent; // Clickable, empty when there is none
+    std::string title;
+};
+
+static SettingsCrumbs settings_crumbs() {
+    SettingsCrumbs crumbs;
+    auto category = settings_category_of(search_last_page);
+    if (!category)
+        return crumbs;
+    if (search_last_page == category->name || category->pages.size() == 1) {
+        crumbs.title = category->name;
+    } else {
+        crumbs.parent = category->name;
+        crumbs.title = settings_page_title(search_last_page);
+    }
+    return crumbs;
+}
+
+static double settings_bold_text_width(Container *root, const std::string &text, double size) {
+    auto window = swifi_window(root);
+    auto font = get_cached_pango_font(window->drawing_context, set->font, size * window->dpi, PANGO_WEIGHT_BOLD, false);
+    pango_layout_set_width(font, -1);
+    pango_layout_set_height(font, -1);
+    pango_layout_set_ellipsize(font, PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_text(font, text.c_str(), -1);
+    int width = 0, height = 0;
+    pango_layout_get_pixel_size(font, &width, &height);
+    return width;
+}
+
+static const std::string settings_crumb_separator = "  ›  ";
+
+// Width of the clickable parent crumb, 0 when there is none.
+static double settings_crumb_parent_w(Container *root, const SettingsCrumbs &crumbs, double size) {
+    return crumbs.parent.empty() ? 0 : settings_bold_text_width(root, crumbs.parent, size);
+}
+
+static void paint_settings_crumbs(Container *root, Bounds b, double size, bool parent_hovered) {
+    auto crumbs = settings_crumbs();
+    if (crumbs.title.empty())
+        return;
+    double x = b.x;
+    if (!crumbs.parent.empty()) {
+        double w = settings_crumb_parent_w(root, crumbs, size);
+        swifi_text(root, Bounds(x, b.y, w + 2, b.h), crumbs.parent, size,
+                   parent_hovered ? theme.text : theme.text_secondary, false, true);
+        x += w;
+        double sw = settings_bold_text_width(root, settings_crumb_separator, size);
+        swifi_text(root, Bounds(x, b.y, sw + 2, b.h), settings_crumb_separator, size, theme.text_secondary, false, true);
+        x += sw;
+    }
+    swifi_text(root, Bounds(x, b.y, std::max(1.0, b.x + b.w - x), b.h), crumbs.title, size, theme.text, false, true);
+}
+
+static bool settings_crumb_parent_hit(Container *root, Container *c, double x_offset, double size) {
+    auto crumbs = settings_crumbs();
+    if (crumbs.parent.empty())
+        return false;
+    double x = c->real_bounds.x + x_offset;
+    return root->mouse_current_x >= x && root->mouse_current_x <= x + settings_crumb_parent_w(root, crumbs, size);
+}
+
+static constexpr double settings_header_size = 18;
+
+static void make_settings_header(Container *parent) {
+    auto header = parent->child(FILL_SPACE, FILL_SPACE);
+    header->name = "settings_header";
+    header->z_index = 1; // Covers page rows scrolled up past the top
+    header->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        set_argb(window->drawing_context, theme.background);
+        set_rect(window->drawing_context, b);
+        window->drawing_context->fill();
+        // Lined up with the page's rows.
+        bool hovered = c->state.mouse_hovering && settings_crumb_parent_hit(root, c, 32 * dpi, settings_header_size);
+        paint_settings_crumbs(root, Bounds(b.x + 32 * dpi, b.y + 8 * dpi, std::max(1.0, b.w - 48 * dpi), b.h - 8 * dpi),
+                              settings_header_size, hovered);
+    };
+    header->when_mouse_motion = [](Container *root, Container *) { swifi_redraw(root); };
+    header->when_mouse_leaves_container = [](Container *root, Container *) { swifi_redraw(root); };
+    header->when_clicked = [](Container *root, Container *c) {
+        auto dpi = swifi_window(root)->dpi;
+        if (settings_crumb_parent_hit(root, c, 32 * dpi, settings_header_size))
+            settings_show(root, settings_crumbs().parent);
+    };
 }
 
 static drawing::Context *cr_of(Container *root) {
@@ -9133,7 +10264,8 @@ static void place_settings_columns(Container *root, Container *c, const Bounds &
     auto scrim = container_by_name("settings_nav_scrim", c);
     auto bar   = container_by_name("settings_nav_bar", c);
     auto right = container_by_name("settings_right", c);
-    if (!left || !scrim || !bar || !right)
+    auto header = container_by_name("settings_header", c);
+    if (!left || !scrim || !bar || !right || !header)
         return;
     auto dpi        = swifi_window(root)->dpi;
     bool was_narrow = settings_narrow;
@@ -9155,11 +10287,21 @@ static void place_settings_columns(Container *root, Container *c, const Bounds &
         left->exists  = true;
         scrim->exists = false;
         bar->exists   = false;
-        left->wanted_pad = Bounds();
+        left->wanted_pad = Bounds(4 * dpi, 4 * dpi, 4 * dpi, 4 * dpi);
         layout(root, left, Bounds(b.x, b.y, left_w, b.h));
-        layout(root, right, Bounds(b.x + left_w, b.y, std::max(0.0, b.w - left_w), b.h));
+        Bounds page(b.x + left_w, b.y, std::max(0.0, b.w - left_w), b.h);
+        // The search results carry their own title.
+        header->exists = trim(search_query).empty() && !settings_crumbs().title.empty();
+        if (header->exists) {
+            double header_h = 56 * dpi;
+            layout(root, header, Bounds(page.x, page.y, page.w, header_h));
+            page.y += header_h;
+            page.h = std::max(0.0, page.h - header_h);
+        }
+        layout(root, right, page);
         return;
     }
+    header->exists = false;
 
     double bar_h = 48 * dpi;
     bar->exists      = true;
@@ -9206,14 +10348,10 @@ void fill_root(Container *root) {
 
         std::string page;
         page.swap(requested_page);
-        if (!page.empty()) {
-            if (auto tab = container_by_name(page, root)) {
-                if (tab->when_clicked) {
-                    if (auto right = container_by_name("settings_right", root))
-                        ((RightData *) right->user_data)->scroll = 0;
-                    tab->when_clicked(root, tab);
-                }
-            }
+        if (!page.empty() && settings_category_of(page)) {
+            if (auto right = container_by_name("settings_right", root))
+                ((RightData *) right->user_data)->scroll = 0;
+            settings_show(root, page);
         }
         // A setting picked from the dock's applications menu.
         search_open_external(root);
@@ -9251,19 +10389,20 @@ void fill_root(Container *root) {
     left->name = "settings_left";
     left->z_index = 3;
     left->when_paint = paint {
-        if (!settings_narrow)
-            return;
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
-        auto dpi = mylar->raw_window->dpi;
-        auto b = c->real_bounds;
-        set_argb(cr, theme.background);
-        set_rect(cr, b);
-        cr->fill();
-        double line = std::max(1.0, (double) std::round(1 * dpi));
-        set_argb(cr, theme.field_border);
-        cr->rectangle(b.x + b.w - line, b.y, line, b.h);
-        cr->fill();
+        if (settings_narrow) {
+            auto mylar = (MylarWindow*)root->user_data;
+            auto cr = mylar->raw_window->drawing_context;
+            auto dpi = mylar->raw_window->dpi;
+            auto b = c->real_bounds;
+            set_argb(cr, theme.background);
+            set_rect(cr, b);
+            cr->fill();
+            double line = std::max(1.0, (double) std::round(1 * dpi));
+            set_argb(cr, theme.field_border);
+            cr->rectangle(b.x + b.w - line, b.y, line, b.h);
+            cr->fill();
+        }
+        settings_nav_indicator_paint(root, c);
     };
     fill_left(left);
 
@@ -9293,8 +10432,13 @@ void fill_root(Container *root) {
         set_rect(window->drawing_context, b);
         window->drawing_context->fill();
         Bounds title(b.x + 52 * dpi, b.y, std::max(0.0, b.w - 60 * dpi), b.h);
-        if (!search_last_page.empty())
-            swifi_text(root, title, search_last_page, 12, theme.text);
+        bool hovered = c->state.mouse_hovering && settings_crumb_parent_hit(root, c, 52 * dpi, 12);
+        paint_settings_crumbs(root, title, 12, hovered);
+    };
+    bar->when_mouse_motion = [](Container *root, Container *) { swifi_redraw(root); };
+    bar->when_clicked = [](Container *root, Container *c) {
+        if (settings_crumb_parent_hit(root, c, 52 * swifi_window(root)->dpi, 12))
+            settings_show(root, settings_crumbs().parent);
     };
     auto hamburger = bar->child(FILL_SPACE, FILL_SPACE);
     hamburger->pre_layout = [](Container *root, Container *c, const Bounds &) {
@@ -9323,18 +10467,13 @@ void fill_root(Container *root) {
         swifi_redraw(root);
     };
 
+    make_settings_header(left_right);
+
     auto right = left_right->child(::fullycustom, FILL_SPACE, FILL_SPACE);
     right->name = "settings_right";
     auto d = new RightData;
     right->user_data = d;
-    right->when_paint = paint {
-        return;
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
-        set_argb(cr, theme.background);
-        set_rect(cr, c->real_bounds);
-        cr->fill();
-    };
+    right->when_paint = page_slide_paint_before;
     right->receive_events_even_if_obstructed = true;
     right->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         if (wall_preview_ate_scroll) {
@@ -9415,6 +10554,7 @@ void fill_root(Container *root) {
     right->when_mouse_up = bar_release;
     right->when_drag_end = bar_release;
     right->after_paint = [](Container *root, Container *c) {
+        page_slide_paint_after(root, c);
         paint_search_flash(root, c);
         paint_right_scrollbar(root, c);
         paint_wallpaper_drop_hint(root, c);
@@ -9486,6 +10626,7 @@ void actual_start() {
     };
     mylar->raw_window->on_close = [](RawWindow *w) {
         settings_wifi_release();
+        settings_bluetooth_release();
         settings_audio_release();
         sshortcut_stop_editing();
         trial_dialog_close();
@@ -9501,7 +10642,10 @@ void actual_start() {
 
     windowing::main_loop(settings_app);
 
+    page_slide_finish();
+    nav_indicator = NavIndicator();
     cleanup_smooth_frames();
+    settings_icon_cache_clear();
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();
 
@@ -9513,8 +10657,8 @@ void settings::start(std::string page, bool focus_search) {
     if (!page.empty()) {
         requested_page = page;
     } else if (!settings_app) {
-        // Opening fresh without a page: show Display rather than a blank page.
-        requested_page = "Display";
+        // Opening fresh without a page: show System rather than a blank page.
+        requested_page = "System";
     }
     if (focus_search)
         search_focus_requested = true;

@@ -503,8 +503,12 @@ void setup_text_editor(Container *c, std::string initial_value, STextEditorOptio
     c->when_drag = drag;
     c->when_drag_end = [](Container *root, Container *c) {
         auto &data = *static_cast<STextEditorData *>(c->user_data);
+        // Any motion between press and release counts as a drag (some windows report a
+        // motion right after the press), so releasing over the button still clears.
         if (data.clear_pressed) {
             data.clear_pressed = false;
+            if (over_clear_button(root, c, data))
+                clear_text_editor(root, c);
             return;
         }
         update_mouse_cursor(root, c, true);
