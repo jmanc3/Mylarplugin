@@ -8,6 +8,7 @@
 #include "text_editor.h"
 
 #include <dbus/dbus.h>
+#include <hyprutils/path/Path.hpp>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fstream>
@@ -345,8 +346,10 @@ static bool program_exists(const std::string &program) {
 }
 
 // The applications a menu should offer, sorted by name. The ones for other
-// desktops are included, marked Script::other_desktop.
-static void desktop_entries_load(std::vector<Script> &entries) {
+// desktops are included, marked Script::other_desktop. The .desktop files in
+// desktop_folder (the one the desktop icons show) are listed too, after the
+// installed ones, so a copy of an installed application isn't listed twice.
+static void desktop_entries_load(std::vector<Script> &entries, const std::string &desktop_folder) {
     entries.clear();
     const auto current_desktops = split_list(getenv("XDG_CURRENT_DESKTOP"), ':');
     auto names_current_desktop = [&current_desktops](const std::string &list) {
@@ -359,14 +362,25 @@ static void desktop_entries_load(std::vector<Script> &entries) {
     // Desktop file ids. A file overrides the ones with its id in later
     // directories, even when all it does is hide them.
     std::unordered_set<std::string> seen;
-    for (const auto &dir : application_directories()) {
+    // Each directory with how deep to look in it.
+    std::vector<std::pair<std::filesystem::path, int>> dirs;
+    for (const auto &dir : application_directories())
+        dirs.emplace_back(dir, 3);
+    if (!desktop_folder.empty()) {
+        std::error_code ec;
+        auto dir = std::filesystem::canonical(desktop_folder, ec);
+        if (!ec && std::filesystem::is_directory(dir, ec) &&
+            std::find_if(dirs.begin(), dirs.end(), [&dir](const auto &d) { return d.first == dir; }) == dirs.end())
+            dirs.emplace_back(dir, 0);
+    }
+    for (const auto &[dir, max_depth] : dirs) {
         std::error_code ec;
         std::filesystem::recursive_directory_iterator it(
             dir, std::filesystem::directory_options::follow_directory_symlink |
                  std::filesystem::directory_options::skip_permission_denied, ec);
         for (; !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
             // Applications aren't nested deep, and a symlink could loop.
-            if (it.depth() >= 3)
+            if (it.depth() >= max_depth)
                 it.disable_recursion_pending();
             const auto &path = it->path();
             if (path.extension() != ".desktop")
@@ -442,9 +456,13 @@ static void desktop_entries_load(std::vector<Script> &entries) {
 
 // Applications first, then everything executable in $PATH.
 static std::shared_future<std::vector<Script>> load_scripts_async() {
-    return std::async(std::launch::async, [] {
+    // Read the setting here, not on the loading thread.
+    std::string desktop_folder;
+    if (auto resolved = Hyprutils::Path::resolvePath(set->desktop_folder))
+        desktop_folder = resolved.value();
+    return std::async(std::launch::async, [desktop_folder] {
         std::vector<Script> loaded;
-        desktop_entries_load(loaded);
+        desktop_entries_load(loaded, desktop_folder);
         std::vector<Script> executables;
         scripts_load(executables);
         loaded.insert(loaded.end(), std::make_move_iterator(executables.begin()),
