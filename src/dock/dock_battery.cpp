@@ -551,7 +551,9 @@ void fill_battery_container(Dock *dock) {
         auto dock = (Dock *) root->user_data;
         set_brightness(std::round(std::clamp(amount, 0.0f, 1.0f) * 100.0f));
         windowing::redraw(dock->battery->raw_window);
-        dock::redraw();
+        // Slider events run with the dock app's mutex held, and dock::redraw locks it
+        // again, so calling it directly here deadlocks the dock.
+        main_thread(dock::redraw);
     };
     make_self_sizing_slider(content,
         [](Container *) { return std::string("\uE706"); },

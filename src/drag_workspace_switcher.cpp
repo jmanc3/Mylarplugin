@@ -58,6 +58,24 @@ static struct {
     double fit_height = 0;
 } dragged_preview;
 
+// After a drop onto a thumbnail, the preview keeps flying into the window's
+// final place inside that thumbnail instead of vanishing on release.
+static constexpr double landing_ms = 260.0;
+static constexpr float landing_fade_start = .85f;
+static unsigned int landing_generation = 0;
+static struct {
+    int cid = -1;
+    int monitor = -1;
+    int source_workspace = -1;
+    std::string target_uuid;
+    Bounds from;
+    float alpha = 1.0f;
+    long started = 0;
+    bool snapshot_released = false;
+    bool close_pending = false;
+    bool previous_hold_open = false;
+} landing;
+
 struct SwitcherScrollLayout {
     int monitor = -1;
     int active_workspace = -1;
@@ -98,7 +116,10 @@ static Bounds switcher_render_bounds(Bounds b, int monitor) {
     return b.scale(scale(monitor)).round();
 }
 
+static void finish_landing(bool run_pending_close);
+
 void drag_workspace_switcher::begin_drag(int cid, bool from_overview) {
+    finish_landing(false);
     dragged_preview = {};
     dragged_preview.cid = cid;
     dragged_preview.from_overview = from_overview;
@@ -204,6 +225,11 @@ static Bounds dragged_bounds() {
 }
 
 void drag_workspace_switcher::transform_thumbnail(int cid, Bounds &bounds, float &alpha) {
+    // The landing copy stands in for the overview thumbnail until it arrives.
+    if (cid == landing.cid && !hypriso->rendering_snapshot()) {
+        alpha = 0.0f;
+        return;
+    }
     if (cid != dragged_preview.cid || !dragged_preview.from_overview || hypriso->rendering_snapshot())
         return;
     dragged_preview.source = bounds;
@@ -213,17 +239,25 @@ void drag_workspace_switcher::transform_thumbnail(int cid, Bounds &bounds, float
 }
 
 bool drag_workspace_switcher::replaces_window(int cid) {
+    if (cid != -1 && cid == landing.cid && !hypriso->rendering_snapshot())
+        return true;
     return cid == dragged_preview.cid && hypriso->get_client_workspace_id(cid) >= 0 &&
         !dragged_preview.from_overview && dragged_preview.ready && dragged_preview.amount > 0.0f &&
         !hypriso->rendering_snapshot();
 }
 
 bool drag_workspace_switcher::omit_from_workspace_snapshot(int cid) {
+    if (cid != -1 && cid == landing.cid && !landing.snapshot_released)
+        return true;
     return cid != -1 && cid == dragged_preview.cid && hypriso->get_client_workspace_id(cid) >= 0 &&
         dragged_preview.ready && (dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f);
 }
 
+static void paint_landing(int monitor);
+
 void drag_workspace_switcher::paint_drag(int monitor, bool above_switcher) {
+    if (above_switcher)
+        paint_landing(monitor);
     const auto &p = dragged_preview;
     if (p.cid == -1 || hypriso->get_client_workspace_id(p.cid) < 0 || !p.ready || p.amount <= 0.0f || hypriso->rendering_snapshot())
         return;
@@ -243,6 +277,134 @@ static Bounds thumbnail_clip_bounds(Container *c) {
     auto b = c->real_bounds;
     b.y += b.h * (1.0 - *datum<float>(c, "slide_in_amount"));
     return b.intersection(c->real_bounds).intersection(switcher_bounds(c->parent));
+}
+
+static Bounds window_bounds_with_extents(int cid) {
+    auto b = bounds_client(cid);
+    const auto extents = extents_client(cid);
+    b.x -= extents.left;
+    b.y -= extents.top;
+    b.w += extents.left + extents.right;
+    b.h += extents.top + extents.bottom;
+    return b;
+}
+
+// Where the window shows up inside its destination thumbnail right now. The
+// destination follows the thumbnail's hover scale, the panel's movement, and
+// the newly created thumbnail when dropped on the "+" tile.
+static bool landing_target(Bounds &out) {
+    for (auto c : actual_root->children) {
+        if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
+            continue;
+        const int workspace = hypriso->get_client_workspace_id(landing.cid);
+        Container *target = nullptr;
+        if (workspace != landing.source_workspace) {
+            for (auto ch : c->children)
+                if (*datum<int>(ch, "workspace") == workspace)
+                    target = ch;
+        }
+        if (!target) {
+            for (auto ch : c->children)
+                if (ch->uuid == landing.target_uuid)
+                    target = ch;
+        }
+        if (!target)
+            return false;
+        const auto tb = target->real_bounds;
+        const auto mb = bounds_monitor(landing.monitor);
+        if (mb.w <= 0 || mb.h <= 0)
+            return false;
+        const auto wb = window_bounds_with_extents(landing.cid);
+        out = Bounds(tb.x + (wb.x - mb.x) / mb.w * tb.w, tb.y + (wb.y - mb.y) / mb.h * tb.h,
+            wb.w / mb.w * tb.w, wb.h / mb.h * tb.h);
+        return true;
+    }
+    return false;
+}
+
+static void finish_landing(bool run_pending_close) {
+    if (landing.cid == -1)
+        return;
+    ++landing_generation;
+    const bool close_pending = landing.close_pending;
+    hold_open = landing.previous_hold_open;
+    landing = {};
+    damage_all();
+    if (run_pending_close && close_pending)
+        drag_workspace_switcher::close_visually();
+}
+
+static void start_landing(int cid, Container *target) {
+    const auto &p = dragged_preview;
+    if (cid == -1 || p.cid != cid || !p.ready || !target || hypriso->rendering_snapshot())
+        return;
+    const int source_workspace = hypriso->get_client_workspace_id(cid);
+    // Dropping onto the window's own desktop leaves it where it is.
+    if (*datum<int>(target, "workspace") == source_workspace)
+        return;
+    finish_landing(false);
+    landing.cid = cid;
+    landing.monitor = target_monitor();
+    landing.source_workspace = source_workspace;
+    landing.target_uuid = target->uuid;
+    landing.from = dragged_bounds();
+    landing.alpha = p.alpha;
+    landing.started = get_current_time_in_ms();
+    landing.previous_hold_open = hold_open;
+    // Keep the panel up until the window has visibly arrived.
+    hold_open = true;
+    const auto generation = ++landing_generation;
+    later(16.0f, [generation](Timer *t) {
+        t->keep_running = false;
+        if (generation != landing_generation || landing.cid == -1)
+            return;
+        if (!hypriso->is_mapped(landing.cid)) {
+            finish_landing(true);
+            return;
+        }
+        const auto t_norm = (get_current_time_in_ms() - landing.started) / landing_ms;
+        if (t_norm >= landing_fade_start && !landing.snapshot_released) {
+            // Let the destination thumbnail include the window again while
+            // the copy covering it fades out.
+            landing.snapshot_released = true;
+            const int workspace = hypriso->get_client_workspace_id(landing.cid);
+            if (workspace >= 0)
+                hypriso->screenshot_space(landing.monitor, workspace);
+        }
+        if (t_norm >= 1.0) {
+            finish_landing(true);
+            return;
+        }
+        t->keep_running = true;
+        damage_all();
+    });
+    damage_all();
+}
+
+static void paint_landing(int monitor) {
+    if (landing.cid == -1 || monitor != landing.monitor || hypriso->rendering_snapshot())
+        return;
+    const auto t = std::clamp((get_current_time_in_ms() - landing.started) / landing_ms, 0.0, 1.0);
+    Bounds target;
+    if (!landing_target(target))
+        return;
+    const auto b = lerp(landing.from, target, pull(slidetopos2, t));
+    float alpha = landing.alpha;
+    if (t > landing_fade_start)
+        alpha *= 1.0f - (t - landing_fade_start) / (1.0f - landing_fade_start);
+    damage_all();
+    if (alpha <= 0.0f)
+        return;
+    const auto old_clip = hypriso->clip;
+    const auto old_clipbox = hypriso->clipbox;
+    defer(hypriso->clip = old_clip; hypriso->clipbox = old_clipbox);
+    hypriso->clip = true;
+    hypriso->clipbox = switcher_render_bounds(bounds_monitor(monitor), monitor);
+    hypriso->draw_deco_thumbnail(landing.cid, switcher_render_bounds(b, monitor), 0, 2.0f, 0, alpha);
+}
+
+void drag_workspace_switcher::land(int cid, Container *target) {
+    start_landing(cid, target);
 }
 
 void layout_spaces(Container *actual_root, Container *parent, int monitor) {
@@ -856,6 +1018,11 @@ static void actual_drag_workspace_switcher_close() {
 void drag_workspace_switcher::close_visually() {
     if (!switcher_showing || switcher_closing || overview::is_showing())
         return;
+    // Close once the dropped window has landed in its thumbnail.
+    if (landing.cid != -1) {
+        landing.close_pending = true;
+        return;
+    }
     switcher_closing = true;
     hold_open = false;
     const auto generation = ++close_generation;
@@ -890,6 +1057,7 @@ void drag_workspace_switcher::close_visually() {
 }
 
 void drag_workspace_switcher::close() {
+    finish_landing(false);
     end_drag(dragged_preview.cid);
     switcher_generation++;
     close_generation++;
@@ -935,6 +1103,7 @@ bool drag_workspace_switcher::drop_window(int cid) {
                 hypriso->screenshot_space(monitor, before);
                 hypriso->screenshot_space(monitor, hypriso->get_client_workspace_id(cid));
             });
+            start_landing(cid, ch);
             return true;
         }
     }

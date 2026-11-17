@@ -4,6 +4,7 @@
 #include <string>
 
 struct Bounds;
+struct Container;
 
 namespace drag_workspace_switcher {
     void open();
@@ -30,6 +31,9 @@ namespace drag_workspace_switcher {
     // Paint the native replacement at its old stacking position, or the raised
     // copy after the entire switcher has painted, just before the cursor.
     void paint_drag(int monitor, bool above_switcher);
+    // Fly the released preview into its place inside the target thumbnail.
+    // Call before end_drag, while the preview still has its drop bounds.
+    void land(int cid, Container *target);
 };
 
 

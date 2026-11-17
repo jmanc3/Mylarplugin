@@ -432,20 +432,20 @@ float get_brightness() {
 
 void set_brightness(float amount) {
     brightness_level = amount;
-    static bool queued = false;
-    static bool latest = amount;
+    static std::atomic<bool> queued = false;
+    static std::atomic<float> latest = amount;
     latest = amount;
-    if (queued)
+    if (queued.exchange(true))
         return;
-    queued = true;
-    std::thread t([amount]() {
+    std::thread t([]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        auto process = std::make_shared<TinyProcessLib::Process>(fz("brightnessctl set {}", (int) std::round(amount)));
+        // Apply the newest value requested while we were waiting, not the first one.
+        queued = false;
+        auto process = std::make_shared<TinyProcessLib::Process>(fz("brightnessctl set {}%", (int) std::round(latest.load())));
+        process->get_exit_status(); // reap it
 
         for (auto d : docks)
             windowing::redraw(d->window->raw_window);
-
-        queued = false;
     });
     t.detach();
 }

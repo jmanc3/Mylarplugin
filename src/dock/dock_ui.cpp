@@ -306,8 +306,12 @@ Container *make_self_sizing_slider(Container *root,
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
+        auto cr = window->raw_window->drawing_context;
         c->wanted_bounds.h = height * dpi;
-        c->wanted_bounds.w = height * dpi * 1.2;
+        // Wide enough for "100%" plus the half of the slider knob that pokes past
+        // the track's end at full value, so the two never overlap.
+        auto widest = draw_text(cr, 0, 0, "100%", 12 * dpi, false);
+        c->wanted_bounds.w = std::max((double) (height * dpi * 1.2), (double) (widest.w + 12 * dpi));
     };
     right->when_paint = [right_text, get_window](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;

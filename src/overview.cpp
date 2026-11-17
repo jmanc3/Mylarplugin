@@ -529,7 +529,7 @@ static void paint_monitor(int monitor_id) {
         b.x += translation + (snapshot ? 0 : thumbnail.drag_x.value);
         b.y += snapshot ? 0 : thumbnail.drag_y.value;
         float alpha = snapshot ? 1.0f : thumbnail.opacity;
-        if (!snapshot && cid == monitor.dragged)
+        if (!snapshot)
             drag_workspace_switcher::transform_thumbnail(cid, b, alpha);
         hypriso->clipbox = render_bounds(clip, monitor_id);
         hypriso->draw_deco_thumbnail(cid, render_bounds(b, monitor_id), 0, 2.0f, 0, alpha);
@@ -667,6 +667,7 @@ static void drop_on_workspace(int cid, double x, double y) {
             if (!(ch->handles_pierced ? ch->handles_pierced(ch, x, y) : bounds_contains(ch->real_bounds, x, y)))
                 continue;
             const int workspace = *datum<int>(ch, "workspace");
+            drag_workspace_switcher::land(cid, ch);
             if (workspace == -1) {
                 const auto spaces = hypriso->get_workspaces(mid);
                 queue_workspace_drop(cid, spaces.empty() ? 1 : spaces.back() + 1);

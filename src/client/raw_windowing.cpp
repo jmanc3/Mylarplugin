@@ -168,41 +168,66 @@ struct pending_pointer_frame_event {
 static constexpr double touchpad_glide_min_velocity = 35.0;
 
 struct pointer_scroll_axis {
+    // Release velocity comes from the net motion over this window, not from
+    // the last few samples: fingers often roll back slightly as they lift, and
+    // following that jitter made the glide run opposite to the swipe.
+    static constexpr uint32_t velocity_window_ms = 100;
+    static constexpr int max_samples = 32;
+
     bool tracking = false;
     bool coasting = false;
     uint32_t time = 0;
     int direction = 0;
     double velocity = 0.0; // Wayland axis units per second.
-    double pending_delta = 0.0;
+    uint32_t sample_times[max_samples] = {};
+    double sample_deltas[max_samples] = {};
+    int sample_count = 0;
+    int sample_next = 0;
 
     void sample(double delta, uint32_t now) {
         // A compositor may send axis(0) with axis_stop when fingers lift.
         // It is a terminator, not a measurement of the release velocity.
         if (delta == 0.0) return;
         const uint32_t elapsed = now - time; // Handles Wayland timestamp wraparound.
-        if (!tracking || elapsed > 100) {
-            velocity = 0.0;
-            pending_delta = 0.0;
-        } else if (elapsed == 0) {
-            pending_delta += delta;
-            return;
-        } else {
-            const double speed = (delta + pending_delta) * 1000.0 / elapsed;
-            // Follow reversals immediately; smooth small speed variations over 30 ms.
-            const double weight = 1.0 - std::exp(-static_cast<double>(elapsed) / 30.0);
-            velocity = velocity * speed <= 0.0 ? speed :
-                velocity + weight * (speed - velocity);
-            pending_delta = 0.0;
+        if (!tracking || elapsed > velocity_window_ms) {
+            sample_count = 0;
+            sample_next = 0;
         }
+        sample_times[sample_next] = now;
+        sample_deltas[sample_next] = delta;
+        sample_next = (sample_next + 1) % max_samples;
+        if (sample_count < max_samples) sample_count++;
+        velocity = 0.0;
         tracking = true;
         coasting = false;
         time = now;
     }
 
+    // Net distance over the recent window divided by the time it covered. The
+    // oldest sample's delta happened before its timestamp, so it only marks
+    // where the window starts.
+    double release_velocity() const {
+        double distance = 0.0;
+        uint32_t oldest = time;
+        for (int i = 0; i < sample_count; ++i) {
+            const int index = (sample_next - 1 - i + max_samples) % max_samples;
+            const uint32_t age = time - sample_times[index];
+            if (age > velocity_window_ms) break;
+            oldest = sample_times[index];
+            if (i + 1 < sample_count && time - sample_times[(index - 1 + max_samples) % max_samples] <= velocity_window_ms)
+                distance += sample_deltas[index];
+        }
+        const uint32_t span = time - oldest;
+        if (span < 8) return 0.0;
+        return distance * 1000.0 / span;
+    }
+
     void stop(uint32_t now) {
-        coasting = tracking && now - time <= 100 &&
-            std::abs(velocity) >= touchpad_glide_min_velocity;
+        velocity = tracking && now - time <= 100 ? release_velocity() : 0.0;
+        coasting = std::abs(velocity) >= touchpad_glide_min_velocity;
         tracking = false;
+        sample_count = 0;
+        sample_next = 0;
         if (!coasting) velocity = 0.0;
     }
 
