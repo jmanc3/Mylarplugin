@@ -6,6 +6,7 @@
 namespace titlebar {
     void on_window_open(int id);
     void on_window_closed(int id);
+    void on_x11_hints_changed(int id);
     void on_draw_decos(std::string name, int monitor, int id, float a, int deco_offset_x, int deco_offset_y);
     void on_activated(int id);
 

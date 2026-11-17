@@ -160,6 +160,34 @@ static void sleep_cid(int cid) {
     heart::layout_containers();        
 }
 
+// Keeps the client area where it is on screen by growing/shrinking the window by the titlebar height,
+// unless the window's geometry is owned by something else (fullscreen).
+static void detach_titlebar(int cid, bool adjust_geometry) {
+    hypriso->remove_decorations(cid);
+    if (auto c = get_cid_container(cid)) {
+        delete c->children[0];
+        c->children.erase(c->children.begin());
+    }
+    if (adjust_geometry) {
+        auto b = bounds_client(cid);
+        hypriso->move_resize(cid, b.x, b.y - titlebar_h, b.w, b.h + titlebar_h);
+    }
+    hypriso->set_corner_rendering_mask_for_window(cid, 0);
+}
+
+static void attach_titlebar(int cid, bool adjust_geometry) {
+    hypriso->reserve_titlebar(cid, titlebar_h);
+    if (auto c = get_cid_container(cid)) {
+        create_titlebar(actual_root, c);
+        *datum<float>(c, "titlebar_alpha") = 1.0;
+    }
+    if (adjust_geometry) {
+        auto b = bounds_client(cid);
+        hypriso->move_resize(cid, b.x, b.y + titlebar_h, b.w, b.h - titlebar_h);
+    }
+    hypriso->set_corner_rendering_mask_for_window(cid, 3);
+}
+
 void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
     auto m = mouse();
     std::vector<PopOption> root;
@@ -230,23 +258,9 @@ void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
             auto client = get_cid_container(cid);
             auto info = (ClientInfo *) client->user_data;
             if (hypriso->has_decorations(cid)) {
-                hypriso->remove_decorations(cid);
-                if (auto c = get_cid_container(cid)) {
-                    delete c->children[0];
-                    c->children.erase(c->children.begin());
-                }
-                auto b = bounds_client(cid);
-                hypriso->move_resize(cid, b.x, b.y - titlebar_h, b.w, b.h + titlebar_h);
-                hypriso->set_corner_rendering_mask_for_window(cid, 0);
+                detach_titlebar(cid, true);
             } else {
-                hypriso->reserve_titlebar(cid, titlebar_h);
-                if (auto c = get_cid_container(cid)) {
-                    create_titlebar(actual_root, c);
-                    *datum<float>(c, "titlebar_alpha") = 1.0;
-                }
-                auto b = bounds_client(cid);
-                hypriso->move_resize(cid, b.x, b.y + titlebar_h, b.w, b.h - titlebar_h);
-                hypriso->set_corner_rendering_mask_for_window(cid, 3);
+                attach_titlebar(cid, true);
             }
         };
         root.push_back(pop);        
@@ -347,24 +361,10 @@ void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
             info->remove_titlebar = !info->remove_titlebar;
             bool has_titlebar = hypriso->has_decorations(cid);
             if (info->remove_titlebar && has_titlebar) {
-                hypriso->remove_decorations(cid);
-                if (auto c = get_cid_container(cid)) {
-                    delete c->children[0];
-                    c->children.erase(c->children.begin());
-                }
-                auto b = bounds_client(cid);
-                hypriso->move_resize(cid, b.x, b.y - titlebar_h, b.w, b.h + titlebar_h);
-                hypriso->set_corner_rendering_mask_for_window(cid, 0);
+                detach_titlebar(cid, true);
             }
             if (!info->remove_titlebar && !has_titlebar) {
-                hypriso->reserve_titlebar(cid, titlebar_h);
-                if (auto c = get_cid_container(cid)) {
-                    create_titlebar(actual_root, c);
-                    *datum<float>(c, "titlebar_alpha") = 1.0;
-                }
-                auto b = bounds_client(cid);
-                hypriso->move_resize(cid, b.x, b.y + titlebar_h, b.w, b.h - titlebar_h);
-                hypriso->set_corner_rendering_mask_for_window(cid, 3);
+                attach_titlebar(cid, true);
             }
             update_restore_info_for(cid);
         };
@@ -805,6 +805,19 @@ void titlebar::on_window_open(int id) {
     } else {
         hypriso->set_corner_rendering_mask_for_window(id, 0);
     }
+}
+
+void titlebar::on_x11_hints_changed(int id) {
+    if (titlebar_disabled(id))
+        return;
+    const bool wants = hypriso->wants_titlebar(id);
+    if (wants == hypriso->has_decorations(id))
+        return;
+    const bool adjust_geometry = !hypriso->is_fullscreen(id);
+    if (wants)
+        attach_titlebar(id, adjust_geometry);
+    else
+        detach_titlebar(id, adjust_geometry);
 }
 
 void titlebar::on_window_closed(int id) {

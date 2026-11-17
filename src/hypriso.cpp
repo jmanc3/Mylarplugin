@@ -472,10 +472,12 @@ static inline SP<Desktop::View::CPopup> mw_popup_head(const PHLWINDOW& w) {
     return w->popupHead();
 }
 
+static bool x11_skip_blur(const PHLWINDOW& w);
+
 static inline bool mw_window_should_blur(const PHLWINDOW& w) {
     if (!w)
         return false;
-    return w->shouldBlur();
+    return w->shouldBlur() && !x11_skip_blur(w);
 }
 
 static inline bool mw_popup_should_blur(const PHLWINDOW& w) {
@@ -817,14 +819,26 @@ static void start_anim_timer(Anim *anim) {
     });
 }
 
+// What an X11 window is and what the user may do with it; see x11_info().
+struct SX11Info {
+    ObClientType type = OB_CLIENT_TYPE_NORMAL;
+    bool popup = false; // popup/dropdown menu, tooltip, notification, combo, dnd icon
+    bool transient = false; // WM_TRANSIENT_FOR, or a type that implies it (dialog, menu, toolbar, utility)
+    bool has_transient_for = false; // WM_TRANSIENT_FOR is set
+    bool has_parent = false; // WM_TRANSIENT_FOR points at a window we know
+    bool fixed_size = false;
+    bool no_blur = false; // Wine WS_EX_LAYERED: per-pixel alpha that must show the desktop unblurred
+    ObMwmHints mwm = {0, 0, 0};
+    guint decorations = 0; // ObFrameDecorations
+    guint functions = 0; // ObFunctions
+};
+
 struct HyprWindow {
     int id;  
     PHLWINDOW w;
 
     SurfacePassInfo pass_info;
     
-    bool checked_resizable = false;
-    bool resizable = true;
 
     bool was_workspace_visible = false;
 
@@ -851,15 +865,17 @@ struct HyprWindow {
     int cornermask = 0; // when rendering the surface, what corners should be rounded
     bool no_rounding = false;
 
-    ObClientType type = (ObClientType) -1;
-    bool transient = false;
-    ObMwmHints mwmhints;
-    guint decorations;
-    gboolean undecorated;
-    guint functions;
+    bool x11_info_valid = false;
+    SX11Info x11_info;
+    // Properties Hyprland doesn't track: read once, then kept current by hook_OnReadProp.
+    bool x11_props_valid = false;
+    ObMwmHints mwm = {0, 0, 0};
+    uint32_t wine_exstyle = 0; // _WINE_HWND_EXSTYLE
 };
 
 static std::vector<HyprWindow *> hyprwindows;
+static const SX11Info& x11_info(HyprWindow* hw);
+void hook_x11_read_prop();
 
 struct HyprMonitor {
     int id;  
@@ -1086,65 +1102,6 @@ static void change_float_state(PHLWINDOW PWINDOW, bool should_float) {
     return;
 }
 
-struct MotifHints {
-    uint32_t flags;
-    uint32_t functions;
-    uint32_t decorations;
-    int32_t  input_mode;
-    uint32_t status;
-};
-
-// Motif flags
-constexpr uint32_t MWM_HINTS_FUNCTIONS   = 1 << 0;
-constexpr uint32_t MWM_FUNC_ALL      = 1 << 0; // enable all functions
-constexpr uint32_t MWM_FUNC_RESIZE   = 1 << 1; // allow user to resize window
-constexpr uint32_t MWM_FUNC_MOVE     = 1 << 2;
-constexpr uint32_t MWM_FUNC_MINIMIZE = 1 << 3;
-constexpr uint32_t MWM_FUNC_MAXIMIZE = 1 << 4;
-constexpr uint32_t MWM_FUNC_CLOSE    = 1 << 5;
-constexpr uint32_t MWM_HINTS_DECORATIONS = 1 << 1;
-
-// Returns motif hints if they exist, otherwise std::nullopt
-std::optional<MotifHints> getMotifHints(xcb_connection_t* conn, xcb_window_t win)
-{
-    if (!conn || !win)
-        return std::nullopt;
-
-    const char motifName[] = "_MOTIF_WM_HINTS";
-
-    // Resolve atom
-    xcb_intern_atom_cookie_t cookie =
-        xcb_intern_atom(conn, 0, sizeof(motifName) - 1, motifName);
-
-    xcb_intern_atom_reply_t* reply =
-        xcb_intern_atom_reply(conn, cookie, nullptr);
-
-    if (!reply)
-        return std::nullopt;
-
-    xcb_atom_t motifAtom = reply->atom;
-    free(reply);
-
-    // Request up to 5 longs (sizeof(MotifHints))
-    xcb_get_property_cookie_t propCookie =
-        xcb_get_property(conn, 0, win, motifAtom,
-                         XCB_GET_PROPERTY_TYPE_ANY, 0, 5);
-
-    xcb_get_property_reply_t* propReply =
-        xcb_get_property_reply(conn, propCookie, nullptr);
-
-    if (!propReply || xcb_get_property_value_length(propReply) < sizeof(MotifHints)) {
-        free(propReply);
-        return std::nullopt;
-    }
-
-    MotifHints hints{};
-    memcpy(&hints, xcb_get_property_value(propReply), sizeof(hints));
-    free(propReply);
-
-    return hints; // full structure
-}
-
 bool HyprIso::requested_client_side_decorations(int cid) {
     for (auto hw : hyprwindows) {
         if (hw->id != cid)
@@ -1171,22 +1128,9 @@ bool HyprIso::requested_client_side_decorations(int cid) {
             }
         }
 
-        if (mw_is_x11(w) && mw_backend_valid(w)) {
-            auto win = mw_client_id(w);
-            if (g_pXWayland && g_pXWayland->m_wm) {
-                auto connection = g_pXWayland->m_wm->getConnection();
-
-                auto hintsOpt = getMotifHints(connection, win);
-                if (hintsOpt) {
-                    auto& h = *hintsOpt;
-                    bool wantsNoDecorations =
-                        (h.flags & MWM_HINTS_DECORATIONS) && (h.decorations == 0);
-                    if (wantsNoDecorations) {
-                        return true;
-                    }
-                }
-            }
-        }
+        // Openbox's rules: Motif hints with no title and no handle, or a type that never gets decor.
+        if (mw_is_x11(w))
+            return !(x11_info(hw).decorations & OB_FRAME_DECOR_TITLEBAR);
     }
     
     return false;
@@ -1408,73 +1352,6 @@ void hook_default_monitor_scale() {
         }
     }
     notify("Couldn't hook the default monitor scale; monitors under 1080p will use 1.0");
-}
-
-inline CFunctionHook* g_pOnReadProp = nullptr;
-typedef void (*origOnReadProp)(void*, SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply);
-    //void CXWM::readProp(SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply) {
-void hook_OnReadProp(void* thisptr, SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
- 
-    (*(origOnReadProp)g_pOnReadProp->m_original)(thisptr, XSURF, atom, reply);
-
-    /*
-    const auto* value    = sc<const char*>(xcb_get_property_value(reply));
-
-    auto handleMotifs = [&]() {
-        // Motif hints are 5 longs: flags, functions, decorations, input_mode, status
-        const uint32_t* hints = rc<const uint32_t*>(value);
-
-        std::vector<uint32_t> m_motifs;
-        m_motifs.assign(hints, hints + std::min<size_t>(reply->value_len, 5));
-
-        for (const auto &w : Desktop::windowState()->windows()) {
-            if (w->m_xwaylandSurface == XSURF) {
-                w->m_X11DoesntWantBorders = false;
-                g_pXWaylandManager->checkBorders(w);
-
-                const uint32_t flags       = m_motifs[0];
-                const uint32_t decorations = m_motifs.size() > 2 ? m_motifs[2] : 1;
-                const uint32_t MWM_HINTS_DECORATIONS = (1L << 1);
-
-                if ((flags & MWM_HINTS_DECORATIONS) && decorations == 0) {
-                    w->m_X11DoesntWantBorders = true;
-                }
-
-                // has decora
-                bool has_decorations = false;
-                for (auto& wd : w->m_windowDecorations)
-                    if (wd->getDisplayName() == "MylarBar")
-                        has_decorations = true;
-
-                if (w->m_X11DoesntWantBorders && has_decorations) {
-                    for (auto it = w.get()->m_windowDecorations.rbegin(); it != w.get()->m_windowDecorations.rend(); ++it) {
-                        auto bar = (IHyprWindowDecoration *) it->get();
-                        if (bar->getDisplayName() == "MylarBar" || bar->getDisplayName() == "MylarResize") {
-                            HyprlandAPI::removeWindowDecoration(globals->api, bar);
-                            for (auto hw : hyprwindows) {
-                                if (hw->w == w && hypriso->on_window_closed) {
-                                    hypriso->on_window_closed(hw->id);
-                                }
-                            }
-                        }
-                    }
-                } else if (!w->m_X11DoesntWantBorders && !has_decorations) {
-                    // add
-                    for (auto hw : hyprwindows) {
-                        if (hw->w == w && hypriso->on_window_open) {
-                           hypriso->on_window_open(hw->id);
-                        }
-                    }
-                }
-            }
-        }
-    };
-    if (atom == HYPRATOMS["_MOTIF_WM_HINTS"])
-        handleMotifs();
-    */
 }
 
 static wl_event_source *source = nullptr;
@@ -5274,6 +5151,7 @@ void HyprIso::create_hooks() {
     // detect_csd_request_change();
     fix_window_corner_rendering();
     hook_default_monitor_scale();
+    hook_x11_read_prop();
     hook_shadow_decorations();
     //disable_default_alt_tab_behaviour();
     detect_x11_move_resize_requests();    
@@ -5326,196 +5204,392 @@ bool xcb_get_transient_for(xcb_connection_t* conn, xcb_window_t window, xcb_wind
     return ok;
 }
 
-void client_get_type_and_transientness(HyprWindow* self) {
-    guint num, i;
-    guint32 *val;
+// Parses _MOTIF_WM_HINTS (flags, functions, decorations; Motif 2.0 has 5 longs, only the first 3 matter).
+// Openbox accepts any property with at least those 3 elements, so we do too.
+static ObMwmHints parse_mwm_hints(xcb_get_property_reply_t* reply) {
+    ObMwmHints hints = {0, 0, 0};
+    if (!reply || reply->format != 32 || xcb_get_property_value_length(reply) < (int)(OB_MWM_ELEMENTS * sizeof(uint32_t)))
+        return hints;
+    const auto values = (const uint32_t*)xcb_get_property_value(reply);
+    hints.flags       = values[0];
+    hints.functions   = values[1];
+    hints.decorations = values[2];
+    return hints;
+}
 
-    self->type = (ObClientType) -1;
-    self->transient = false;
-    
-    const auto X11BACKEND = dynamic_cast<Desktop::View::CX11Backend*>(&self->w->backend());
-    if (!X11BACKEND || !X11BACKEND->m_xwaylandSurface)
+// Atoms that aren't in HYPRATOMS, interned once each.
+static uint32_t interned_atom(xcb_connection_t* conn, const std::string& name) {
+    static std::unordered_map<std::string, uint32_t> cache;
+    if (const auto it = cache.find(name); it != cache.end())
+        return it->second;
+    if (!conn)
+        return XCB_ATOM_NONE;
+
+    uint32_t atom   = XCB_ATOM_NONE;
+    auto     cookie = xcb_intern_atom(conn, 0, name.size(), name.c_str());
+    if (auto reply = xcb_intern_atom_reply(conn, cookie, nullptr)) {
+        atom = reply->atom;
+        free(reply);
+    }
+    cache[name] = atom;
+    return atom;
+}
+
+static uint32_t wine_exstyle_atom(xcb_connection_t* conn) {
+    return interned_atom(conn, "_WINE_HWND_EXSTYLE");
+}
+
+constexpr uint32_t WINE_WS_EX_LAYERED = 0x00080000;
+
+// _WINE_HWND_EXSTYLE mirrors the Win32 extended window style as a single CARDINAL.
+static uint32_t parse_wine_exstyle(xcb_get_property_reply_t* reply) {
+    if (!reply || reply->format != 32 || xcb_get_property_value_length(reply) < (int)sizeof(uint32_t))
+        return 0;
+    return *(const uint32_t*)xcb_get_property_value(reply);
+}
+
+// Hyprland doesn't read _MOTIF_WM_HINTS or _WINE_HWND_EXSTYLE when a window maps. Both requests go out
+// before waiting on either, so this is one blocking round-trip, once per window; after that
+// hook_OnReadProp keeps them current from the property-change replies.
+static void read_x11_props(HyprWindow* hw, xcb_connection_t* conn) {
+    hw->x11_props_valid = true;
+    const auto win      = mw_client_id(hw->w);
+    const auto motif    = HYPRATOMS.find("_MOTIF_WM_HINTS");
+    if (!conn || !win || motif == HYPRATOMS.end())
         return;
 
-    for (const auto& a : X11BACKEND->m_xwaylandSurface->m_atoms) {
-        if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DESKTOP"])
-            self->type = OB_CLIENT_TYPE_DESKTOP;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DOCK"])
-            self->type = OB_CLIENT_TYPE_DOCK;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_TOOLBAR"])
-            self->type = OB_CLIENT_TYPE_TOOLBAR;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_MENU"])
-            self->type = OB_CLIENT_TYPE_MENU;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_UTILITY"])
-            self->type = OB_CLIENT_TYPE_UTILITY;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_SPLASH"])
-            self->type = OB_CLIENT_TYPE_SPLASH;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_DIALOG"])
-            self->type = OB_CLIENT_TYPE_DIALOG;
-        else if (a == HYPRATOMS["NET_WM_WINDOW_TYPE_NORMAL"])
-            self->type = OB_CLIENT_TYPE_NORMAL;
-        else if (a == HYPRATOMS["KDE_NET_WM_WINDOW_TYPE_OVERRIDE"])
-        {
-            self->mwmhints.flags &= (OB_MWM_FLAG_FUNCTIONS |
-                                     OB_MWM_FLAG_DECORATIONS);
-            self->mwmhints.decorations = 0;
-            self->mwmhints.functions = 0;
+    const auto exstyle_atom   = wine_exstyle_atom(conn);
+    auto       motif_cookie   = xcb_get_property(conn, 0, win, motif->second, XCB_GET_PROPERTY_TYPE_ANY, 0, 5);
+    auto       exstyle_cookie = xcb_get_property(conn, 0, win, exstyle_atom, XCB_ATOM_CARDINAL, 0, 1);
+
+    auto motif_reply = xcb_get_property_reply(conn, motif_cookie, nullptr);
+    hw->mwm          = parse_mwm_hints(motif_reply);
+    free(motif_reply);
+
+    auto exstyle_reply = xcb_get_property_reply(conn, exstyle_cookie, nullptr);
+    hw->wine_exstyle   = exstyle_atom == XCB_ATOM_NONE ? 0 : parse_wine_exstyle(exstyle_reply);
+    free(exstyle_reply);
+}
+
+// _KDE_NET_WM_WINDOW_TYPE_OVERRIDE isn't in HYPRATOMS.
+static uint32_t kde_override_atom(xcb_connection_t* conn) {
+    return interned_atom(conn, "_KDE_NET_WM_WINDOW_TYPE_OVERRIDE");
+}
+
+// Openbox's client_get_type_and_transientness(), plus the transient window types Openbox predates
+// (popup/dropdown menus, tooltips, notifications, combo boxes, DnD icons), which we never treat as
+// windows: no titlebar, no functions, not in the dock or alt-tab.
+static void x11_get_type_and_transientness(SX11Info& info, const SP<CXWaylandSurface>& surface, xcb_connection_t* conn) {
+    // Atom ids are fixed once XWayland is up, so resolve them on first use instead of per lookup.
+    static const auto TYPES = [] {
+        const std::array<std::pair<const char*, ObClientType>, 8> NAMES = {{
+            {"_NET_WM_WINDOW_TYPE_DESKTOP", OB_CLIENT_TYPE_DESKTOP},
+            {"_NET_WM_WINDOW_TYPE_DOCK", OB_CLIENT_TYPE_DOCK},
+            {"_NET_WM_WINDOW_TYPE_TOOLBAR", OB_CLIENT_TYPE_TOOLBAR},
+            {"_NET_WM_WINDOW_TYPE_MENU", OB_CLIENT_TYPE_MENU},
+            {"_NET_WM_WINDOW_TYPE_UTILITY", OB_CLIENT_TYPE_UTILITY},
+            {"_NET_WM_WINDOW_TYPE_SPLASH", OB_CLIENT_TYPE_SPLASH},
+            {"_NET_WM_WINDOW_TYPE_DIALOG", OB_CLIENT_TYPE_DIALOG},
+            {"_NET_WM_WINDOW_TYPE_NORMAL", OB_CLIENT_TYPE_NORMAL},
+        }};
+        std::array<std::pair<uint32_t, ObClientType>, 8> resolved = {};
+        for (size_t i = 0; i < NAMES.size(); i++) {
+            const auto it = HYPRATOMS.find(NAMES[i].first);
+            resolved[i]   = {it == HYPRATOMS.end() ? (uint32_t)XCB_ATOM_NONE : it->second, NAMES[i].second};
         }
-        if (self->type != (ObClientType) -1)
-            break; 
+        return resolved;
+    }();
+    static const auto POPUP_TYPES = [] {
+        const std::array<const char*, 6> NAMES = {
+            "_NET_WM_WINDOW_TYPE_POPUP_MENU", "_NET_WM_WINDOW_TYPE_DROPDOWN_MENU", "_NET_WM_WINDOW_TYPE_TOOLTIP",
+            "_NET_WM_WINDOW_TYPE_NOTIFICATION", "_NET_WM_WINDOW_TYPE_COMBO", "_NET_WM_WINDOW_TYPE_DND",
+        };
+        std::array<uint32_t, 6> resolved = {};
+        for (size_t i = 0; i < NAMES.size(); i++) {
+            const auto it = HYPRATOMS.find(NAMES[i]);
+            resolved[i]   = it == HYPRATOMS.end() ? (uint32_t)XCB_ATOM_NONE : it->second;
+        }
+        return resolved;
+    }();
+
+    const auto KDE_OVERRIDE = kde_override_atom(conn);
+    bool       typed        = false;
+
+    // _NET_WM_WINDOW_TYPE is ordered by preference: use the first value we know about.
+    for (const auto atom : surface->m_atoms) {
+        if (atom == XCB_ATOM_NONE)
+            continue;
+        for (const auto& [type_atom, type] : TYPES) {
+            if (type_atom != atom)
+                continue;
+            info.type = type;
+            typed     = true;
+            break;
+        }
+        if (!typed && std::ranges::find(POPUP_TYPES, atom) != POPUP_TYPES.end()) {
+            info.popup = true;
+            typed      = true;
+        }
+        if (!typed && KDE_OVERRIDE != XCB_ATOM_NONE && atom == KDE_OVERRIDE) {
+            // prevent this window from getting any decor or functionality
+            info.mwm.flags &= (OB_MWM_FLAG_FUNCTIONS | OB_MWM_FLAG_DECORATIONS);
+            info.mwm.decorations = 0;
+            info.mwm.functions   = 0;
+        }
+        if (typed)
+            break;
     }
 
-    xcb_window_t t;
-    auto connection = g_pXWayland->m_wm->getConnection();
-    if (xcb_get_transient_for(connection, mw_client_id(self->w), &t))
-        self->transient = TRUE;
+    info.has_transient_for = surface->m_transient;
+    info.has_parent        = !!surface->m_parent;
+    info.transient         = info.has_transient_for;
 
-    if (self->type == (ObClientType) -1) {
-        if (self->transient)
-            self->type = OB_CLIENT_TYPE_DIALOG;
-        else
-            self->type = OB_CLIENT_TYPE_NORMAL;
+    // No type hint: a transient is a dialog, anything else a normal window.
+    if (!typed)
+        info.type = info.transient ? OB_CLIENT_TYPE_DIALOG : OB_CLIENT_TYPE_NORMAL;
+
+    if (info.popup || info.type == OB_CLIENT_TYPE_DIALOG || info.type == OB_CLIENT_TYPE_TOOLBAR || info.type == OB_CLIENT_TYPE_MENU ||
+        info.type == OB_CLIENT_TYPE_UTILITY)
+        info.transient = true;
+}
+
+// A window whose min and max size hints meet can't be resized. This is dwm's isfixed (max == min) widened
+// to Openbox's rule (min never below max), which also catches bogus hints where min > max.
+static bool x11_fixed_size(const SP<CXWaylandSurface>& surface) {
+    const auto hints = surface->m_sizeHints.get();
+    if (!hints)
+        return false;
+    if (hints->min_width <= 0 || hints->min_height <= 0 || hints->max_width <= 0 || hints->max_height <= 0)
+        return false;
+    return hints->min_width >= hints->max_width && hints->min_height >= hints->max_height;
+}
+
+// Openbox's client_setup_default_decor_and_functions(): start with everything, strip what the type
+// doesn't allow, then apply the Motif hints subtractively.
+static void x11_setup_decor_and_functions(SX11Info& info) {
+    info.decorations = OB_FRAME_DECOR_TITLEBAR | OB_FRAME_DECOR_HANDLE | OB_FRAME_DECOR_GRIPS | OB_FRAME_DECOR_BORDER | OB_FRAME_DECOR_ICON | OB_FRAME_DECOR_ALLDESKTOPS |
+        OB_FRAME_DECOR_ICONIFY | OB_FRAME_DECOR_MAXIMIZE | OB_FRAME_DECOR_SHADE | OB_FRAME_DECOR_CLOSE;
+    info.functions = OB_CLIENT_FUNC_RESIZE | OB_CLIENT_FUNC_MOVE | OB_CLIENT_FUNC_ICONIFY | OB_CLIENT_FUNC_MAXIMIZE | OB_CLIENT_FUNC_SHADE | OB_CLIENT_FUNC_CLOSE |
+        OB_CLIENT_FUNC_BELOW | OB_CLIENT_FUNC_ABOVE | OB_CLIENT_FUNC_UNDECORATE;
+
+    if (info.fixed_size)
+        info.functions &= ~OB_CLIENT_FUNC_RESIZE;
+
+    if (info.popup) {
+        info.decorations = 0;
+        info.functions   = 0;
+        return;
     }
 
-    if (self->type == OB_CLIENT_TYPE_DIALOG ||
-        self->type == OB_CLIENT_TYPE_TOOLBAR ||
-        self->type == OB_CLIENT_TYPE_MENU ||
-        self->type == OB_CLIENT_TYPE_UTILITY)
-    {
-        self->transient = TRUE;
+    switch (info.type) {
+        case OB_CLIENT_TYPE_NORMAL:
+        case OB_CLIENT_TYPE_DIALOG: info.functions |= OB_CLIENT_FUNC_FULLSCREEN; break;
+        case OB_CLIENT_TYPE_UTILITY: break;
+        case OB_CLIENT_TYPE_MENU:
+        case OB_CLIENT_TYPE_TOOLBAR:
+            info.decorations &= ~(OB_FRAME_DECOR_ICONIFY | OB_FRAME_DECOR_MAXIMIZE);
+            info.functions &= ~(OB_CLIENT_FUNC_ICONIFY | OB_CLIENT_FUNC_MAXIMIZE);
+            break;
+        case OB_CLIENT_TYPE_SPLASH:
+            info.decorations = 0;
+            info.functions   = OB_CLIENT_FUNC_MOVE;
+            break;
+        case OB_CLIENT_TYPE_DESKTOP:
+            info.decorations = 0;
+            info.functions   = 0;
+            break;
+        case OB_CLIENT_TYPE_DOCK:
+            info.decorations = 0;
+            info.functions   = OB_CLIENT_FUNC_BELOW;
+            break;
+    }
+
+    if (info.decorations == 0)
+        info.functions &= ~OB_CLIENT_FUNC_UNDECORATE;
+
+    // No title and no handle means no decorations at all, but keep the border if asked for.
+    if ((info.mwm.flags & OB_MWM_FLAG_DECORATIONS) && !(info.mwm.decorations & OB_MWM_DECOR_ALL) &&
+        !(info.mwm.decorations & (OB_MWM_DECOR_HANDLE | OB_MWM_DECOR_TITLE)))
+        info.decorations = (info.mwm.decorations & OB_MWM_DECOR_BORDER) ? OB_FRAME_DECOR_BORDER : 0;
+
+    // Motif may only take away resize and move; like Openbox, never let it kill buttons or close.
+    if ((info.mwm.flags & OB_MWM_FLAG_FUNCTIONS) && !(info.mwm.functions & OB_MWM_FUNC_ALL)) {
+        if (!(info.mwm.functions & OB_MWM_FUNC_RESIZE))
+            info.functions &= ~OB_CLIENT_FUNC_RESIZE;
+        if (!(info.mwm.functions & OB_MWM_FUNC_MOVE))
+            info.functions &= ~OB_CLIENT_FUNC_MOVE;
+    }
+
+    if (!(info.functions & OB_CLIENT_FUNC_SHADE))
+        info.decorations &= ~OB_FRAME_DECOR_SHADE;
+    if (!(info.functions & OB_CLIENT_FUNC_ICONIFY))
+        info.decorations &= ~OB_FRAME_DECOR_ICONIFY;
+    if (!(info.functions & OB_CLIENT_FUNC_RESIZE))
+        info.decorations &= ~(OB_FRAME_DECOR_GRIPS | OB_FRAME_DECOR_HANDLE);
+
+    // can't maximize without moving/resizing
+    if (!((info.functions & OB_CLIENT_FUNC_MAXIMIZE) && (info.functions & OB_CLIENT_FUNC_MOVE) && (info.functions & OB_CLIENT_FUNC_RESIZE))) {
+        info.functions &= ~OB_CLIENT_FUNC_MAXIMIZE;
+        info.decorations &= ~OB_FRAME_DECOR_MAXIMIZE;
     }
 }
 
-static void client_setup_default_decor_and_functions(HyprWindow* self) {
-    self->decorations =
-        (OB_FRAME_DECOR_TITLEBAR |
-         OB_FRAME_DECOR_HANDLE |
-         OB_FRAME_DECOR_GRIPS |
-         OB_FRAME_DECOR_BORDER |
-         OB_FRAME_DECOR_ICON |
-         OB_FRAME_DECOR_ALLDESKTOPS |
-         OB_FRAME_DECOR_ICONIFY |
-         OB_FRAME_DECOR_MAXIMIZE |
-         OB_FRAME_DECOR_SHADE |
-         OB_FRAME_DECOR_CLOSE);
-    self->functions =
-        (OB_CLIENT_FUNC_RESIZE |
-         OB_CLIENT_FUNC_MOVE |
-         OB_CLIENT_FUNC_ICONIFY |
-         OB_CLIENT_FUNC_MAXIMIZE |
-         OB_CLIENT_FUNC_SHADE |
-         OB_CLIENT_FUNC_CLOSE |
-         OB_CLIENT_FUNC_BELOW |
-         OB_CLIENT_FUNC_ABOVE |
-         OB_CLIENT_FUNC_UNDECORATE);
+// Classification of an X11 window. Computed on first query, then cached until one of the properties it's
+// built from changes (see hook_OnReadProp); recomputing is pure CPU work on data Hyprland already holds. Wayland windows get the default: a normal window that can do everything.
+static const SX11Info& x11_info(HyprWindow* hw) {
+    static const SX11Info DEFAULT_INFO = [] {
+        SX11Info info;
+        x11_setup_decor_and_functions(info);
+        return info;
+    }();
 
-    //if (!(self->min_size.width < self->max_size.width ||
-          //self->min_size.height < self->max_size.height))
-        //self->functions &= ~OB_CLIENT_FUNC_RESIZE;
+    if (!hw || !mw_is_x11(hw->w) || !mw_backend_valid(hw->w))
+        return DEFAULT_INFO;
+    if (hw->x11_info_valid)
+        return hw->x11_info;
 
-    switch (self->type) {
-    case OB_CLIENT_TYPE_NORMAL:
-        self->functions |= OB_CLIENT_FUNC_FULLSCREEN;
-        break;
+    const auto backend = dynamic_cast<Desktop::View::CX11Backend*>(&hw->w->backend());
+    const auto surface = backend ? backend->m_xwaylandSurface.lock() : nullptr;
+    if (!surface)
+        return DEFAULT_INFO;
 
-    case OB_CLIENT_TYPE_DIALOG:
-        self->functions |= OB_CLIENT_FUNC_FULLSCREEN;
-        break;
+    xcb_connection_t* conn    = (g_pXWayland && g_pXWayland->m_wm) ? g_pXWayland->m_wm->getConnection() : nullptr;
 
-    case OB_CLIENT_TYPE_UTILITY:
-        break;
+    if (!hw->x11_props_valid)
+        read_x11_props(hw, conn);
 
-    case OB_CLIENT_TYPE_MENU:
-    case OB_CLIENT_TYPE_TOOLBAR:
-        self->decorations &= ~(OB_FRAME_DECOR_ICONIFY |
-                               OB_FRAME_DECOR_MAXIMIZE);
-        self->functions &= ~(OB_CLIENT_FUNC_ICONIFY |
-                             OB_CLIENT_FUNC_MAXIMIZE);
-        break;
+    SX11Info info;
+    info.mwm     = hw->mwm;
+    info.no_blur = hw->wine_exstyle & WINE_WS_EX_LAYERED;
+    x11_get_type_and_transientness(info, surface, conn);
+    info.fixed_size = x11_fixed_size(surface);
+    x11_setup_decor_and_functions(info);
 
-    case OB_CLIENT_TYPE_SPLASH:
-        self->decorations = 0;
-        self->functions = OB_CLIENT_FUNC_MOVE;
-        break;
+    hw->x11_info       = info;
+    hw->x11_info_valid = true;
+    return hw->x11_info;
+}
 
-    case OB_CLIENT_TYPE_DESKTOP:
-        self->decorations = 0;
-        self->functions = 0;
-        break;
+static HyprWindow* hyprwindow_for(int id) {
+    for (auto hw : hyprwindows)
+        if (hw->id == id)
+            return hw;
+    return nullptr;
+}
 
-    case OB_CLIENT_TYPE_DOCK:
-        self->decorations = 0;
-        self->functions = OB_CLIENT_FUNC_BELOW;
-        break;
-    }
-
-    if (self->decorations == 0)
-        self->functions &= ~OB_CLIENT_FUNC_UNDECORATE;
-
-    if (self->mwmhints.flags & OB_MWM_FLAG_DECORATIONS) {
-        if (! (self->mwmhints.decorations & OB_MWM_DECOR_ALL)) {
-            if (! ((self->mwmhints.decorations & OB_MWM_DECOR_HANDLE) ||
-                   (self->mwmhints.decorations & OB_MWM_DECOR_TITLE)))
-            {
-                if (self->mwmhints.decorations & OB_MWM_DECOR_BORDER)
-                    self->decorations = OB_FRAME_DECOR_BORDER;
-                else
-                    self->decorations = 0;
-            }
-        }
-    }
-
-    if (self->mwmhints.flags & OB_MWM_FLAG_FUNCTIONS) {
-        if (! (self->mwmhints.functions & OB_MWM_FUNC_ALL)) {
-            if (! (self->mwmhints.functions & OB_MWM_FUNC_RESIZE))
-                self->functions &= ~OB_CLIENT_FUNC_RESIZE;
-            if (! (self->mwmhints.functions & OB_MWM_FUNC_MOVE))
-                self->functions &= ~OB_CLIENT_FUNC_MOVE;
-        }
-    }
-
-    if (!(self->functions & OB_CLIENT_FUNC_SHADE))
-        self->decorations &= ~OB_FRAME_DECOR_SHADE;
-    if (!(self->functions & OB_CLIENT_FUNC_ICONIFY))
-        self->decorations &= ~OB_FRAME_DECOR_ICONIFY;
-    if (!(self->functions & OB_CLIENT_FUNC_RESIZE))
-        self->decorations &= ~(OB_FRAME_DECOR_GRIPS | OB_FRAME_DECOR_HANDLE);
-
-    if (!((self->functions & OB_CLIENT_FUNC_MAXIMIZE) &&
-          (self->functions & OB_CLIENT_FUNC_MOVE) &&
-          (self->functions & OB_CLIENT_FUNC_RESIZE))) {
-        self->functions &= ~OB_CLIENT_FUNC_MAXIMIZE;
-        self->decorations &= ~OB_FRAME_DECOR_MAXIMIZE;
-    }
+// Windows' layered windows (WS_EX_LAYERED) paint per-pixel alpha that is meant to show what's behind
+// them as-is; Windows never blurs them, and blurring their whole box smears the transparent parts.
+static bool x11_skip_blur(const PHLWINDOW& w) {
+    if (!mw_is_x11(w))
+        return false;
+    for (auto hw : hyprwindows)
+        if (hw->w == w)
+            return x11_info(hw).no_blur;
+    return false;
 }
 
 bool HyprIso::alt_tabbable(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto h : hyprwindows) {
-        if (h->id == id) {
-            bool found = false;
-            bool canX11 = false;
-            
-            if (mw_is_x11(h->w)) {
-                client_get_type_and_transientness(h);
-                if (h->type == OB_CLIENT_TYPE_NORMAL) {
-                    canX11 = true;
-                }
-            } else {
-                canX11 = true;
-            }
-            for (const auto &w : Desktop::windowState()->windows()) {
-                if (w == h->w && w->m_isMapped && canX11) {
-                    found = true;
-                }
-            }
-            return found;
-        }
+    auto hw = hyprwindow_for(id);
+    if (!hw)
+        return false;
+
+    if (mw_is_x11(hw->w)) {
+        const auto& info = x11_info(hw);
+        if (info.popup)
+            return false;
+        // Normal windows, plus dialogs that stand on their own (typed as a dialog but transient for nothing).
+        const bool standalone_dialog = info.type == OB_CLIENT_TYPE_DIALOG && !info.has_transient_for;
+        if (info.type != OB_CLIENT_TYPE_NORMAL && !standalone_dialog)
+            return false;
     }
 
-    return false; 
+    for (const auto& w : Desktop::windowState()->windows())
+        if (w == hw->w && w->m_isMapped)
+            return true;
+    return false;
+}
+
+bool HyprIso::resizable(int id) {
+    return x11_info(hyprwindow_for(id)).functions & OB_CLIENT_FUNC_RESIZE;
+}
+
+bool HyprIso::can_maximize(int id) {
+    return x11_info(hyprwindow_for(id)).functions & OB_CLIENT_FUNC_MAXIMIZE;
+}
+
+inline CFunctionHook* g_pOnReadProp = nullptr;
+typedef void (*origOnReadProp)(void*, SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply);
+// void CXWM::readProp(SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply)
+// Runs for every X11 property change. When one that x11_info() is built from changes, drop the cached
+// classification and let Mylar re-apply titlebar decisions (apps like Wine and Chromium flip their
+// Motif hints after mapping, e.g. on entering fullscreen).
+void hook_OnReadProp(void* thisptr, SP<CXWaylandSurface> XSURF, uint32_t atom, xcb_get_property_reply_t* reply) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    (*(origOnReadProp)g_pOnReadProp->m_original)(thisptr, XSURF, atom, reply);
+
+    if (!XSURF)
+        return;
+
+    // Resolved once: this runs for every X11 property change, so keep the uninteresting ones cheap.
+    static const uint32_t MOTIF       = HYPRATOMS["_MOTIF_WM_HINTS"];
+    static const uint32_t TYPE        = HYPRATOMS["_NET_WM_WINDOW_TYPE"];
+    static const uint32_t SIZE_HINTS  = HYPRATOMS["WM_NORMAL_HINTS"];
+    static const uint32_t TRANSIENT   = XCB_ATOM_WM_TRANSIENT_FOR;
+    static const uint32_t EXSTYLE     = wine_exstyle_atom(((CXWM*)thisptr)->getConnection());
+    if (atom != MOTIF && atom != TYPE && atom != SIZE_HINTS && atom != TRANSIENT && (EXSTYLE == XCB_ATOM_NONE || atom != EXSTYLE))
+        return;
+
+    for (auto hw : hyprwindows) {
+        if (!hw->w || !mw_is_x11(hw->w) || !mw_backend_valid(hw->w))
+            continue;
+        const auto backend = dynamic_cast<Desktop::View::CX11Backend*>(&hw->w->backend());
+        if (!backend || backend->m_xwaylandSurface != XSURF)
+            continue;
+
+        // The reply already holds the new value; no need to ask the X server again. Until the first full
+        // read, leave both alone so read_x11_props() still fetches the other one.
+        if (hw->x11_props_valid && atom == MOTIF)
+            hw->mwm = parse_mwm_hints(reply);
+        if (hw->x11_props_valid && atom == EXSTYLE)
+            hw->wine_exstyle = parse_wine_exstyle(reply);
+        if (!hw->x11_info_valid)
+            return; // never queried, so nothing to update: classify lazily on first use
+
+        const auto old_decorations = hw->x11_info.decorations;
+        const bool old_no_blur     = hw->x11_info.no_blur;
+        hw->x11_info_valid         = false;
+        if (!hw->w->m_isMapped)
+            return;
+        const auto& info = x11_info(hw);
+        if (info.no_blur != old_no_blur)
+            g_pHyprRenderer->damageWindow(hw->w);
+        // Only a titlebar change needs Mylar to act; resize/maximize are read on demand.
+        if (info.decorations == old_decorations)
+            return;
+        const int id = hw->id;
+        main_thread([id]() {
+            if (hypriso->on_x11_hints_changed)
+                hypriso->on_x11_hints_changed(id);
+        });
+        return;
+    }
+}
+
+void hook_x11_read_prop() {
+    static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "readProp");
+    for (auto m : METHODS) {
+        if (m.demangled.find("CXWM::readProp") == std::string::npos)
+            continue;
+        g_pOnReadProp = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_OnReadProp);
+        g_pOnReadProp->hook();
+        return;
+    }
+    notify("Couldn't hook CXWM::readProp; X11 windows won't react to hint changes after they open");
 }
 
 void change_root_config_path(std::string path, bool force = true) {
@@ -7668,43 +7742,6 @@ bool HyprIso::is_mapped(int id) {
         }
     }
     return false; 
-}
-
-bool x11MotifDisallowsResize(const MotifHints& h) {
-    // If no function hints are provided, assume resizing is allowed
-    if (!(h.flags & MWM_HINTS_FUNCTIONS))
-        return false;
-
-    // If all functions are allowed, resizing is allowed
-    if (h.functions & MWM_FUNC_ALL)
-        return false;
-
-    // Otherwise, check explicitly
-    return !(h.functions & MWM_FUNC_RESIZE);
-}
-
-bool HyprIso::resizable(int id) {
-    for (auto hw : hyprwindows) {
-        if (hw->id == id) {
-            if (!hw->checked_resizable) {
-                hw->checked_resizable = true;
-                if (mw_is_x11(hw->w) && mw_backend_valid(hw->w)) {
-                    auto win = mw_client_id(hw->w);
-                    if (g_pXWayland && g_pXWayland->m_wm) {
-                        auto connection = g_pXWayland->m_wm->getConnection();
-
-                        auto hintsOpt = getMotifHints(connection, win);
-                        if (hintsOpt) {
-                            auto& h = *hintsOpt;
-                            hw->resizable = !x11MotifDisallowsResize(h);
-                        }
-                    }
-                }            
-            }
-            return hw->resizable;
-        }
-    }
-    return true;
 }
 
 bool HyprIso::dnd_active() {

@@ -409,6 +409,9 @@ struct HyprIso {
     std::function<void(int id)> on_window_open = nullptr;
     
     std::function<void(int id)> on_window_closed = nullptr;
+
+    // An X11 window's hints changed after it opened so that it now wants (or no longer wants) a titlebar.
+    std::function<void(int id)> on_x11_hints_changed = nullptr;
     
     std::function<void(int id)> on_title_change = nullptr;
 
@@ -525,6 +528,8 @@ struct HyprIso {
     // ends, instead of focus following the cursor over other windows.
     void hold_focus_during_dnd(int id);
     bool resizable(int id);
+    // False for X11 windows that can't move or resize (fixed size hints, Motif, splash/dock types).
+    bool can_maximize(int id);
     
     void set_float_state(int id, bool should_float);
 

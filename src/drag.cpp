@@ -111,7 +111,8 @@ void drag::motion(int cid) {
         p = b;
     }
 
-    snap_preview::on_drag(cid, mouse_current.x, mouse_current.y);
+    if (hypriso->can_maximize(cid))
+        snap_preview::on_drag(cid, mouse_current.x, mouse_current.y);
 }
 
 // TODO: multi-monitor broken
@@ -121,6 +122,8 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
         return;
     auto c = get_cid_container(cid);
     if (!c) return;
+    if (pos != (int) SnapPosition::NONE && !hypriso->can_maximize(cid))
+        return;
 
     auto snapped = datum<bool>(c, "snapped");
     
@@ -197,6 +200,8 @@ void drag::end(int cid) {
     int mon = hypriso->monitor_from_cursor();
     auto m = mouse();
     auto pos = mouse_to_snap_position(mon, m.x, m.y);
+    if (!hypriso->can_maximize(cid))
+        pos = SnapPosition::NONE;
     snap_preview::on_drag_end(cid, m.x, m.y, (int) pos);
     if (pos != SnapPosition::NONE) {
         auto snap_edge_animation = datum<float>(actual_root, "snap_edge_animation");

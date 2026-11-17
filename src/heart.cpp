@@ -2705,6 +2705,7 @@ void heart::begin() {
             hypriso->on_render = on_render;
             hypriso->is_snapped = is_snapped;
             hypriso->on_window_open = on_window_open;
+            hypriso->on_x11_hints_changed = titlebar::on_x11_hints_changed;
             
             hypriso->on_window_closed = on_window_closed;
             hypriso->on_popup_open = on_popup_open;
