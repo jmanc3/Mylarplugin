@@ -37,7 +37,7 @@ static std::vector<ShortcutDefault> build_defaults() {
         {"toggle_floating", "Toggle floating", "ALT + V", "hl.dsp.window.float({ action = \"toggle\" })", ""},
         {"toggle_floating_alt", "Toggle floating (alternate)", "SUPER + G", "hl.dsp.window.float({ action = \"toggle\" })", ""},
         {"cycle_fullscreen", "Cycle window: floating, fake fullscreen, fullscreen", "SUPER + SHIFT + Return", "hl.plugin.mylar.cycle_fullscreen", "", true},
-        {"toggle_layout", "Toggle tiling on this workspace", "", "hl.plugin.mylar.toggle_layout", "", true},
+        {"toggle_layout", "Tile windows", "ALT + SPACE", "hl.plugin.mylar.toggle_layout", "", true},
 
         // Keyboard, also shown on the Keyboard page
         {"switch_layout", "Switch layout", "SUPER + SPACE", "hl.dsp.exec_cmd(\"hyprctl switchxkblayout all next\")", ""},

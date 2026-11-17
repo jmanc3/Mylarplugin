@@ -15,6 +15,7 @@
 #include "dock/dock_wifi.h"
 #include "dock/dock_bluetooth.h"
 #include "dock/dock_brightness.h"
+#include "dock/dock_battery.h"
 #include "audio.h"
 #include "events.h"
 #include "datetime.h"
@@ -365,7 +366,16 @@ static const std::vector<SettingsCategory> &settings_categories() {
             {"Time & Date", "Date & time", "Time zone, clock format, automatic time", "\uEC92"},
         }},
     };
-    return categories;
+    // Only machines with a battery get the Battery page.
+    static const std::vector<SettingsCategory> with_battery = []() {
+        auto list = categories;
+        list.insert(list.begin() + 1, {"Battery", "settings-power", "battery", {
+            {"Battery", "Battery", "Charge, battery usage history, time remaining", "\uEBAA"},
+        }});
+        return list;
+    }();
+    static const bool battery = has_internal_battery();
+    return battery ? with_battery : categories;
 }
 
 // The category holding `id`, which is either a page id or a category name.
@@ -1135,6 +1145,94 @@ static void swifi_glyph(drawing::Context *cr, double x, double y, const char *gl
     cr->show_layout(layout);
 }
 
+/*************************************************
+ *
+ * Keyboard focus
+ *
+ * Tab and Shift+Tab walk the window's tab stops in tree order, Enter and Space
+ * activate the focused stop, arrow keys move inside a control (a slider, a
+ * button group, an open dropdown menu) or else to the neighbouring stop, and
+ * Escape hides the focus ring. Every container with when_clicked is a tab stop
+ * unless focus_skip marks it; focus_register gives a stop its own keys and ring.
+ * The ring only shows once the keyboard moved focus; a mouse press hides it.
+ * The navigation itself lives with fill_root (focus_key).
+ *
+ *************************************************/
+
+struct FocusSpec {
+    // Enter and Space. Unset: when_clicked.
+    std::function<void(Container *root, Container *c)> activate;
+    // Arrow keys (dx, dy in -1..1). Returning false lets them move focus instead.
+    std::function<bool(Container *root, Container *c, int dx, int dy)> arrow;
+    // Where the ring goes. Unset: real_bounds.
+    std::function<Bounds(Container *root, Container *c)> ring;
+    float radius = -1;  // Logical px, -1 for settings_control_rounding
+    bool text = false;  // Text field: Enter, Space and arrows are its own
+    bool skip = false;  // Never a tab stop, even though it is clickable
+};
+
+// Lives as long as the container: the entry is erased from its on_closed.
+static std::unordered_map<Container *, FocusSpec> focus_specs;
+
+static FocusSpec &focus_spec_for(Container *c) {
+    auto [it, inserted] = focus_specs.try_emplace(c);
+    if (inserted) {
+        auto previous = std::move(c->on_closed);
+        c->on_closed = [previous](Container *c) {
+            focus_specs.erase(c);
+            if (previous)
+                previous(c);
+        };
+    }
+    return it->second;
+}
+
+static const FocusSpec *focus_spec(Container *c) {
+    auto it = focus_specs.find(c);
+    return it == focus_specs.end() ? nullptr : &it->second;
+}
+
+static void focus_register(Container *c, FocusSpec spec) {
+    focus_spec_for(c) = std::move(spec);
+}
+
+static void focus_skip(Container *c) {
+    focus_spec_for(c).skip = true;
+}
+
+static void focus_text(Container *c) {
+    focus_spec_for(c).text = true;
+}
+
+// Each window keeps its own focus: the settings window, and the dialog popup
+// opened from it (only one is open at a time).
+struct FocusState {
+    Container *current = nullptr;
+    std::weak_ptr<bool> life;
+    // The ring is drawn; only after the keyboard moved focus.
+    bool visible = false;
+    // Focus placed by the program (the row a search result opened, a dialog's
+    // first field): the first Tab shows the ring there instead of moving on.
+    bool reveal_first = false;
+    // The focused stop went away with the page it replaced (a category link was
+    // activated): the next Tab continues on the new page.
+    bool into_page = false;
+};
+static FocusState focus_main;
+static FocusState focus_dialog;
+
+static FocusState &focus_of(Container *root) {
+    return settings_mylar && root == settings_mylar->root ? focus_main : focus_dialog;
+}
+
+// The row a search result opened, focused once it has been laid out.
+static Container *focus_pending_row = nullptr;
+static std::weak_ptr<bool> focus_pending_row_life;
+
+static void focus_set(Container *root, Container *c, bool show);
+static void focus_dialog_start(Container *popup_root, Container *c);
+static void focus_install_dialog(MylarWindow *popup);
+
 // Creates a container that sizes itself based on children size
 // It takes full width of parent
 // It lays out right child first and then left with remainder of space
@@ -1526,6 +1624,7 @@ static void make_bool_control(Container *parent, bool initial_value, std::functi
     bool_info->on = initial_value;
     bool_info->row = row ? row : parent;
     right->user_data = bool_info;
+    focus_register(right, {.radius = toggle_h * .5f});
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->drawing_context;
@@ -1714,6 +1813,29 @@ static void make_slider(Container *parent, std::string title, std::string descri
     right->when_mouse_up = right->when_mouse_down;
     right->when_drag = right->when_mouse_down;
     right->when_drag_end = right->when_mouse_down;
+    // Left and Right step the value: one notch, or 5% without notches.
+    focus_register(right, {
+        .activate = [](Container *, Container *) {},
+        .arrow = [on_change, notches](Container *, Container *c, int dx, int) {
+            if (dx == 0)
+                return false;
+            auto data = (SliderInfo *) c->user_data;
+            float step = notches != 0 ? 1.0f / (float) notches : .05f;
+            float value = std::clamp(std::round(data->value / step + dx) * step, 0.0f, 1.0f);
+            if (value != data->value) {
+                data->value = value;
+                if (on_change)
+                    on_change(value);
+            }
+            return true;
+        },
+        // The thumb overhangs the track by half its width on both ends.
+        .ring = [](Container *, Container *c) {
+            auto b = c->real_bounds;
+            return Bounds(b.x - b.h * .5, b.y, b.w + b.h, b.h);
+        },
+        .radius = 10,
+    });
     
     bool has_reset = row != nullptr;
     right->pre_layout = [has_reset, row_slider_w](Container *root, Container *c, const Bounds &b) {
@@ -1762,6 +1884,24 @@ static void make_button_group(Container *parent, std::string title, std::string 
         if (options[i] == default_value)
             group_data->selected = i;
     right->user_data = group_data;
+    // One tab stop for the whole group; Left and Right pick the neighbouring option.
+    focus_register(right, {
+        .activate = [](Container *, Container *) {},
+        .arrow = [](Container *root, Container *c, int dx, int) {
+            if (dx == 0)
+                return false;
+            auto data = (GroupData *) c->user_data;
+            int count = (int) c->children.size();
+            if (count == 0)
+                return true;
+            int next = data->selected < 0 ? (dx > 0 ? 0 : count - 1) : std::clamp(data->selected + dx, 0, count - 1);
+            auto option = c->children[next];
+            if (next != data->selected && option->when_clicked)
+                option->when_clicked(root, option);
+            return true;
+        },
+        .radius = 10,
+    });
     right->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
         auto cr = mylar->raw_window->drawing_context;
@@ -1794,6 +1934,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
     for (int i = 0; i < options.size(); i++) {
         auto o = options[i];
         auto option = right->child(FILL_SPACE, FILL_SPACE);
+        focus_skip(option);
         option->when_paint = [o, i](Container *root, Container *c) {
             auto group = (GroupData *) c->parent->user_data;
             auto mylar = (MylarWindow*)root->user_data;
@@ -1876,11 +2017,14 @@ struct DropdownMenuData : UserData {
     float scroll = 0;
     float overflow = 0;
     int selected_index = -1;
+    int key_index = -1; // Row highlighted with the arrow keys, -1 for none
     bool scrolled_to_selection = false;
     SmoothScroll smooth;
 };
 
 static MylarWindow *dropdown_popup = nullptr;
+// The open menu's list, while dropdown_popup is a menu (it can also be a dialog).
+static Container *dropdown_menu_list = nullptr;
 static constexpr int dropdown_row_h = 32;
 static constexpr int dropdown_max_visible_rows = 12;
 
@@ -1889,6 +2033,7 @@ static void close_dropdown_menu() {
         return;
     auto popup = dropdown_popup;
     dropdown_popup = nullptr;
+    dropdown_menu_list = nullptr;
     std::erase(popups, popup);
     windowing::timer(settings_app, 1, [](void *data) {
         windowing::close_window((RawWindow *) data);
@@ -1919,8 +2064,10 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
     popup->root->wanted_bounds.w = FILL_SPACE;
     popup->root->wanted_bounds.h = FILL_SPACE;
     popup->root->on_closed = [popup](Container *) {
-        if (dropdown_popup == popup)
+        if (dropdown_popup == popup) {
             dropdown_popup = nullptr;
+            dropdown_menu_list = nullptr;
+        }
         std::erase(popups, popup);
     };
     popup->root->when_paint = [](Container *root, Container *c) {
@@ -1930,6 +2077,7 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
     };
 
     auto list = popup->root->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    dropdown_menu_list = list;
     auto menu = new DropdownMenuData;
     for (size_t i = 0; i < options.size(); i++)
         if (options[i].id == selected)
@@ -1975,6 +2123,13 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
         }
         windowing::redraw(window);
     };
+    // The pointer takes over from the arrow keys.
+    list->when_mouse_motion = [menu](Container *root, Container *) {
+        if (menu->key_index < 0)
+            return;
+        menu->key_index = -1;
+        windowing::redraw(((MylarWindow *) root->user_data)->raw_window);
+    };
     list->when_paint = [](Container *root, Container *c) {
         auto window = ((MylarWindow *) root->user_data)->raw_window;
         window->drawing_context->save();
@@ -2004,12 +2159,13 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
         auto ch = list->child(FILL_SPACE, dropdown_row_h);
         bool is_selected = (int) i == menu->selected_index;
         auto label = options[i].label;
-        ch->when_paint = [label, is_selected](Container *root, Container *c) {
+        int index = (int) i;
+        ch->when_paint = [label, is_selected, menu, index](Container *root, Container *c) {
             auto window = ((MylarWindow *) root->user_data)->raw_window;
             auto cr = window->drawing_context;
             auto dpi = window->dpi;
             auto b = c->real_bounds;
-            if (c->state.mouse_pressing || c->state.mouse_hovering) {
+            if (c->state.mouse_pressing || c->state.mouse_hovering || menu->key_index == index) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, b.x, b.y, b.w, b.h, 6 * dpi, 1.0);
                 cr->fill();
@@ -2031,17 +2187,76 @@ static void open_dropdown_menu(Container *root, Container *anchor, std::vector<D
     windowing::redraw(popup->raw_window);
 }
 
+// Keys for an open dropdown menu: Up, Down, Home and End move the highlight,
+// Enter and Space pick it, Escape and Tab close the menu. True when used.
+static bool dropdown_menu_key(xkb_keysym_t sym) {
+    if (!dropdown_popup || !dropdown_menu_list)
+        return false;
+    auto list = dropdown_menu_list;
+    auto menu = (DropdownMenuData *) list->user_data;
+    int count = (int) list->children.size();
+    if (sym == XKB_KEY_Escape || sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab) {
+        close_dropdown_menu();
+        return true;
+    }
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter || sym == XKB_KEY_space) {
+        if (menu->key_index >= 0 && menu->key_index < count) {
+            auto row = list->children[menu->key_index];
+            if (row->when_clicked)
+                row->when_clicked(dropdown_popup->root, row);
+        } else {
+            close_dropdown_menu();
+        }
+        return true;
+    }
+    int from = menu->key_index >= 0 ? menu->key_index : menu->selected_index;
+    int index;
+    if (sym == XKB_KEY_Down)
+        index = from < 0 ? 0 : from + 1;
+    else if (sym == XKB_KEY_Up)
+        index = from < 0 ? count - 1 : from - 1;
+    else if (sym == XKB_KEY_Home)
+        index = 0;
+    else if (sym == XKB_KEY_End)
+        index = count - 1;
+    else
+        return false;
+    if (count == 0)
+        return true;
+    menu->key_index = std::clamp(index, 0, count - 1);
+    // Keep the row in view.
+    auto dpi = dropdown_popup->raw_window->dpi;
+    double inset = 4 * dpi;
+    double top = menu->key_index * dropdown_row_h * dpi + inset;
+    double bottom = top + dropdown_row_h * dpi;
+    double view = list->real_bounds.h;
+    float scroll = menu->scroll;
+    if (top + scroll < 0)
+        scroll = (float) -(top - inset);
+    else if (bottom + scroll > view)
+        scroll = (float) -(bottom + inset - view);
+    menu->smooth.stop();
+    menu->scroll = std::clamp(scroll, -menu->overflow, 0.0f);
+    windowing::redraw(dropdown_popup->raw_window);
+    return true;
+}
+
 static double dropdown_button_width(Container *root, const std::string &label) {
     auto dpi = swifi_window(root)->dpi;
     return std::clamp(swifi_text_width(root, label, 11) + 46 * dpi, 120.0 * dpi, 250.0 * dpi);
+}
+
+// The button's frame, vertically centered in its container.
+static Bounds dropdown_button_frame(Container *root, Container *c) {
+    double h = std::min<double>(30 * swifi_window(root)->dpi, c->real_bounds.h);
+    return Bounds(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
 }
 
 static void paint_dropdown_button(Container *root, Container *c, const std::string &label) {
     auto window = swifi_window(root);
     auto cr = window->drawing_context;
     auto dpi = window->dpi;
-    double h = std::min<double>(30 * dpi, c->real_bounds.h);
-    Bounds b(c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - h) * .5, c->real_bounds.w, h);
+    Bounds b = dropdown_button_frame(root, c);
     paint_smooth_frame(cr, b, settings_control_rounding * dpi,
         c->state.mouse_pressing ? theme.dropdown_pressed :
         c->state.mouse_hovering ? theme.dropdown_hover : theme.dropdown_background,
@@ -2076,6 +2291,7 @@ static void make_dropdown(Container *parent, std::string text_, std::vector<std:
     pad->when_paint = [](Container *root, Container *c) {
         paint_dropdown_button(root, c, ((TextData *) c->user_data)->text);
     };
+    focus_register(pad, {.ring = dropdown_button_frame});
     pad->when_clicked = [func, options](Container *root, Container *c) {
         auto td = (TextData *) c->user_data;
         std::vector<DropdownOption> menu_options;
@@ -2279,6 +2495,7 @@ static Container *make_field(Container *parent, bool only_numbers, std::string i
     };
     options.on_change = std::move(on_change);
     setup_text_editor(pad, std::move(initial_value), std::move(options));
+    focus_text(pad);
     pad->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto dpi = static_cast<MylarWindow *>(root->user_data)->raw_window->dpi;
         auto bounds = measure_text_editor(root, c);
@@ -3829,6 +4046,7 @@ static void make_wall_preview(Container *parent) {
         c->wanted_bounds.h = height * swifi_window(root)->dpi;
     };
     c->when_paint = paint_wall_preview;
+    focus_skip(c); // Picks the monitor under the pointer
     c->when_drag_end_is_click = false;
     c->when_clicked = [](Container *root, Container *c) {
         auto v = wall_view(c, swifi_window(root)->dpi);
@@ -4900,6 +5118,7 @@ static Container *swifi_network_row(Container *parent) {
             settings_wifi->password = std::move(text);
     };
     setup_text_editor(input, "", std::move(options));
+    focus_text(input);
     input->pre_layout = [](Container *root, Container *c, const Bounds &) {
         // "Show" turns masking off on the shared editor.
         static_cast<STextEditorData *>(c->user_data)->options.password = !settings_wifi->show_password;
@@ -6203,6 +6422,7 @@ static void sbt_build_prompt(SettingsBluetoothPage *page) {
                 settings_bluetooth->input = std::move(text);
         };
         setup_text_editor(field, "", std::move(options));
+        focus_text(field);
         field->when_paint = [](Container *root, Container *c) {
             auto window = swifi_window(root);
             auto dpi = window->dpi;
@@ -7630,6 +7850,7 @@ static MylarWindow *sdt_open_popup(Container *root, Container *anchor, int w, in
         if (pressed && sym == XKB_KEY_Escape)
             close_dropdown_menu();
     };
+    focus_install_dialog(popup);
     return popup;
 }
 
@@ -7721,6 +7942,16 @@ static void sdt_spin(Container *parent, std::function<std::string()> label, std:
             step(-1);
         swifi_redraw(root);
     };
+    // Up and Down step the value, like a spin box; Left and Right move on.
+    focus_register(cell, {
+        .activate = [](Container *, Container *) {},
+        .arrow = [step](Container *, Container *, int, int dy) {
+            if (dy == 0)
+                return false;
+            step(-dy);
+            return true;
+        },
+    });
 }
 
 static void sdt_caption(Container *parent, std::string text) {
@@ -7768,6 +7999,7 @@ static void sdt_open_datetime_dialog(Container *root, Container *anchor) {
         int n = sdt_days_in_month(draft->year, draft->month);
         draft->day = (draft->day - 1 + d + n) % n + 1;
     });
+    focus_dialog_start(popup->root, row1->children.back());
     sdt_spin(row1, [draft]() {
         static const char *months[] = {"January", "February", "March", "April", "May", "June", "July",
                                        "August", "September", "October", "November", "December"};
@@ -7958,6 +8190,62 @@ static void list_bar_install(Container *list) {
         if (clicked)
             clicked(root, c);
     };
+}
+
+// Keyboard rows for the popup lists: Up, Down, Page Up/Down via the arrows keep a
+// highlighted row in view, Enter or Space picks it. Up from the first row moves
+// focus back out (to the search field). The pointer clears the highlight.
+// T needs `shown`, `scroll`, `overflow`, `key_index` and `smooth`.
+// The first row fully in view, where keyboard selection starts.
+template <typename T>
+static int list_first_visible(Container *root, T *data, int row_h) {
+    double h = row_h * swifi_window(root)->dpi;
+    int first = (int) std::ceil(-data->scroll / h - .01);
+    return std::clamp(first, 0, std::max(0, (int) data->shown.size() - 1));
+}
+
+template <typename T>
+static void list_keys_install(Container *list, int row_h, std::function<void(Container *root, T *data, int index)> pick) {
+    auto motion = std::move(list->when_mouse_motion);
+    list->when_mouse_motion = [motion](Container *root, Container *c) {
+        ((T *) c->user_data)->key_index = -1;
+        if (motion)
+            motion(root, c);
+    };
+    focus_register(list, {
+        .activate = [pick](Container *root, Container *c) {
+            auto data = (T *) c->user_data;
+            if (data->key_index >= 0 && data->key_index < (int) data->shown.size())
+                pick(root, data, data->key_index);
+        },
+        .arrow = [row_h](Container *root, Container *c, int, int dy) {
+            auto data = (T *) c->user_data;
+            int count = (int) data->shown.size();
+            if (dy == 0 || count == 0)
+                return false;
+            if (dy < 0 && data->key_index <= 0) {
+                data->key_index = -1;
+                return false;
+            }
+            if (data->key_index < 0)
+                data->key_index = list_first_visible(root, data, row_h);
+            else
+                data->key_index = std::clamp(data->key_index + dy, 0, count - 1);
+            auto dpi = swifi_window(root)->dpi;
+            double top = data->key_index * row_h * dpi;
+            double bottom = top + row_h * dpi;
+            double view = c->real_bounds.h;
+            float scroll = data->scroll;
+            if (top + scroll < 0)
+                scroll = (float) -top;
+            else if (bottom + scroll > view)
+                scroll = (float) -(bottom - view);
+            data->smooth.stop();
+            data->scroll = std::clamp(scroll, -data->overflow, 0.0f);
+            return true;
+        },
+        .radius = 6,
+    });
 }
 
 /*
@@ -8278,6 +8566,7 @@ struct SdtZoneList : UserData {
     float scroll = 0;
     float overflow = 0;
     bool scrolled_to_current = false;
+    int key_index = -1; // Row picked with the arrow keys, -1 for none
     ListScrollbar bar;
     SmoothScroll smooth;
 };
@@ -8300,6 +8589,7 @@ static void sdt_filter_zones(SdtZoneList *list, const std::string &query) {
             list->shown.push_back(&row);
     }
     list->scroll = 0;
+    list->key_index = -1;
 }
 
 static void sdt_pick_zone(const std::string &id) {
@@ -8373,8 +8663,8 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
                 break;
             auto row = data->shown[i];
             Bounds rb(b.x, y, b.w - list_bar_hit_w * dpi, row_h);
-            bool hovered = c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) &&
-                root->mouse_current_y >= y && root->mouse_current_y < y + row_h;
+            bool hovered = (c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) &&
+                root->mouse_current_y >= y && root->mouse_current_y < y + row_h) || data->key_index == i;
             if (hovered) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
@@ -8407,6 +8697,9 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
             sdt_pick_zone(data->shown[i]->entry->id);
     };
     list_bar_install<SdtZoneList>(list);
+    list_keys_install<SdtZoneList>(list, sdt_zone_row_h, [](Container *, SdtZoneList *data, int i) {
+        sdt_pick_zone(data->shown[i]->entry->id);
+    });
 
     // The search field goes above the list.
     auto field = make_field(body, false, "", [data](std::string text) {
@@ -8414,7 +8707,7 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
     });
     std::rotate(body->children.begin(), body->children.end() - 1, body->children.end());
     auto edit_key = std::move(field->when_key_event);
-    field->when_key_event = [edit_key, data](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+    field->when_key_event = [edit_key, data, list](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
                                             int mods, bool is_text, std::string text) {
         if (pressed && sym == XKB_KEY_Escape) {
             close_dropdown_menu();
@@ -8425,10 +8718,16 @@ static void sdt_open_timezone_dialog(Container *root, Container *anchor) {
                 sdt_pick_zone(data->shown[0]->entry->id);
             return;
         }
+        // Down moves into the list.
+        if (pressed && c->active && sym == XKB_KEY_Down && !data->shown.empty()) {
+            data->key_index = list_first_visible(root, data, sdt_zone_row_h);
+            focus_set(root, list, true);
+            return;
+        }
         if (edit_key)
             edit_key(root, c, key, pressed, sym, mods, is_text, text);
     };
-    set_active(popup->root, {field}, popup->root, true, false);
+    focus_dialog_start(popup->root, field);
     windowing::redraw(popup->raw_window);
 }
 
@@ -8529,6 +8828,118 @@ static void fill_datetime_settings(Container *root) {
         generation = ++sdt.generation;
     }
     sdt_refresh_async();
+    sdt_watch(generation);
+}
+
+/*************************************************
+ *
+ * Battery page (the charge history moved here from the dock's battery menu)
+ *
+ *************************************************/
+
+static void fill_battery_settings(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
+    padded_right->name = "battery_page";
+
+    // Readings come from the dock's battery thread; start it in case no dock is running.
+    main_thread([]() {
+        watch_battery_level();
+        request_battery_refresh();
+    });
+
+    make_section_title(padded_right, "Status");
+    make_vert_space(padded_right, 10);
+
+    auto summary = padded_right->child(FILL_SPACE, FILL_SPACE);
+    search_tag(summary, "Battery level", "Charge, charging state and time remaining");
+    summary->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 104 * swifi_window(root)->dpi;
+    };
+    summary->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        paint_smooth_frame(cr, b, 5 * dpi, theme.row_background, theme.row_border, std::max(1.0, (double) std::round(1 * dpi)));
+        auto s = battery_summary();
+        double percent_w = std::max(swifi_text_width(root, "100%", 26), swifi_text_width(root, s.percent, 26));
+        swifi_text(root, Bounds(b.x + 20 * dpi, b.y, percent_w, b.h), s.percent, 26, theme.text, false, true);
+        double x = b.x + 20 * dpi + percent_w + 24 * dpi;
+        double w = std::max(1.0, b.right() - 20 * dpi - x);
+        swifi_text(root, Bounds(x, b.y + 18 * dpi, w, 20 * dpi), s.state, 12, theme.text, false, true);
+        swifi_text(root, Bounds(x, b.y + 42 * dpi, w, 20 * dpi), s.estimate, 11, theme.text);
+        if (!s.detail.empty())
+            swifi_text(root, Bounds(x, b.y + 64 * dpi, w, 20 * dpi), s.detail, 10, theme.text_secondary);
+    };
+    make_vert_space(padded_right, 28);
+
+    make_section_title(padded_right, "Battery usage");
+    make_vert_space(padded_right, 10);
+
+    auto graph = padded_right->child(FILL_SPACE, FILL_SPACE);
+    search_tag(graph, "Battery history", "Charge over the last 3 hours, with an estimate of what is left");
+    // The page container is only viewport tall and moves with the scroll.
+    graph->parent_bounds_limit_input_bounds = false;
+    graph->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 300 * swifi_window(root)->dpi;
+    };
+    graph->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        paint_smooth_frame(cr, b, 5 * dpi, theme.row_background, theme.row_border, std::max(1.0, (double) std::round(1 * dpi)));
+        auto s = battery_summary();
+        Bounds line(b.x + 20 * dpi, b.y + 14 * dpi, b.w - 40 * dpi, 20 * dpi);
+        swifi_text(root, line, "Last 3 hours · charge %", 11, theme.text_secondary);
+        if (!s.rate.empty()) {
+            double rate_w = swifi_text_width(root, s.rate, 10);
+            swifi_text(root, Bounds(line.right() - rate_w, line.y, rate_w, line.h), s.rate, 10, theme.accent);
+        }
+        BatteryGraphPalette palette;
+        palette.text = theme.text;
+        palette.muted = theme.text_secondary;
+        palette.grid = swifi_mix(theme.row_background, theme.text, .1);
+        palette.now_line = swifi_mix(theme.row_background, theme.text, .3);
+        paint_battery_history(cr, Bounds(b.x + 20 * dpi, b.y + 46 * dpi, b.w - 40 * dpi, 210 * dpi), dpi, root->mouse_current_x,
+                              c->state.mouse_hovering, palette);
+        swifi_text(root, Bounds(b.x + 20 * dpi, b.bottom() - 36 * dpi, b.w - 40 * dpi, 20 * dpi),
+                   "Solid: recorded charge   ·   Dashed: estimate", 9, theme.text_secondary);
+    };
+    graph->when_mouse_motion = [](Container *root, Container *) { swifi_redraw(root); };
+    graph->when_mouse_enters_container = [](Container *root, Container *) { swifi_redraw(root); };
+    graph->when_mouse_leaves_container = [](Container *root, Container *) { swifi_redraw(root); };
+    make_vert_space(padded_right, 4);
+
+    make_bool(padded_right, "Record battery history", "Saves the charge every 5 minutes and keeps the last 24 hours",
+              battery_history_enabled(), [](bool on) { set_battery_history_enabled(on); }, "\uE81C");
+
+    auto message = padded_right->child(FILL_SPACE, FILL_SPACE);
+    message->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 30 * swifi_window(root)->dpi;
+    };
+    message->when_paint = [](Container *root, Container *c) {
+        auto s = battery_summary();
+        if (s.message.empty())
+            return;
+        RGBA color = s.message_is_error ? RGBA(.85, .30, .22, 1) : theme.text_secondary;
+        swifi_text(root, c->real_bounds, s.message, 10, color);
+    };
+
+    // New readings arrive every 30 seconds; repaint while the page shows.
+    unsigned generation;
+    {
+        std::lock_guard lock(sdt.mutex);
+        generation = ++sdt.generation;
+    }
     sdt_watch(generation);
 }
 
@@ -8648,6 +9059,7 @@ struct SkbdLayoutList : UserData {
     std::vector<const SkbdLayoutEntry *> shown;
     float scroll = 0;
     float overflow = 0;
+    int key_index = -1; // Row picked with the arrow keys, -1 for none
     ListScrollbar bar;
     SmoothScroll smooth;
 };
@@ -8671,6 +9083,7 @@ static void skbd_filter(SkbdLayoutList *list, const std::string &query) {
             list->shown.push_back(&entry);
     }
     list->scroll = 0;
+    list->key_index = -1;
 }
 
 static void skbd_open_layout_dialog(Container *root, Container *anchor) {
@@ -8730,8 +9143,8 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
             auto entry = data->shown[i];
             Bounds rb(b.x, y, b.w - list_bar_hit_w * dpi, row_h);
             const bool added = skbd_contains(entry->layout, entry->variant);
-            bool hovered = c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) &&
-                root->mouse_current_y >= y && root->mouse_current_y < y + row_h;
+            bool hovered = (c->state.mouse_hovering && !list_bar_blocks_hover(data->bar) &&
+                root->mouse_current_y >= y && root->mouse_current_y < y + row_h) || data->key_index == i;
             if (hovered && !added) {
                 set_argb(cr, c->state.mouse_pressing ? theme.popup_pressed : theme.popup_hover);
                 drawRoundedRect(cr, rb.x, rb.y, rb.w, rb.h, 6 * dpi, 1.0);
@@ -8762,6 +9175,9 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
             skbd_add(*data->shown[i]);
     };
     list_bar_install<SkbdLayoutList>(list);
+    list_keys_install<SkbdLayoutList>(list, skbd_row_h, [](Container *, SkbdLayoutList *data, int i) {
+        skbd_add(*data->shown[i]);
+    });
 
     // The search field goes above the list.
     auto field = make_field(body, false, "", [data](std::string text) {
@@ -8782,7 +9198,7 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
         swifi_text(root, b, "Search layouts by language, country or name", 11, swifi_dim(theme.text_secondary));
     };
     auto edit_key = std::move(field->when_key_event);
-    field->when_key_event = [edit_key, data](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
+    field->when_key_event = [edit_key, data, list](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym,
                                             int mods, bool is_text, std::string text) {
         if (pressed && sym == XKB_KEY_Escape) {
             close_dropdown_menu();
@@ -8797,10 +9213,16 @@ static void skbd_open_layout_dialog(Container *root, Container *anchor) {
             }
             return;
         }
+        // Down moves into the list.
+        if (pressed && c->active && sym == XKB_KEY_Down && !data->shown.empty()) {
+            data->key_index = list_first_visible(root, data, skbd_row_h);
+            focus_set(root, list, true);
+            return;
+        }
         if (edit_key)
             edit_key(root, c, key, pressed, sym, mods, is_text, text);
     };
-    set_active(popup->root, {field}, popup->root, true, false);
+    focus_dialog_start(popup->root, field);
     windowing::redraw(popup->raw_window);
 }
 
@@ -9198,6 +9620,15 @@ static void search_build_into(std::vector<SearchEntry> &out) {
         });
     }
 
+    if (settings_category_of("Battery")) {
+        search_add("Battery", "Status", "Status", "", "battery power charge laptop");
+        search_add("Battery", "Status", "Battery level", "Charge, charging state and time remaining",
+                   "percent percentage charging remaining time left estimate empty");
+        search_add("Battery", "Battery usage", "Battery history", "Charge over the last 3 hours, with an estimate of what is left",
+                   "graph usage history drain discharge rate watts chart");
+        search_add("Battery", "Battery usage", "Record battery history", "Saves the charge every 5 minutes and keeps the last 24 hours",
+                   "history record log save graph");
+    }
     search_add("Wifi", "Wi-Fi", "Wi-Fi", "", "wifi wireless network internet connect wlan");
     search_add("Wifi", "Available networks", "Available networks", "", "wifi ssid connect password network join");
 
@@ -9688,6 +10119,9 @@ static void paint_search_flash(Container *root, Container *right) {
         d->scroll = std::clamp(scroll, -d->overflow, 0.0f);
         search_flash.locating = false;
         search_flash.start = get_current_time_in_ms();
+        // Its control takes keyboard focus once laid out at the new scroll.
+        focus_pending_row = target;
+        focus_pending_row_life = target->lifetime;
         right_bar_touch(right);
         swifi_redraw(root);
         return;
@@ -9758,6 +10192,7 @@ static void make_search_field(Container *left) {
             search_set_query(settings_mylar->root, text);
     };
     setup_text_editor(field, "", std::move(options));
+    focus_text(field);
     field->when_paint = [](Container *root, Container *c) {
         auto window = swifi_window(root);
         auto cr = window->drawing_context;
@@ -9941,6 +10376,14 @@ static void create_category_option(Container *parent, const SettingsCategory &ca
         // A category with several pages always opens its overview.
         settings_show(root, category.name);
     };
+    focus_register(c, {
+        .ring = [](Container *root, Container *c) {
+            auto b = c->real_bounds;
+            b.shrink(3 * swifi_window(root)->dpi);
+            return b;
+        },
+        .radius = 5,
+    });
 }
 
 void fill_left(Container *left) {
@@ -9980,6 +10423,7 @@ static void make_category_link(Container *parent, const SettingsPageInfo &page) 
     row->when_clicked = [&page](Container *root, Container *) {
         settings_show(root, page.id);
     };
+    focus_register(row, {.radius = 5});
 }
 
 static void fill_category_page(Container *root, const SettingsCategory &category) {
@@ -10160,6 +10604,8 @@ static bool settings_show(Container *root, const std::string &id) {
         fill_audio_settings(root);
     } else if (page == "Time & Date") {
         fill_datetime_settings(root);
+    } else if (page == "Battery") {
+        fill_battery_settings(root);
     }
     search_current_page.clear();
     swifi_redraw(root);
@@ -10255,6 +10701,7 @@ static void make_settings_header(Container *parent) {
         if (settings_crumb_parent_hit(root, c, 32 * dpi, settings_header_size))
             settings_show(root, settings_crumbs().parent);
     };
+    focus_skip(header); // Only the parent crumb under the pointer is a link
 }
 
 static drawing::Context *cr_of(Container *root) {
@@ -10331,6 +10778,331 @@ static void place_settings_columns(Container *root, Container *c, const Bounds &
     }
 }
 
+/*
+ * Keyboard focus, continued (see FocusSpec): moving between stops, the keys,
+ * and the ring.
+ */
+
+static bool focus_is_stop(Container *c) {
+    auto spec = focus_spec(c);
+    if (spec && spec->skip)
+        return false;
+    return (spec || c->when_clicked) && c->interactable;
+}
+
+// Every stop under `c` in tree order, shown or not.
+static void focus_collect(Container *c, std::vector<Container *> &out) {
+    if (focus_is_stop(c))
+        out.push_back(c);
+    auto &children = c->type == ::newscroll ? ((ScrollContainer *) c)->content->children : c->children;
+    for (auto child : children)
+        focus_collect(child, out);
+}
+
+static bool focus_inside(Container *c, Container *ancestor) {
+    for (auto p = c; p; p = p->parent)
+        if (p == ancestor)
+            return true;
+    return false;
+}
+
+// Laid out and not hidden by itself or a parent up to `root`.
+static bool focus_shown(Container *root, Container *c) {
+    if (c->real_bounds.w <= 0 || c->real_bounds.h <= 0)
+        return false;
+    for (auto p = c; p; p = p->parent) {
+        if (!p->exists)
+            return false;
+        if (p == root)
+            return true;
+    }
+    return false;
+}
+
+// The focused container while it is alive and part of this window.
+static Container *focus_get(Container *root) {
+    auto &f = focus_of(root);
+    if (f.life.expired() || !focus_inside(f.current, root))
+        return nullptr;
+    return f.current;
+}
+
+static Bounds focus_ring_bounds(Container *root, Container *c) {
+    auto spec = focus_spec(c);
+    return spec && spec->ring ? spec->ring(root, c) : c->real_bounds;
+}
+
+// Scrolls the page so a focused row is fully visible.
+static void focus_scroll_into_view(Container *root, Container *c) {
+    auto right = container_by_name("settings_right", root);
+    if (!right || !focus_inside(c, right) || c == right)
+        return;
+    auto d = (RightData *) right->user_data;
+    auto dpi = swifi_window(root)->dpi;
+    auto b = focus_ring_bounds(root, c);
+    double margin = 16 * dpi;
+    double top = b.y - right->real_bounds.y;
+    double bottom = top + b.h;
+    float scroll = d->applied_scroll;
+    if (top < margin)
+        scroll += (float) (margin - top);
+    else if (bottom > right->real_bounds.h - margin)
+        scroll -= (float) std::min(bottom - (right->real_bounds.h - margin), top - margin);
+    scroll = std::clamp(scroll, -d->overflow, 0.0f);
+    if (scroll == d->applied_scroll)
+        return;
+    d->scroll = d->applied_scroll;
+    d->smooth.start(d->applied_scroll, scroll);
+    right_bar_touch(right);
+}
+
+static void focus_set(Container *root, Container *c, bool show) {
+    auto &f = focus_of(root);
+    f.current = c;
+    f.life = c->lifetime;
+    f.reveal_first = false;
+    f.into_page = false;
+    if (show)
+        f.visible = true;
+    // Text fields take typing while active; focusing anything else leaves them.
+    set_active(root, {c}, root, true, true);
+    focus_scroll_into_view(root, c);
+    swifi_redraw(root);
+}
+
+// Moves to the next (step 1) or previous (step -1) shown stop after `from`, wrapping.
+static void focus_move(Container *root, Container *from, int step) {
+    auto &f = focus_of(root);
+    bool main_window = &f == &focus_main;
+    // The page list opened over a narrow window keeps focus to itself.
+    Container *scope = root;
+    if (main_window && settings_narrow && settings_nav_open)
+        if (auto left = container_by_name("settings_left", root))
+            scope = left;
+    std::vector<Container *> stops;
+    focus_collect(scope, stops);
+    int count = (int) stops.size();
+    if (count == 0)
+        return;
+    int start = -1;
+    if (from) {
+        auto it = std::find(stops.begin(), stops.end(), from);
+        if (it != stops.end())
+            start = (int) (it - stops.begin());
+    }
+    if (start < 0 && f.into_page && step > 0) {
+        // Continue at the top of the page that replaced the focused stop.
+        if (auto right = container_by_name("settings_right", root)) {
+            for (auto stop : stops) {
+                if (focus_inside(stop, right) && focus_shown(root, stop)) {
+                    focus_set(root, stop, true);
+                    return;
+                }
+            }
+        }
+    }
+    if (start < 0)
+        start = step > 0 ? -1 : count;
+    for (int i = 1; i <= count; i++) {
+        int index = ((start + step * i) % count + count) % count;
+        if (focus_shown(root, stops[index])) {
+            focus_set(root, stops[index], true);
+            return;
+        }
+    }
+}
+
+// A press focuses the stop under the pointer (so Tab continues from there) and hides the ring.
+static void focus_mouse_pressed(Container *root, int x, int y) {
+    auto &f = focus_of(root);
+    bool redraw = f.visible;
+    f.visible = false;
+    f.reveal_first = false;
+    f.into_page = false;
+    auto pierced = pierced_containers(root, x, y);
+    if (!pierced.empty()) {
+        for (auto p = pierced[0]; p; p = p->parent) {
+            if (focus_is_stop(p)) {
+                f.current = p;
+                f.life = p->lifetime;
+                break;
+            }
+        }
+    }
+    if (redraw)
+        swifi_redraw(root);
+}
+
+// Keys for one window (the settings window or a dialog), before its containers
+// see them. True when used up.
+static bool focus_key(Container *root, xkb_keysym_t sym, int mods, bool pressed) {
+    if (!pressed)
+        return false;
+    auto &f = focus_of(root);
+    bool main_window = &f == &focus_main;
+    bool tab = sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab;
+    bool shift = (mods & MOD_SHIFT) || sym == XKB_KEY_ISO_Left_Tab;
+    bool others = mods & (MOD_CTRL | MOD_ALT | MOD_SUPER);
+    auto c = focus_get(root);
+
+    if (sym == XKB_KEY_Escape) {
+        // Also reaches the containers, where it cancels what is going on (or closes the dialog).
+        bool changed = f.visible;
+        f.visible = false;
+        f.reveal_first = false;
+        if (main_window && settings_narrow && settings_nav_open) {
+            settings_nav_open = false;
+            changed = true;
+        }
+        if (changed)
+            swifi_redraw(root);
+        return false;
+    }
+    if (tab && !others) {
+        if (c && !f.visible && f.reveal_first && focus_shown(root, c)) {
+            f.visible = true;
+            f.reveal_first = false;
+            focus_scroll_into_view(root, c);
+            swifi_redraw(root);
+            return true;
+        }
+        focus_move(root, c, shift ? -1 : 1);
+        return true;
+    }
+    // A hidden stop (a row's buttons swapped out) still orders Tab, but takes no keys.
+    if (!c || !focus_shown(root, c) || others || (mods & MOD_SHIFT))
+        return false;
+    auto spec = focus_spec(c);
+    if (spec && spec->text)
+        return false; // Fields keep Enter, Space and the arrows
+    int dx = sym == XKB_KEY_Left ? -1 : sym == XKB_KEY_Right ? 1 : 0;
+    int dy = sym == XKB_KEY_Up ? -1 : sym == XKB_KEY_Down ? 1 : 0;
+    if (dx || dy) {
+        f.reveal_first = false;
+        auto arrow = spec ? spec->arrow : nullptr;
+        if (arrow && arrow(root, c, dx, dy)) {
+            f.visible = true;
+            focus_scroll_into_view(root, c);
+            swifi_redraw(root);
+            return true;
+        }
+        focus_move(root, c, dx + dy > 0 ? 1 : -1);
+        return true;
+    }
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter || sym == XKB_KEY_space) {
+        // Copied: activating can delete the container and its spec.
+        auto activate = spec && spec->activate ? spec->activate : c->when_clicked;
+        if (activate)
+            activate(root, c);
+        // The dialog may have closed (its state is reset when the next one opens).
+        if (main_window && !focus_get(root))
+            focus_main.into_page = true;
+        swifi_redraw(root);
+        return true;
+    }
+    return false;
+}
+
+// Keys that reached the settings window: an open dropdown menu takes the
+// navigation keys, an open dialog gets its own focus handling.
+static bool focus_settings_key(Container *root, xkb_keysym_t sym, int mods, bool pressed) {
+    if (dropdown_popup && dropdown_menu_list)
+        return pressed && dropdown_menu_key(sym);
+    if (dropdown_popup)
+        return focus_key(dropdown_popup->root, sym, mods, pressed);
+    return focus_key(root, sym, mods, pressed);
+}
+
+// Runs after the columns are laid out.
+static void focus_after_layout(Container *root) {
+    if (!focus_pending_row)
+        return;
+    auto row = focus_pending_row;
+    focus_pending_row = nullptr;
+    if (focus_pending_row_life.expired())
+        return;
+    std::vector<Container *> stops;
+    focus_collect(row, stops);
+    for (auto stop : stops) {
+        if (focus_shown(root, stop)) {
+            focus_set(root, stop, false);
+            focus_main.reveal_first = !focus_main.visible;
+            return;
+        }
+    }
+}
+
+static void paint_focus_ring(Container *root, Container *) {
+    auto &f = focus_of(root);
+    if (!f.visible || (&f == &focus_main && page_slide.outgoing))
+        return;
+    auto c = focus_get(root);
+    if (!c || !focus_shown(root, c))
+        return;
+    auto window = swifi_window(root);
+    auto cr = window->drawing_context;
+    auto dpi = window->dpi;
+    // Rows scrolled under the page title stay hidden.
+    Bounds clip = root->real_bounds;
+    for (auto p = c->parent; p; p = p->parent) {
+        if (p->name == "settings_right" || p->name == "settings_left") {
+            clip = p->real_bounds;
+            break;
+        }
+    }
+    auto spec = focus_spec(c);
+    double line = std::max(1.0, (double) std::round(2 * dpi));
+    double gap = std::round(2 * dpi);
+    double radius = (spec && spec->radius >= 0 ? spec->radius : settings_control_rounding) * dpi + gap + line * .5;
+    auto b = focus_ring_bounds(root, c);
+    b.grow(gap + line);
+    cr->save();
+    cr->rectangle(clip.x, clip.y, clip.w, clip.h);
+    cr->clip_path();
+    drawRoundedRect(cr, b.x, b.y, b.w, b.h + 1, radius, line);
+    set_argb(cr, theme.text);
+    cr->stroke();
+    cr->set_line_width(1);
+    cr->restore();
+}
+
+// A dialog's starting focus. The ring shows right away when the keyboard opened it.
+static void focus_dialog_start(Container *popup_root, Container *c) {
+    focus_dialog = FocusState();
+    focus_set(popup_root, c, focus_main.visible);
+    focus_dialog.reveal_first = !focus_dialog.visible;
+}
+
+// Gives a dialog popup the same keys, ring and pointer handling as the settings window.
+static void focus_install_dialog(MylarWindow *popup) {
+    focus_dialog = FocusState();
+    popup->root->after_paint = paint_focus_ring;
+    auto forward_key = popup->raw_window->on_key_press;
+    popup->raw_window->on_key_press = [popup, forward_key](RawWindow *rw, int key, bool pressed, xkb_keysym_t sym, int mods,
+                                                          bool is_text, std::string text) {
+        {
+            std::lock_guard<std::mutex> lock(rw->creator->mutex);
+            if (dropdown_popup == popup) {
+                ::layout(popup->root, popup->root, popup->root->real_bounds);
+                if (focus_key(popup->root, sym, mods, pressed)) {
+                    windowing::redraw(rw);
+                    return true;
+                }
+            }
+        }
+        return forward_key ? forward_key(rw, key, pressed, sym, mods, is_text, text) : false;
+    };
+    auto forward_press = popup->raw_window->on_mouse_press;
+    popup->raw_window->on_mouse_press = [popup, forward_press](RawWindow *rw, int button, int state, float x, float y) {
+        if (state == 1) { // WL_POINTER_BUTTON_STATE_PRESSED
+            std::lock_guard<std::mutex> lock(rw->creator->mutex);
+            if (dropdown_popup == popup)
+                focus_mouse_pressed(popup->root, (int) (x * rw->dpi), (int) (y * rw->dpi));
+        }
+        return forward_press ? forward_press(rw, button, state, x, y) : false;
+    };
+}
+
 void fill_root(Container *root) {
     root->when_paint = paint {
         auto mylar = (MylarWindow*)root->user_data;
@@ -10339,6 +11111,7 @@ void fill_root(Container *root) {
         set_rect(cr, c->real_bounds);
         cr->fill();
     };
+    root->after_paint = paint_focus_ring;
     auto left_right = root->child(::fullycustom, FILL_SPACE, FILL_SPACE);
     // Handle external navigation on the settings thread, then lay out the page.
     left_right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
@@ -10382,9 +11155,10 @@ void fill_root(Container *root) {
                     settings_nav_open = true;
                     place_settings_columns(root, c, b);
                 }
-                set_active(root, {field}, root, true, false);
+                focus_set(root, field, false);
             }
         }
+        focus_after_layout(root);
     };
     
     // Children come first in hit testing in this order, so the expanded page
@@ -10425,6 +11199,7 @@ void fill_root(Container *root) {
         swifi_redraw(root);
     };
     scrim->when_fine_scrolled = [](Container *, Container *, double, double, bool) {};
+    focus_skip(scrim);
 
     auto bar = left_right->child(::hbox, FILL_SPACE, FILL_SPACE);
     bar->name = "settings_nav_bar";
@@ -10445,6 +11220,7 @@ void fill_root(Container *root) {
         if (settings_crumb_parent_hit(root, c, 52 * swifi_window(root)->dpi, 12))
             settings_show(root, settings_crumbs().parent);
     };
+    focus_skip(bar);
     auto hamburger = bar->child(FILL_SPACE, FILL_SPACE);
     hamburger->pre_layout = [](Container *root, Container *c, const Bounds &) {
         auto dpi = swifi_window(root)->dpi;
@@ -10619,7 +11395,29 @@ void actual_start() {
             }
             return true;
         }
+        {
+            std::lock_guard<std::mutex> lock(rw->creator->mutex);
+            if (settings_mylar) {
+                auto root = settings_mylar->root;
+                ::layout(root, root, root->real_bounds);
+                if (focus_settings_key(root, sym, mods, pressed)) {
+                    windowing::redraw(rw);
+                    if (dropdown_popup)
+                        windowing::redraw(dropdown_popup->raw_window);
+                    return true;
+                }
+            }
+        }
         return forward_key ? forward_key(rw, key, pressed, sym, mods, is_text, text) : false;
+    };
+    auto forward_press = mylar->raw_window->on_mouse_press;
+    mylar->raw_window->on_mouse_press = [forward_press](RawWindow *rw, int button, int state, float x, float y) {
+        if (state == 1) { // WL_POINTER_BUTTON_STATE_PRESSED
+            std::lock_guard<std::mutex> lock(rw->creator->mutex);
+            if (settings_mylar)
+                focus_mouse_pressed(settings_mylar->root, (int) (x * rw->dpi), (int) (y * rw->dpi));
+        }
+        return forward_press ? forward_press(rw, button, state, x, y) : false;
     };
     // Files can be dropped anywhere on the Display page to set the wallpaper.
     mylar->raw_window->accepts_file_drop = [](RawWindow *rw, float, float) {
@@ -10649,6 +11447,9 @@ void actual_start() {
 
     page_slide_finish();
     nav_indicator = NavIndicator();
+    focus_main = FocusState();
+    focus_dialog = FocusState();
+    focus_pending_row = nullptr;
     cleanup_smooth_frames();
     settings_icon_cache_clear();
     cleanup_cached_pango_fonts();

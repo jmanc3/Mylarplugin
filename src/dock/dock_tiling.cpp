@@ -75,8 +75,7 @@ static std::string shared_keys(const std::vector<std::string> &ids, const std::s
 
 static std::vector<std::pair<std::string, std::string>> tiling_shortcuts(const std::string &layout) {
     std::vector<std::pair<std::string, std::string>> list = {
-        // Alt + Space is handled directly in heart.cpp's key handler.
-        {"Toggle tiling", "Alt + Space"},
+        {"Tile windows", pretty_keys(shortcut_keys("toggle_layout"))},
         {"Focus window", shared_keys({"focus_left", "focus_right", "focus_up", "focus_down"}, "Arrows")},
         {"Move window", shared_keys({"move_left", "move_right", "move_up", "move_down"}, "Arrows")},
         {"Toggle floating", pretty_keys(shortcut_keys("toggle_floating"))},
@@ -141,12 +140,12 @@ static void tiling_label(Container *parent, const std::string &text, double heig
     };
 }
 
-static void tiling_toggle(Container *parent, const std::string &text, std::function<bool(const STilingMenuState &)> value,
+static void tiling_toggle(Container *parent, std::function<std::string()> text, std::function<bool(const STilingMenuState &)> value,
                           std::function<void(const std::string &)> change) {
     auto row = tiling_row(parent, 44);
     auto label = row->child(FILL_SPACE, FILL_SPACE);
     label->when_paint = [text](Container *root, Container *c) {
-        paint_tiling_text(static_cast<Dock *>(root->user_data), c, text);
+        paint_tiling_text(static_cast<Dock *>(root->user_data), c, text());
     };
     auto toggle = row->child(44, FILL_SPACE);
     toggle->pre_layout = [](Container *root, Container *c, const Bounds &) {
@@ -216,7 +215,11 @@ void fill_tiling_container(Dock *dock) {
         c->wanted_pad = Bounds(16 * dpi, 12 * dpi, 16 * dpi, 12 * dpi);
         c->spacing = 6 * dpi;
     };
-    tiling_toggle(parent, "Tile windows (Alt + Space)", [](const STilingMenuState &state) { return state.is_tiling; },
+    // Shows the shortcut set on the Shortcuts page.
+    tiling_toggle(parent, []() {
+        auto keys = shortcut_keys("toggle_layout");
+        return keys.empty() ? std::string("Tile windows") : "Tile windows (" + pretty_keys(keys) + ")";
+    }, [](const STilingMenuState &state) { return state.is_tiling; },
         [](const std::string &monitor) {
             main_thread([monitor]() {
                 const int space = tiling_workspace(monitor);
@@ -226,7 +229,7 @@ void fill_tiling_container(Dock *dock) {
             });
         });
 
-    tiling_toggle(parent, "Tile new workspaces", [](const STilingMenuState &state) { return state.new_workspace_is_tiling; },
+    tiling_toggle(parent, []() { return std::string("Tile new workspaces"); }, [](const STilingMenuState &state) { return state.new_workspace_is_tiling; },
         [](const std::string &) {
             main_thread([]() {
                 hypriso->set_new_workspace_tiling(!set->new_workspace_is_tiling);
@@ -283,7 +286,7 @@ void fill_tiling_container(Dock *dock) {
         change_gap(c, (dock->tiling_settings.window_gap + (scroll_y > 0 ? 1 : -1)) / 32.0f);
     };
 
-    tiling_toggle(parent, "Highlight active window", [](const STilingMenuState &state) { return state.border_hint; },
+    tiling_toggle(parent, []() { return std::string("Highlight active window"); }, [](const STilingMenuState &state) { return state.border_hint; },
         [](const std::string &) {
             main_thread([]() {
                 set->active_window_border_hint = !set->active_window_border_hint;

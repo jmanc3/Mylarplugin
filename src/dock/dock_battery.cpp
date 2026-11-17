@@ -3,6 +3,8 @@
 #include "dock/dock_internal.h"
 
 #include "dock/dock.h"
+#include "dock/dock_brightness.h"
+#include "dock/dock_extra.h"
 #include "settings.h"
 
 #include <iomanip>
@@ -111,11 +113,18 @@ void request_battery_refresh() {
     battery_wakeup.notify_all();
 }
 
-static void toggle_battery_history() {
-    main_thread([]() {
+bool battery_history_enabled() {
+    std::lock_guard<std::mutex> lock(battery_mutex);
+    return battery_view.history_enabled;
+}
+
+void set_battery_history_enabled(bool enabled) {
+    main_thread([enabled]() {
         {
             std::lock_guard<std::mutex> lock(battery_mutex);
-            battery_view.history_enabled = !battery_view.history_enabled;
+            if (battery_view.history_enabled == enabled && set->battery_history_enabled == enabled)
+                return;
+            battery_view.history_enabled = enabled;
             set->battery_history_enabled = battery_view.history_enabled;
             if (!battery_view.history_enabled) battery_view.history_error.clear();
             battery_refresh_requested = true;
@@ -267,8 +276,8 @@ static void battery_text(drawing::Context *cr, double x, double y, const std::st
 }
 
 static void paint_battery_graph(drawing::Context *cr, const Bounds &b, double dpi, const BatteryView &view,
-                                double mouse_x, bool hovered) {
-    const RGBA muted = {.40, .46, .54, 1};
+                                double mouse_x, bool hovered, const BatteryGraphPalette &palette) {
+    const RGBA muted = palette.muted;
     const RGBA blue = {.08, .48, .88, 1};
     const auto now = std::time(nullptr);
     const bool forecast = view.status.valid && view.status.state == 2 && view.remaining_seconds > 0;
@@ -285,14 +294,14 @@ static void paint_battery_graph(drawing::Context *cr, const Bounds &b, double dp
     cr->rectangle(x(now), plot.y, plot.right() - x(now), plot.h);
     cr->fill();
     for (int percent : {0, 25, 50, 75, 100}) {
-        set_argb(cr, {.89, .92, .95, 1});
+        set_argb(cr, palette.grid);
         cr->set_line_width(dpi);
         cr->move_to(plot.x, y(percent));
         cr->line_to(plot.right(), y(percent));
         cr->stroke();
         battery_text(cr, b.x, y(percent) - 6 * dpi, std::to_string(percent), 8, dpi, muted);
     }
-    set_argb(cr, {.68, .75, .83, 1});
+    set_argb(cr, palette.now_line);
     cr->move_to(x(now), plot.y);
     cr->line_to(x(now), plot.bottom());
     cr->stroke();
@@ -362,7 +371,9 @@ static void paint_battery_graph(drawing::Context *cr, const Bounds &b, double dp
         }
         if (intersects) {
             const double hover_y = y(hover_percent);
-            set_argb(cr, {.25, .35, .46, .72});
+            RGBA cursor = palette.text;
+            cursor.a *= .6;
+            set_argb(cr, cursor);
             double dash[] = {3 * dpi, 3 * dpi};
             cr->set_dash(dash, 2, 0);
             cr->set_line_width(dpi);
@@ -377,7 +388,7 @@ static void paint_battery_graph(drawing::Context *cr, const Bounds &b, double dp
             const auto charge_label = std::format("{:.1f}%", hover_percent);
             const double label_x = std::clamp(hover_x + 6 * dpi, plot.x, plot.right() - 68 * dpi);
             const double label_y = std::clamp(hover_y - 26 * dpi, plot.y, plot.bottom() - 28 * dpi);
-            battery_text(cr, label_x, label_y, charge_label, 9, dpi, {.12, .17, .24, 1}, 65 * dpi, true);
+            battery_text(cr, label_x, label_y, charge_label, 9, dpi, palette.text, 65 * dpi, true);
             battery_text(cr, label_x, label_y + 14 * dpi, time_label, 8, dpi, muted, 68 * dpi);
         }
     }
@@ -394,6 +405,62 @@ static void paint_battery_graph(drawing::Context *cr, const Bounds &b, double dp
     cr->restore();
 }
 
+BatterySummary battery_summary() {
+    const auto view = battery_snapshot();
+    const auto &s = view.status;
+    BatterySummary summary;
+    summary.valid = s.valid;
+    summary.percent = s.valid ? std::format("{:.0f}%", s.percentage) : "—";
+    summary.state = "Waiting for data";
+    if (s.valid) {
+        switch (s.state) {
+            case 1: summary.state = "Charging"; break;
+            case 2: summary.state = "On battery"; break;
+            case 3: summary.state = "Battery empty"; break;
+            case 4: summary.state = "Fully charged"; break;
+            case 5: summary.state = "Charging paused"; break;
+            case 6: summary.state = "Discharge paused"; break;
+            default: summary.state = "Status unavailable"; break;
+        }
+    }
+    summary.estimate = s.valid ? "An estimate will appear while discharging." : s.reading_reason;
+    if (s.valid && s.state == 2) {
+        summary.estimate = view.remaining_seconds > 0 ? "About " + battery_duration(view.remaining_seconds) + " remaining" :
+            "Estimating remaining time…";
+    } else if (s.valid && s.protector_enabled) {
+        summary.estimate = "Charge protection is enabled.";
+    } else if (s.valid && s.state == 1) {
+        summary.estimate = "Connected to power · battery is charging";
+    }
+    if (s.valid) {
+        summary.detail = "Estimates adapt to your current usage.";
+        if (s.state == 2 && view.remaining_seconds > 0) {
+            auto end = view.updated + static_cast<std::time_t>(view.remaining_seconds);
+            std::tm today{}, then{};
+            localtime_r(&view.updated, &today);
+            localtime_r(&end, &then);
+            summary.detail = "Estimated empty at " + battery_clock(end, today.tm_yday != then.tm_yday || today.tm_year != then.tm_year);
+        } else if (s.state == 2) {
+            summary.detail = "Waiting for a reliable discharge rate.";
+        }
+    }
+    if (s.valid && s.state == 2) {
+        if (view.percent_per_hour > 0) summary.rate = std::format("−{:.1f}% / hr", view.percent_per_hour);
+        if (std::isfinite(s.energy_rate) && s.energy_rate > .1)
+            summary.rate += std::format("  {:.1f} W", s.energy_rate);
+        if (summary.rate.empty()) summary.rate = "Measuring discharge…";
+    }
+    summary.message = view.pending ? "Applying power setting…" : view.action_error;
+    if (summary.message.empty()) summary.message = view.history_error;
+    summary.message_is_error = !view.action_error.empty() || !view.history_error.empty();
+    return summary;
+}
+
+void paint_battery_history(drawing::Context *cr, const Bounds &b, double dpi, double mouse_x, bool hovered,
+                           const BatteryGraphPalette &palette) {
+    paint_battery_graph(cr, b, dpi, battery_snapshot(), mouse_x, hovered, palette);
+}
+
 void fill_battery_container(Dock *dock) {
     auto root = dock->battery->root;
     root->type = ::vbox;
@@ -407,7 +474,7 @@ void fill_battery_container(Dock *dock) {
     content->pre_layout = [](Container *root, Container *c, const Bounds &) {
         auto dock = (Dock *) root->user_data;
         auto dpi = dock->battery->raw_window->dpi;
-        c->wanted_pad = Bounds(20 * dpi, 16 * dpi, 20 * dpi, 12 * dpi);
+        c->wanted_pad = Bounds(20 * dpi, 12 * dpi, 16 * dpi, 12 * dpi);
     };
     auto sized_row = [content](double height) {
         auto row = content->child(FILL_SPACE, height);
@@ -417,116 +484,107 @@ void fill_battery_container(Dock *dock) {
         };
         return row;
     };
-    auto header = sized_row(24);
+    auto header = sized_row(36);
     header->type = ::hbox;
-    header->when_paint = [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        battery_text(dock->battery->raw_window->drawing_context, c->real_bounds.x, c->real_bounds.y,
-            "Battery", 13, dock->battery->raw_window->dpi, {.12, .17, .24, 1}, -1, true);
-    };
-    header->child(FILL_SPACE, FILL_SPACE);
-    auto history_toggle = header->child(170, FILL_SPACE);
-    history_toggle->pre_layout = [](Container *root, Container *c, const Bounds &) {
-        auto dock = (Dock *) root->user_data;
-        c->wanted_bounds.w = 170 * dock->battery->raw_window->dpi;
-    };
-    history_toggle->when_clicked = [](Container *, Container *) { toggle_battery_history(); };
-    history_toggle->when_paint = [](Container *root, Container *c) {
+    auto title = header->child(FILL_SPACE, FILL_SPACE);
+    title->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->battery->raw_window->drawing_context;
         auto dpi = dock->battery->raw_window->dpi;
-        const bool enabled = battery_snapshot().history_enabled;
-        auto b = c->real_bounds;
-        battery_text(cr, b.x + 36 * dpi , b.y + 5 * dpi, enabled ? "History enabled" : "History disabled",
-            9, dpi, {.40, .46, .54, 1});
-        double x = b.right() - 42 * dpi;
-        RGBA fill = enabled ? RGBA(.08, .48, .88, 1) : RGBA(.81, .85, .90, 1);
-        if (c->state.mouse_hovering) fill = enabled ? RGBA(.06, .40, .78, 1) : RGBA(.72, .79, .87, 1);
-        set_argb(cr, fill);
-        drawRoundedRect(cr, x, b.y, 42 * dpi, 24 * dpi, 12 * dpi, 1);
-        cr->fill();
-        set_argb(cr, {1, 1, 1, 1});
-        cr->arc(x + (enabled ? 30 : 12) * dpi, b.y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
-        cr->fill();
+        const auto bounds = draw_text(cr, 0, 0, "Battery", 13 * dpi, false, set->font, -1, -1, {.12, .17, .24, 1}, true);
+        battery_text(cr, c->real_bounds.x, c->real_bounds.y + (c->real_bounds.h - bounds.h) * .5,
+            "Battery", 13, dpi, {.12, .17, .24, 1}, -1, true);
     };
-    auto summary = sized_row(114);
+    // Opens the Battery page in Settings, where the usage history lives.
+    auto gear = header->child(36, FILL_SPACE);
+    gear->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 36 * static_cast<Dock *>(root->user_data)->battery->raw_window->dpi;
+    };
+    gear->when_paint = [](Container *root, Container *c) {
+        const auto dock = static_cast<Dock *>(root->user_data);
+        const auto cr = dock->battery->raw_window->drawing_context;
+        const auto dpi = dock->battery->raw_window->dpi;
+        const auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(cr, {0, 0, 0, c->state.mouse_pressing ? .14f : (c->state.mouse_hovering ? .1f : .06f)});
+        cr->fill();
+        const std::string glyph = ""; // Settings
+        const auto t = draw_text(cr, 0, 0, glyph, 13 * dpi, false, icon_font);
+        draw_text(cr, center_x(c, t.w), center_y(c, t.h), glyph, 13 * dpi, true, icon_font, -1, -1, {0, 0, 0, .8});
+    };
+    gear->when_clicked = [](Container *root, Container *) {
+        auto dock = (Dock *) root->user_data;
+        windowing::close_window(dock->battery->raw_window);
+        main_thread([]() {
+            settings::start("Battery");
+        });
+    };
+    auto summary = sized_row(110);
     summary->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto cr = dock->battery->raw_window->drawing_context;
         auto dpi = dock->battery->raw_window->dpi;
-        const auto view = battery_snapshot();
-        const auto &s = view.status;
+        const auto s = battery_summary();
         auto b = c->real_bounds;
         RGBA ink = {.12, .17, .24, 1}, muted = {.40, .46, .54, 1};
-        battery_text(cr, b.x, b.y + dpi, s.valid ? std::format("{:.0f}%", s.percentage) : "—", 30, dpi, ink, -1, true);
-        std::string state = "Waiting for data";
-        if (s.valid) {
-            switch (s.state) {
-                case 1: state = "Charging"; break;
-                case 2: state = "On battery"; break;
-                case 3: state = "Battery empty"; break;
-                case 4: state = "Fully charged"; break;
-                case 5: state = "Charging paused"; break;
-                case 6: state = "Discharge paused"; break;
-                default: state = "Status unavailable"; break;
-            }
-        }
-        battery_text(cr, b.x + 135 * dpi, b.y + 11 * dpi, state, 11, dpi, muted);
-        std::string estimate = s.valid ? "An estimate will appear while discharging." : s.reading_reason;
-        if (s.valid && s.state == 2) {
-            estimate = view.remaining_seconds > 0 ? "About " + battery_duration(view.remaining_seconds) + " remaining" :
-                "Estimating remaining time…";
-        } else if (s.valid && s.protector_enabled) {
-            estimate = "Charge protection is enabled.";
-        } else if (s.valid && s.state == 1) {
-            estimate = "Connected to power · battery is charging";
-        }
-        battery_text(cr, b.x, b.y + 54 * dpi, estimate, 11, dpi, ink, b.w);
-        std::string detail = "Estimates adapt to your current usage.";
-        if (s.valid && s.state == 2 && view.remaining_seconds > 0) {
-            auto end = view.updated + static_cast<std::time_t>(view.remaining_seconds);
-            std::tm today{}, then{};
-            localtime_r(&view.updated, &today);
-            localtime_r(&end, &then);
-            detail = "Estimated empty at " + battery_clock(end, today.tm_yday != then.tm_yday || today.tm_year != then.tm_year);
-        } else if (s.valid && s.state == 2) {
-            detail = "Waiting for a reliable discharge rate.";
-        }
-        if (s.valid) battery_text(cr, b.x, b.y + 86 * dpi, detail, 10, dpi, muted, b.w);
+        battery_text(cr, b.x, b.y + dpi, s.percent, 30, dpi, ink, -1, true);
+        battery_text(cr, b.x + 135 * dpi, b.y + 11 * dpi, s.state, 11, dpi, muted);
+        battery_text(cr, b.x, b.y + 54 * dpi, s.estimate, 11, dpi, ink, b.w);
+        if (!s.detail.empty()) battery_text(cr, b.x, b.y + 82 * dpi, s.detail, 10, dpi, muted, b.w);
     };
-    auto graph_title = sized_row(25);
-    graph_title->when_paint = [](Container *root, Container *c) {
+
+    // Brightness and night light, moved here from the dock and its extra menu.
+    auto brightness_title = sized_row(30);
+    brightness_title->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto dpi = dock->battery->raw_window->dpi;
         auto cr = dock->battery->raw_window->drawing_context;
-        auto view = battery_snapshot();
-        auto b = c->real_bounds;
-        battery_text(cr, b.x, b.y, "Last 3 hours · charge %", 10, dpi, {.40, .46, .54, 1});
-        std::string rate = "";
-        if (view.status.valid && view.status.state == 2) {
-            if (view.percent_per_hour > 0) rate = std::format("−{:.1f}% / hr", view.percent_per_hour);
-            if (std::isfinite(view.status.energy_rate) && view.status.energy_rate > .1)
-                rate += std::format("  {:.1f} W", view.status.energy_rate);
-            if (rate.empty()) rate = "Measuring discharge…";
-        }
-        auto bounds = draw_text(cr, 0, 0, rate, 9 * dpi, false);
-        battery_text(cr, b.right() - bounds.w, b.y, rate, 9, dpi, {.08, .48, .78, 1});
-    };
-    auto graph = sized_row(175);
-    graph->when_paint = [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        paint_battery_graph(dock->battery->raw_window->drawing_context, c->real_bounds, dock->battery->raw_window->dpi,
-            battery_snapshot(), root->mouse_current_x, c->state.mouse_hovering);
-    };
-    graph->when_mouse_motion = request_damage;
-    graph->when_mouse_enters_container = request_damage;
-    graph->when_mouse_leaves_container = request_damage;
-    auto legend = sized_row(24);
-    legend->when_paint = [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
         auto dpi = dock->battery->raw_window->dpi;
-        battery_text(dock->battery->raw_window->drawing_context, c->real_bounds.x, c->real_bounds.y,
-            "Solid: recorded charge   ·   Dashed: estimate", 8, dpi, {.40, .46, .54, 1});
+        auto b = c->real_bounds;
+        set_argb(cr, {.88, .91, .95, 1});
+        cr->set_line_width(dpi);
+        cr->move_to(b.x, b.y);
+        cr->line_to(b.right(), b.y);
+        cr->stroke();
+        battery_text(cr, b.x, b.y + 9 * dpi, "Brightness", 11, dpi, {.12, .17, .24, 1}, -1, true);
+    };
+    auto set_level = [](Container *root, float amount) {
+        auto dock = (Dock *) root->user_data;
+        set_brightness(std::round(std::clamp(amount, 0.0f, 1.0f) * 100.0f));
+        windowing::redraw(dock->battery->raw_window);
+        dock::redraw();
+    };
+    make_self_sizing_slider(content,
+        [](Container *) { return std::string("\uE706"); },
+        [](Container *) { return std::to_string((int) std::round(brightness_level)) + "%"; },
+        [set_level](Container *c, float amount) {
+            Container *root = c;
+            while (root->parent) root = root->parent;
+            set_level(root, amount);
+        },
+        [](Container *) { return brightness_level / 100.0f; },
+        [](Dock *d) { return d->battery; });
+    auto night = sized_row(56);
+    night->when_clicked = [](Container *root, Container *) {
+        toggle_nightlight();
+        windowing::redraw(((Dock *) root->user_data)->battery->raw_window);
+    };
+    night->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto cr = dock->battery->raw_window->drawing_context;
+        auto dpi = dock->battery->raw_window->dpi;
+        auto b = c->real_bounds;
+        battery_text(cr, b.x, b.y + 6 * dpi, "Night light", 11, dpi, {.12, .17, .24, 1}, -1, true);
+        battery_text(cr, b.x, b.y + 27 * dpi, "Warmer colors that cut down on blue light", 9, dpi, {.40, .46, .54, 1}, b.w - 50 * dpi);
+        const bool enabled = nightlight_on;
+        double x = b.right() - 42 * dpi, y = b.y + 22 * dpi - 12 * dpi;
+        RGBA fill = enabled ? RGBA(.08, .48, .88, 1) : RGBA(.81, .85, .90, 1);
+        if (c->state.mouse_hovering) fill = enabled ? RGBA(.06, .40, .78, 1) : RGBA(.72, .79, .87, 1);
+        set_argb(cr, fill);
+        drawRoundedRect(cr, x, y, 42 * dpi, 24 * dpi, 12 * dpi, 1);
+        cr->fill();
+        set_argb(cr, {1, 1, 1, 1});
+        cr->arc(x + (enabled ? 30 : 12) * dpi, y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
+        cr->fill();
     };
     for (bool protector : {false, true}) {
         auto control = sized_row(70);
@@ -573,13 +631,11 @@ void fill_battery_container(Dock *dock) {
     auto feedback = content->child(FILL_SPACE, FILL_SPACE);
     feedback->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto view = battery_snapshot();
-        auto message = view.pending ? "Applying power setting…" : view.action_error;
-        if (message.empty()) message = view.history_error;
-        if (message.empty()) return;
+        auto s = battery_summary();
+        if (s.message.empty()) return;
         battery_text(dock->battery->raw_window->drawing_context, c->real_bounds.x, c->real_bounds.y + 4 * dock->battery->raw_window->dpi,
-            message, 8, dock->battery->raw_window->dpi,
-            view.action_error.empty() && view.history_error.empty() ? RGBA(.40, .46, .54, 1) : RGBA(.70, .23, .16, 1), c->real_bounds.w);
+            s.message, 8, dock->battery->raw_window->dpi,
+            s.message_is_error ? RGBA(.70, .23, .16, 1) : RGBA(.40, .46, .54, 1), c->real_bounds.w);
     };
 }
 

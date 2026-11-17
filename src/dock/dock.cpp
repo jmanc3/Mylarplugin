@@ -2180,7 +2180,8 @@ static void fill_root(Container *root) {
         };
     }
 
-    {
+    // On laptops brightness lives in the battery menu.
+    if (!has_internal_battery()) {
         auto brightness = simple_dock_item(root, ICON("\uE706"), []() {
            return fz("{}%", (int) std::round(brightness_level));
         }, []() {
@@ -2349,10 +2350,14 @@ static void fill_root(Container *root) {
             return std::string("+100%");
         });
         battery->when_clicked = [](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                settings_page_right_click(root, "Battery settings", "Battery");
+                return;
+            }
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 420, 550);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 420, 436);
             dock->battery = open_mylar_popup(mylar, settings);
             if (!dock->battery)
                 return;
@@ -2365,6 +2370,10 @@ static void fill_root(Container *root) {
             dock->battery->root->wanted_bounds.h = FILL_SPACE;
             fill_battery_container(dock);
             request_battery_refresh();
+            std::thread([]() {
+                brightness_level = get_brightness();
+                dock::change_in_battery();
+            }).detach();
             windowing::redraw(dock->battery->raw_window);
         };
     }

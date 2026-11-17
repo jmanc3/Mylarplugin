@@ -2,6 +2,7 @@
 
 #include "dock/dock_internal.h"
 
+#include "dock/dock_battery.h"
 #include "dock/dock_bluetooth.h"
 #include "dock/dock_projection.h"
 #include "dock/dock_volume.h"
@@ -11,6 +12,18 @@
 #include <linux/input-event-codes.h>
 
 bool nightlight_on = false;
+
+void toggle_nightlight() {
+    if (nightlight_on) {
+        system("killall hyprsunset");
+    } else {
+        std::thread t([]() {
+            system("hyprsunset -t 5000");
+        });
+        t.detach();
+    }
+    nightlight_on = !nightlight_on;
+}
 
 // State handed to the short-lived timer that reopens a popup after the extra
 // menu window has closed.
@@ -626,17 +639,11 @@ void fill_extra_container(Container *root) {
     });
     bluetooth->name = "bluetooth";
     bluetooth->exists = bluetooth_available.load();
-    add_extra_button(top, "\uE708", [](Container *, Container *) {
-        if (nightlight_on) {
-            system("killall hyprsunset");
-        } else {
-            std::thread t([]() {
-                system("hyprsunset -t 5000");
-            });
-            t.detach();
-        }
-        nightlight_on = !nightlight_on;
+    // On laptops night light lives in the battery menu, next to brightness.
+    auto night = add_extra_button(top, "\uE708", [](Container *, Container *) {
+        toggle_nightlight();
     });
+    night->exists = !has_internal_battery();
     add_extra_button(top, "\uE087", nullptr);
 
     auto middle = root->child(::hbox, FILL_SPACE, FILL_SPACE);

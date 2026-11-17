@@ -472,10 +472,6 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
         zoom_factor = 1.0;
     }
 
-    if (alt_held && key == KEY_SPACE && state == 1) {
-        toggle_layout();
-    }
-
     // Only this key's handlers decide whether it is consumed. A flag left over from an
     // earlier key (e.g. the screenshot tool consuming the Esc that closed it) would
     // otherwise swallow every following key, SUPER_L included, until the mouse moved.
