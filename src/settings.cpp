@@ -815,9 +815,9 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
 static std::unordered_map<std::string, Bounds> text_extents_cache;
 
 static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color, bool bold, int align = 0) {
-    auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
 
-    std::string key = fz("{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f", set->font, size, (int) bold, wrap, h, align);
+    std::string key = fz("{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f", font, size, (int) bold, wrap, h, align);
     key += text;
     auto cached = text_extents_cache.find(key);
     if (cached != text_extents_cache.end() && !draw)
@@ -3604,6 +3604,30 @@ static const WallThumb *wall_thumb(const std::string &path) {
     if (stamp.empty() || !t.surface)
         return nullptr;
     return &t;
+}
+
+// Starts decoding every wallpaper file in the background so the preview and
+// crop tool have it in memory before the Display page is first opened.
+// Safe to call from any thread.
+void settings::preload_wallpapers() {
+    std::vector<std::string> paths;
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(wallpaper_config_dir(), ec)) {
+        auto name = entry.path().filename().string();
+        if (name == "wall.png" || (name.rfind("wall-", 0) == 0 && entry.path().extension() == ".png"))
+            paths.push_back(entry.path().string());
+    }
+    for (auto &path : paths) {
+        const auto stamp = wallpaper_file_stamp(path);
+        if (stamp.empty())
+            continue;
+        std::lock_guard<std::mutex> lock(wall_thumbs_mutex);
+        auto &t = wall_thumbs[path];
+        if (stamp == t.stamp || stamp == t.loading_stamp || (t.has_pending && stamp == t.pending_stamp))
+            continue;
+        t.loading_stamp = stamp;
+        wall_thumb_load(path, stamp);
+    }
 }
 
 // Maps the monitor layout (logical) into the preview canvas.

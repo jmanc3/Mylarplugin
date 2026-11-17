@@ -200,7 +200,7 @@ static Container *setup_label(Container *root, Container *label_parent, bool bol
 }
 
 static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font, int wrap, int h, RGBA color) {
-    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, font, size, PANGO_WEIGHT_NORMAL, false);
     //pango_layout_set_text(layout, "\uE7E7", strlen("\uE83F"));
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {

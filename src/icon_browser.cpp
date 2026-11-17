@@ -1309,6 +1309,7 @@ static void start_icon_browser() {
     settings.pos.w = 900;
     settings.pos.h = 640;
     settings.name = "Icon Browser";
+    settings.app_id = "preferences-desktop-icons";
     auto mylar = open_mylar_window(app, WindowType::NORMAL, settings);
     auto data = new BrowserData;
     data->app = app;

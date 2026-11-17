@@ -49,7 +49,7 @@ RawWindowSettings make_icon_anchored_popup_settings(Container *icon,
 
 Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font,
                  int wrap, int h, RGBA color, bool bold, int align) {
-    auto layout = get_cached_pango_font(cr, set->font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, font, size, bold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL, false);
 
     pango_layout_set_text(layout, text.data(), text.size());
     pango_layout_set_alignment(layout, (PangoAlignment) align);
@@ -78,7 +78,7 @@ Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size,
 
 Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, int size, bool draw, std::string font,
                  int wrap, int h, RGBA color) {
-    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, font, size, PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
         pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);
@@ -106,7 +106,7 @@ Bounds draw_text(drawing::Context *cr, Container *c, std::string text, int size,
                  int wrap, int h) {
     if (!cr)
         return {0, 0, 0, 0};
-    auto layout = get_cached_pango_font(cr, set->font, size, PANGO_WEIGHT_NORMAL, false);
+    auto layout = get_cached_pango_font(cr, font, size, PANGO_WEIGHT_NORMAL, false);
     pango_layout_set_text(layout, text.data(), text.size());
     if (wrap == -1) {
         pango_layout_set_wrap(layout, PangoWrapMode::PANGO_WRAP_NONE);

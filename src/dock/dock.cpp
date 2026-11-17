@@ -553,7 +553,7 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
             pop.icon_left = "\uE713";
             pop.is_text_icon = true;
             pop.on_clicked = []() {
-                settings::start("", true);
+                settings::start("Display");
             };
             root.push_back(pop);
         }

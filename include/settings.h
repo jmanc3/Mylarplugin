@@ -33,4 +33,6 @@ namespace settings {
     // Opens settings on the result's page, scrolls to the row and flashes it.
     // Call on the main thread, like start.
     void open_search_result(const SearchResult &result);
+    // Decodes the wallpaper files into memory ahead of the Display page.
+    void preload_wallpapers();
 };

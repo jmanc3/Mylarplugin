@@ -1578,6 +1578,7 @@ void wallpaper_settings_changed() {
     for (auto c : actual_monitors)
         wall_refresh_monitor(c);
     damage_all();
+    settings::preload_wallpapers();
 }
 
 static void paint_wallpaper(int current_monitor, Container *m) {
@@ -2770,6 +2771,8 @@ void heart::begin() {
             create_default_config();
             
             watch_wallpaper_change();
+            // Decode wallpapers into memory once startup settles, for the Display page.
+            later(3000, [](Timer *) { settings::preload_wallpapers(); });
 
             //if (hyprland_instance_name() != last_hyprland_instance_name())
                 //overview::open(hypriso->monitor_from_cursor());
