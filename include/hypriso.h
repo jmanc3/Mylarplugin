@@ -149,6 +149,8 @@ struct ConfigSettings {
     int fixed_workspace_count = 4;
     bool workspaces_span_monitors = false;
     bool resize_at_screen_edges = true;
+    // Skip our titlebar on windows that asked (xdg-decoration / KDE server-decoration) to draw their own.
+    bool respect_csd_requests = false;
     bool desktop_icons = true;
     int desktop_vertical_override = 1; // -1: Hyprland config, 0: horizontal, 1: vertical
     std::string desktop_sort_by = "name";

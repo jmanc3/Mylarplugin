@@ -1150,25 +1150,26 @@ bool HyprIso::requested_client_side_decorations(int cid) {
         if (hw->id != cid)
             continue;
         auto w = hw->w;
-            //for (auto hw : hyprwindows) {
-        //for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            //if (s->m_surf == hw->w->m_xdgSurface) {
- 
-        /*for (const auto &s : NProtocols::serverDecorationKDE->m_decos) {
-            if (w->m_xdgSurface && s->m_surf == w->m_xdgSurface) {
-                if (s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT) {
-                    return true;
+        // Wayland clients announce their preference through either xdg-decoration or the
+        // older KDE server-decoration protocol; only honored when the user opts in.
+        if (set && set->respect_csd_requests && !mw_is_x11(w)) {
+            if (PROTO::serverDecorationKDE) {
+                auto surf = mw_window_surface(w);
+                for (const auto &s : PROTO::serverDecorationKDE->m_decos) {
+                    if (s && surf && s->m_surf == surf && s->m_mostRecentlyRequested == ORG_KDE_KWIN_SERVER_DECORATION_MODE_CLIENT)
+                        return true;
+                }
+            }
+            if (PROTO::xdgDecoration) {
+                auto xdg = mw_wayland_resource(w);
+                if (xdg && xdg->m_toplevel && xdg->m_toplevel->m_resource) {
+                    auto it = PROTO::xdgDecoration->m_decorations.find(xdg->m_toplevel->m_resource->resource());
+                    if (it != PROTO::xdgDecoration->m_decorations.end() && it->second &&
+                        it->second->mostRecentlyRequested == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE)
+                        return true;
                 }
             }
         }
-        for (const auto &[a, b] : NProtocols::xdgDecoration->m_decorations) {
-            if (w->m_xdgSurface && w->m_xdgSurface->m_toplevel && w->m_xdgSurface->m_toplevel->m_resource && b->m_resource == w->m_xdgSurface->m_toplevel->m_resource) {
-                if (b->mostRecentlyRequested == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE) {
-                    return true;
-                }
-            }
-        }
-        */
 
         if (mw_is_x11(w) && mw_backend_valid(w)) {
             auto win = mw_client_id(w);

@@ -658,6 +658,7 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     settings->fixed_workspace_count = std::clamp(settings->fixed_workspace_count, 1, 20);
     bind(bool, "workspaces_span_monitors", &settings->workspaces_span_monitors);
     bind(bool, "resize_at_screen_edges", &settings->resize_at_screen_edges);
+    bind(bool, "respect_csd_requests", &settings->respect_csd_requests);
     bind(bool, "desktop_icons", &settings->desktop_icons);
     bind(int, "desktop_vertical_override", &settings->desktop_vertical_override);
     bind(std::string, "desktop_sort_by", &settings->desktop_sort_by);
@@ -4841,6 +4842,11 @@ static void fill_multitasking_settings(Container *root) {
     make_bool(padded_right, "Snap windows",
         "Drag a window to a screen edge or corner to fill half or a quarter of the screen", set->resize_at_screen_edges, [](bool value) {
             set->resize_at_screen_edges = value;
+            save_multitasking_settings();
+        });
+    make_bool(padded_right, "Attempt to respect CSD requests",
+        "Don't add a titlebar to windows that ask to draw their own decorations", set->respect_csd_requests, [](bool value) {
+            set->respect_csd_requests = value;
             save_multitasking_settings();
         });
 }
@@ -9570,6 +9576,8 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Multitasking", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
     search_add("Multitasking", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
                "window resizing screen edges corners quarter snap snapping tile tiling half maximize drag edges");
+    search_add("Multitasking", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
+               "csd ssd client side server side decorations titlebar title bar xdg kde");
 
     search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
     search_add("Mouse & Touchpad", "Mouse", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert scroll wheel");

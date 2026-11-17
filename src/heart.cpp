@@ -2895,7 +2895,9 @@ void heart::layout_containers() {
 
     for (auto c : actual_root->children) {
         auto cid = *datum<int>(c, "cid");
-        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->resizable(cid) && hypriso->is_window_workspace_visible(cid) && !is_slept(cid);
+        // Not gated on resizable(): non-resizable X11 windows (most fullscreen games) would
+        // otherwise stop blocking input, letting clicks fall through to the desktop icons.
+        bool exists = hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) && hypriso->is_window_workspace_visible(cid) && !is_slept(cid);
         if (hypriso->whitelist_on) {
             bool found = false;
             for (auto wid : hypriso->render_whitelist) {
