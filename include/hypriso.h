@@ -817,6 +817,16 @@ void gestures_reset();
 void monitor_rule_mirror_from_to_toggle(std::string from, std::string to);
 void monitor_rule_disable_toggle(std::string from, std::string to);
 
+// How the output `to` is used next to `from` in the saved monitor rules.
+// Main thread only.
+enum MonitorProjectionMode {
+    MONITOR_PROJECTION_EXTEND = 0, // Its own part of the desktop
+    MONITOR_PROJECTION_MIRROR = 1, // Shows the same picture as `from`
+    MONITOR_PROJECTION_OFF    = 2, // Disabled
+};
+int monitor_projection_mode(std::string from, std::string to);
+void monitor_set_projection_mode(std::string from, std::string to, int mode);
+
 bool is_slept(int cid);
 
 void set_api(void *api);

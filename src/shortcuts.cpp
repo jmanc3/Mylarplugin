@@ -22,6 +22,7 @@ static std::vector<ShortcutDefault> build_defaults() {
         {"close_window", "Close window", "ALT + C", "hl.dsp.window.close()", ""},
         {"screenshot_tool", "Take a screenshot", "Print", "hl.plugin.mylar.screenshot_tool", "", true},
         {"screenshot_tool_draw", "Take a screenshot and draw on it", "", "hl.plugin.mylar.screenshot_tool_draw", "", true},
+        {"projection", "Project to other displays", "SUPER + P", "hl.plugin.mylar.projection", "", true},
 
         // Snapping
         {"snap_left", "Snap window left", "", "hl.plugin.mylar.snap_left", "", true},
@@ -98,7 +99,7 @@ static std::vector<ShortcutDefault> build_defaults() {
         {"scrolling_swap_column_right", "Scrolling: move column right", "SUPER + CTRL + right", "hl.dsp.layout(\"swapcol r\")", ""},
         {"scrolling_full_width", "Scrolling: make column full width", "SUPER + F", "hl.dsp.layout(\"fit active\")", ""},
         {"scrolling_fit_visible", "Scrolling: fit visible columns on screen", "SUPER + SHIFT + F", "hl.dsp.layout(\"fit visible\")", ""},
-        {"scrolling_promote", "Scrolling: move window into its own column", "SUPER + P", "hl.dsp.layout(\"promote\")", ""},
+        {"scrolling_promote", "Scrolling: move window into its own column", "SUPER + SHIFT + P", "hl.dsp.layout(\"promote\")", ""},
 
         // Scratchpad
         {"scratchpad_toggle", "Toggle scratchpad", "ALT + S", "hl.dsp.workspace.toggle_special(\"magic\")", ""},

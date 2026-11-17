@@ -12480,6 +12480,73 @@ void monitor_rule_disable_toggle(std::string from, std::string to) {
     commit_monitor_change();
 }
 
+int monitor_projection_mode(std::string from, std::string to) {
+    auto target = std::ranges::find(set->monitors, to, &MylarMonitor::output);
+    if (target == set->monitors.end()) {
+        // No saved rule yet: report what the output is doing right now.
+        for (auto m : State::monitorState()->allMonitors()) {
+            if (m->m_name != to)
+                continue;
+            if (m->m_activeMonitorRule.m_disabled)
+                return MONITOR_PROJECTION_OFF;
+            if (m->m_activeMonitorRule.m_mirrorOf == from)
+                return MONITOR_PROJECTION_MIRROR;
+        }
+        return MONITOR_PROJECTION_EXTEND;
+    }
+    if (target->disabled)
+        return MONITOR_PROJECTION_OFF;
+    if (!target->mirror.empty()) {
+        std::string mirror_source = from;
+        auto        source        = std::ranges::find(set->monitors, from, &MylarMonitor::output);
+        if (source != set->monitors.end() && !source->mirror.empty())
+            mirror_source = source->mirror;
+        if (target->mirror == mirror_source)
+            return MONITOR_PROJECTION_MIRROR;
+    }
+    return MONITOR_PROJECTION_EXTEND;
+}
+
+void monitor_set_projection_mode(std::string from, std::string to, int mode) {
+    if (from.empty() || to.empty() || from == to)
+        return;
+    if (monitor_projection_mode(from, to) == mode)
+        return;
+
+    auto target = std::ranges::find(set->monitors, to, &MylarMonitor::output);
+    if (target == set->monitors.end()) {
+        set->monitors.push_back(monitor_config_for_output(to));
+        target = std::prev(set->monitors.end());
+    }
+
+    if (mode == MONITOR_PROJECTION_MIRROR) {
+        // Same chain flattening as monitor_rule_mirror_from_to_toggle.
+        std::string mirror_source = from;
+        auto        source        = std::ranges::find(set->monitors, from, &MylarMonitor::output);
+        if (source != set->monitors.end()) {
+            if (source->mirror == to)
+                source->mirror.clear();
+            else if (!source->mirror.empty())
+                mirror_source = source->mirror;
+        }
+        target          = std::ranges::find(set->monitors, to, &MylarMonitor::output);
+        target->mirror   = mirror_source;
+        target->disabled = false;
+    } else if (mode == MONITOR_PROJECTION_OFF) {
+        target->disabled = true;
+        target->mirror.clear();
+        for (auto& monitor : set->monitors) {
+            if (monitor.mirror == to)
+                monitor.mirror.clear();
+        }
+    } else {
+        target->disabled = false;
+        target->mirror.clear();
+    }
+
+    commit_monitor_change();
+}
+
 std::vector<MylarMonitorRule> HyprIso::all_monitors() {
     std::vector<MylarMonitorRule> monitors;
     for (auto m : State::monitorState()->allMonitors()) {

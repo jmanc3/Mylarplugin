@@ -62,8 +62,6 @@ struct Dock : UserData {
     MylarWindow *tiling_info = nullptr;
     STilingMenuState tiling_settings;
 
-    MylarWindow *projection = nullptr;
-
     MylarWindow *tray_menu = nullptr;
 
     Windows *collection = nullptr;

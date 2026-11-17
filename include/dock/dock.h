@@ -35,6 +35,9 @@ namespace dock {
     void set_dock_merge(bool enabled);
 
     void open_applications();
+    // The extra menu's Project page (mirror / extend / turn off other monitors)
+    // on the dock under the cursor. Main thread.
+    void open_projection();
 
     Bounds get_location(std::string name, int cid);
     std::map<int, Bounds> try_get_locations(const std::string &name);

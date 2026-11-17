@@ -2401,6 +2401,11 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
 
+    hypriso->add_hyprctl_dispatcher("projection", [](lua_State *) {
+        dock::open_projection();
+        return 0;
+    });
+
     hypriso->add_hyprctl_dispatcher("right_click_activate", [](lua_State *) {
         for (auto m : actual_root->children) {
             if (m->custom_type == (int) TYPE::CLIENT) {

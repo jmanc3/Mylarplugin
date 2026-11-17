@@ -4,12 +4,13 @@
 
 #include "dock/dock_battery.h"
 #include "dock/dock_bluetooth.h"
-#include "dock/dock_projection.h"
 #include "dock/dock_volume.h"
+#include "settings.h"
 #include "systray.h"
 
 #include <cstdlib>
 #include <linux/input-event-codes.h>
+#include <set>
 
 bool nightlight_on = false;
 
@@ -37,47 +38,29 @@ static MylarWindow *extra_window(Dock *dock) {
     return dock->extra;
 }
 
-static Container *add_extra_button(Container *parent, std::string icon,
-                                   std::function<void(Container *root, Container *c)> on_clicked) {
-    static constexpr float button_pad = 10;
-    auto button = parent->child(FILL_SPACE, FILL_SPACE);
-    button->pre_layout = [](Container *root, Container *c, const Bounds &b) {
-        auto dock = (Dock *) root->user_data;
-        auto window = extra_window(dock);
-        auto s = window->raw_window->dpi;
-        c->wanted_pad = Bounds(button_pad * s, button_pad * s, button_pad * s, button_pad * s);
-    };
-    auto icon_button = button->child(FILL_SPACE, FILL_SPACE);
-    icon_button->when_clicked = std::move(on_clicked);
-    icon_button->when_paint = [icon = std::move(icon)](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        auto window = extra_window(dock);
-        auto cr = window->raw_window->drawing_context;
-        auto dpi = window->raw_window->dpi;
-        if (c->state.mouse_pressing || c->state.mouse_hovering) {
-            if (c->state.mouse_pressing) {
-                set_argb(cr, {0, 0, 0, .2});
-            } else {
-                set_argb(cr, {0, 0, 0, .1});
-            }
-            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dpi, 1.0);
-            cr->fill();
-        }
-        set_argb(cr, {0, 0, 0, .2});
-        drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 10 * dpi, 1.0);
-        cr->stroke();
-
-        auto b = draw_text(cr, 0, 0, icon, 36, false, icon_font, -1, -1, {0, 0, 0, 1});
-        draw_text(cr, center_x(c, b.w), center_y(c, b.h), icon, 36, true, icon_font, -1, -1, {0, 0, 0, 1});
-    };
-    return button;
+static float extra_dpi(Container *root) {
+    return extra_window((Dock *) root->user_data)->raw_window->dpi;
 }
 
-static void open_bluetooth_popup(Dock *dock) {
+static drawing::Context *extra_cr(Container *root) {
+    return extra_window((Dock *) root->user_data)->raw_window->drawing_context;
+}
+
+static void extra_redraw(Container *root) {
+    windowing::redraw(extra_window((Dock *) root->user_data)->raw_window);
+}
+
+static void close_extra(Dock *dock) {
     auto window = extra_window(dock);
+    if (!window)
+        return;
     windowing::close_window(window->raw_window);
     if (dock->window->popup_window == window)
         dock->window->popup_window = nullptr;
+}
+
+static void open_bluetooth_popup(Dock *dock) {
+    close_extra(dock);
 
     auto mylar = dock->window;
     auto dpi = mylar->raw_window->dpi;
@@ -110,42 +93,589 @@ static void open_bluetooth_popup(Dock *dock) {
     }, reformed);
 }
 
-static void open_projection_popup(Dock *dock) {
-    auto window = extra_window(dock);
-    windowing::close_window(window->raw_window);
+/*************************************************
+ *
+ * Pages
+ *
+ * The popup shows one page at a time. Going into a page (or back out) slides
+ * and fades between them the same way the Settings window does: the page being
+ * left is kept, already laid out, and painted into a layer that slides away
+ * while the new page slides in from the other side.
+ *
+ *************************************************/
 
-    auto mylar = dock->window;
-    auto dpi = mylar->raw_window->dpi;
+struct ProjectionTarget {
+    std::string name;
+    int mode = MONITOR_PROJECTION_EXTEND;
+};
 
-    auto reformed = new Reformed;
-    reformed->dpi = dpi;
-    reformed->window = mylar;
-    reformed->dock = dock;
+struct ExtraMenu;
 
-    windowing::timer(dock->app, 40, [](void *data) {
-        main_thread([data]() {
-            auto r = std::unique_ptr<Reformed>(static_cast<Reformed *>(data));
-            auto mylar = r->window;
-            auto dock = r->dock;
-            auto dpi = r->dpi;
-            auto c = container_by_name("extra", dock->window->root);
+// Menus that still exist, so replies from the main thread can tell whether
+// theirs is gone. Docks run on their own threads, hence the mutex.
+static std::mutex extra_menus_mutex;
+static std::set<ExtraMenu *> extra_menus_alive;
 
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, volume_popup_w, volume_popup_w * .5);
+struct ExtraMenu : UserData {
+    Dock *dock = nullptr;
+    Container *pages = nullptr;    // Holds the current page as its only child
+    std::string page = "main";
+    bool closed = false;
+    bool via_keyboard = false;
 
-            dock->projection = open_mylar_popup(mylar, settings);
-            if (!dock->projection)
+    // Slide between pages
+    Container *outgoing = nullptr; // Holder of the old page's containers, or null
+    int dir = 0;                   // 1 into a page, -1 back out, 0 idle
+    long start = 0;                // Set on the first frame, so slow builds don't eat the animation
+    float eased = 1;
+    bool layer_open = false;
+
+    // Project page
+    std::string ours;              // The monitor this dock is on
+    std::vector<ProjectionTarget> targets;
+    bool targets_ready = false;
+    int focus_row = -1;            // Keyboard selection on the Project page
+
+    ExtraMenu() {
+        std::lock_guard<std::mutex> lock(extra_menus_mutex);
+        extra_menus_alive.insert(this);
+    }
+    ~ExtraMenu() override {
+        {
+            std::lock_guard<std::mutex> lock(extra_menus_mutex);
+            extra_menus_alive.erase(this);
+        }
+        delete outgoing;
+    }
+};
+
+static bool extra_menu_alive(ExtraMenu *menu) {
+    std::lock_guard<std::mutex> lock(extra_menus_mutex);
+    return extra_menus_alive.contains(menu) && !menu->closed;
+}
+
+static constexpr float extra_slide_ms = 260;
+static constexpr float extra_slide_distance = 56;
+static constexpr float extra_pad = 12;
+
+struct ExtraPage {
+    std::string id;
+    int depth;                       // 0 for the main page, 1 for pages opened from it
+    void (*fill)(Container *page, ExtraMenu *menu);
+};
+
+static void fill_main_page(Container *page, ExtraMenu *menu);
+static void fill_project_page(Container *page, ExtraMenu *menu);
+
+// Every page of the popup. A new page only needs an entry here and a tile
+// (or anything else) that calls extra_show_page with its id.
+static const std::vector<ExtraPage> extra_pages = {
+    {"main", 0, fill_main_page},
+    {"project", 1, fill_project_page},
+};
+
+static const ExtraPage *extra_page(const std::string &id) {
+    for (auto &p : extra_pages)
+        if (p.id == id)
+            return &p;
+    return nullptr;
+}
+
+static void extra_slide_finish(ExtraMenu *menu) {
+    delete menu->outgoing;
+    menu->outgoing = nullptr;
+    menu->dir = 0;
+    menu->start = 0;
+}
+
+static void extra_build_page(ExtraMenu *menu) {
+    auto page = menu->pages->child(::vbox, FILL_SPACE, FILL_SPACE);
+    if (auto p = extra_page(menu->page))
+        p->fill(page, menu);
+}
+
+// Rebuilds the current page in place, without a slide.
+static void extra_refill_page(ExtraMenu *menu) {
+    for (auto child : menu->pages->children)
+        delete child;
+    menu->pages->children.clear();
+    extra_build_page(menu);
+}
+
+static void extra_show_page(ExtraMenu *menu, const std::string &id) {
+    auto from = extra_page(menu->page);
+    auto to = extra_page(id);
+    if (!to || id == menu->page)
+        return;
+    extra_slide_finish(menu);
+    auto holder = new Container;
+    holder->real_bounds = menu->pages->real_bounds;
+    holder->children = std::move(menu->pages->children);
+    menu->pages->children.clear();
+    for (auto child : holder->children)
+        child->parent = holder;
+    menu->outgoing = holder;
+    menu->dir = from ? (to->depth >= from->depth ? 1 : -1) : 1;
+    menu->page = id;
+    if (id == "project" && menu->targets_ready && menu->focus_row < 0 && menu->via_keyboard && !menu->targets.empty())
+        menu->focus_row = 0;
+    extra_build_page(menu);
+    windowing::redraw(extra_window(menu->dock)->raw_window);
+}
+
+static void extra_pages_paint_before(Container *root, Container *c) {
+    auto menu = (ExtraMenu *) c->user_data;
+    if (menu->dir == 0)
+        return;
+    auto window = extra_window(menu->dock)->raw_window;
+    auto cr = window->drawing_context;
+    long now = get_current_time_in_ms();
+    if (menu->start == 0)
+        menu->start = now;
+    float t = std::clamp((float) (now - menu->start) / extra_slide_ms, 0.0f, 1.0f);
+    if (t >= 1) {
+        extra_slide_finish(menu);
+        return;
+    }
+    float e = 1 - (1 - t) * (1 - t) * (1 - t); // ease out
+    menu->eased = e;
+    double distance = extra_slide_distance * window->dpi * menu->dir;
+
+    cr->save();
+    clip_to_popup_background(cr, root->real_bounds, window->dpi);
+    if (menu->outgoing) {
+        cr->push_group();
+        cr->save();
+        cr->translate(-distance * e, 0);
+        paint_outline(root, menu->outgoing);
+        cr->restore();
+        cr->pop_group_to_source();
+        // Gone a bit before the new page arrives, so the two don't muddle.
+        cr->paint_source(std::max(0.0f, 1 - e * 1.4f));
+    }
+    cr->push_group();
+    cr->save();
+    cr->translate(distance * (1 - e), 0);
+    menu->layer_open = true;
+    windowing::redraw(window);
+}
+
+static void extra_pages_paint_after(Container *root, Container *c) {
+    auto menu = (ExtraMenu *) c->user_data;
+    if (!menu->layer_open)
+        return;
+    menu->layer_open = false;
+    auto cr = extra_cr(root);
+    cr->restore();
+    cr->pop_group_to_source();
+    cr->paint_source(menu->eased);
+    cr->restore();
+}
+
+/*************************************************
+ *
+ * Building blocks
+ *
+ *************************************************/
+
+// Lays its children out left to right in equal columns, wrapping into as many
+// rows as needed. Children that don't exist are skipped, so tiles can come and
+// go (Bluetooth) without leaving holes.
+static constexpr float tile_min_w = 100;
+static constexpr float tile_h = 72;
+static constexpr float tile_gap = 8;
+
+static int flow_columns(double w, double min_w, double gap) {
+    return std::max(1, (int) std::floor((w + gap) / (min_w + gap)));
+}
+
+static Container *make_flow_grid(Container *parent) {
+    auto grid = parent->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    grid->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        auto dpi = extra_dpi(root);
+        double gap = tile_gap * dpi;
+        double th = tile_h * dpi;
+        std::vector<Container *> shown;
+        for (auto child : c->children)
+            if (child->exists)
+                shown.push_back(child);
+        int cols = flow_columns(b.w, tile_min_w * dpi, gap);
+        int rows = (int) std::ceil((double) shown.size() / cols);
+        double w = (b.w - gap * (cols - 1)) / cols;
+        c->wanted_bounds.h = rows > 0 ? rows * th + (rows - 1) * gap : 0;
+        for (int i = 0; i < (int) shown.size(); i++) {
+            int col = i % cols;
+            int row = i / cols;
+            ::layout(root, shown[i], Bounds(std::round(b.x + col * (w + gap)), std::round(b.y + row * (th + gap)), std::round(w), std::round(th)));
+        }
+    };
+    return grid;
+}
+
+// One button in the main page's grid.
+struct ExtraTile {
+    std::string name;                           // Container name, so others can find it
+    std::string icon;
+    std::string label;
+    std::function<bool()> visible;              // Null: always shown
+    std::function<bool()> active;               // Null: never highlighted
+    bool opens_page = false;                    // Draws a chevron
+    std::function<void(Container *root, ExtraMenu *menu)> on_click;
+};
+
+static void paint_hover(drawing::Context *cr, Container *c, float dpi, float radius) {
+    if (!c->state.mouse_hovering && !c->state.mouse_pressing)
+        return;
+    set_argb(cr, {0, 0, 0, c->state.mouse_pressing ? .14 : .07});
+    drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, radius * dpi, 1.0);
+    cr->fill();
+}
+
+static void add_tile(Container *grid, ExtraMenu *menu, ExtraTile tile) {
+    auto c = grid->child(FILL_SPACE, FILL_SPACE);
+    c->name = tile.name;
+    c->exists = !tile.visible || tile.visible();
+    auto shared = std::make_shared<ExtraTile>(std::move(tile));
+    c->when_clicked = [shared, menu](Container *root, Container *c) {
+        if (c->state.mouse_button_pressed != BTN_LEFT)
+            return;
+        if (shared->on_click)
+            shared->on_click(root, menu);
+    };
+    c->when_paint = [shared](Container *root, Container *c) {
+        auto cr = extra_cr(root);
+        auto dpi = extra_dpi(root);
+        auto b = c->real_bounds;
+        bool on = shared->active && shared->active();
+        RGBA ink = on ? RGBA(1, 1, 1, 1) : RGBA(0, 0, 0, .85);
+
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(cr, on ? accent : RGBA(0, 0, 0, .045));
+        cr->fill();
+        paint_hover(cr, c, dpi, 8);
+
+        auto ib = draw_text(cr, 0, 0, shared->icon, 18 * dpi, false, icon_font, -1, -1, ink);
+        auto lb = draw_text(cr, 0, 0, shared->label, 10 * dpi, false, set->font, -1, -1, ink);
+        double gap = 6 * dpi;
+        double top = b.y + (b.h - ib.h - gap - lb.h) * .5;
+        draw_text(cr, center_x(c, ib.w), top, shared->icon, 18 * dpi, true, icon_font, -1, -1, ink);
+        draw_text(cr, center_x(c, lb.w), top + ib.h + gap, shared->label, 10 * dpi, true, set->font, -1, -1, ink);
+
+        if (shared->opens_page) {
+            std::string chevron = "";
+            auto cb = draw_text(cr, 0, 0, chevron, 9 * dpi, false, icon_font, -1, -1, ink);
+            draw_text(cr, b.x + b.w - cb.w - 8 * dpi, b.y + 8 * dpi, chevron, 9 * dpi, true, icon_font, -1, -1, ink);
+        }
+    };
+}
+
+// Fixed height line of text.
+static Container *add_text(Container *parent, std::string text, int size, RGBA color, float h, bool bold = false) {
+    auto c = parent->child(FILL_SPACE, FILL_SPACE);
+    c->pre_layout = [h](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = h * extra_dpi(root);
+    };
+    c->when_paint = [text, size, color, bold](Container *root, Container *c) {
+        auto cr = extra_cr(root);
+        auto dpi = extra_dpi(root);
+        auto tb = draw_text(cr, 0, 0, text, size * dpi, false, set->font, -1, -1, color, bold);
+        draw_text(cr, c->real_bounds.x, center_y(c, tb.h), text, size * dpi, true, set->font, -1, -1, color, bold);
+    };
+    return c;
+}
+
+static void extra_page_padding(Container *page) {
+    page->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = extra_dpi(root);
+        c->wanted_pad = Bounds(extra_pad * dpi, extra_pad * dpi, extra_pad * dpi, extra_pad * dpi);
+        c->spacing = 10 * dpi;
+    };
+}
+
+// Back button and title at the top of a sub page.
+static void add_page_header(Container *page, ExtraMenu *menu, std::string title, std::string back_to) {
+    auto header = page->child(::hbox, FILL_SPACE, FILL_SPACE);
+    header->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = extra_dpi(root);
+        c->wanted_bounds.h = 30 * dpi;
+        c->spacing = 6 * dpi;
+    };
+    auto back = header->child(FILL_SPACE, FILL_SPACE);
+    back->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 30 * extra_dpi(root);
+    };
+    back->when_paint = [](Container *root, Container *c) {
+        auto cr = extra_cr(root);
+        auto dpi = extra_dpi(root);
+        paint_hover(cr, c, dpi, 6);
+        std::string glyph = "";
+        auto gb = draw_text(cr, 0, 0, glyph, 11 * dpi, false, icon_font, -1, -1, {0, 0, 0, .85});
+        draw_text(cr, center_x(c, gb.w), center_y(c, gb.h), glyph, 11 * dpi, true, icon_font, -1, -1, {0, 0, 0, .85});
+    };
+    back->when_clicked = [menu, back_to](Container *root, Container *c) {
+        extra_show_page(menu, back_to);
+    };
+    add_text(header, title, 12, {0, 0, 0, .9}, 30, true);
+}
+
+/*************************************************
+ *
+ * Main page
+ *
+ *************************************************/
+
+static std::vector<ExtraTile> extra_tiles() {
+    return {
+        {"bluetooth", "", "Bluetooth", []() { return bluetooth_available.load(); }, nullptr, false,
+         [](Container *, ExtraMenu *menu) { open_bluetooth_popup(menu->dock); }},
+        // On laptops night light lives in the battery menu, next to brightness.
+        {"night_light", "", "Night light", []() { return !has_internal_battery(); }, []() { return nightlight_on; }, false,
+         [](Container *root, ExtraMenu *) {
+             toggle_nightlight();
+             extra_redraw(root);
+         }},
+        {"keyboard", "", "Keyboard", nullptr, nullptr, false,
+         [](Container *, ExtraMenu *menu) {
+             close_extra(menu->dock);
+             main_thread([]() { settings::start("Keyboard"); });
+         }},
+        {"project", "", "Project", nullptr, nullptr, true,
+         [](Container *, ExtraMenu *menu) { extra_show_page(menu, "project"); }},
+        {"screenshot", "", "Screenshot", nullptr, nullptr, false,
+         [](Container *, ExtraMenu *menu) {
+             close_extra(menu->dock);
+             windowing::timer(menu->dock->app, 100, [](void *) {
+                 system("hyprctl dispatch \"hl.plugin.mylar.screenshot_tool()\"");
+             }, nullptr);
+         }},
+        {"kill", "", "Kill window", nullptr, nullptr, false,
+         [](Container *, ExtraMenu *menu) {
+             close_extra(menu->dock);
+             system("hyprctl kill");
+         }},
+    };
+}
+
+static void make_tray_area(Container *parent);
+
+static constexpr float tray_h = 60;
+
+static void fill_main_page(Container *page, ExtraMenu *menu) {
+    extra_page_padding(page);
+    auto grid = make_flow_grid(page);
+    for (auto &tile : extra_tiles())
+        add_tile(grid, menu, tile);
+    make_tray_area(page);
+}
+
+int extra_popup_height() {
+    int shown = 0;
+    for (auto &tile : extra_tiles())
+        if (!tile.visible || tile.visible())
+            shown++;
+    int cols = flow_columns(extra_popup_w - extra_pad * 2, tile_min_w, tile_gap);
+    int rows = std::max(1, (int) std::ceil((double) shown / cols));
+    float main_h = extra_pad * 2 + rows * tile_h + (rows - 1) * tile_gap + 10 + tray_h;
+    // Leaves the Project page room for a few monitors.
+    return (int) std::ceil(std::max(main_h, 236.0f));
+}
+
+/*************************************************
+ *
+ * Project page: how the other monitors show this one
+ *
+ *************************************************/
+
+static const char *projection_mode_names[] = {"Extend", "Mirror", "Off"};
+static constexpr int projection_mode_count = 3;
+
+// Asks the main thread for the other monitors and how each is used.
+static void extra_fetch_targets(ExtraMenu *menu) {
+    auto dock = menu->dock;
+    std::string ours = menu->ours;
+    main_thread([dock, menu, ours]() {
+        std::vector<ProjectionTarget> targets;
+        for (auto &m : hypriso->all_monitors())
+            if (m.from != ours)
+                targets.push_back({m.from, monitor_projection_mode(ours, m.from)});
+        windowing::run_on_app(dock->app, [dock, menu, targets]() {
+            std::lock_guard<std::mutex> lock(dock->app->mutex);
+            if (!extra_menu_alive(menu))
                 return;
-            dock->projection->root->on_closed = [](Container *root) {
-                auto dock = (Dock *) root->user_data;
-                dock->projection = nullptr;
-            };
-            dock->projection->root->user_data = dock;
-            dock->projection->root->wanted_bounds.w = FILL_SPACE;
-            dock->projection->root->wanted_bounds.h = FILL_SPACE;
-            fill_projection_container(dock);
-            windowing::redraw(dock->projection->raw_window);
+            menu->targets = targets;
+            menu->targets_ready = true;
+            if (menu->focus_row >= (int) targets.size())
+                menu->focus_row = (int) targets.size() - 1;
+            if (menu->via_keyboard && menu->focus_row < 0 && !targets.empty())
+                menu->focus_row = 0;
+            // During a slide this only swaps the incoming page; the slide keeps going.
+            if (menu->page == "project")
+                extra_refill_page(menu);
+            windowing::redraw(extra_window(dock)->raw_window);
         });
-    }, reformed);
+    });
+}
+
+static void extra_set_mode(ExtraMenu *menu, int row, int mode) {
+    if (row < 0 || row >= (int) menu->targets.size())
+        return;
+    mode = std::clamp(mode, 0, projection_mode_count - 1);
+    auto &target = menu->targets[row];
+    if (target.mode == mode)
+        return;
+    target.mode = mode;
+    // Mirroring onto a monitor that mirrors another, or turning one off, can
+    // change what the others do, so ask again once the rules are written.
+    main_thread([ours = menu->ours, name = target.name, mode]() {
+        monitor_set_projection_mode(ours, name, mode);
+    });
+    extra_fetch_targets(menu);
+    windowing::redraw(extra_window(menu->dock)->raw_window);
+}
+
+static void add_projection_row(Container *page, ExtraMenu *menu, int row) {
+    auto line = page->child(::hbox, FILL_SPACE, FILL_SPACE);
+    line->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dpi = extra_dpi(root);
+        c->wanted_bounds.h = 40 * dpi;
+        c->wanted_pad = Bounds(0, 6 * dpi, 6 * dpi, 6 * dpi);
+    };
+    line->when_paint = [menu, row](Container *root, Container *c) {
+        auto cr = extra_cr(root);
+        auto dpi = extra_dpi(root);
+        auto b = c->real_bounds;
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(cr, {0, 0, 0, .045});
+        cr->fill();
+        if (menu->focus_row == row) {
+            set_argb(cr, accent);
+            drawRoundedRect(cr, b.x + dpi, b.y + dpi, b.w - 2 * dpi, b.h - 2 * dpi, 7 * dpi, std::round(2 * dpi));
+            cr->stroke();
+        }
+    };
+
+    auto name = line->child(FILL_SPACE, FILL_SPACE);
+    name->when_paint = [menu, row](Container *root, Container *c) {
+        if (row >= (int) menu->targets.size())
+            return;
+        auto cr = extra_cr(root);
+        auto dpi = extra_dpi(root);
+        auto &target = menu->targets[row];
+        RGBA ink = {0, 0, 0, target.mode == MONITOR_PROJECTION_OFF ? .45 : .85};
+        std::string glyph = "";
+        auto gb = draw_text(cr, 0, 0, glyph, 13 * dpi, false, icon_font, -1, -1, ink);
+        double x = c->real_bounds.x + 10 * dpi;
+        draw_text(cr, x, center_y(c, gb.h), glyph, 13 * dpi, true, icon_font, -1, -1, ink);
+        x += gb.w + 8 * dpi;
+        cr->save();
+        cr->rectangle(x, c->real_bounds.y, std::max(0.0, c->real_bounds.x + c->real_bounds.w - x - 4 * dpi), c->real_bounds.h);
+        cr->clip_path();
+        auto tb = draw_text(cr, 0, 0, target.name, 11 * dpi, false, set->font, -1, -1, ink);
+        draw_text(cr, x, center_y(c, tb.h), target.name, 11 * dpi, true, set->font, -1, -1, ink);
+        cr->restore();
+    };
+
+    // Extend | Mirror | Off
+    auto group = line->child(::hbox, FILL_SPACE, FILL_SPACE);
+    group->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.w = 180 * extra_dpi(root);
+    };
+    group->when_paint = [](Container *root, Container *c) {
+        auto cr = extra_cr(root);
+        auto dpi = extra_dpi(root);
+        auto b = c->real_bounds;
+        set_argb(cr, {0, 0, 0, .07});
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, 6 * dpi, 1.0);
+        cr->fill();
+    };
+    for (int mode = 0; mode < projection_mode_count; mode++) {
+        auto seg = group->child(FILL_SPACE, FILL_SPACE);
+        seg->when_paint = [menu, row, mode](Container *root, Container *c) {
+            if (row >= (int) menu->targets.size())
+                return;
+            auto cr = extra_cr(root);
+            auto dpi = extra_dpi(root);
+            auto b = c->real_bounds;
+            bool selected = menu->targets[row].mode == mode;
+            if (selected) {
+                set_argb(cr, accent);
+                drawRoundedRect(cr, b.x + 2 * dpi, b.y + 2 * dpi, b.w - 4 * dpi, b.h - 4 * dpi, 5 * dpi, 1.0);
+                cr->fill();
+            } else if (c->state.mouse_hovering || c->state.mouse_pressing) {
+                set_argb(cr, {0, 0, 0, c->state.mouse_pressing ? .12 : .06});
+                drawRoundedRect(cr, b.x + 2 * dpi, b.y + 2 * dpi, b.w - 4 * dpi, b.h - 4 * dpi, 5 * dpi, 1.0);
+                cr->fill();
+            }
+            RGBA ink = selected ? RGBA(1, 1, 1, 1) : RGBA(0, 0, 0, .8);
+            std::string text = projection_mode_names[mode];
+            auto tb = draw_text(cr, 0, 0, text, 10 * dpi, false, set->font, -1, -1, ink);
+            draw_text(cr, center_x(c, tb.w), center_y(c, tb.h), text, 10 * dpi, true, set->font, -1, -1, ink);
+        };
+        seg->when_clicked = [menu, row, mode](Container *root, Container *c) {
+            if (c->state.mouse_button_pressed != BTN_LEFT)
+                return;
+            extra_set_mode(menu, row, mode);
+        };
+    }
+}
+
+static void fill_project_page(Container *page, ExtraMenu *menu) {
+    extra_page_padding(page);
+    add_page_header(page, menu, "Project", "main");
+    if (!menu->targets_ready) {
+        add_text(page, "Looking for displays…", 10, {0, 0, 0, .5}, 20);
+        return;
+    }
+    if (menu->targets.empty()) {
+        add_text(page, "No other displays are connected", 10, {0, 0, 0, .5}, 20);
+        return;
+    }
+    add_text(page, "How other displays show this screen", 10, {0, 0, 0, .55}, 16);
+    for (int row = 0; row < (int) menu->targets.size(); row++)
+        add_projection_row(page, menu, row);
+}
+
+static void extra_key(Container *root, ExtraMenu *menu, xkb_keysym_t sym) {
+    if (sym == XKB_KEY_Escape) {
+        if (menu->page != "main" && !menu->via_keyboard)
+            extra_show_page(menu, "main");
+        else
+            close_extra(menu->dock);
+        return;
+    }
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        close_extra(menu->dock);
+        return;
+    }
+    if (menu->page != "project")
+        return;
+    if (sym == XKB_KEY_BackSpace) {
+        extra_show_page(menu, "main");
+        return;
+    }
+    int count = (int) menu->targets.size();
+    if (count == 0)
+        return;
+    int &row = menu->focus_row;
+    if (sym == XKB_KEY_Up || sym == XKB_KEY_ISO_Left_Tab) {
+        row = row <= 0 ? count - 1 : row - 1;
+    } else if (sym == XKB_KEY_Down || sym == XKB_KEY_Tab) {
+        row = row < 0 ? 0 : (row + 1) % count;
+    } else if (sym == XKB_KEY_Left || sym == XKB_KEY_Right || sym == XKB_KEY_p || sym == XKB_KEY_P || sym == XKB_KEY_space) {
+        if (row < 0)
+            row = 0;
+        int mode = menu->targets[row].mode;
+        if (sym == XKB_KEY_Left)
+            mode = std::max(0, mode - 1);
+        else if (sym == XKB_KEY_Right)
+            mode = std::min(projection_mode_count - 1, mode + 1);
+        else
+            mode = (mode + 1) % projection_mode_count; // P again cycles, like Windows
+        extra_set_mode(menu, row, mode);
+    } else {
+        return;
+    }
+    extra_redraw(root);
 }
 
 /*************************************************
@@ -326,7 +856,7 @@ static void make_tray_area(Container *parent) {
     tray->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto dock = (Dock *) root->user_data;
         auto s = extra_window(dock)->raw_window->dpi;
-        c->wanted_bounds = Bounds(0, 0, FILL_SPACE, 60 * s);
+        c->wanted_bounds = Bounds(0, 0, FILL_SPACE, tray_h * s);
     };
     tray->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
@@ -623,50 +1153,72 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
     });
 }
 
-void fill_extra_container(Container *root) {
+void fill_extra_container(Container *root, std::string page, bool via_keyboard) {
+    auto dock = (Dock *) root->user_data;
     root->type = ::vbox;
+    root->wanted_bounds.w = FILL_SPACE;
+    root->wanted_bounds.h = FILL_SPACE;
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
-        auto window = extra_window(dock);
-        auto cr = window->raw_window->drawing_context;
-        paint_popup_background(cr, c->real_bounds, dock->extra->raw_window->dpi);
+        paint_popup_background(extra_cr(root), c->real_bounds, extra_window(dock)->raw_window->dpi);
     };
 
-    auto top = root->child(::hbox, FILL_SPACE, FILL_SPACE);
-    auto bluetooth = add_extra_button(top, "\uE702", [](Container *root, Container *c) {
-        auto dock = (Dock *) root->user_data;
-        open_bluetooth_popup(dock);
-    });
-    bluetooth->name = "bluetooth";
-    bluetooth->exists = bluetooth_available.load();
-    // On laptops night light lives in the battery menu, next to brightness.
-    auto night = add_extra_button(top, "\uE708", [](Container *, Container *) {
-        toggle_nightlight();
-    });
-    night->exists = !has_internal_battery();
-    add_extra_button(top, "\uE087", nullptr);
+    auto menu = new ExtraMenu;
+    menu->dock = dock;
+    menu->ours = dock->creation_settings.monitor_name;
+    menu->via_keyboard = via_keyboard;
+    menu->page = extra_page(page) ? page : "main";
 
-    auto middle = root->child(::hbox, FILL_SPACE, FILL_SPACE);
-    add_extra_button(middle, "\uEBC6", [](Container *root, Container *) {
-        auto dock = (Dock *) root->user_data;
-        open_projection_popup(dock);
-    });
-    add_extra_button(middle, "\uE722", [](Container *root, Container *) {
-        auto dock = (Dock *) root->user_data;
-        auto window = extra_window(dock);
-        windowing::close_window(window->raw_window);
+    auto pages = root->child(::fullycustom, FILL_SPACE, FILL_SPACE);
+    pages->user_data = menu;
+    menu->pages = pages;
+    pages->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        for (auto child : c->children) {
+            if (child->pre_layout)
+                child->pre_layout(root, child, c->real_bounds);
+            ::layout(root, child, c->real_bounds);
+        }
+    };
+    pages->when_paint = extra_pages_paint_before;
+    pages->after_paint = extra_pages_paint_after;
 
-        windowing::timer(dock->app, 100, [](void *) {
-            system("hyprctl dispatch \"hl.plugin.mylar.screenshot_tool()\"");
-        }, nullptr);
-    });
-    add_extra_button(middle, "\uF140", [](Container *root, Container *) {
-        auto dock = (Dock *) root->user_data;
-        auto window = extra_window(dock);
-        windowing::close_window(window->raw_window);
+    root->on_closed = [menu](Container *) {
+        menu->closed = true;
+    };
+    root->when_key_event = [menu](Container *root, Container *, int, bool pressed, xkb_keysym_t sym, int, bool, std::string) {
+        if (pressed)
+            extra_key(root, menu, sym);
+    };
 
-        system("hyprctl kill");
-    });
+    extra_build_page(menu);
+    extra_fetch_targets(menu);
+}
 
-    make_tray_area(root);
+void open_extra_popup(Dock *dock, std::string page, bool via_keyboard) {
+    auto mylar = dock->window;
+    auto anchor = container_by_name("extra", mylar->root);
+    if (!anchor || mylar->popup_window)
+        return;
+    auto dpi = mylar->raw_window->dpi;
+
+    RawWindowSettings settings = make_icon_anchored_popup_settings(anchor, dpi, extra_popup_w, extra_popup_height());
+    // Above the button, extending left from its right edge.
+    settings.popup.anchor = RawWindowSettings::PopupAnchor::TOP_RIGHT;
+    settings.popup.gravity = RawWindowSettings::PopupGravity::TOP_LEFT;
+    settings.keyboard_focus_on_click = via_keyboard;
+
+    auto extra = open_mylar_popup(mylar, settings);
+    if (!extra)
+        return;
+    dock->extra = extra;
+    extra->root->user_data = dock;
+    fill_extra_container(extra->root, page, via_keyboard);
+
+    if (via_keyboard) {
+        later(30, [dock, extra](Timer *) {
+            if (dock->extra == extra && windowing::has_window(extra->raw_window))
+                windowing::request_keyboard_focus(extra->raw_window);
+        });
+    }
+    windowing::redraw(extra->raw_window);
 }

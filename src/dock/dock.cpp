@@ -5,7 +5,6 @@
 #include "dock/dock_bluetooth.h"
 #include "dock/dock_brightness.h"
 #include "dock/dock_extra.h"
-#include "dock/dock_projection.h"
 #include "dock/dock_tiling.h"
 #include "dock/dock_ui.h"
 #include "dock/dock_volume.h"
@@ -2066,20 +2065,7 @@ static void fill_root(Container *root) {
         auto extra = simple_dock_item(root, ICON("\ue70e"));
         extra->name = "extra";
         extra->when_clicked = [](Container *root, Container *c) {
-            auto dock = (Dock *) root->user_data;
-            auto mylar = dock->window;
-            auto dpi = mylar->raw_window->dpi;
-
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 370, 260);
-
-            dock->extra = open_mylar_popup(mylar, settings);
-            if (!dock->extra)
-                return;
-            dock->extra->root->user_data = dock;
-            auto extra_root = dock->extra->root;
-            fill_extra_container(extra_root);
-
-            windowing::redraw(dock->extra->raw_window);
+            open_extra_popup((Dock *) root->user_data);
         };
     }
 
@@ -3253,6 +3239,34 @@ void dock::remove_slept_button() {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         actual_remove_slept_button(d);
+    }
+}
+
+void dock::open_projection() {
+    auto monitor_id = hypriso->monitor_from_cursor();
+    auto monitor_name = hypriso->monitor_name(monitor_id);
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (d->creation_settings.monitor_name != monitor_name)
+            continue;
+        auto mylar = d->window;
+        if (auto open = mylar->popup_window) {
+            windowing::close_window(open->raw_window);
+            mylar->popup_window = nullptr;
+            // Pressing the shortcut again closes the menu it opened.
+            if (open == d->extra)
+                return;
+            // Give the closed popup's grab a moment to go away first.
+            windowing::timer(d->app, 40, [](void *data) {
+                auto dock = (Dock *) data;
+                std::lock_guard<std::mutex> lock(dock->app->mutex);
+                if (!finished && !dock->window->popup_window)
+                    open_extra_popup(dock, "project", true);
+            }, d);
+            return;
+        }
+        open_extra_popup(d, "project", true);
+        return;
     }
 }
 

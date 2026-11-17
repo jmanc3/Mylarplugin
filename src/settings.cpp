@@ -342,7 +342,7 @@ struct SettingsCategory {
 static const std::vector<SettingsCategory> &settings_categories() {
     static const std::vector<SettingsCategory> categories = {
         {"System", "settings-system", "preferences-desktop-display", {
-            {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper", "\uE7F4"},
+            {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper, desktop icons", "\uE7F4"},
             {"Multitasking", "Multitasking", "Workspaces, snap windows, app switching, hot corners", "\uE7C4"},
         }},
         {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
@@ -360,7 +360,7 @@ static const std::vector<SettingsCategory> &settings_categories() {
             {"Audio", "Sound", "Volume, output and input devices, app volume", "\uE767"},
         }},
         {"Personalization", "settings-personalization", "preferences-desktop-wallpaper", {
-            {"Desktop", "Desktop & dock", "Theme, font, desktop icons, overview, dock", "\uE771"},
+            {"Desktop", "Desktop & dock", "Theme, font, overview, dock", "\uE771"},
         }},
         {"Time & language", "settings-time", "preferences-system-time", {
             {"Time & Date", "Date & time", "Time zone, clock format, automatic time", "\uEC92"},
@@ -4417,6 +4417,42 @@ static void fill_display_settings(Container *root) {
     }
 
     make_wallpaper_row(padded_right);
+
+    make_bool_with_button(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
+        set->desktop_icons = c;
+        main_thread([]() {
+            desktop_icons::stop();
+            desktop_icons::start();
+            damage_all();
+        });
+    }, "Change folder", []() {
+        static bool chooser_open = false;
+        if (chooser_open)
+            return;
+
+        chooser_open = true;
+
+        std::thread t([]() {
+            const auto file = trim_newline(choose_file(true));
+            main_thread([file]() {
+                    notify(file);
+            });
+            
+            if (!file.empty() && std::filesystem::exists(file) && std::filesystem::is_directory(file)) {
+                main_thread([file]() {
+                    set->desktop_folder = file;
+                    desktop_icons::stop();
+                    desktop_icons::start();
+                    settings::load_save_settings(true, set); // save
+                });
+            }
+
+            chooser_open = false;
+        });
+
+        t.detach();
+    }, "\uec6c");
+
     make_vert_space(padded_right, 10);
         
     for (auto m : options) {
@@ -4466,41 +4502,6 @@ static void fill_desktop_settings(Container *root, Container *c) {
         }).detach();
     }, "\uE71D", []() { return !icon_cache_rescan_in_progress; });
 
-    make_bool_with_button(padded_right, "Desktop Icons", "", set->desktop_icons, [](bool c) {
-        set->desktop_icons = c;
-        main_thread([]() {
-            desktop_icons::stop();
-            desktop_icons::start();
-            damage_all();
-        });
-    }, "Change folder", []() {
-        static bool chooser_open = false;
-        if (chooser_open)
-            return;
-
-        chooser_open = true;
-
-        std::thread t([]() {
-            const auto file = trim_newline(choose_file(true));
-            main_thread([file]() {
-                    notify(file);
-            });
-            
-            if (!file.empty() && std::filesystem::exists(file) && std::filesystem::is_directory(file)) {
-                main_thread([file]() {
-                    set->desktop_folder = file;
-                    desktop_icons::stop();
-                    desktop_icons::start();
-                    settings::load_save_settings(true, set); // save
-                });
-            }
-
-            chooser_open = false;
-        });
-
-        t.detach();
-    }, "\uec6c");
-    
     make_dropdown_option(padded_right, "Overview", "Change layout type", "\uE8A9", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
         set->overview_layout_type = new_type;
     });
@@ -9516,6 +9517,7 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Display", "Display Settings", "Span across monitors", "Stretch one image over every monitor using the shared wallpaper", "wallpaper background span stretch multiple monitors displays");
     search_add("Display", "Display Settings", "Wallpaper for", "Monitors can each have their own wallpaper", "wallpaper background per monitor display separate own");
     search_add("Display", "Display Settings", "Brightness", "Screen backlight level", "brightness backlight dim bright screen");
+    search_add("Display", "Display Settings", "Desktop Icons", "", "show icons files folders on desktop");
     search_add("Display", "Monitor", "Mode", "Resolution and refresh rate", "resolution refresh rate hz fps size");
     search_add("Display", "Monitor", "Scale", "Scale factor, or \"auto\"", "zoom size dpi hidpi fractional scaling bigger smaller");
     search_add("Display", "Monitor", "Transform", "Rotation and reflection applied to the display", "rotate rotation flip portrait landscape orientation");
@@ -9543,7 +9545,6 @@ static void search_build_into(std::vector<SearchEntry> &out) {
 
     search_add("Desktop", "Desktop Settings", "Desktop Settings", "", "desktop");
     search_add("Desktop", "Desktop Settings", "Icon Cache", "Re-scan installed icons", "icons refresh rescan reload missing icon theme");
-    search_add("Desktop", "Desktop Settings", "Desktop Icons", "", "show icons files folders on desktop");
     search_add("Desktop", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
     search_add("Desktop", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
     search_add("Desktop", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
