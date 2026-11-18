@@ -11394,6 +11394,11 @@ void fill_root(Container *root) {
 // read by the window thread. 0 means unknown.
 static std::atomic<int> settings_fit_w = 0;
 static std::atomic<int> settings_fit_h = 0;
+// Starting size (logical px) matching what heart's restore rules will resize
+// the window to once it maps, so the first frame is laid out at its final
+// size. 0 means use the defaults.
+static std::atomic<int> settings_open_w = 0;
+static std::atomic<int> settings_open_h = 0;
 
 void actual_start() {
     theme = set->dark_theme ? dark_theme : light_theme;
@@ -11416,6 +11421,10 @@ void actual_start() {
     if (fit_h > 0) {
         settings.pos.min_h = std::min(settings.pos.min_h, fit_h);
         settings.pos.h = std::min(settings.pos.h, fit_h);
+    }
+    if (settings_open_w.load() > 0 && settings_open_h.load() > 0) {
+        settings.pos.w = std::max(settings.pos.min_w, settings_open_w.load());
+        settings.pos.h = std::max(settings.pos.min_h, settings_open_h.load());
     }
     settings.name = "Settings";
     settings.app_id = "preferences-system";
@@ -11540,6 +11549,22 @@ void settings::start(std::string page, bool focus_search) {
         int gap = 20;
         settings_fit_w = area.w > 0 ? std::max(1, (int) area.w - gap * 2) : 0;
         settings_fit_h = area.h > 0 ? std::max(1, (int) area.h - titlebar_h - gap * 2) : 0;
+
+        // heart's apply_restore_info and fit_on_screen resize the window right
+        // after it maps. Open at that size instead, otherwise the first frame
+        // is painted at the default size and visibly jumps on the next one.
+        double w = 0, h = 0;
+        auto saved = restore_infos.find("preferences-system");
+        if (area.w > 0 && area.h > 0 && saved != restore_infos.end() && saved->second.remember_size &&
+            saved->second.box.w > 0 && saved->second.box.h > 0) {
+            auto s = scale(hypriso->monitor_from_cursor());
+            w = std::min(area.w * saved->second.box.w, std::max(1.0, area.w - 60 * s));
+            h = std::min(area.h * saved->second.box.h, std::max(1.0, area.h - 60 * s));
+            w = std::min(w, area.w * .85);
+            h = std::min(h, area.h * .85);
+        }
+        settings_open_w = (int) w;
+        settings_open_h = (int) h;
     }
     std::thread t(actual_start);
     t.detach();
