@@ -189,6 +189,9 @@ MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings s
     m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
     wire_handlers(m);
     mylar_windows.push_back(m);
+    // open_window could not paint before on_render was wired. The paint runs
+    // on the window's loop, after the caller has filled the root.
+    windowing::redraw(m->raw_window);
     return m;
 }
 
@@ -206,6 +209,7 @@ MylarWindow *open_mylar_popup(MylarWindow *parent, RawWindowSettings settings) {
     mylar_windows.push_back(m);
 
     parent->popup_window = m;
+    windowing::redraw(m->raw_window);
 
     return m;
 }

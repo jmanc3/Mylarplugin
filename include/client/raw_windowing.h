@@ -129,6 +129,11 @@ struct RawWindowSettings {
     // NORMAL windows: makes this a child (dialog) of that window through
     // xdg_toplevel.set_parent; the compositor centers it over the parent.
     RawWindow *parent_window = nullptr;
+    // NORMAL windows: the scale of the monitor it will open on, if known. The
+    // compositor only sends the preferred scale after the window maps, which
+    // needs a painted buffer; with a hint that first frame is painted at the
+    // right scale instead of being skipped. 0 means unknown.
+    float scale_hint = 0;
 };
 
 struct RawWindow {    

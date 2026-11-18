@@ -11434,6 +11434,9 @@ static std::atomic<int> settings_fit_h = 0;
 // size. 0 means use the defaults.
 static std::atomic<int> settings_open_w = 0;
 static std::atomic<int> settings_open_h = 0;
+// Scale of the monitor the window opens on, so its first frame is painted at
+// that scale. 0 means unknown.
+static std::atomic<float> settings_open_scale = 0;
 
 void actual_start() {
     theme = set->dark_theme ? dark_theme : light_theme;
@@ -11463,6 +11466,7 @@ void actual_start() {
     }
     settings.name = "Settings";
     settings.app_id = "preferences-system";
+    settings.scale_hint = settings_open_scale.load();
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
     mylar->root->user_data = mylar;
     settings_mylar = mylar;
@@ -11600,6 +11604,7 @@ void settings::start(std::string page, bool focus_search) {
         }
         settings_open_w = (int) w;
         settings_open_h = (int) h;
+        settings_open_scale = scale(hypriso->monitor_from_cursor());
     }
     std::thread t(actual_start);
     t.detach();

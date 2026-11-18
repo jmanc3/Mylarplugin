@@ -631,7 +631,7 @@ static void paint_bubbly_icon_background(Container *root, Container *c, Pin *pin
         double y = bounds.y + bounds.h - r * .24;
         if (r > 0) {
             cairo_pattern_t *radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
-            cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.1 * hover_amount);
+            cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.3 * hover_amount);
             cairo_pattern_add_color_stop_rgba(radial, 1.0, 1, 1, 1, 0.0);
             cairo_set_source(cr, radial);
             cairo_arc(cr, x, y, r, 0, 2 * M_PI);
@@ -682,7 +682,7 @@ static void paint_bubbly_icon_background(Container *root, Container *c, Pin *pin
         cairo_pattern_t *radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
         x = bounds.x + line_w * 2;
         y = bounds.y + line_w * 2;
-        cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.35 * opened);
+        cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.18 * opened);
         cairo_pattern_add_color_stop_rgba(radial, 1.0, 1, 1, 1, 0.0);
         cairo_set_source(cr, radial);
 
@@ -703,7 +703,7 @@ static void paint_bubbly_icon_background(Container *root, Container *c, Pin *pin
 
         r = bounds.h * .6;
         radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
-        cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.2 * opened);
+        cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.1 * opened);
         cairo_pattern_add_color_stop_rgba(radial, 1.0, 1, 1, 1, 0.0);
         cairo_set_source(cr, radial);
         cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
@@ -1282,11 +1282,14 @@ static double pin_launch_amount(Pin *pin) {
         return 0;
     }
     // Breathe from the start so it's clear the app is opening: dip to 30%
-    // once a second, like winbar.
-    const double period = 1000;
-    double phase = std::fmod((double) elapsed, period) / period;
-    double scalar = std::abs(phase * 2.0 - 1.0);
-    double amount = 1.0 - (1.0 - scalar) * .7;
+    // once a second, like winbar. The bubbly styles hold steady instead.
+    double amount = 1.0;
+    if (!dock_is_bubbly()) {
+        const double period = 1000;
+        double phase = std::fmod((double) elapsed, period) / period;
+        double scalar = std::abs(phase * 2.0 - 1.0);
+        amount = 1.0 - (1.0 - scalar) * .7;
+    }
     const long remaining = kLaunchPretendMs - elapsed;
     if (remaining < kLaunchFadeMs)
         amount *= (double) remaining / kLaunchFadeMs;
@@ -1302,7 +1305,7 @@ static void start_launch_pretend(Pin *pin) {
 // 0.5 -> 1.0 over 500ms with Qt's OutInCirc easing.
 static constexpr float kPunchMs = 500.f;
 // How much the icon shrinks at the deepest point of the punch (0.2 = 20%).
-static constexpr float kPunchShrink = 0.3f;
+static constexpr float kPunchShrink = 0.25f;
 static constexpr float kPunchDepth = 1.f - kPunchShrink;
 
 static float dock_punch_scale(float t) {

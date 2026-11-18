@@ -690,6 +690,13 @@ void on_window_render(wl_window *win) {
     // An EGL swap attaches a buffer; xdg surfaces must not get one before
     // their first configure. handle_surface_configure paints once it arrives.
     if (win->use_gpu && !win->configured) return;
+    // Handlers not wired yet, so presenting now shows an empty frame. Drop the
+    // request (clearing the flag so windowing::redraw wakes the loop again):
+    // open_mylar_window requests the first frame once they are.
+    if (win->rw && !win->rw->on_render) {
+        win->redraw_requested.store(false);
+        return;
+    }
     if (win->resize_next) {
         wl_window_resize_buffer(win, win->logical_width, win->logical_height);
         win->resize_next = false;
@@ -723,6 +730,7 @@ void on_window_render(wl_window *win) {
 
     win->dropped_frame = false;
     win->redraw_requested.store(false);
+    fprintf(stderr, "TMPFRAME %s %dx%d scale=%.2f set_once=%d\n", win->app_id.c_str(), win->scaled_w, win->scaled_h, win->current_fractional_scale, win->rw ? win->rw->fractional_scale_set_once : -1);
     // Install the gate before painting: paint callbacks may request another frame.
     win->frame_callback = wl_surface_frame(win->surface);
     wl_callback_add_listener(win->frame_callback, &surface_frame_listener, win);
@@ -893,6 +901,18 @@ static void handle_fractional_scale_preferred_scale(
 
     if (win->rw)
         windowing::redraw(win->rw);
+}
+
+// Uses a known scale before the compositor sends one (it does so only after
+// the surface maps). The next frame resizes the buffers to match; the real
+// preferred_scale event later corrects it if the guess was wrong.
+static void apply_scale_hint(wl_window *win, float scale) {
+    if (!win->rw)
+        return;
+    win->rw->fractional_scale_set_once = true;
+    win->current_fractional_scale = scale;
+    win->rw->dpi = scale;
+    win->resize_next = true;
 }
 
 static const wp_fractional_scale_v1_listener fractional_scale_listener = {
@@ -2797,6 +2817,8 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
                                        parent_toplevel, settings.pos.max_w, settings.pos.max_h);
         rw->drawing_context = window->cr;
         window->id = rw->id;
+        if (settings.scale_hint > 0 && !rw->fractional_scale_set_once)
+            apply_scale_hint(window, settings.scale_hint);
         window->on_render = on_window_render;  // set now that rw is set (resize_buffer skipped it)
         if (window->on_render)
             window->on_render(window);  // paint first frame so window is not blank on first show
@@ -2835,6 +2857,9 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
 
     rw->drawing_context = window->cr;
     window->id = rw->id;
+    // A popup opens on its parent's monitor.
+    if (parent->fractional_scale_set_once && !rw->fractional_scale_set_once)
+        apply_scale_hint(window, parent->dpi);
     window->on_render = on_window_render;
     window->popup_positioner = settings.popup;
     window->popup_use_fallback_anchor_rect = !settings.popup.use_explicit_anchor_rect;
