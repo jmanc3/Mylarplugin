@@ -205,9 +205,10 @@ void clip_to_popup_background(drawing::Context *cr, const Bounds &bounds, double
     cr->clip_path();
 }
 
-void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi, float value, float meter) {
+void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi, float value, float meter, float high_water) {
     static constexpr float dotr = 17;
-    static constexpr float thickness = 8;
+    // Sliders with a level meter (meter >= 0) are thicker so its half of the track stays readable.
+    float thickness = meter >= 0 ? 12 : 8;
     float final_thickness = std::round(thickness * dpi);
     float final_dotr = std::round(dotr * dpi);
     {
@@ -218,24 +219,35 @@ void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi
         set_argb(cr, {0, 0, 0, .1});
         cr->fill();
 
-        double meter_w = b.w * std::clamp(value, 0.0f, 1.0f) * std::clamp(meter, 0.0f, 1.0f);
-        if (meter_w > 0.5) {
+        value = std::clamp(value, 0.0f, 1.0f);
+        double fill_w = b.w * value;
+        if (fill_w > 0.5) {
             cr->save();
             drawRoundedRect(cr, b.x, b.y, b.w, b.h, final_thickness * .45, 1.0);
             cr->clip_path();
-            // A pill whose right end sits at the peak; when it is shorter than it is tall,
-            // its left end slides out of the track and is clipped away.
-            double pill_w = std::max(meter_w, (double) b.h);
-            double pill_x = b.x + meter_w - pill_w;
-            double rad = b.h * .5;
-            cr->new_path();
-            cr->arc(pill_x + pill_w - rad, b.y + rad, rad, -M_PI / 2, M_PI / 2);
-            cr->arc(pill_x + rad, b.y + rad, rad, M_PI / 2, 3 * M_PI / 2);
-            cr->close_path();
-            auto color = accent;
-            color.a = .55;
-            set_argb(cr, color);
+
+            // The volume itself: solid accent up to the knob.
+            cr->rectangle(b.x, b.y, fill_w, b.h);
+            set_argb(cr, accent);
             cr->fill();
+
+            // Like winbar, the bottom half shows what is playing right now, scaled by the
+            // volume so it never runs past the knob: a slow falling high-water mark behind
+            // a darker, faster level.
+            double meter_h = std::round(b.h * .5);
+            double meter_y = b.y + b.h - meter_h;
+            double mark_w = fill_w * std::clamp(std::max(high_water, meter), 0.0f, 1.0f);
+            if (mark_w > 0.5) {
+                cr->rectangle(b.x, meter_y, mark_w, meter_h);
+                set_argb(cr, {.76, .76, .76, 1});
+                cr->fill();
+            }
+            double level_w = fill_w * std::clamp(meter, 0.0f, 1.0f);
+            if (level_w > 0.5) {
+                cr->rectangle(b.x, meter_y, level_w, meter_h);
+                set_argb(cr, {.46, .46, .46, 1});
+                cr->fill();
+            }
             cr->restore();
         }
     }

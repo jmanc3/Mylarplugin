@@ -35,7 +35,7 @@ void paint_popup_background(drawing::Context *cr, const Bounds &bounds, double d
 void clip_to_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi);
 
 // `meter` (0..1) draws a live level inside the filled part of the track, up to the knob.
-void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi, float value, float meter = 0);
+void paint_slider(Container *root, Container *c, drawing::Context *cr, float dpi, float value, float meter = -1, float high_water = 0);
 
 Container *make_self_sizing_slider(Container *root,
                                    std::function<std::string(Container *)> left_text,

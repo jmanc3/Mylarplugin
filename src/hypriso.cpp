@@ -5628,6 +5628,14 @@ void HyprIso::end() {
 #endif
     eventListeners.clear();
     closingWindowZIndices.clear();
+    // Without Mylar windows float freely, which stock Hyprland can't manage
+    // well, so they go back to tiling. heart::end() has already saved their
+    // positions and our listeners are gone, so the tiled geometry isn't saved.
+    // Dialogs and popups keep floating like Hyprland would have them.
+    std::vector<PHLWINDOWREF> to_tile;
+    for (auto hw : hyprwindows)
+        if (mw_is_floating(hw->w) && !mw_pinned(hw->w) && !mw_parent(hw->w) && alt_tabbable(hw->id))
+            to_tile.push_back(hw->w);
     for (auto window : hyprwindows)
         delete window;
     hyprwindows.clear();
@@ -5663,6 +5671,9 @@ void HyprIso::end() {
     return_default_config = true;
     // change_root_config_path(g_pConfigManager->getMainConfigPath());
     Config::mgr()->reload();
+    for (const auto& w : to_tile)
+        if (auto window = w.lock(); window && window->m_isMapped)
+            change_float_state(window, false);
     for (auto a : anims)
         delete a;
     anims.clear();
@@ -7710,6 +7721,22 @@ void set_input_takeover(const std::string &owner, bool active) {
     // skips the mouse move event, so our own listeners cannot cancel it.
     Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
     g_pInputManager->refocusPointer();
+}
+
+// Key repeat runs in the client, which keeps repeating until it is told the
+// key went up. Unloading the plugin stalls the compositor long enough for a
+// held key (like the one that ran "make load") to repeat many times before its
+// release gets through. A keyboard leave stops the client's repeat at once;
+// entering again right after keeps focus where it was.
+void stop_client_key_repeat() {
+    if (!g_pSeatManager || !g_pInputManager || g_pInputManager->getKeysFromAllKBs().empty())
+        return;
+    const auto surface = g_pSeatManager->m_state.keyboardFocus.lock();
+    if (!surface)
+        return;
+    g_pSeatManager->setKeyboardFocus(nullptr);
+    g_pSeatManager->setKeyboardFocus(surface);
+    wl_display_flush_clients(g_pCompositor->m_wlDisplay);
 }
 
 int get_monitor(int client) {

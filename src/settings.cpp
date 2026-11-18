@@ -1638,10 +1638,13 @@ static void paint_toggle(Container *root, Container *c, ToggleAnim *t, Bounds ch
     cr->fill();
 }
 
-static void make_bool_control(Container *parent, bool initial_value, std::function<void(bool)> on_change, Container *row = nullptr) {
+// With row_toggles, clicking anywhere on the row flips the switch (for rows that hold
+// nothing but the bool), and pressing the row stretches the knob like pressing the switch.
+static void make_bool_control(Container *parent, bool initial_value, std::function<void(bool)> on_change, Container *row = nullptr, bool row_toggles = false) {
     struct BoolInfo : UserData {
         bool on = false;
         Container *row = nullptr;
+        bool row_toggles = false;
         ToggleAnim anim;
     };
 
@@ -1649,6 +1652,7 @@ static void make_bool_control(Container *parent, bool initial_value, std::functi
     auto bool_info = new BoolInfo;
     bool_info->on = initial_value;
     bool_info->row = row ? row : parent;
+    bool_info->row_toggles = row_toggles;
     right->user_data = bool_info;
     focus_register(right, {.radius = toggle_h * .5f});
     right->when_paint = paint {
@@ -1658,7 +1662,8 @@ static void make_bool_control(Container *parent, bool initial_value, std::functi
         auto data = (BoolInfo *) c->user_data;
 
         bool row_hovered = c->state.mouse_hovering || data->row->state.mouse_hovering;
-        paint_toggle(root, c, &data->anim, c->real_bounds, data->on, row_hovered, c->state.mouse_pressing);
+        bool pressing = c->state.mouse_pressing || (data->row_toggles && data->row->state.mouse_pressing);
+        paint_toggle(root, c, &data->anim, c->real_bounds, data->on, row_hovered, pressing);
 
         // On/Off text
         std::string text = data->on ? "On" : "Off";
@@ -1707,12 +1712,26 @@ static void make_bool_control(Container *parent, bool initial_value, std::functi
         }
         windowing::redraw(((MylarWindow *) root->user_data)->raw_window);
     };
+
+    if (row_toggles) {
+        auto row_c = bool_info->row;
+        // The row gets presses even over the switch; those are the switch's own.
+        row_c->when_clicked = [right, on_change](Container *root, Container *c) {
+            if (bounds_contains(right->real_bounds, root->mouse_initial_x, root->mouse_initial_y))
+                return;
+            auto data = (BoolInfo *) right->user_data;
+            data->on = !data->on;
+            if (on_change)
+                on_change(data->on);
+            windowing::redraw(((MylarWindow *) root->user_data)->raw_window);
+        };
+    }
 }
 
 static void make_bool(Container *parent, std::string title, std::string description, bool initial_value, std::function<void(bool)> on_change, std::string icon = "") {
     auto p = make_self_height_sized_parent(parent);
     make_label_like(p, title, description, icon);
-    make_bool_control(p, initial_value, on_change);
+    make_bool_control(p, initial_value, on_change, nullptr, true);
 }
 
 static void make_button(Container *parent, std::string text, std::function<void()> func, std::function<bool()> is_enabled);
@@ -1983,6 +2002,22 @@ static void make_button_group(Container *parent, std::string title, std::string 
                 on_selected(o);
         };
     }
+
+    // Clicking elsewhere on the row moves to the next option, wrapping around. The row
+    // also gets presses on the group itself; those belong to the options.
+    p->when_clicked = [right](Container *root, Container *c) {
+        if (bounds_contains(right->real_bounds, root->mouse_initial_x, root->mouse_initial_y))
+            return;
+        auto data = (GroupData *) right->user_data;
+        int count = (int) right->children.size();
+        if (count == 0)
+            return;
+        int next = data->selected < 0 ? 0 : (data->selected + 1) % count;
+        auto option = right->children[next];
+        if (next != data->selected && option->when_clicked)
+            option->when_clicked(root, option);
+        windowing::redraw(((MylarWindow *) root->user_data)->raw_window);
+    };
 }
 
 static Container *make_vert_space(Container *parent, float amount) {
@@ -5032,8 +5067,14 @@ static void swifi_paint_button(Container *root, Container *c, const std::string 
     auto b = c->real_bounds;
     if (b.h <= 1 || b.w <= 1)
         return;
-    set_argb(cr, !enabled ? theme.slider_track : c->state.mouse_pressing ? theme.button_pressed :
-        c->state.mouse_hovering ? theme.button_hover : theme.button_background);
+    // Like winbar's wifi menu: a translucent white wash over whatever is underneath, so
+    // the button picks up the accent tint of an expanded row instead of fighting it.
+    double alpha;
+    if (set->dark_theme)
+        alpha = !enabled ? .04 : c->state.mouse_pressing ? .22 : c->state.mouse_hovering ? .16 : .10;
+    else
+        alpha = !enabled ? .35 : c->state.mouse_pressing ? .55 : c->state.mouse_hovering ? .92 : .75;
+    set_argb(cr, RGBA(1, 1, 1, alpha));
     drawRoundedRect(cr, b.x, b.y, b.w, b.h, settings_control_rounding * dpi, 1.0);
     cr->fill();
     b.x += 6 * dpi;
@@ -7121,6 +7162,8 @@ struct SettingsAudioRow : UserData {
     AudioNodeInfo node;
     AudioCardInfo card;
     float shown_peak = 0;
+    MeterHighWater high_water;
+    float high_water_shown = 0; // meter level scale, 0..1
     bool dragging = false;
     double drag_value = 0;
     double last_sent = -1;
@@ -7322,7 +7365,7 @@ static void saudio_set_volume_from_mouse(Container *root, Container *c, Settings
 }
 
 static Container *saudio_row(Container *parent) {
-    auto row = parent->child(::vbox, FILL_SPACE, 106);
+    auto row = parent->child(::vbox, FILL_SPACE, 92);
     auto data = new SettingsAudioRow;
     row->user_data = data;
     row->receive_events_even_if_obstructed = true;
@@ -7526,7 +7569,8 @@ static Container *saudio_row(Container *parent) {
         auto b = c->real_bounds;
         double r = 8 * dpi;
         double value = std::clamp(saudio_shown_volume(data), 0.0, 1.0);
-        double track_h = 6 * dpi;
+        // Thicker than other sliders so the level meter in its bottom half stays readable.
+        double track_h = std::round(10 * dpi);
         double x0 = b.x + r;
         double w = std::max(1.0, b.w - 2 * r);
         double y = b.y + b.h * .5 - track_h * .5;
@@ -7534,12 +7578,37 @@ static Container *saudio_row(Container *parent) {
         set_argb(cr, theme.slider_track);
         drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
         cr->fill();
-        if (value > 0) {
-            set_argb(cr, fill);
-            drawRoundedRect(cr, x0, y, std::max(track_h, w * value), track_h, track_h * .5, 1.0);
-            cr->fill();
-        }
         double cx = x0 + w * value;
+        if (value > 0) {
+            cr->save();
+            drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
+            cr->clip_path();
+            // The volume itself: solid up to the knob.
+            set_argb(cr, fill);
+            cr->rectangle(x0, y, cx - x0, track_h);
+            cr->fill();
+            // Like winbar, the bottom half shows what is playing right now, scaled by the volume
+            // so it never runs past the knob: a slow falling high-water mark behind a faster level.
+            if (data->node.peak_supported && !data->node.mute) {
+                double meter_h = std::round(track_h * .5);
+                double meter_y = y + track_h - meter_h;
+                double level = saudio_meter_level(data->shown_peak);
+                double mark = std::max((double) data->high_water_shown, level);
+                RGBA mark_color = set->dark_theme ? RGBA(.40, .40, .40, 1) : RGBA(.76, .76, .76, 1);
+                RGBA level_color = set->dark_theme ? RGBA(.78, .78, .78, 1) : RGBA(.46, .46, .46, 1);
+                if (mark > 0.001) {
+                    set_argb(cr, mark_color);
+                    cr->rectangle(x0, meter_y, (cx - x0) * mark, meter_h);
+                    cr->fill();
+                }
+                if (level > 0.001) {
+                    set_argb(cr, level_color);
+                    cr->rectangle(x0, meter_y, (cx - x0) * level, meter_h);
+                    cr->fill();
+                }
+            }
+            cr->restore();
+        }
         Bounds thumb(cx - r, b.y + b.h * .5 - r, r * 2, r * 2);
         set_argb(cr, theme.slider_thumb);
         drawRoundedRect(cr, thumb.x, thumb.y, thumb.w, thumb.h, r, 1.0);
@@ -7571,64 +7640,6 @@ static Container *saudio_row(Container *parent) {
         auto text = std::to_string((int) std::round(saudio_shown_volume(data) * 100)) + "%";
         swifi_text(root, Bounds(b.x + 10 * dpi, b.y, b.w - 10 * dpi, b.h), text, 11,
                    data->node.mute ? theme.text_secondary : theme.text);
-    };
-
-    // Level meter under the slider: shows whether the device/stream is actually producing sound.
-    auto meter_line = row->child(::hbox, FILL_SPACE, 14);
-    meter_line->pre_layout = [data](Container *root, Container *c, const Bounds &) {
-        c->exists = !data->is_card;
-        c->wanted_bounds.h = 14 * swifi_window(root)->dpi;
-    };
-    auto meter_left = meter_line->child(56, FILL_SPACE);
-    meter_left->pre_layout = [](Container *root, Container *c, const Bounds &) {
-        c->wanted_bounds.w = 56 * swifi_window(root)->dpi;
-    };
-    auto meter = meter_line->child(FILL_SPACE, FILL_SPACE);
-    meter->when_paint = [data](Container *root, Container *c) {
-        if (!data->node.peak_supported)
-            return;
-        auto window = swifi_window(root);
-        auto cr = window->drawing_context;
-        auto dpi = window->dpi;
-        auto b = c->real_bounds;
-        double r = 8 * dpi;
-        double h = 4 * dpi;
-        double x0 = b.x + r;
-        double w = std::max(1.0, b.w - 2 * r);
-        double y = b.y + 2 * dpi;
-        RGBA track = theme.slider_track;
-        track.a *= .5;
-        auto pill = [cr](double px, double py, double pw, double ph) {
-            double rad = ph * .5;
-            cr->new_path();
-            cr->arc(px + pw - rad, py + rad, rad, -M_PI / 2, M_PI / 2);
-            cr->arc(px + rad, py + rad, rad, M_PI / 2, 3 * M_PI / 2);
-            cr->close_path();
-        };
-        set_argb(cr, track);
-        pill(x0, y, w, h);
-        cr->fill();
-        double level = saudio_meter_level(data->shown_peak);
-        if (level <= 0.001)
-            return;
-        RGBA green = set->dark_theme ? RGBA(.35, .80, .50, 1) : RGBA(.15, .62, .32, 1);
-        RGBA fill = data->node.mute ? theme.text_secondary : green;
-        if (level > .92 && !data->node.mute)
-            fill = RGBA(.90, .55, .20, 1);
-        set_argb(cr, fill);
-        // Keep the round end at the peak; at low levels the pill's left end is clipped by the track.
-        double fill_w = w * level;
-        double pill_w = std::max(h, fill_w);
-        cr->save();
-        pill(x0, y, w, h);
-        cr->clip_path();
-        pill(x0 + fill_w - pill_w, y, pill_w, h);
-        cr->fill();
-        cr->restore();
-    };
-    auto meter_right = meter_line->child(64, FILL_SPACE);
-    meter_right->pre_layout = [](Container *root, Container *c, const Bounds &) {
-        c->wanted_bounds.w = 64 * swifi_window(root)->dpi;
     };
 
     return row;
@@ -7749,6 +7760,10 @@ static bool saudio_refresh(SettingsAudioPage *page) {
         if (std::abs(saudio_meter_level(shown) - saudio_meter_level(data->shown_peak)) > 0.002)
             redraw = true;
         data->shown_peak = shown;
+        float mark = data->high_water.feed(saudio_meter_level(shown), get_current_time_in_ms());
+        if (std::abs(mark - data->high_water_shown) > 0.002)
+            redraw = true;
+        data->high_water_shown = mark;
         if (data->dragging || get_current_time_in_ms() - data->last_local_change < 700)
             redraw = true;
     }
@@ -7877,7 +7892,7 @@ static void fill_audio_settings(Container *root) {
         double h = 0;
         for (auto row : c->children) {
             auto data = (SettingsAudioRow *) row->user_data;
-            row->wanted_bounds.h = (data->is_card ? 70 : 106) * dpi;
+            row->wanted_bounds.h = (data->is_card ? 70 : 92) * dpi;
             h += row->wanted_bounds.h;
         }
         if (c->children.empty())
@@ -9799,6 +9814,16 @@ static bool settings_narrow   = false;
 // Set by settings::start from the main thread; the settings thread focuses the search field.
 static std::atomic<bool> search_focus_requested = false;
 static bool settings_nav_open = false;
+// The page list scrolls when the window is too short to show all of it.
+struct NavScroll {
+    float scroll   = 0;
+    float overflow = 0;
+    SmoothScroll smooth;
+    bool bar_hovered  = false;
+    bool bar_dragging = false;
+    double bar_grab   = 0; // Mouse offset from the thumb top while dragging
+};
+static NavScroll nav_scroll;
 
 static constexpr long search_flash_ms = 1600;
 
@@ -11044,6 +11069,73 @@ static drawing::Context *cr_of(Container *root) {
     return swifi_window(root)->drawing_context;
 }
 
+// The page list's scrollbar: a thin thumb in a strip along the list's right edge,
+// wider while hovered or dragged. Clicking the track jumps there.
+static constexpr double nav_bar_strip = 12;
+
+struct NavBarGeometry {
+    double x = 0, track_y = 0, track_h = 0, thumb_y = 0, thumb_h = 0;
+};
+
+static bool nav_bar_geometry(Container *left, double dpi, NavBarGeometry &g) {
+    if (nav_scroll.overflow <= 0)
+        return false;
+    auto b    = left->real_bounds;
+    g.x       = b.x + b.w - nav_bar_strip * dpi;
+    g.track_y = b.y + 4 * dpi;
+    g.track_h = std::max(1.0, b.h - 8 * dpi);
+    double content = b.h + nav_scroll.overflow;
+    g.thumb_h = std::min(g.track_h, std::max(30.0 * dpi, g.track_h * b.h / content));
+    g.thumb_y = g.track_y + (-nav_scroll.scroll / nav_scroll.overflow) * (g.track_h - g.thumb_h);
+    return true;
+}
+
+static bool nav_bar_hit(Container *root, Container *left) {
+    NavBarGeometry g;
+    if (!nav_bar_geometry(left, swifi_window(root)->dpi, g))
+        return false;
+    auto b = left->real_bounds;
+    return root->mouse_current_x >= g.x && root->mouse_current_x <= b.x + b.w &&
+        root->mouse_current_y >= b.y && root->mouse_current_y <= b.y + b.h;
+}
+
+// Moves the list so the thumb top lands at `thumb_y`.
+static void nav_bar_scroll_to(Container *root, Container *left, double thumb_y) {
+    NavBarGeometry g;
+    if (!nav_bar_geometry(left, swifi_window(root)->dpi, g))
+        return;
+    double room = g.track_h - g.thumb_h;
+    double t    = room > 0 ? std::clamp((thumb_y - g.track_y) / room, 0.0, 1.0) : 0.0;
+    nav_scroll.smooth.stop();
+    nav_scroll.scroll = (float) (-t * nav_scroll.overflow);
+    swifi_redraw(root);
+}
+
+// Lays out the page list in `b` and offsets its entries by nav_scroll.
+static void layout_settings_left(Container *root, Container *left, const Bounds &b) {
+    auto measure = [root, left, &b]() {
+        layout(root, left, b);
+        double bottom = left->real_bounds.y;
+        for (auto ch : left->children)
+            if (ch->exists)
+                bottom = std::max(bottom, ch->real_bounds.y + ch->real_bounds.h);
+        double content = bottom + left->wanted_pad.h - left->real_bounds.y;
+        nav_scroll.overflow = (float) std::max(0.0, std::floor(content - left->real_bounds.h));
+    };
+    measure();
+    if (nav_scroll.overflow > 0) {
+        // Leave the scrollbar its own strip so grabbing it doesn't click an entry.
+        left->wanted_pad.w = nav_bar_strip * swifi_window(root)->dpi;
+        measure();
+    }
+    if (nav_scroll.smooth.step(nav_scroll.scroll))
+        swifi_redraw(root);
+    nav_scroll.scroll = std::clamp(nav_scroll.scroll, -nav_scroll.overflow, 0.0f);
+    if (nav_scroll.scroll != 0)
+        for (auto ch : left->children)
+            modify_all(ch, 0, nav_scroll.scroll);
+}
+
 // Lays out left_right's children (it is fullycustom).
 // Wide windows show the page list beside the page. Narrow ones replace it with
 // a hamburger bar above the page; the list then opens over the page from there.
@@ -11076,7 +11168,7 @@ static void place_settings_columns(Container *root, Container *c, const Bounds &
         scrim->exists = false;
         bar->exists   = false;
         left->wanted_pad = Bounds(4 * dpi, 4 * dpi, 4 * dpi, 4 * dpi);
-        layout(root, left, Bounds(b.x, b.y, left_w, b.h));
+        layout_settings_left(root, left, Bounds(b.x, b.y, left_w, b.h));
         Bounds page(b.x + left_w, b.y, std::max(0.0, b.w - left_w), b.h);
         // The search results carry their own title.
         header->exists = trim(search_query).empty() && !settings_crumbs().title.empty();
@@ -11102,7 +11194,7 @@ static void place_settings_columns(Container *root, Container *c, const Bounds &
     if (searching) {
         double field_h = 48 * dpi;
         scrim->exists  = false;
-        layout(root, left, Bounds(below.x, below.y, below.w, field_h));
+        layout_settings_left(root, left, Bounds(below.x, below.y, below.w, field_h));
         layout(root, right, Bounds(below.x, below.y + field_h, below.w, std::max(0.0, below.h - field_h)));
         return;
     }
@@ -11110,7 +11202,7 @@ static void place_settings_columns(Container *root, Container *c, const Bounds &
     scrim->exists = settings_nav_open;
     if (settings_nav_open) {
         layout(root, scrim, below);
-        layout(root, left, Bounds(below.x, below.y, std::min(below.w, 260.0 * dpi), below.h));
+        layout_settings_left(root, left, Bounds(below.x, below.y, std::min(below.w, 260.0 * dpi), below.h));
     }
 }
 
@@ -11170,6 +11262,21 @@ static Bounds focus_ring_bounds(Container *root, Container *c) {
 
 // Scrolls the page so a focused row is fully visible.
 static void focus_scroll_into_view(Container *root, Container *c) {
+    auto left = container_by_name("settings_left", root);
+    if (left && c != left && focus_inside(c, left)) {
+        auto lb = left->real_bounds;
+        auto b = focus_ring_bounds(root, c);
+        double margin = 4 * swifi_window(root)->dpi;
+        float scroll = nav_scroll.scroll;
+        if (b.y - margin < lb.y)
+            scroll += (float) (lb.y - (b.y - margin));
+        else if (b.y + b.h + margin > lb.y + lb.h)
+            scroll -= (float) (b.y + b.h + margin - (lb.y + lb.h));
+        scroll = std::clamp(scroll, -nav_scroll.overflow, 0.0f);
+        if (scroll != nav_scroll.scroll)
+            nav_scroll.smooth.start(nav_scroll.scroll, scroll);
+        return;
+    }
     auto right = container_by_name("settings_right", root);
     if (!right || !focus_inside(c, right) || c == right)
         return;
@@ -11523,7 +11630,87 @@ void fill_root(Container *root) {
             cr->rectangle(b.x + b.w - line, b.y, line, b.h);
             cr->fill();
         }
+        // Entries scrolled out of the list stay hidden; restored in after_paint.
+        auto window = swifi_window(root);
+        auto b = c->real_bounds;
+        window->drawing_context->save();
+        window->drawing_context->rectangle(b.x, b.y, b.w, b.h);
+        window->drawing_context->clip_path();
         settings_nav_indicator_paint(root, c);
+    };
+    left->after_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        cr->restore();
+        auto dpi = window->dpi;
+        NavBarGeometry g;
+        if (!nav_bar_geometry(c, dpi, g))
+            return;
+        bool active = nav_scroll.bar_hovered || nav_scroll.bar_dragging;
+        double w = (active ? 6 : 3) * dpi;
+        double x = g.x + (nav_bar_strip * dpi - w) * .5;
+        RGBA color = theme.text_secondary;
+        color.a *= active ? .7 : .4;
+        set_argb(cr, color);
+        drawRoundedRect(cr, x, g.thumb_y, w, g.thumb_h, w * .5, 1.0);
+        cr->fill();
+    };
+    left->when_mouse_motion = [](Container *root, Container *c) {
+        bool hovered = nav_bar_hit(root, c);
+        if (hovered != nav_scroll.bar_hovered) {
+            nav_scroll.bar_hovered = hovered;
+            swifi_redraw(root);
+        }
+    };
+    left->when_mouse_leaves_container = [](Container *root, Container *) {
+        if (nav_scroll.bar_hovered && !nav_scroll.bar_dragging) {
+            nav_scroll.bar_hovered = false;
+            swifi_redraw(root);
+        }
+    };
+    left->when_mouse_down = [](Container *root, Container *c) {
+        if (!nav_bar_hit(root, c))
+            return;
+        NavBarGeometry g;
+        if (!nav_bar_geometry(c, swifi_window(root)->dpi, g))
+            return;
+        nav_scroll.bar_dragging = true;
+        nav_scroll.bar_hovered  = true;
+        double y = root->mouse_current_y;
+        if (y >= g.thumb_y && y <= g.thumb_y + g.thumb_h) {
+            nav_scroll.bar_grab = y - g.thumb_y;
+        } else {
+            nav_scroll.bar_grab = g.thumb_h * .5;
+            nav_bar_scroll_to(root, c, y - nav_scroll.bar_grab);
+        }
+        swifi_redraw(root);
+    };
+    left->when_drag = [](Container *root, Container *c) {
+        if (nav_scroll.bar_dragging)
+            nav_bar_scroll_to(root, c, root->mouse_current_y - nav_scroll.bar_grab);
+    };
+    auto nav_bar_release = [](Container *root, Container *c) {
+        if (!nav_scroll.bar_dragging)
+            return;
+        nav_scroll.bar_dragging = false;
+        nav_scroll.bar_hovered  = nav_bar_hit(root, c);
+        swifi_redraw(root);
+    };
+    left->when_mouse_up = nav_bar_release;
+    left->when_drag_end = nav_bar_release;
+    // Scrolls come to the entry under the pointer first; the list must still get them.
+    left->receive_events_even_if_obstructed = true;
+    left->when_fine_scrolled = [](Container *root, Container *, double, double scroll_y, bool touchpad) {
+        if (scroll_y == 0 || nav_scroll.overflow <= 0)
+            return;
+        float delta = (float) (scroll_y * 3 * swifi_window(root)->dpi);
+        if (touchpad) {
+            nav_scroll.smooth.stop();
+            nav_scroll.scroll = std::clamp(nav_scroll.scroll + delta, -nav_scroll.overflow, 0.0f);
+        } else {
+            nav_scroll.smooth.scroll_by(nav_scroll.scroll, delta, -nav_scroll.overflow, 0.0f);
+        }
+        swifi_redraw(root);
     };
     fill_left(left);
 
@@ -11603,6 +11790,9 @@ void fill_root(Container *root) {
             wall_preview_ate_scroll = false;
             return;
         }
+        // The page list opened over the page takes the scrolling.
+        if (settings_narrow && settings_nav_open && trim(search_query).empty())
+            return;
         // Horizontal-only events (touchpad drift, wheel tilt) and axis_stop
         // frames carry no vertical motion; don't restart the wheel easing.
         if (scroll_y == 0)

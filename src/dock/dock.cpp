@@ -97,6 +97,9 @@ static bool dock_is_bubbly() {
     return dock_style.load() != DockStyle::Default;
 }
 static float max_width = 200;
+// Drawn for a dock item when neither the icon theme nor the window has an icon.
+static const char *kFallbackIconPath = "/usr/share/mylardesktop/icons/application-default-icon.svg";
+
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
 static std::vector<std::thread> dock_threads;
@@ -196,6 +199,10 @@ struct Pin : UserData {
     cairo_surface_t* icon_surf = nullptr;
     bool attempted_load = false;
     bool scale_change = false;
+    // The icon is the generic fallback; swap it for the window's own icon
+    // once a window shows up.
+    bool using_fallback_icon = false;
+    size_t fallback_window_count = 0;
 
     long creation_time = get_current_time_in_ms();
 
@@ -1806,28 +1813,48 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         if (!pin->windows.empty())
             title = pin->windows[0].title;
         if (icons_loaded) {
+            auto size = get_icon_size(mylar->raw_window->dpi);
+            auto take_window_icon = [pin, size]() {
+                for (auto w : pin->windows) {
+                    // Take the icon from the window
+                    cairo_surface_t *surface = hypriso->get_icon_on_window(w.cid, size);
+                    if (!surface)
+                        continue;
+                    if (pin->icon_surf)
+                        cairo_surface_destroy(pin->icon_surf);
+                    pin->icon_surf = surface;
+                    return true;
+                }
+                return false;
+            };
             if (!pin->attempted_load || pin->scale_change) {
                 pin->scale_change = false;
                 pin->attempted_load = true;
-                auto size = get_icon_size(mylar->raw_window->dpi);
-                auto icon = pin->icon;
+                pin->using_fallback_icon = false;
+                pin->full_icon.clear();
+                if (pin->icon_surf) {
+                    cairo_surface_destroy(pin->icon_surf);
+                    pin->icon_surf = nullptr;
+                }
                 auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon)});
-                //"application-x-executable"
                 if (!full.empty()) {
                     pin->full_icon = full;
                     load_icon_full_path(&pin->icon_surf, full, size);
-                } else {
-                    for (auto w : pin->windows) {
-                        auto cid = w.cid;
-                        // Take the icon from the window
-                        cairo_surface_t *surface = hypriso->get_icon_on_window(cid, size);
-                        if (!surface)
-                            continue;
-                        if (pin->icon_surf)
-                            cairo_surface_destroy(pin->icon_surf);
-                        pin->icon_surf = surface;
-                        break;
+                }
+                if (!pin->icon_surf) {
+                    pin->full_icon.clear();
+                    if (!take_window_icon()) {
+                        pin->full_icon = kFallbackIconPath;
+                        load_icon_full_path(&pin->icon_surf, kFallbackIconPath, size);
+                        pin->using_fallback_icon = true;
+                        pin->fallback_window_count = pin->windows.size();
                     }
+                }
+            } else if (pin->using_fallback_icon && pin->windows.size() != pin->fallback_window_count) {
+                pin->fallback_window_count = pin->windows.size();
+                if (take_window_icon()) {
+                    pin->using_fallback_icon = false;
+                    pin->full_icon.clear();
                 }
             }
         }

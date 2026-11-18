@@ -75,6 +75,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 #endif
 
     set_api(handle);
+    stop_client_key_repeat();
 
     settings::load_save_settings(false, set); // load
     settings::load_save_settings(true, set); // save
@@ -91,6 +92,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    stop_client_key_repeat();
     try {
         settings::load_save_settings(true, set); // save
         heart::end();

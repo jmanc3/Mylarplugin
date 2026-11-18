@@ -752,6 +752,8 @@ void unsetCursorImage(bool force = false);
 // and key presses not used by a keybind are kept from the focused client. It
 // targets windows only; layer surfaces such as the dock keep their input.
 void set_input_takeover(const std::string &owner, bool active);
+// Re-enters the focused client so it stops repeating keys held right now.
+void stop_client_key_repeat();
 void set_cursor_hidden_for_desktop_fade(bool hidden);
 void set_cursor_hidden_for_screenshot_draw(bool hidden);
 void center_cursor_on_monitor(int monitor);

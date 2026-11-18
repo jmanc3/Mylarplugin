@@ -724,14 +724,20 @@ void apply_restore_info(int id) {
             // Opening a decorated window can apply restore rules twice.
             if (c && *datum<bool>(c, "snapped"))
                 continue;
-            if (info.remember_size) {
-                if (info.box.w > 0 && info.box.h > 0) {
-                    const auto b = restored_window_bounds(id, info);
-                    hypriso->move_resize(id, b.x, b.y, b.w, b.h);
+            const bool restore_maximized = info.remember_maximized && info.remembered_snap_type == (int) SnapPosition::MAX && hypriso->can_maximize(id);
+            const bool restore_size = info.remember_size && info.box.w > 0 && info.box.h > 0;
+            const Bounds restored = restore_size ? restored_window_bounds(id, info) : Bounds();
+            // A window that gets maximized only needs the remembered size for unmaximizing. Resizing it
+            // first sends two configures right after mapping, and Firefox can drop the second one's repaint.
+            if (restore_size && !restore_maximized)
+                hypriso->move_resize(id, restored.x, restored.y, restored.w, restored.h);
+            if (restore_maximized) {
+                drag::snap_window(get_monitor(id), id, info.remembered_snap_type);
+                if (restore_size && c && *datum<bool>(c, "snapped")) {
+                    *datum<Bounds>(c, "pre_snap_bounds") = restored;
+                    update_restore_info_for(id, true);
                 }
             }
-            if (info.remember_maximized && info.remembered_snap_type == (int) SnapPosition::MAX)
-                drag::snap_window(get_monitor(id), id, info.remembered_snap_type);
             return;
         }
     }

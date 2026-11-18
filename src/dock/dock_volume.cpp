@@ -88,6 +88,8 @@ struct AudioData : UserData {
 
     std::vector<MeterKey> meters;
     float meter = 0; // Shown level, 0..1 (falls off smoothly)
+    MeterHighWater high_water;
+    float high_water_shown = 0;
 
     std::string loaded_icon;
     float old_dpi = 0.0;
@@ -229,7 +231,8 @@ static Container *fill_out_volume_slider(Container *c) {
         auto audio_data = (AudioData *) audio_c->user_data;
 
         paint_slider(root, c, cr, dpi, std::clamp(audio_data->level, 0.0f, 1.0f),
-                     audio_data->muted ? 0.0f : audio_data->meter);
+                     audio_data->muted ? 0.0f : audio_data->meter,
+                     audio_data->muted ? 0.0f : audio_data->high_water_shown);
     };
 
     c->when_drag_end_is_click = false;
@@ -856,6 +859,7 @@ static bool update_meters(Container *scroll, const std::vector<AudioNodeInfo> &n
     if (!scroll)
         return false;
     bool changed = false;
+    long now = get_current_time_in_ms();
     for (auto c : ((ScrollContainer *) scroll)->content->children) {
         auto data = (AudioData *) c->user_data;
         float target = 0;
@@ -867,6 +871,10 @@ static bool update_meters(Container *scroll, const std::vector<AudioNodeInfo> &n
         if (std::abs(shown - data->meter) > 0.001f)
             changed = true;
         data->meter = shown;
+        float mark = data->high_water.feed(shown, now);
+        if (std::abs(mark - data->high_water_shown) > 0.001f)
+            changed = true;
+        data->high_water_shown = mark;
     }
     return changed;
 }

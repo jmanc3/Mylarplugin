@@ -12,6 +12,8 @@
 #include <string>
 #include <cstdint>
 #include <functional>
+#include <algorithm>
+#include <cmath>
 #include <pipewire/node.h>
 
 extern bool audio_running;
@@ -178,6 +180,33 @@ void audio_mixer_set_card_profile(uint32_t card, const std::string &profile);
 // Starts or stops peak metering of every node. Reference counted: every call with true must be
 // matched by one with false; meters run while at least one user wants them.
 void audio_mixer_meters(bool on);
+
+// High-water mark of a level meter (like winbar's): jumps up with the level, holds briefly,
+// then falls back to zero with an ease-in-expo curve unless a new higher level arrives.
+struct MeterHighWater {
+    float peak = 0;
+    long set_ms = 0;
+
+    static constexpr long hold_ms = 130;
+    static constexpr long fall_ms = 1000;
+
+    float value(long now) const {
+        double t = std::clamp((double) (now - set_ms - hold_ms) / fall_ms, 0.0, 1.0);
+        double eased = t <= 0 ? 0 : std::pow(2.0, 10 * t - 10);
+        if (t >= 1)
+            eased = 1;
+        return (float) (peak * (1 - eased));
+    }
+
+    // Feeds the current level; returns the mark to show.
+    float feed(float level, long now) {
+        if (level > 0.001f && level >= value(now)) {
+            peak = level;
+            set_ms = now;
+        }
+        return value(now);
+    }
+};
 
 
 #endif //WINBAR_AUDIO_H
