@@ -3051,6 +3051,53 @@ static void add_monitor_float_field(Container* parent, std::string title, std::s
                          }, nullptr, number_hint("Decimal number", min_value, max_value, note));
 }
 
+// Monitor whose option rows need rebuilding on the next layout, settings thread only.
+static MonitorOption *display_options_stale = nullptr;
+
+// The HDR row is a single switch, like Windows: it sets every related field to
+// what HDR (or plain SDR) needs, so nobody has to understand the Advanced rows.
+//
+// How Hyprland uses them (see CMonitor::applyMonitorRuleSoft and getCMSettings):
+// - cm "hdr" outputs PQ with BT.2020 primaries. It silently falls back to sRGB
+//   when the EDID does not report HDR, and an ICC profile replaces cm entirely.
+// - SDR content (almost every window) is mapped into HDR with SDR black at
+//   sdr_min_luminance and SDR white at sdr_max_luminance nits. The defaults
+//   (0.2 / 80) make the desktop look grey and dim next to SDR mode, which is the
+//   usual "HDR looks washed out" complaint. 203 nits is the BT.2408 reference
+//   white Hyprland itself uses for HDR, close to the 200 nits Windows picks by
+//   default, and 0.005 is PQ's floor, so SDR black stays truly black.
+// - sdrbrightness / sdrsaturation scale the already PQ-encoded signal. Guides
+//   suggest sdrbrightness 1.2 to undo the 80 nit default; with white placed at
+//   203 nits that hack would double up, so it goes back to 1.
+// - The SDR-in-HDR values do nothing outside HDR, so turning HDR off keeps them
+//   and a later turn on brings back whatever the user tuned, like Windows'
+//   "SDR content brightness" slider.
+// - Min/max/average luminance describe the panel (EDID overrides) and VRR is
+//   unrelated, so they are left alone.
+static void apply_hdr_defaults(MylarMonitor &config, bool on) {
+    if (on) {
+        if (config.cm != "hdredid")
+            config.cm = "hdr";
+        config.bitdepth = 10; // PQ in 8 bits bands badly
+        if (!config.icc.empty()) {
+            notify(fz("ICC profile \"{}\" removed, it overrides HDR", config.icc));
+            config.icc.clear();
+        }
+        // Only replace values still at Hyprland's SDR defaults, keep anything tuned.
+        if (config.sdr_max_luminance == 80) {
+            config.sdr_max_luminance = 203;
+            config.sdrbrightness     = 1.0f;
+        }
+        if (config.sdr_min_luminance == 0.2f)
+            config.sdr_min_luminance = 0.005f;
+        if (config.sdrsaturation <= 0)
+            config.sdrsaturation = 1.0f;
+    } else {
+        config.cm       = "srgb";
+        config.bitdepth = 8;
+    }
+}
+
 static void change_display_options(MonitorOption *m) {
     auto right = container_by_name("settings_right", settings_mylar->root);
     if (!right)
@@ -3139,11 +3186,12 @@ static void change_display_options(MonitorOption *m) {
 
     const bool hdr_on = m->config.cm == "hdr" || m->config.cm == "hdredid";
     make_bool(padded_right, "HDR", "High dynamic range, for displays that support it", hdr_on, [m, commit](bool value) {
-        m->config.cm = value ? "hdr" : "srgb";
-        // HDR needs 10 bit output.
-        if (value)
-            m->config.bitdepth = 10;
+        apply_hdr_defaults(m->config, value);
         commit();
+        // The Advanced rows show the values this just changed.
+        display_options_stale = m;
+        if (settings_mylar)
+            windowing::redraw(settings_mylar->raw_window);
     }, "\uE793");
 
 
@@ -11156,6 +11204,9 @@ void fill_root(Container *root) {
         // Only present while the display page is showing.
         if (display_trial.page_stale && container_by_name("display_page", root))
             fill_display_settings(root);
+        else if (display_options_stale && container_by_name("display_page", root))
+            change_display_options(display_options_stale);
+        display_options_stale = nullptr;
 
         // Last, so pages rebuilt above are laid out in this pass.
         place_settings_columns(root, c, b);
