@@ -2586,8 +2586,10 @@ static void damage_popup_shadow(const Bounds &bounds) {
     hypriso->damage_box(damage);
 }
 
-void on_popup_closed(int id) {
+static void remove_popup_containers(int id) {
     auto m = actual_root; 
+    if (!m)
+        return;
 
     for (int i = m->children.size() - 1; i >= 0; i--) {
         if (m->children[i]->custom_type == (int) TYPE::POPUP) {
@@ -2602,6 +2604,26 @@ void on_popup_closed(int id) {
     }
 }
 
+void on_popup_closed(int id) {
+    // Hyprland keeps drawing a dock popup as a fading snapshot after it's gone;
+    // keep its shadow until that fade finishes so the two disappear together.
+    if (!actual_root)
+        return;
+    bool fading_dock_popup = false;
+    for (auto ch : actual_root->children)
+        if (ch->custom_type == (int) TYPE::POPUP && *datum<int>(ch, "cid") == id && *datum<bool>(ch, "dock_popup"))
+            fading_dock_popup = true;
+    if (fading_dock_popup && alpha_popup(id) > 0.0f) {
+        later(16, [id](Timer *t) {
+            t->keep_running = alpha_popup(id) > 0.0f;
+            if (!t->keep_running)
+                remove_popup_containers(id);
+        });
+        return;
+    }
+    remove_popup_containers(id);
+}
+
 void on_popup_open(int id, int parent_id, bool owner_is_window) {
     {
         auto m = actual_root; 
@@ -2611,6 +2633,9 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
         c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto bounds = bounds_popup(*datum<int>(c, "cid"));
             auto previous = c->real_bounds;
+            // Unmapped but still fading out: the snapshot stays where the popup was.
+            if (*datum<bool>(c, "dock_popup") && (bounds.w <= 0 || bounds.h <= 0) && alpha_popup(*datum<int>(c, "cid")) > 0.0f)
+                bounds = previous;
             if (*datum<bool>(c, "dock_popup") &&
                 (bounds.x != previous.x || bounds.y != previous.y || bounds.w != previous.w || bounds.h != previous.h)) {
                 damage_popup_shadow(previous);

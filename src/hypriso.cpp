@@ -10445,18 +10445,33 @@ Bounds bounds_popup(int id) {
     return {0, 0, 0, 0};
 }
 
+// Fade-outs Hyprland starts when a popup unmaps (a snapshot of it fading away), by popup id.
+// Kept past the popup's destruction so things drawn alongside it can follow the fade.
+static std::unordered_map<int, WP<Desktop::IFadeout>> popup_fadeouts;
+
 float alpha_popup(int id) {
     for (auto hp : hyprpopus) {
-        if (hp->id == id) {
-            if (auto p = hp->p.lock()) {
-                if (!p->m_mapped || (p->m_windowOwner.expired() && p->m_layerOwner.expired()))
-                    return 0.0f;
-                auto surf = p->wlSurface() ? p->wlSurface()->resource() : nullptr;
-                if (!surf || !surf->m_current.texture)
-                    return 0.0f;
-                return std::clamp(p->alpha()[Desktop::View::POPUP_ALPHA_FADE]->value(), 0.0f, 1.0f);
-            }
-        }
+        if (hp->id != id)
+            continue;
+        auto p = hp->p.lock();
+        if (!p || !p->m_mapped || (p->m_windowOwner.expired() && p->m_layerOwner.expired()))
+            break;
+        // The same checks Hyprland makes before it draws the popup.
+        if (!p->alphaNonZero())
+            return 0.0f;
+        auto surf = p->wlSurface() ? p->wlSurface()->resource() : nullptr;
+        if (!surf || !surf->m_current.texture || surf->m_current.size.x < 1 || surf->m_current.size.y < 1)
+            return 0.0f;
+        // renderLayer() draws layer popups with only the layer's fade; the popup's own fade isn't applied.
+        if (auto ls = p->m_layerOwner.lock())
+            return std::clamp(ls->alpha()[Desktop::View::LS_ALPHA_FADE]->value(), 0.0f, 1.0f);
+        return std::clamp(p->alpha()[Desktop::View::POPUP_ALPHA_FADE]->value(), 0.0f, 1.0f);
+    }
+    // Unmapped or gone: what's on screen is Hyprland's fading snapshot of it.
+    if (auto it = popup_fadeouts.find(id); it != popup_fadeouts.end()) {
+        if (auto fadeout = it->second.lock(); fadeout && !fadeout->done())
+            return std::clamp(fadeout->alpha(), 0.0f, 1.0f);
+        popup_fadeouts.erase(it);
     }
     return 0.0f;
 }
@@ -10927,6 +10942,7 @@ void prune_expired_popups() {
             dead.push_back(hp->id);
     for (auto id : dead)
         popup_destroyed(id);
+    std::erase_if(popup_fadeouts, [](const auto &entry) { return entry.second.expired(); });
 }
 
 void schedule_prune_expired_popups() {
@@ -11026,6 +11042,27 @@ void hook_onPopupDestroy(void* thisptr) {
     (*(origPopupDestroy)g_pOnPopupDestroy->m_original)((Desktop::View::CPopup *) thisptr);
 }
 
+// void CPopup::onUnmap() starts the popup's fade-out snapshot; remember it for alpha_popup().
+inline CFunctionHook* g_pOnPopupUnmap = nullptr;
+typedef void (*origPopupUnmap)(Desktop::View::CPopup *);
+void hook_onPopupUnmap(void* thisptr) {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto popup = (Desktop::View::CPopup *) thisptr;
+    int id = -1;
+    for (auto hp : hyprpopus)
+        if (hp->p.get() == popup)
+            id = hp->id;
+    const auto before = Desktop::fadingOutState()->fadeouts().size();
+
+    (*(origPopupUnmap)g_pOnPopupUnmap->m_original)(popup);
+
+    const auto &fadeouts = Desktop::fadingOutState()->fadeouts();
+    if (id != -1 && fadeouts.size() > before)
+        popup_fadeouts[id] = fadeouts.back();
+}
+
 // CPopup::create(SP<IPopupBackend>, WP<CPopup>) creates nested popups.
 inline CFunctionHook* g_pPopupCreate = nullptr;
 typedef SP<Desktop::View::CPopup> (*origPopupCreate)(SP<Desktop::View::IPopupBackend>, WP<Desktop::View::CPopup>);
@@ -11077,9 +11114,18 @@ void hook_popup_creation_and_destruction() {
             }
         }
     }
-    
+    {
+        static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "onUnmap");
+        for (auto m : METHODS) {
+            if (m.demangled.find("CPopup::onUnmap") != std::string::npos) {
+                g_pOnPopupUnmap = HyprlandAPI::createFunctionHook(globals->api, m.address, (void*)&hook_onPopupUnmap);
+                g_pOnPopupUnmap->hook();
+                hooked++;
+            }
+        }
+    }
 
-    constexpr int EXPECTED_HOOKS = 4;
+    constexpr int EXPECTED_HOOKS = 5;
     if (hooked != EXPECTED_HOOKS) {
         notify(std::format("{} failed to hook popup creation and destruction, report to fix", hooked));
     }

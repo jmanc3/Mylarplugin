@@ -701,7 +701,8 @@ Bounds bounds_monitor(int id);
 Bounds bounds_reserved_monitor(int id);
 
 Bounds bounds_popup(int id);
-// Hyprland's fade-in/out value for the popup (0..1), 0 if it isn't mapped or has no buffer yet
+// Opacity Hyprland draws the popup at (0..1): while mapped, the fade it renders it with; after it
+// unmaps (even once destroyed), its fading snapshot's alpha. 0 when nothing of it is on screen.
 float alpha_popup(int id);
 
 Bounds bounds_client(int id);
