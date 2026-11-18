@@ -341,7 +341,7 @@ struct SettingsCategory {
 
 static const std::vector<SettingsCategory> &settings_categories() {
     static const std::vector<SettingsCategory> categories = {
-        {"Display", "settings-system", "preferences-desktop-display", {
+        {"Display", "settings-display", "preferences-desktop-display", {
             {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper, desktop icons", "\uE7F4"},
         }},
         {"Network & internet", "settings-network", "network-wireless", {
@@ -353,8 +353,8 @@ static const std::vector<SettingsCategory> &settings_categories() {
         {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
             {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
         }},
-        {"Behaviour", "settings-personalization", "preferences-desktop-wallpaper", {
-            {"Desktop", "Behaviour", "Theme, font, overview, dock, workspaces, snap windows, hot corners", "\uE771"},
+        {"Behaviour", "settings-behaviour", "preferences-desktop-wallpaper", {
+            {"Behaviour", "Behaviour", "Theme, font, overview, dock, workspaces, snap windows, hot corners", "\uE771"},
         }},
         {"Devices", "settings-devices", "preferences-desktop-peripherals", {
             {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
@@ -4513,10 +4513,11 @@ static void save_multitasking_settings() {
     });
 }
 
-// Shown at the end of the Behaviour (Desktop) page.
+// Shown at the end of the Behaviour page.
 static void add_multitasking_settings(Container *padded_right) {
+    make_vert_space(padded_right, 24);
     make_section_title(padded_right, "Multitasking Settings");
-    make_vert_space(padded_right, 12);
+    make_vert_space(padded_right, 10);
     make_button_group(padded_right, "App switching",
         "Choose which windows appear in the app switcher",
         {"All workspaces", "Current workspace"}, [](std::string selected) {
@@ -4567,7 +4568,7 @@ static void add_multitasking_settings(Container *padded_right) {
         });
 }
 
-static void fill_desktop_settings(Container *root, Container *c) {
+static void fill_behaviour_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
         return;
@@ -9584,34 +9585,34 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Display", "Monitor", "Max average luminance", "Maximum average luminance override", "brightness nits");
     search_add("Display", "Monitor", "Disabled", "Turn this monitor off without disconnecting it", "disable turn off monitor screen enable");
 
-    search_add("Desktop", "Desktop Settings", "Desktop Settings", "", "desktop");
-    search_add("Desktop", "Desktop Settings", "Icon Cache", "Re-scan installed icons", "icons refresh rescan reload missing icon theme");
-    search_add("Desktop", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
-    search_add("Desktop", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
-    search_add("Desktop", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
-    search_add("Desktop", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
-    search_add("Desktop", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
-    search_add("Desktop", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
+    search_add("Behaviour", "Desktop Settings", "Desktop Settings", "", "desktop");
+    search_add("Behaviour", "Desktop Settings", "Icon Cache", "Re-scan installed icons", "icons refresh rescan reload missing icon theme");
+    search_add("Behaviour", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
+    search_add("Behaviour", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
+    search_add("Behaviour", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
+    search_add("Behaviour", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
+    search_add("Behaviour", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
+    search_add("Behaviour", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
                "taskbar dock workspace windows monitors");
-    search_add("Desktop", "Dock Settings", "Show applications from other desktops",
+    search_add("Behaviour", "Dock Settings", "Show applications from other desktops",
                "List applications in the applications menu that are meant only for GNOME, KDE or another desktop",
                "applications menu launcher desktop files gnome kde xfce session onlyshowin apps all");
-    search_add("Desktop", "Dock Settings", "Combine taskbar buttons and hide labels", "Group all windows that belong to one dock icon under a single icon",
+    search_add("Behaviour", "Dock Settings", "Combine taskbar buttons and hide labels", "Group all windows that belong to one dock icon under a single icon",
                "group merge stack labels dock taskbar");
 
-    search_add("Desktop", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
-    search_add("Desktop", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
+    search_add("Behaviour", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
+    search_add("Behaviour", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
                "alt tab switcher windows workspace");
-    search_add("Desktop", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
+    search_add("Behaviour", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
                "dynamic fixed workspaces virtual desktops behaviour");
-    search_add("Desktop", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
+    search_add("Behaviour", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
                "count workspaces virtual desktops amount");
-    search_add("Desktop", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
+    search_add("Behaviour", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
                "workspaces span displays screens independent together");
-    search_add("Desktop", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
-    search_add("Desktop", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
+    search_add("Behaviour", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
+    search_add("Behaviour", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
                "window resizing screen edges corners quarter snap snapping tile tiling half maximize drag edges");
-    search_add("Desktop", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
+    search_add("Behaviour", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
                "csd ssd client side server side decorations titlebar title bar xdg kde");
 
     search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
@@ -10255,7 +10256,7 @@ static void make_search_field(Container *left) {
         paint_text_editor(root, c, theme.text, theme.accent);
         if (data && data->text.empty()) {
             Bounds text(b.x + 12 * dpi, b.y, std::max(0.0, b.w - 48 * dpi), b.h);
-            swifi_text(root, text, "Find a setting", 11, swifi_dim(theme.text_secondary));
+            swifi_text(root, text, "Find a setting (Ctrl + L)", 11, swifi_dim(theme.text_secondary));
         }
     };
     auto edit_key = std::move(field->when_key_event);
@@ -10632,8 +10633,8 @@ static bool settings_show(Container *root, const std::string &id) {
         fill_mouse_settings(root, nullptr);
     } else if (page == "Keyboard") {
         fill_keyboard_settings(root, nullptr);
-    } else if (page == "Desktop") {
-        fill_desktop_settings(root, nullptr);
+    } else if (page == "Behaviour") {
+        fill_behaviour_settings(root, nullptr);
     } else if (page == "Display") {
         fill_display_settings(root);
     } else if (page == "Shortcuts") {
