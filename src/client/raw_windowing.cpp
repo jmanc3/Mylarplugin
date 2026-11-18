@@ -374,8 +374,8 @@ struct wl_window {
     int logical_width, logical_height;
     int scaled_w, scaled_h;
 
-    int cur_x = 0;
-    int cur_y = 0;
+    double cur_x = 0;
+    double cur_y = 0;
 
     std::string title;
     std::string app_id;
@@ -1304,10 +1304,11 @@ static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
         if (w->surface == surface) {
             // printf("pointer: enter at %.2f, %.2f for %s\n", dx, dy, w->title.data());
             w->has_pointer_focus = true;
-            w->cur_x = sx;
-            w->cur_y = sy;
+            // Positions arrive as wl_fixed_t (24.8 fixed point), not pixels.
+            w->cur_x = wl_fixed_to_double(sx);
+            w->cur_y = wl_fixed_to_double(sy);
             if (w->rw->on_mouse_enters) {
-               w->rw->on_mouse_enters(w->rw, sx, sy);
+               w->rw->on_mouse_enters(w->rw, w->cur_x, w->cur_y);
             }
             if (w->on_render)
                 w->on_render(w);
