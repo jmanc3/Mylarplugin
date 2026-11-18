@@ -1,6 +1,7 @@
 #include "overview.h"
 #include "container.h"
 #include "dock/dock.h"
+#include "drag.h"
 #include "drag_workspace_switcher.h"
 #include "first.h"
 #include "heart.h"
@@ -1086,6 +1087,24 @@ static bool initialize_overview(int monitor) {
 
 void overview_actual_close() {
     const bool was_initialized = initialized;
+    // A thumbnail grabbed while overview was closing becomes a real window
+    // drag once the overview is gone, instead of being dropped mid-drag.
+    int handoff = -1;
+    double handoff_dx = 0;
+    double handoff_dy = 0;
+    if (scene) {
+        for (auto &[mid, monitor] : scene->monitors) {
+            if (monitor.dragged == -1)
+                continue;
+            auto thumbnail = dragged_thumbnail(monitor);
+            if (!thumbnail || hypriso->get_client_workspace_id(monitor.dragged) != hypriso->get_active_workspace_id(mid))
+                continue;
+            handoff = monitor.dragged;
+            handoff_dx = thumbnail->drag_x.value;
+            handoff_dy = thumbnail->drag_y.value;
+            break;
+        }
+    }
     lifecycle++;
     animation_generation++;
     animating = false;
@@ -1114,6 +1133,20 @@ void overview_actual_close() {
         hypriso->simulateMouseMovement();
     }
     set_input_takeover("overview", false);
+    if (handoff != -1 && get_cid_container(handoff) && hypriso->is_mapped(handoff) && !drag::dragging()) {
+        if (hypriso->is_hidden(handoff))
+            hypriso->set_hidden(handoff, false, false);
+        // At zero openness the thumbnail sits on the window's natural bounds,
+        // so its drag offset is where the window has visually been carried to.
+        if (hypriso->is_floating(handoff)) {
+            auto b = bounds_client(handoff);
+            b.x += handoff_dx;
+            b.y += handoff_dy;
+            hypriso->move_resize(handoff, b);
+        }
+        drag::begin(handoff);
+        hypriso->bring_to_front(handoff);
+    }
     damage_all();
     request_refresh();
 }
