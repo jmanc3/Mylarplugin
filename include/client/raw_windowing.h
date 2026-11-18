@@ -123,6 +123,9 @@ struct RawWindowSettings {
     int alignment = 0; // 0 none, 1 top, clockwise + 1
     PopupPositioner popup;
     bool keyboard_focus_on_click = false;
+    // Popups: no grab and an empty input region, so it never takes focus or clicks
+    // (an indicator shown while the pointer stays on its parent).
+    bool passive = false;
     // NORMAL windows: makes this a child (dialog) of that window through
     // xdg_toplevel.set_parent; the compositor centers it over the parent.
     RawWindow *parent_window = nullptr;

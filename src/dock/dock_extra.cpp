@@ -11,17 +11,103 @@
 #include <cstdlib>
 #include <linux/input-event-codes.h>
 #include <set>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
-bool nightlight_on = false;
+// hyprsunset outlives the plugin (it keeps running across "hyprctl plugin
+// reload"), so read whether it is running instead of assuming it is off.
+static bool hyprsunset_running() {
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator("/proc", ec)) {
+        const auto name = entry.path().filename().string();
+        if (name.empty() || !std::all_of(name.begin(), name.end(), ::isdigit))
+            continue;
+        std::ifstream comm(entry.path() / "comm");
+        std::string cmd;
+        if (std::getline(comm, cmd) && cmd == "hyprsunset")
+            return true;
+    }
+    return false;
+}
+
+bool nightlight_on = hyprsunset_running();
+
+// The dock's copy of set->nightlight_temperature, so the slider updates
+// immediately while the setting itself is only written on the main thread.
+static int nightlight_kelvin = -1;
+
+int nightlight_temperature() {
+    if (nightlight_kelvin < 0)
+        nightlight_kelvin = std::clamp(set->nightlight_temperature, nightlight_min_kelvin, nightlight_max_kelvin);
+    return nightlight_kelvin;
+}
+
+// Sends one command to hyprsunset's IPC socket (what "hyprctl hyprsunset"
+// does), so dragging the slider doesn't fork a process per step.
+static void hyprsunset_request(const std::string &request) {
+    const char *runtime = getenv("XDG_RUNTIME_DIR");
+    const char *signature = getenv("HYPRLAND_INSTANCE_SIGNATURE");
+    if (!runtime || !signature)
+        return;
+    std::string path = std::string(runtime) + "/hypr/" + signature + "/.hyprsunset.sock";
+    sockaddr_un addr = {};
+    addr.sun_family = AF_UNIX;
+    if (path.size() >= sizeof(addr.sun_path))
+        return;
+    strcpy(addr.sun_path, path.c_str());
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0)
+        return;
+    timeval timeout = {0, 200 * 1000};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    if (connect(fd, (sockaddr *) &addr, sizeof(addr)) == 0 &&
+        send(fd, request.data(), request.size(), MSG_NOSIGNAL) == (ssize_t) request.size()) {
+        // Wait for the reply so hyprsunset doesn't write into a closed socket.
+        char reply[256];
+        (void) !recv(fd, reply, sizeof(reply), 0);
+    }
+    close(fd);
+}
+
+void set_nightlight_temperature(int kelvin) {
+    kelvin = std::clamp((int) std::round(kelvin / 100.0) * 100, nightlight_min_kelvin, nightlight_max_kelvin);
+    if (kelvin == nightlight_temperature())
+        return;
+    nightlight_kelvin = kelvin;
+    if (nightlight_on)
+        hyprsunset_request("temperature " + std::to_string(kelvin));
+    main_thread([kelvin]() { set->nightlight_temperature = kelvin; });
+    // Saving rewrites the whole settings file, so wait until the slider settles.
+    debounce_main("nightlight_temperature", 300, []() { settings::load_save_settings(true, set); });
+}
+
+void make_nightlight_slider(Container *parent, MylarWindow *(*get_window)(Dock *)) {
+    make_self_sizing_slider(parent,
+        [](Container *) { return std::string("\uE708"); },
+        [](Container *) { return std::to_string(nightlight_temperature()) + "K"; },
+        [get_window](Container *c, float amount) {
+            Container *root = c;
+            while (root->parent) root = root->parent;
+            amount = std::clamp(amount, 0.0f, 1.0f);
+            set_nightlight_temperature(nightlight_min_kelvin + amount * (nightlight_max_kelvin - nightlight_min_kelvin));
+            windowing::redraw(get_window((Dock *) root->user_data)->raw_window);
+        },
+        [](Container *) {
+            return (float) (nightlight_temperature() - nightlight_min_kelvin) / (nightlight_max_kelvin - nightlight_min_kelvin);
+        },
+        get_window);
+}
 
 void toggle_nightlight() {
+    // Never wait on hyprsunset from a plugin thread: a thread parked in
+    // system() until hyprsunset exits returns into unmapped code if the plugin
+    // was unloaded in the meantime, crashing the compositor on the next toggle.
     if (nightlight_on) {
-        system("killall hyprsunset");
+        launch_command("killall hyprsunset");
     } else {
-        std::thread t([]() {
-            system("hyprsunset -t 5000");
-        });
-        t.detach();
+        launch_command("exec hyprsunset -t " + std::to_string(nightlight_temperature()));
     }
     nightlight_on = !nightlight_on;
 }
@@ -465,6 +551,14 @@ static void fill_main_page(Container *page, ExtraMenu *menu) {
     auto grid = make_flow_grid(page);
     for (auto &tile : extra_tiles())
         add_tile(grid, menu, tile);
+    // Laptops have night light in the battery menu instead.
+    if (!has_internal_battery()) {
+        auto gap = page->child(FILL_SPACE, 8);
+        gap->pre_layout = [](Container *root, Container *c, const Bounds &) {
+            c->wanted_bounds.h = 8 * extra_dpi(root);
+        };
+        make_nightlight_slider(page, extra_window);
+    }
     make_tray_area(page);
 }
 
@@ -476,6 +570,8 @@ int extra_popup_height() {
     int cols = flow_columns(extra_popup_w - extra_pad * 2, tile_min_w, tile_gap);
     int rows = std::max(1, (int) std::ceil((double) shown / cols));
     float main_h = extra_pad * 2 + rows * tile_h + (rows - 1) * tile_gap + 10 + tray_h;
+    if (!has_internal_battery())
+        main_h += 8 + 32; // Night light temperature slider
     // Leaves the Project page room for a few monitors.
     return (int) std::ceil(std::max(main_h, 236.0f));
 }

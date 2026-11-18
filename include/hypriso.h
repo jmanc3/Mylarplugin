@@ -172,6 +172,8 @@ struct ConfigSettings {
     int tiling_window_gap = 8;
     // Master or Scrolling.
     std::string tiling_layout = "Master";
+    // Night light (hyprsunset) colour temperature in kelvin.
+    int nightlight_temperature = 5000;
     std::vector<SWorkspaceTiling> workspace_tiling;
     std::vector<SShortcutOverride> shortcuts;
     std::vector<SCustomShortcut> custom_shortcuts;

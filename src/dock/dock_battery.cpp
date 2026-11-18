@@ -588,6 +588,7 @@ void fill_battery_container(Dock *dock) {
         cr->arc(x + (enabled ? 30 : 12) * dpi, y + 12 * dpi, 9 * dpi, 0, 2 * M_PI);
         cr->fill();
     };
+    make_nightlight_slider(content, [](Dock *d) { return d->battery; });
     for (bool protector : {false, true}) {
         auto control = sized_row(70);
         control->when_clicked = [protector](Container *, Container *) { request_battery_action(protector); };

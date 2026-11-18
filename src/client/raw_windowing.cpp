@@ -1654,9 +1654,12 @@ static void keyboard_emit_key(wl_context *ctx, uint32_t key, uint32_t state,
                     is_text = false;
                 }
             }
-            if (state == WL_KEYBOARD_KEY_STATE_PRESSED &&
-                sym == XKB_KEY_Escape &&
-                win->xdg_popup) {
+            if (sym == XKB_KEY_Escape && win->xdg_popup) {
+                // Close on release, not press: closing on press hands keyboard focus back with
+                // Escape still held (the compositor lists it in wl_keyboard.enter), so the window
+                // underneath gets the release, e.g. a fullscreen video in a browser unfullscreens.
+                if (state == WL_KEYBOARD_KEY_STATE_PRESSED)
+                    return;
                 // Popups nest: Escape closes only the innermost one, which may not be the
                 // surface holding keyboard focus.
                 RawWindow *innermost = win->rw;
@@ -2882,7 +2885,11 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
             wl_surface_commit(layer->surface);
         }
     }
-    if (window_wl->xdg_popup && ctx->seat && ctx->last_input_serial != 0) {
+    if (settings.passive) {
+        auto region = wl_compositor_create_region(ctx->compositor);
+        wl_surface_set_input_region(window_wl->surface, region);
+        wl_region_destroy(region);
+    } else if (window_wl->xdg_popup && ctx->seat && ctx->last_input_serial != 0) {
         xdg_popup_grab(window_wl->xdg_popup, ctx->seat, ctx->last_input_serial);
         window_wl->popup_grabbed = true;
     }

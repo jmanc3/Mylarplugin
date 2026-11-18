@@ -450,6 +450,117 @@ void set_brightness(float amount) {
     t.detach();
 }
 
+static constexpr int brightness_osd_w = 220;
+static constexpr int brightness_osd_h = 44;
+static constexpr long brightness_osd_fade_ms = 250;
+
+static void brightness_osd_stop_timer(Dock *dock) {
+    if (dock->brightness_osd_timer != -1)
+        windowing::timer_stop(dock->app, dock->brightness_osd_timer);
+    dock->brightness_osd_timer = -1;
+}
+
+// Called with the dock app's mutex held (container events).
+static void brightness_osd_show(Dock *dock, Container *anchor) {
+    brightness_osd_stop_timer(dock);
+    dock->brightness_osd_fade_start = 0;
+    if (dock->brightness_osd) {
+        windowing::redraw(dock->brightness_osd->raw_window);
+        return;
+    }
+    auto mylar = dock->window;
+    // Another menu is open (its grab owns the pointer); don't stack on top of it.
+    if (mylar->popup_window)
+        return;
+    auto dpi = mylar->raw_window->dpi;
+    RawWindowSettings settings = make_icon_anchored_popup_settings(anchor, dpi, brightness_osd_w, brightness_osd_h);
+    settings.passive = true;
+    dock->brightness_osd = open_mylar_popup(mylar, settings);
+    if (!dock->brightness_osd)
+        return;
+    auto root = dock->brightness_osd->root;
+    root->user_data = dock;
+    root->wanted_bounds.w = FILL_SPACE;
+    root->wanted_bounds.h = FILL_SPACE;
+    root->on_closed = [](Container *root) {
+        auto dock = (Dock *) root->user_data;
+        brightness_osd_stop_timer(dock);
+        dock->brightness_osd = nullptr;
+        dock->brightness_osd_fade_start = 0;
+    };
+    root->when_paint = [](Container *root, Container *c) {
+        auto dock = (Dock *) root->user_data;
+        auto rw = dock->brightness_osd->raw_window;
+        auto cr = rw->drawing_context;
+        auto dpi = rw->dpi;
+        double alpha = 1;
+        if (dock->brightness_osd_fade_start != 0) {
+            double t = (double) (get_current_time_in_ms() - dock->brightness_osd_fade_start) / brightness_osd_fade_ms;
+            alpha = std::clamp(1.0 - t, 0.0, 1.0);
+            alpha = alpha * alpha;
+            if (alpha > 0)
+                windowing::redraw(rw);
+        }
+        if (alpha <= 0)
+            return;
+
+        cr->push_group();
+        auto b = c->real_bounds;
+        paint_popup_background(cr, b, dpi);
+        RGBA ink = {.12, .17, .24, 1};
+        int level = (int) std::round(std::clamp(brightness_level, 0.0f, 100.0f));
+
+        auto ico = draw_text(cr, 0, 0, "", 12 * dpi, false, icon_font);
+        draw_text(cr, b.x + 14 * dpi, b.y + b.h * .5 - ico.h * .5, "", 12 * dpi, true, icon_font, -1, -1, ink);
+
+        std::string text = std::to_string(level) + "%";
+        auto widest = draw_text(cr, 0, 0, "100%", 10 * dpi, false, set->font);
+        auto tb = draw_text(cr, 0, 0, text, 10 * dpi, false, set->font);
+        double text_right = b.right() - 14 * dpi;
+        draw_text(cr, text_right - tb.w, b.y + b.h * .5 - tb.h * .5, text, 10 * dpi, true, set->font, -1, -1, ink);
+
+        double track_x = b.x + 14 * dpi + ico.w + 12 * dpi;
+        double track_w = text_right - widest.w - 12 * dpi - track_x;
+        double track_h = std::round(6 * dpi);
+        double track_y = b.y + b.h * .5 - track_h * .5;
+        if (track_w > 0) {
+            drawRoundedRect(cr, track_x, track_y, track_w, track_h, track_h * .5, 1.0);
+            set_argb(cr, {0, 0, 0, .1});
+            cr->fill();
+            double fill_w = track_w * level / 100.0;
+            if (fill_w >= track_h) {
+                drawRoundedRect(cr, track_x, track_y, fill_w, track_h, track_h * .5, 1.0);
+                set_argb(cr, accent);
+                cr->fill();
+            }
+        }
+        cr->pop_group_to_source();
+        cr->paint_source(alpha);
+    };
+    windowing::redraw(dock->brightness_osd->raw_window);
+}
+
+// Called with the dock app's mutex held (container events).
+static void brightness_osd_fade_out(Dock *dock) {
+    if (!dock->brightness_osd || dock->brightness_osd_fade_start != 0)
+        return;
+    dock->brightness_osd_fade_start = get_current_time_in_ms();
+    windowing::redraw(dock->brightness_osd->raw_window);
+    dock->brightness_osd_timer = windowing::timer(dock->app, brightness_osd_fade_ms + 20, [](void *data) {
+        auto dock = (Dock *) data;
+        std::lock_guard<std::mutex> lock(dock->app->mutex);
+        dock->brightness_osd_timer = -1;
+        auto osd = dock->brightness_osd;
+        if (finished || !osd || dock->brightness_osd_fade_start == 0)
+            return;
+        windowing::close_window(osd->raw_window);
+        if (dock->window->popup_window == osd)
+            dock->window->popup_window = nullptr;
+        dock->brightness_osd = nullptr;
+        dock->brightness_osd_fade_start = 0;
+    }, dock);
+}
+
 static void set_master_volume(float amount) {
     //notify("set master");
     audio([amount]() {
@@ -2072,15 +2183,7 @@ static void fill_root(Container *root) {
     if (false) {
         auto night = simple_dock_item(root, ICON("\uE708"));
         night->when_clicked = paint {
-           if (nightlight_on)  {
-               system("killall hyprsunset");
-           } else {
-               std::thread t([]() {
-                   system("hyprsunset -t 5000");
-               });
-               t.detach();
-           }
-           nightlight_on = !nightlight_on;
+           toggle_nightlight();
         };
     }
 
@@ -2335,6 +2438,37 @@ static void fill_root(Container *root) {
         }, []() {
             return std::string("+100%");
         });
+        std::thread([]() {
+            brightness_level = get_brightness();
+        }).detach();
+        battery->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
+            auto dock = (Dock *) root->user_data;
+            float level = brightness_level;
+            if (came_from_touchpad) {
+                level += scroll_y * .25;
+            } else {
+                // Same steps as the volume item: round to the next 0, 3, 5, or 7
+                int full = std::round(level);
+                int last_digit;
+                do {
+                    if (scroll_y > 0) {
+                        full++;
+                    } else if (scroll_y < 0) {
+                        full--;
+                    }
+                    last_digit = full % 10;
+                } while (!(last_digit == 0 || last_digit == 3 || last_digit == 5 || last_digit == 7));
+                level = (float) full;
+            }
+            level = std::clamp(level, 0.0f, 100.0f);
+            set_brightness(level);
+            brightness_osd_show(dock, c);
+            if (dock->battery)
+                windowing::redraw(dock->battery->raw_window);
+        };
+        battery->when_mouse_leaves_container = [](Container *root, Container *c) {
+            brightness_osd_fade_out((Dock *) root->user_data);
+        };
         battery->when_clicked = [](Container *root, Container *c) {
             if (c->state.mouse_button_pressed == BTN_RIGHT) {
                 settings_page_right_click(root, "Battery settings", "Battery");
@@ -2343,7 +2477,7 @@ static void fill_root(Container *root) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
             auto dpi = mylar->raw_window->dpi;
-            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 420, 436);
+            RawWindowSettings settings = make_icon_anchored_popup_settings(c, dpi, 420, 468);
             dock->battery = open_mylar_popup(mylar, settings);
             if (!dock->battery)
                 return;

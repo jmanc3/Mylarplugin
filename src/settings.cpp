@@ -675,6 +675,8 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(int, "tiling_window_gap", &settings->tiling_window_gap);
     settings->tiling_window_gap = std::clamp(settings->tiling_window_gap, 0, 32);
     bind(std::string, "tiling_layout", &settings->tiling_layout);
+    bind(int, "nightlight_temperature", &settings->nightlight_temperature);
+    settings->nightlight_temperature = std::clamp(settings->nightlight_temperature, 2500, 6500);
     if (settings->tiling_layout != "Scrolling")
         settings->tiling_layout = "Master";
 

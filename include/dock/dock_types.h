@@ -43,6 +43,10 @@ struct Dock : UserData {
     MylarWindow *brightness = nullptr;
 
     MylarWindow *battery = nullptr;
+    // Brightness level shown above the battery icon while scrolling it.
+    MylarWindow *brightness_osd = nullptr;
+    long brightness_osd_fade_start = 0; // 0 while fully shown
+    int brightness_osd_timer = -1;
     MylarWindow *date_menu = nullptr;
 
     int date_view_month = 0;

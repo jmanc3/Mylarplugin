@@ -3250,6 +3250,16 @@ void launch_command(std::string command) {
     }
     
     if (pid == 0) {
+        // The compositor blocks SIGTERM and ignores SIGPIPE/SIGQUIT; both
+        // survive exec, so without this launched programs can't be killed
+        // with a plain kill/killall and misbehave on broken pipes.
+        sigset_t none;
+        sigemptyset(&none);
+        sigprocmask(SIG_SETMASK, &none, nullptr);
+        for (int sig : {SIGPIPE, SIGQUIT, SIGINT, SIGCHLD, SIGTERM, SIGHUP})
+            signal(sig, SIG_DFL);
+        setsid();
+
         char *dir = getenv("HOME");
         if (dir) {
             int ret = chdir(dir);
