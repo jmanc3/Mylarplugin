@@ -1,12 +1,19 @@
 #include "dock_thumbnails.h"
 
+#include "audio.h"
 #include "heart.h"
+#include "mpris.h"
 #include "popup.h"
 #include "titlebar.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <linux/input-event-codes.h>
+#include <map>
+#include <unordered_map>
 #include <vector>
 
 // The dock lives in its own Wayland client, so it cannot draw over its own
@@ -33,6 +40,37 @@ constexpr float kCloseMinSize = 12;
 constexpr float kCloseMaxSize = 22;
 constexpr int kStripMax = 6;    // up to this many windows use a single strip
 constexpr int kGridLineMax = 6; // grid rows/columns along the dock edge
+constexpr float kMediaMinSize = 18;
+constexpr float kMediaMaxSize = 28;
+constexpr float kMediaGap = 4;
+constexpr int kMediaPollMs = 1000; // re-link audio streams/players while the preview is open
+
+// Roles of the buttons inside a thumbnail (stored in datum "role").
+enum ButtonRole {
+    kRoleClose = 1,
+    kRolePrevious,
+    kRolePlayPause,
+    kRoleNext,
+    kRoleMute,
+};
+
+// Media controls that apply to one window, found by linking MPRIS players and
+// audio streams to the window's process (see compute_media).
+struct Media {
+    std::string player; // MPRIS bus name; empty when no player belongs to the window
+    bool playing = false;
+    bool can_play_pause = false;
+    bool can_next = false;
+    bool can_previous = false;
+
+    // Audio backend fallback for windows without an MPRIS player: their
+    // playback streams can at least be muted.
+    std::vector<uint32_t> streams;
+    bool muted = false;
+
+    bool any() const { return !player.empty() || !streams.empty(); }
+    bool operator==(const Media &) const = default;
+};
 
 // dock alignment: 1 top, 2 right, 3 bottom, 4 left
 constexpr int kEdgeTop = 1;
@@ -68,6 +106,9 @@ struct State {
     bool dnd_over_preview = false;
     int dnd_hover_cid = -1;
     long dnd_hover_start = 0;
+
+    // Media controls per window id of the open preview.
+    std::map<int, Media> media;
 };
 
 State &state() {
@@ -168,6 +209,7 @@ void destroy_now() {
     s.has_icon = false;
     s.source.clear();
     s.ids.clear();
+    s.media.clear();
     if (!s.container)
         return;
     auto *c = s.container;
@@ -294,6 +336,8 @@ void paint_preview(Container *actual_root, Container *c) {
     border(c->real_bounds, {1, 1, 1, .1}, std::max(1.0f, std::round(s)), 0, std::round(12 * s));
 }
 
+void paint_media_backdrop(Container *thumb, float s);
+
 void paint_thumbnail(Container *actual_root, Container *c) {
     auto *root = get_rendering_root();
     if (!root)
@@ -338,6 +382,8 @@ void paint_thumbnail(Container *actual_root, Container *c) {
         }
     }
 
+    paint_media_backdrop(c, s);
+
     if (c->state.mouse_hovering || (state().dnd_hover_cid != -1 && state().dnd_hover_cid == cid)) {
         auto b = c->real_bounds;
         b.grow(std::round(2 * s));
@@ -371,6 +417,380 @@ void paint_close_button(Container *actual_root, Container *c) {
         "\uE8BB", RGBA(1, 1, 1, 1), 10);
     if (texture && texture->id != -1)
         draw_texture(*texture, center_x(c, texture->w), center_y(c, texture->h), .95f);
+}
+
+
+// ---------------------------------------------------------------------------
+// Linking media players and audio streams to windows
+// ---------------------------------------------------------------------------
+
+int parent_pid(int pid) {
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+    FILE *f = std::fopen(path, "r");
+    if (!f)
+        return -1;
+    char buf[512];
+    const size_t n = std::fread(buf, 1, sizeof(buf) - 1, f);
+    std::fclose(f);
+    buf[n] = '\0';
+    // The command name is in parentheses and may contain spaces or ')'.
+    const char *close = std::strrchr(buf, ')');
+    if (!close)
+        return -1;
+    char state = 0;
+    int ppid = -1;
+    if (std::sscanf(close + 1, " %c %d", &state, &ppid) != 2)
+        return -1;
+    return ppid;
+}
+
+// Process ancestry, memoized for one compute_media pass.
+struct Ancestry {
+    std::unordered_map<int, std::vector<int>> chains;
+
+    const std::vector<int> &of(int pid) {
+        auto it = chains.find(pid);
+        if (it != chains.end())
+            return it->second;
+        std::vector<int> chain;
+        int p = pid;
+        for (int depth = 0; depth < 64; depth++) {
+            p = parent_pid(p);
+            if (p <= 1)
+                break;
+            chain.push_back(p);
+        }
+        return chains[pid] = std::move(chain);
+    }
+
+    // 3: same process, 2: one process started the other, 0: unrelated.
+    int relation(int a, int b) {
+        if (a <= 0 || b <= 0)
+            return 0;
+        if (a == b)
+            return 3;
+        const auto &up_a = of(a);
+        if (std::find(up_a.begin(), up_a.end(), b) != up_a.end())
+            return 2;
+        const auto &up_b = of(b);
+        if (std::find(up_b.begin(), up_b.end(), a) != up_b.end())
+            return 2;
+        return 0;
+    }
+};
+
+std::string lowercase(std::string text) {
+    for (auto &ch : text)
+        ch = (char) std::tolower((unsigned char) ch);
+    return text;
+}
+
+bool desktop_entry_matches(const std::string &entry, const std::string &window_class) {
+    if (entry.empty() || window_class.empty())
+        return false;
+    const std::string e = lowercase(entry);
+    const std::string c = lowercase(window_class);
+    return e == c || c.ends_with("." + e) || e.ends_with("." + c);
+}
+
+struct WindowInfo {
+    int cid;
+    int pid;
+    std::string klass;
+    std::string title; // lowercase
+};
+
+// Keeps the windows that relate most closely to `pid`. A window owned by the
+// exact process wins over one whose process merely started (or was started by)
+// it, so e.g. a terminal does not take over an mpv instance with its own window.
+std::vector<const WindowInfo *> closest_windows(const std::vector<WindowInfo> &windows, int pid, Ancestry &ancestry) {
+    int best = 0;
+    std::vector<const WindowInfo *> result;
+    for (const auto &w : windows) {
+        const int r = ancestry.relation(pid, w.pid);
+        if (r == 0 || r < best)
+            continue;
+        if (r > best) {
+            best = r;
+            result.clear();
+        }
+        result.push_back(&w);
+    }
+    return result;
+}
+
+std::map<int, Media> compute_media(const std::vector<int> &preview_ids) {
+    std::map<int, Media> result;
+
+    std::vector<int> all = get_window_stacking_order();
+    for (int cid : preview_ids)
+        if (std::find(all.begin(), all.end(), cid) == all.end())
+            all.push_back(cid);
+
+    std::vector<WindowInfo> windows;
+    windows.reserve(all.size());
+    for (int cid : all)
+        windows.push_back({cid, hypriso->get_pid(cid), hypriso->class_name(cid), lowercase(hypriso->title_name(cid))});
+
+    Ancestry ancestry;
+
+    // MPRIS: the bus name's owner process, then the player's desktop entry.
+    for (const auto &p : mpris::players()) {
+        if (!p.active())
+            continue;
+        auto matched = closest_windows(windows, p.pid, ancestry);
+        if (matched.empty()) {
+            for (const auto &w : windows)
+                if (desktop_entry_matches(p.desktop_entry, w.klass))
+                    matched.push_back(&w);
+        }
+        if (matched.empty())
+            continue;
+
+        // Several windows of one process (browser windows): prefer the ones
+        // whose title shows what is playing (browsers title windows by tab).
+        if (matched.size() > 1 && !p.title.empty()) {
+            const std::string title = lowercase(p.title);
+            std::vector<const WindowInfo *> narrowed;
+            for (auto *w : matched)
+                if (w->title.find(title) != std::string::npos)
+                    narrowed.push_back(w);
+            if (!narrowed.empty())
+                matched = std::move(narrowed);
+        }
+
+        for (auto *w : matched) {
+            if (std::find(preview_ids.begin(), preview_ids.end(), w->cid) == preview_ids.end())
+                continue;
+            auto &m = result[w->cid];
+            // One window, several players: keep the one that is playing.
+            if (!m.player.empty() && (m.playing || !p.playing()))
+                continue;
+            m.player = p.name;
+            m.playing = p.playing();
+            m.can_play_pause = p.playing() ? p.can_pause : p.can_play;
+            m.can_next = p.can_go_next;
+            m.can_previous = p.can_go_previous;
+        }
+    }
+
+    // Audio backend: playback streams carry the pid of the process that opened
+    // them (for browsers often a helper process the window's process started).
+    for (const auto &node : audio_mixer_nodes()) {
+        if (node.kind != AudioNodeKind::SinkInput || node.pid <= 0)
+            continue;
+        if (node.corked && !node.mute)
+            continue;
+        for (auto *w : closest_windows(windows, node.pid, ancestry)) {
+            if (std::find(preview_ids.begin(), preview_ids.end(), w->cid) == preview_ids.end())
+                continue;
+            auto &m = result[w->cid];
+            m.streams.push_back(node.index);
+            m.muted = m.streams.size() == 1 ? node.mute : (m.muted && node.mute);
+        }
+    }
+
+    // The mute button is only a fallback for windows without a player.
+    for (auto &[cid, m] : result)
+        if (!m.player.empty())
+            m.streams.clear();
+    std::erase_if(result, [](const auto &entry) { return !entry.second.any(); });
+    return result;
+}
+
+// Recomputes which thumbnails get media controls and relayouts when that changed.
+void update_media() {
+    auto &s = state();
+    if (!s.container)
+        return;
+    auto media = compute_media(s.ids);
+    if (media == s.media)
+        return;
+    s.media = std::move(media);
+    s.container->pre_layout(actual_root, s.container, actual_root->real_bounds);
+    damage_all();
+}
+
+void watch_media(Container *preview, int token) {
+    later(kMediaPollMs, [preview, token](Timer *) {
+        auto &s = state();
+        if (!s.container || s.container != preview || s.refresh_token != token)
+            return;
+        update_media();
+        watch_media(preview, token);
+    });
+}
+
+void start_media_tracking() {
+    static bool hooked = false;
+    if (!hooked) {
+        hooked = true;
+        mpris::set_on_change([] { update_media(); });
+    }
+    mpris::refresh();
+}
+
+const Media *media_for(int cid) {
+    auto &media = state().media;
+    auto it = media.find(cid);
+    return it == media.end() ? nullptr : &it->second;
+}
+
+bool media_button_enabled(const Media &m, int role) {
+    switch (role) {
+        case kRolePrevious: return m.can_previous;
+        case kRoleNext: return m.can_next;
+        case kRolePlayPause: return m.can_play_pause;
+        default: return true;
+    }
+}
+
+void paint_media_button(Container *actual_root, Container *c) {
+    auto *root = get_rendering_root();
+    if (!root)
+        return;
+    auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+    if (stage != (int) STAGE::RENDER_PRE_CURSOR)
+        return;
+    if (rid != *datum<int>(c, "mid"))
+        return;
+    if (c->real_bounds.w <= 0 || c->real_bounds.h <= 0)
+        return;
+    const Media *m = media_for(*datum<int>(c, "cid"));
+    if (!m)
+        return;
+
+    renderfix
+    const int role = *datum<int>(c, "role");
+    const bool enabled = media_button_enabled(*m, role);
+    auto b = c->real_bounds;
+    b.round();
+    const double rounding = std::round(b.w * .5);
+    if (enabled && (c->state.mouse_hovering || c->state.mouse_pressing)) {
+        const float a = c->state.mouse_pressing ? .32f : .2f;
+        rect(b, {1, 1, 1, a}, 0, rounding, 2.0f);
+    }
+
+    const float alpha = enabled ? .95f : .35f;
+    const char *key = "dock_thumb_media_play";
+    const char *glyph = "\uF5B0";
+    // One fixed size: the textures are shared, and differently sized buttons
+    // would otherwise keep regenerating them.
+    const int glyph_h = 11;
+    switch (role) {
+        case kRolePrevious: key = "dock_thumb_media_prev"; glyph = "\uF8AC"; break;
+        case kRoleNext: key = "dock_thumb_media_next"; glyph = "\uF8AD"; break;
+        case kRolePlayPause:
+            if (m->playing) {
+                key = "dock_thumb_media_pause";
+                glyph = "\uF8AE";
+            }
+            break;
+        case kRoleMute:
+            key = m->muted ? "dock_thumb_muted" : "dock_thumb_unmuted";
+            glyph = m->muted ? "\uE74F" : "\uE995";
+            break;
+        default: break;
+    }
+    // Cached on the monitor root (like the close button) so every thumbnail
+    // shares one texture per glyph and each monitor keeps its own scale.
+    auto *texture = get_cached_texture(root, root, key, icon_font, glyph, RGBA(1, 1, 1, 1), glyph_h);
+    if (texture && texture->id != -1)
+        draw_texture(*texture, center_x(c, texture->w), center_y(c, texture->h), alpha);
+}
+
+void media_button_clicked(int cid, int role) {
+    auto &s = state();
+    auto it = s.media.find(cid);
+    if (it == s.media.end())
+        return;
+    auto &m = it->second;
+    if (!media_button_enabled(m, role))
+        return;
+    switch (role) {
+        case kRolePrevious: mpris::previous(m.player); break;
+        case kRoleNext: mpris::next(m.player); break;
+        case kRolePlayPause:
+            mpris::play_pause(m.player);
+            // Flip right away; the player's reply corrects it if it disagrees.
+            m.playing = !m.playing;
+            break;
+        case kRoleMute:
+            m.muted = !m.muted;
+            for (uint32_t stream : m.streams)
+                audio_mixer_set_mute(AudioNodeKind::SinkInput, stream, m.muted);
+            break;
+        default: break;
+    }
+    damage_all();
+}
+
+// Lays out the media buttons of `thumb` as a centered row just above the title
+// bar. Buttons without a function for this window collapse to nothing so they
+// cannot be hovered or clicked.
+void layout_media_buttons(Container *thumb) {
+    const int cid = *datum<int>(thumb, "cid");
+    const Media *m = media_for(cid);
+    std::vector<Container *> visible;
+    for (auto *child : thumb->children) {
+        const int role = *datum<int>(child, "role");
+        if (role == kRoleClose)
+            continue;
+        bool show = false;
+        if (m) {
+            if (!m->player.empty())
+                show = role == kRolePlayPause || (role == kRolePrevious && m->can_previous) ||
+                       (role == kRoleNext && m->can_next);
+            else
+                show = role == kRoleMute;
+        }
+        if (show)
+            visible.push_back(child);
+        else
+            child->real_bounds = Bounds(0, 0, 0, 0);
+    }
+    if (visible.empty())
+        return;
+    std::sort(visible.begin(), visible.end(), [](Container *a, Container *b) {
+        return *datum<int>(a, "role") < *datum<int>(b, "role");
+    });
+
+    const auto tb = thumb->real_bounds;
+    const double size = std::round(std::clamp(.2 * std::min(tb.w, tb.h), (double) kMediaMinSize, (double) kMediaMaxSize));
+    auto row_width = [&] { return visible.size() * size + (visible.size() - 1) * kMediaGap; };
+    // Tiny thumbnails (crowded grids) keep only the main button.
+    if (visible.size() > 1 && row_width() > tb.w - 8) {
+        for (auto *button : visible)
+            if (*datum<int>(button, "role") != kRolePlayPause)
+                button->real_bounds = Bounds(0, 0, 0, 0);
+        std::erase_if(visible, [](Container *b) { return *datum<int>(b, "role") != kRolePlayPause; });
+    }
+    const double row_w = row_width();
+    // Matches the title bar painted in paint_thumbnail (about a fifth of the height).
+    const double title_h = std::max(20.0, std::round(tb.h * .2));
+    double x = std::round(tb.x + (tb.w - row_w) * .5);
+    const double y = std::round(std::max(tb.y + 4, tb.bottom() - title_h - 6 - size));
+    for (auto *button : visible) {
+        button->real_bounds = Bounds(x, y, size, size);
+        x += size + kMediaGap;
+    }
+}
+
+// Translucent pill behind the visible media buttons so they read on any screenshot.
+void paint_media_backdrop(Container *thumb, float s) {
+    Bounds row;
+    for (auto *child : thumb->children) {
+        if (*datum<int>(child, "role") == kRoleClose || child->real_bounds.w <= 0)
+            continue;
+        row = union_bounds(row, child->real_bounds);
+    }
+    if (row.w <= 0 || row.h <= 0)
+        return;
+    row.grow(std::round(3 * s));
+    row.round();
+    rect(row, {0, 0, 0, .6f}, 0, std::round(row.h * .5), 2.0f);
+    border(row, {1, 1, 1, .14f}, std::max(1.0f, std::round(s)), 0, std::round(row.h * .5), 2.0f);
 }
 
 // Creates the overlay container and its thumbnails. Does not check whether the
@@ -638,6 +1058,8 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
 
             // Position the close button in this thumbnail's top-right corner.
             for (auto *close : thumb->children) {
+                if (*datum<int>(close, "role") != kRoleClose)
+                    continue;
                 const double size = close->wanted_bounds.w;
                 const double room = std::min(thumb->real_bounds.w, thumb->real_bounds.h) - size;
                 const double inset = std::clamp<double>(room * .5, 0.0, kCloseInset);
@@ -646,6 +1068,7 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
                     thumb->real_bounds.y + inset,
                     size, size);
             }
+            layout_media_buttons(thumb);
             index++;
         }
     };
@@ -734,6 +1157,7 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
         close->real_bounds = Bounds(0, 0, close_size, close_size);
         *datum<int>(close, "cid") = items[i].cid;
         *datum<int>(close, "mid") = mid;
+        *datum<int>(close, "role") = kRoleClose;
         close->when_paint = paint_close_button;
         close->when_mouse_down = consume_event;
         close->when_mouse_up = consume_event;
@@ -758,6 +1182,38 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
                 dock_thumbnails::remove_window(cid);
             });
         };
+
+        // Media controls; laid out (or collapsed) by layout_media_buttons.
+        for (int role : {kRolePrevious, kRolePlayPause, kRoleNext, kRoleMute}) {
+            auto *button = thumb->child(0, 0);
+            button->z_index = 90;
+            button->wanted_bounds = Bounds(0, 0, 0, 0);
+            button->real_bounds = Bounds(0, 0, 0, 0);
+            *datum<int>(button, "cid") = items[i].cid;
+            *datum<int>(button, "mid") = mid;
+            *datum<int>(button, "role") = role;
+            button->when_paint = paint_media_button;
+            button->when_mouse_down = consume_event;
+            button->when_mouse_up = consume_event;
+            button->when_mouse_enters_container = paint {
+                consume_event(root, c);
+                damage_all();
+            };
+            button->when_mouse_leaves_container = paint {
+                consume_event(root, c);
+                damage_all();
+            };
+            button->when_clicked = paint {
+                if (c->state.mouse_button_pressed != BTN_LEFT)
+                    return;
+                if (!bounds_contains(c->real_bounds, root->mouse_current_x, root->mouse_current_y))
+                    return;
+                consume_event(root, c);
+                const int cid = *datum<int>(c, "cid");
+                const int role = *datum<int>(c, "role");
+                later_immediate([cid, role](Timer *) { media_button_clicked(cid, role); });
+            };
+        }
     }
 
     auto &s = state();
@@ -773,6 +1229,10 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
     s.anchor_icon = placement && placement->has_icon ? placement->icon : Bounds{};
     s.has_icon = placement && placement->has_icon;
     const int token = ++s.refresh_token;
+
+    start_media_tracking();
+    s.media = compute_media(ids);
+    watch_media(preview, token);
 
     preview->pre_layout(actual_root, preview, actual_root->real_bounds);
     damage_all();
