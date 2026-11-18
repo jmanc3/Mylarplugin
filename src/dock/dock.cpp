@@ -245,7 +245,6 @@ static void make_vert_space(Container *parent, int wanted_h, std::function<Mylar
         auto dock = (Dock *) root->user_data;
         auto window = get_window(dock);
         auto dpi = window->raw_window->dpi;
-        auto cr = window->raw_window->drawing_context;
         c->wanted_bounds.h = wanted_h * dpi;
     };
 }
@@ -577,7 +576,6 @@ Container *simple_dock_item(Container *root, std::function<std::string()> ico, s
                             std::function<std::string()> layout_text = nullptr) {
     if (!layout_text)
         layout_text = text;
-    auto dock = (Dock *) root->user_data;
     auto c = root->child(40, FILL_SPACE);
     /*if (dock->vertical) {
         c->type = ::vbox;
@@ -909,7 +907,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
     if (window) {
         pin->windows.push_back(*window);
         // ch should be moved to right behind the last matching stacking rule
-        for (int i = 0; i < icons->children.size(); i++) {
+        for (int i = 0; i < (int) icons->children.size(); i++) {
             if (ch == icons->children[i]) {
                 icons->children.erase(icons->children.begin() + i);
             }
@@ -1177,7 +1175,6 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->drawing_context;
 
         const auto windows_count = pin->windows.size();
         if (c->state.mouse_button_pressed == BTN_LEFT) {
@@ -1261,7 +1258,6 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto mylar = dock->window;
-        auto cr = mylar->raw_window->drawing_context;
 
         std::string title = pin->stacking_rule;
         if (!pin->windows.empty())
@@ -1477,7 +1473,7 @@ static void merge_to_be_into_list(Dock *dock, Container *c) {
 
 int
 would_be_x(Container *icons, Container *target, int pos_x) {
-    for (int i = 0; i < icons->children.size(); i++) {
+    for (int i = 0; i < (int) icons->children.size(); i++) {
         if (icons->children[i] == target) {
             return pos_x;
         }
@@ -1629,7 +1625,6 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         // swap icons on taskbar
         int distance = 100000;
         int index = 0;
-        int w_b = 0;
         auto natural_x = ((Pin *) icons->children[0]->user_data)->natural_position_x;
         static std::vector<Container *> before;
         before.clear();
@@ -1637,21 +1632,20 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
             before.push_back(ch);
 
         icons->children.erase(icons->children.begin() + drag_index);
-        for (int i = 0; i < icons->children.size() + 1; i++) {
+        for (int i = 0; i < (int) icons->children.size() + 1; i++) {
             icons->children.insert(icons->children.begin() + i, dragging);
             auto would_be = would_be_x(icons, dragging, natural_x);
             auto dist = std::abs(dragging->real_bounds.x - would_be);
             if (dist < distance) {
                 distance = dist;
                 index = i;
-                w_b = would_be;
             }
             icons->children.erase(icons->children.begin() + i);
         }
         icons->children.insert(icons->children.begin() + index, dragging);
 
         bool any_change = false;
-        for (int i = 0; i < before.size(); i++) {
+        for (int i = 0; i < (int) before.size(); i++) {
             if (before[i] != icons->children[i]) {
                 auto ch_pin_data = (Pin*)before[i]->user_data;
                 ch_pin_data->wants_reposition_animation = true;
@@ -1691,14 +1685,12 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         if (data->animating && !data->wants_reposition_animation) {
             data->spring.update((((float) delta) / 1000.0f) * 1.5);
             c->real_bounds.x = data->spring.position;
-            float abs_vel = std::abs(data->spring.velocity);
             if ((current - data->animation_start_time) > 1500.0f) {
                 data->animating = false;
                 c->real_bounds.x = data->natural_position_x;
             }
         } else if (data->wants_reposition_animation) {
             data->wants_reposition_animation = false;
-            auto dist = std::abs(c->real_bounds.x - data->natural_position_x);
             data->spring = SpringAnimation(c->real_bounds.x, data->natural_position_x);
             if (data->init_repo_vel != 0.0) {
                 auto scalar = data->init_repo_vel / 10000.0f;
@@ -1957,11 +1949,9 @@ static void fill_root(Container *root) {
     root->type = ::hbox;
     root->receive_events_even_if_obstructed = true;
     root->when_mouse_enters_container = paint {
-        auto dock = (Dock *) root->user_data;
         //windowing::set_size(dock->window->raw_window, 0, 100);
     };
     root->when_mouse_leaves_container = paint {
-        auto dock = (Dock *) root->user_data;
         //windowing::set_size(dock->window->raw_window, 0, 40);
     };
 
@@ -2051,7 +2041,7 @@ static void fill_root(Container *root) {
             auto dock = (Dock *) root->user_data;
             layout_icons(root, c, dock);
 
-            for (int i = 0; i < c->children.size() - 1; i++) {
+            for (int i = 0; i < (int) c->children.size() - 1; i++) {
                 if (c->children.empty())
                     break;
                 auto *active = c->children[i];
@@ -2070,7 +2060,7 @@ static void fill_root(Container *root) {
             }
         };
         icons->after_paint = paint {
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 if (c->children.empty())
                     break;
                 auto *active = c->children[i];
@@ -2283,8 +2273,6 @@ static void fill_root(Container *root) {
         t.detach();
 
         brightness->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
-            auto dock = (Dock *) root->user_data;
-            auto mylar = dock->window;
             auto brightness_data = (BrightnessData *) c->user_data;
             brightness_data->value += scroll_y * .4;
             if (brightness_data->value > 100) {
@@ -2390,8 +2378,6 @@ static void fill_root(Container *root) {
                 audio_start();
                 last_time_checked_ms = current;
             }
-            auto dock = (Dock *) root->user_data;
-            auto mylar = dock->window;
             if (came_from_touchpad) {
                 volume_level += scroll_y * .25;
             } else {
@@ -2611,7 +2597,6 @@ static void fill_root(Container *root) {
         show_desktop->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto dock = (Dock *) root->user_data;
             auto mylar = dock->window;
-            auto cr = mylar->raw_window->drawing_context;
             c->wanted_bounds.w = 4 * mylar->raw_window->dpi;
         };
     }
@@ -2922,7 +2907,7 @@ void dock::stop(std::string monitor_name) {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        for (int i = 0; i < dock_threads.size(); i++) {
+        for (int i = 0; i < (int) dock_threads.size(); i++) {
             if (dock_threads[i].joinable()) {
                 dock_threads[i].join();
             }
@@ -3073,7 +3058,7 @@ void dock::on_activated(int cid) {
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto p : icons->children) {
                 auto pin = (Pin *) p->user_data;
-                for (int i = 0; i < pin->windows.size(); i++) {
+                for (int i = 0; i < (int) pin->windows.size(); i++) {
                     if (pin->windows[i].cid == cid) {
                         auto copy = pin->windows[i];
                         pin->windows.erase(pin->windows.begin() + i);
@@ -3311,7 +3296,7 @@ void dock::create_slept_button() {
             }
 
             auto ico_bounds = draw_text(cr, c, "\uF738", 12 * mylar->raw_window->dpi, false, icon_font);
-            auto b = draw_text(cr,
+            draw_text(cr,
                 c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - ico_bounds.h * .5,
                 "\uF738", 12 * mylar->raw_window->dpi, true, icon_font);
         };
@@ -3327,7 +3312,7 @@ void dock::create_slept_button() {
                 root->children.erase(root->children.begin() + i);
                 break;
             }
-        for (int i = 0; i < root->children.size(); i++)
+        for (int i = 0; i < (int) root->children.size(); i++)
             if (root->children[i]->name == "icons") {
                 root->children.insert(root->children.begin() + i + 1, sleep_button);
                 break;

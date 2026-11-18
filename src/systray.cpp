@@ -924,7 +924,7 @@ static void xembed_publish() {
 
 static xcb_atom_t intern(const char *name) {
     auto reply = xcb_intern_atom_reply(xconn, xcb_intern_atom(xconn, 0, strlen(name), name), nullptr);
-    xcb_atom_t atom = reply ? reply->atom : XCB_ATOM_NONE;
+    xcb_atom_t atom = reply ? reply->atom : (xcb_atom_t) XCB_ATOM_NONE;
     free(reply);
     return atom;
 }

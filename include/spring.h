@@ -60,7 +60,6 @@ static SpringState springEvaluate(
 
     } else {
         // Overdamped
-        double omegaD = omega0 * std::sqrt(zeta * zeta - 1);
         double r1 = -omega0 * (zeta - std::sqrt(zeta * zeta - 1));
         double r2 = -omega0 * (zeta + std::sqrt(zeta * zeta - 1));
 

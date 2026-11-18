@@ -921,7 +921,7 @@ void fill_applications_container(Container *root) {
                 cr->restore();
         };
         o->when_mouse_enters_container = [search](Container *root, Container *c) {
-            auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
+            auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
             int index = 0;
             int alive_index = 0;
             for (auto sibling : c->parent->children) {
@@ -1173,7 +1173,7 @@ void fill_applications_container(Container *root) {
     };
 
     auto rebuild_scripts = [scroll_content, scroll, search](const std::vector<Script> &entries) {
-    auto &field_text = search->field_text; auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
+    auto &active_option = search->active_option; auto &keyboard_option_changed = search->keyboard_option_changed;
     for (auto child : scroll_content->children)
         delete child;
     scroll_content->children.clear();

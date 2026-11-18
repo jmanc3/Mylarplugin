@@ -202,8 +202,6 @@ static void generate_data(OptionsData *data, const std::vector<std::string>& ico
     data->parentPaths.clear();
     data->themes.clear();
 
-    const std::filesystem::directory_options searchOptions =
-        (std::filesystem::directory_options::follow_directory_symlink | std::filesystem::directory_options::skip_permission_denied);
     struct stat st{};
     for (const auto& search_path : icon_search_paths) {
         if (stat(search_path.c_str(), &st) != 0)
@@ -378,7 +376,7 @@ static void load_data() {
             unsigned char theme = 0;
             read_number(parent);
             read_number(theme);
-            if (getParentIndex(parent) >= next->data.parentPaths.size() || theme >= next->data.themes.size())
+            if ((size_t) getParentIndex(parent) >= next->data.parentPaths.size() || theme >= next->data.themes.size())
                 throw std::runtime_error("Invalid icon cache path index");
             std::memcpy(next->option_buffer.data() + option_index, &parent, sizeof(parent));
             std::memcpy(next->option_buffer.data() + option_index + sizeof(parent), &theme, sizeof(theme));
@@ -522,7 +520,7 @@ void search_icons(std::vector<IconTarget>& targets) {
     const auto &ranges = cache->ranges;
     const auto *data = &cache->data;
     const auto *option_buffer = cache->option_buffer.data();
-    for (int i = 0; i < targets.size(); ++i) {
+    for (int i = 0; i < (int) targets.size(); ++i) {
         auto             &target = targets[i];
         target.was_searched = true;
 
@@ -594,7 +592,7 @@ void search_icons(std::vector<IconTarget>& targets) {
             range = ranges.at(target_name);
 
         std::vector<Candidate> candidates;
-        for (int j = 0; j < (range.length / 3); ++j) {
+        for (int j = 0; j < (int) (range.length / 3); ++j) {
             unsigned long      actual_index            = range.start + j * 3;
             unsigned short int parentIndexAndExtension = 0;
             std::memcpy(&parentIndexAndExtension, option_buffer + actual_index, sizeof(unsigned short int));
@@ -637,7 +635,7 @@ void search_icons(std::vector<IconTarget>& targets) {
             int  size       = 0;
 
             // Iterate through the characters in the path string
-            for (int i = startIndex; i < candidate.parent_path.length(); i++) {
+            for (int i = startIndex; i < (int) candidate.parent_path.length(); i++) {
                 if (scale != 0 && size != 0)
                     break;
 
@@ -653,7 +651,7 @@ void search_icons(std::vector<IconTarget>& targets) {
                     }
                     found_at   = true;
                     buffer_len = 0;
-                } else if (c == '/' || c == 'x' || c == 'X' || i == candidate.parent_path.length() - 1) {
+                } else if (c == '/' || c == 'x' || c == 'X' || i == (int) candidate.parent_path.length() - 1) {
                     if (found_at && buffer_len != 0) {
                         // Convert the buffer to an integer and save it to the scale
                         // variable
@@ -802,7 +800,7 @@ void pick_best(std::vector<IconTarget>& targets, int target_size, IconContext ta
     c3ic_generate_sizes(target_size, strict_sizes);
     std::vector<int> large_to_small;
     c3ic_generate_sizes(512, large_to_small);
-    for (int ss = 0; ss < targets.size(); ss++) {
+    for (int ss = 0; ss < (int) targets.size(); ss++) {
         IconTarget*      target              = &targets[ss];
         bool             has_preferred_theme = false;
         std::string_view preferred_theme;
@@ -817,7 +815,7 @@ void pick_best(std::vector<IconTarget>& targets, int target_size, IconContext ta
             target->best_full_path = target->name;
         } else {
             //assert(target->was_searched);
-            for (int i = 0; i < target->candidates.size(); i++) {
+            for (int i = 0; i < (int) target->candidates.size(); i++) {
                 Candidate* candidate                 = &target->candidates[i];
                 candidate->is_part_of_current_theme  = current_theme == candidate->theme;
                 candidate->is_part_of_target_context = candidate->context == target_context;
@@ -828,7 +826,7 @@ void pick_best(std::vector<IconTarget>& targets, int target_size, IconContext ta
                 if (candidate->context == IconContext::NotSet)
                     candidate->is_part_of_target_context = false;
                 candidate->size_index = strict_sizes.size() + 1;
-                for (int size_index = 0; size_index < strict_sizes.size(); size_index++) {
+                for (int size_index = 0; size_index < (int) strict_sizes.size(); size_index++) {
                     if (starts_with(target->name, "steam_icon_")) {
                         if (candidate->size == large_to_small[size_index]) {
                             candidate->size_index = size_index;
@@ -941,7 +939,7 @@ std::string c3ic_fix_desktop_file_icon(const std::string& given_name, const std:
     unsigned long index_into_file = 0;
 
     // Eat the first line;
-#define MNOT_DONE index_into_file < buffer.st_size
+#define MNOT_DONE index_into_file < (unsigned long) buffer.st_size
     while (MNOT_DONE && to_fix_data[index_into_file] != '\n') {
         index_into_file++;
     }
@@ -961,7 +959,7 @@ std::string c3ic_fix_desktop_file_icon(const std::string& given_name, const std:
     char        given_path_c[1024 * 6] = {0};
     const char* temp_given_path_c      = given_path.c_str();
 
-    for (int i = 0; i < given_path.size() + 1; i++) {
+    for (int i = 0; i < (int) given_path.size() + 1; i++) {
         char c = temp_given_path_c[i];
         if (c == '/') {
             offset = 0;
@@ -1092,7 +1090,7 @@ void get_options(std::vector<std::string>& names, const std::string& name, int m
             }
             if (only_print) {
                 names.emplace_back(entry.first);
-                if (names.size() > max && max != 0)
+                if (names.size() > (size_t) max && max != 0)
                     return;
             }
         }
@@ -1196,7 +1194,7 @@ Candidate path_to_candidate(std::string path) {
                     int size = 0;
 
                     // Iterate through the characters in the path string
-                    for (int i = 0; i < can.parent_path.length(); i++) {
+                    for (int i = 0; i < (int) can.parent_path.length(); i++) {
                         if (scale != 0 && size != 0)
                             break;
 
@@ -1212,7 +1210,7 @@ Candidate path_to_candidate(std::string path) {
                             }
                             found_at = true;
                             buffer_len = 0;
-                        } else if (c == '/' || c == 'x' || c == 'X' || i == can.parent_path.length() - 1) {
+                        } else if (c == '/' || c == 'x' || c == 'X' || i == (int) can.parent_path.length() - 1) {
                             if (found_at && buffer_len != 0) {
                                 // Convert the buffer to an integer and save it to the scale variable
                                 buffer[buffer_len] = '\0';

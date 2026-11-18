@@ -724,7 +724,7 @@ void layout(Container* root, Container* container, const Bounds& bounds) {
     } else if (container->type & layout_type::scrollpane) {
         layout_scrollpane(root, container, container->children_bounds);
     } else if (container->type & layout_type::transition) {
-        for (int i = 0; i < container->children.size(); i++) {
+        for (int i = 0; i < (int) container->children.size(); i++) {
             auto child = container->children[i];
             if (i == 0) {
                 child->exists = true;
@@ -768,10 +768,10 @@ void layout(Container* root, Container* container, const Bounds& bounds) {
                 overflow   = right - container->real_bounds.w;
                 overflow--;
                 container->children[i]->real_bounds.w -= 1;
-                for (int l = i + 1; l < container->children.size(); l++)
+                for (int l = i + 1; l < (int) container->children.size(); l++)
                     container->children[l]->real_bounds.x -= 1;
                 i++;
-                if (i == container->children.size())
+                if (i == (int) container->children.size())
                     i = 0;
             } while (overflow > 0);
         }
@@ -919,13 +919,6 @@ Bounds::Bounds(double x, double y, double w, double h) {
     this->y = y;
     this->w = w;
     this->h = h;
-}
-
-Bounds::Bounds(const Bounds& b) {
-    x = b.x;
-    y = b.y;
-    w = b.w;
-    h = b.h;
 }
 
 Bounds::Bounds() {

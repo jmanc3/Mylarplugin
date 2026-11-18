@@ -56,7 +56,7 @@ static void fill_coverflow(Container *c, int monitor) {
             ch->when_paint = paint_cover;
         });
 
-        for (int i = 0; i < c->children.size(); i++) {
+        for (int i = 0; i < (int) c->children.size(); i++) {
             auto ch = c->children[i];
             int cid = *datum<int>(ch, "cid");
             auto b = hypriso->thumbnail_size(cid);
@@ -69,7 +69,7 @@ static void fill_coverflow(Container *c, int monitor) {
         float scroll = *datum<float>(c, "scroll");
 
         float total_w = 0;
-        for (int i = 0; i < c->children.size(); i++) {
+        for (int i = 0; i < (int) c->children.size(); i++) {
             auto ch = c->children[i];
             total_w += (ch->wanted_bounds.w + spacing) * s;
         }
@@ -78,7 +78,7 @@ static void fill_coverflow(Container *c, int monitor) {
             scroll *= scale;
         }
 
-        for (int index = 0; index < stack.size(); index++) {
+        for (int index = 0; index < (int) stack.size(); index++) {
             for (int i = c->children.size() - 1; i >= 0; i--) {
                 if (stack[index] == (*datum<int>(c->children[i], "cid"))) {
                     *datum<int>(c->children[i], "stacking_index") = index;
@@ -108,7 +108,7 @@ static void fill_coverflow(Container *c, int monitor) {
         }
         
 
-        for (int i = 0; i < c->children.size(); i++) {
+        for (int i = 0; i < (int) c->children.size(); i++) {
             auto ch = c->children[i];
             auto x = c->real_bounds.x + c->real_bounds.w * .5 * s;
             auto y = c->real_bounds.y + c->real_bounds.h * .5 * s;

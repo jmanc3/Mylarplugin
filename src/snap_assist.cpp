@@ -418,6 +418,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                             }
                             break;
                         }
+                        default: break;
                     }
                     
                     float slide_amount = 150 * s;
@@ -512,12 +513,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     }
                     if (info->id != -1)
                         icon_width = info->w;
-                    float focus_alpha = 1.0;
-                    if (true) {
-                        focus_alpha = color_titlebar_text_focused().a;
-                    } else {
-                        focus_alpha = color_titlebar_text_unfocused().a;
-                    }
                     if (parent_data->visibility == 1.0) {
                         clip(to_parent(root, c), s);
                         draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
@@ -529,14 +524,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 std::string title_text = hypriso->title_name(cid);
                 if (!title_text.empty()) {
                     TextureInfo *focused = nullptr;
-                    TextureInfo *unfocused = nullptr;
                     auto color_titlebar_textfo = color_titlebar_text_focused();
                     auto titlebar_text = titlebar_text_h();
-                    auto color_titlebar_textunfo = color_titlebar_text_unfocused();
                     focused = get_cached_texture(root, c, std::to_string(rid) + "_title_focused", set->font,
                         title_text, color_titlebar_textfo, titlebar_text);
-                    unfocused = get_cached_texture(root, c, std::to_string(rid) + "_title_unfocused", set->font,
-                        title_text, color_titlebar_textunfo, titlebar_text);
                     
                     auto texture_info = focused;
 
@@ -584,7 +575,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             auto close = thumb->child(FILL_SPACE, FILL_SPACE);
             close->when_paint = [](Container *actual_root, Container *c) {
                 auto parent_data = (HelperData *) c->parent->parent->user_data;
-                auto data = (SnapThumb *) c->parent->user_data;
                 if (parent_data->closing)
                     return;
                 
@@ -621,7 +611,6 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             close->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
                 auto root = get_rendering_root();
                 if (!root) return;
-                auto [rid, s, stage, active_id] = roots_info(actual_root, root);
                 
                 auto w = titlebar_h * titlebar_button_ratio();
                 c->wanted_bounds = {b.x + b.w - w, b.y, w, (float) titlebar_h};
@@ -683,7 +672,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
     
 
     auto parent_data = (HelperData *) c->user_data;
-    for (int i = 0; i < c->children.size(); i++) {
+    for (int i = 0; i < (int) c->children.size(); i++) {
         auto ch = c->children[i];
         auto data = (SnapThumb *) ch->user_data;
  
@@ -849,7 +838,7 @@ void actual_open(int monitor, int cid) {
     // open containers
     // ==============================================
 
-    for (int i = 0; i < open_slots.size(); i++) {
+    for (int i = 0; i < (int) open_slots.size(); i++) {
         auto pos = open_slots[i];
         auto snap_helper = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
         auto helper_data = new HelperData;
@@ -985,10 +974,6 @@ static void actual_close() {
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
        auto child = actual_root->children[i];
        if (child->custom_type == (int) TYPE::SNAP_HELPER) {
-           for (auto ch : child->children) {
-               auto data = (SnapThumb * ) ch->user_data;
-               //hypriso->set_hidden(data->cid, false, false);
-           }
            delete child;
            actual_root->children.erase(actual_root->children.begin() + i);
        }
@@ -1066,6 +1051,14 @@ void snap_assist::click(int id, int button, int state, float x, float y) {
     }
 
     snap_assist::close();
+
+    // The fade-out only lets input through to windows on its next animation tick, but this
+    // runs before Hyprland routes the press. Let it through now so the window under the
+    // cursor gets the press (e.g. a client-side titlebar starting an xdg_toplevel.move).
+    if (state && snap_assist::is_showing() && !skip_close && !hypriso->input_bypass_whitelist) {
+        hypriso->input_bypass_whitelist = true;
+        hypriso->simulateMouseMovement();
+    }
 }
 
 void snap_assist::fix_order() {

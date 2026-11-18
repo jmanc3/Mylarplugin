@@ -251,7 +251,6 @@ Container *build_menu(const std::vector<PopOption>& options, int x, int y, int m
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (stage == paint_stage(c)) {
             renderfix
-            auto pud = (PopupUserData *) c->user_data;
             auto b = c->real_bounds;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .036f}, 7 * s, 2.0f, b, std::round(16 * s));
             rect(b, {1, 1, 1, .75}, 0, 7 * s, 2.0, true);

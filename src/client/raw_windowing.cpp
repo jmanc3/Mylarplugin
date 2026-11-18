@@ -1278,9 +1278,6 @@ static void pointer_scroll_tick(wl_context *ctx) {
 static void pointer_handle_enter(void *data, struct wl_pointer *wl_pointer,
                                  uint32_t serial, struct wl_surface *surface,
                                  wl_fixed_t sx, wl_fixed_t sy) {
-    double dx = wl_fixed_to_double(sx);
-    double dy = wl_fixed_to_double(sy);
-    // printf("pointer: enter at %.2f, %.2f\n", dx, dy);
     auto ctx = (wl_context *) data;
     pointer_scroll_cancel(ctx);
     for (auto w : ctx->windows) {
@@ -1344,8 +1341,6 @@ static void pointer_handle_motion(void *data, struct wl_pointer *wl_pointer,
 static void pointer_handle_button(void *data, struct wl_pointer *wl_pointer,
                                   uint32_t serial, uint32_t time,
                                   uint32_t button, uint32_t state) {
-    const char *st = (state == WL_POINTER_BUTTON_STATE_PRESSED) ? "pressed" : "released";
-    // printf("pointer: button %u %s\n", button, st);
     //win->marked_for_closing = true;
     auto ctx = (wl_context *) data;
     if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
@@ -1695,7 +1690,7 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
             timerfd_update(ctx->key_repeat_timer_fd, ctx->key_repeat_delay);
         }
     } else {
-        if (ctx->most_recently_pressed == key) {
+        if (ctx->most_recently_pressed == (int) key) {
             ctx->most_recently_pressed = -1;
             timerfd_stop(ctx->key_repeat_timer_fd);
         }
@@ -2311,7 +2306,7 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
 static void registry_handle_global_remove(void *data, struct wl_registry *registry, uint32_t id) {
     wl_context *d = (wl_context *)data;
     for (int i = d->outputs.size() - 1; i >= 0; i--) {
-        if (d->outputs[i]->id == id) {
+        if (d->outputs[i]->id == (int) id) {
             delete d->outputs[i];
             d->outputs.erase(d->outputs.begin() + i) ;
         }
@@ -2816,8 +2811,6 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
             window->on_render(window);
         windows.push_back(window);        
     }
-    auto window = windows[windows.size() - 1];
-    
     return rw;
 }
 
@@ -3298,15 +3291,7 @@ void RawApp::update_monitor_information() {
 }
 
 void RawApp::print_monitors() {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == id)
-            ctx = c;
-    
-    //notify(fz("{}", ctx->outputs.size())); 
-    for (auto o : ctx->outputs) {
-        //notify(fz("{} {} {}", o->name, o->physical_width, o->physical_height)); 
-    }
+    ;
 }
 
 // returns file descriptor takes the function that will be called after ms time
@@ -3338,7 +3323,7 @@ int windowing::timer(RawApp *app, int ms, std::function<void(void *data)> actual
     pf.fd = create_timerfd_ms(ms);
     pf.data = data;
     pf.func = [ctx, actual_function](PolledFunction f) {
-        for (int i = 0; i < ctx->polled_fds.size(); i++) {
+        for (int i = 0; i < (int) ctx->polled_fds.size(); i++) {
             if (ctx->polled_fds[i].fd == f.fd) {
                 close(f.fd);
                 ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
@@ -3371,7 +3356,7 @@ void windowing::timer_stop(RawApp *app, int fd) {
             ctx = c;
     if (!ctx)
         return;
-    for (int i = 0; i < ctx->polled_fds.size(); i++) {
+    for (int i = 0; i < (int) ctx->polled_fds.size(); i++) {
         if (ctx->polled_fds[i].fd == fd) {
             close(fd);
             ctx->polled_fds.erase(ctx->polled_fds.begin() + i);

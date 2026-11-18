@@ -100,7 +100,6 @@ bool grouped_with(Container *client, int snap_type) {
 void update_resize_edge_preview_bar(int cid) {
     Container *c = get_cid_container(cid);
     if (!c) return;
-    auto snapped = *datum<bool>(c, "snapped");
     auto snap_type = *datum<int>(c, "snap_type");
     Container *cr = nullptr;
     for (auto ch : actual_root->children) {
@@ -414,7 +413,7 @@ void resizing::end(int cid) {
 
 int index_of_cid(int cid) {
     auto order = get_window_stacking_order();
-    for (int i = 0; i < order.size(); i++) {
+    for (int i = 0; i < (int) order.size(); i++) {
         if (order[i] == cid) {
             return i;
         }
@@ -477,7 +476,6 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                 }
                 accent.a = vert_amount;
                 rect(bb, accent);
-                auto cc = bb;
                 hypriso->damage_entire(rid);
 
                 float h = 45 * s;
@@ -494,7 +492,6 @@ void paint_resize_edge(Container *actual_root, Container *c) {
         {
             auto vert_dot_amount = *datum<float>(c, "horizontal_bar_dot_amount_shown");
             auto vert_amount = *datum<float>(c, "horizontal_bar_amount_shown");
-            auto rm = bounds_reserved_monitor(rid);
             if (vert_amount != 0.0) {
                 auto pos = *datum<int>(c, "horizontal_bar_position");
                 auto bb = c->real_bounds;
@@ -506,7 +503,6 @@ void paint_resize_edge(Container *actual_root, Container *c) {
                 }
                 accent.a = vert_amount;
                 rect(bb, accent);
-                auto cc = bb;
                 hypriso->damage_entire(rid);
 
                 float w = 45 * s;
@@ -713,7 +709,6 @@ void create_resize_container_for_window(int id) {
                 //return false;
             }
         }
-        float rounding = hypriso->get_rounding(cid);
        
         if (bounds_contains(c->real_bounds, x, y)) {
             if (bounds_contains(b, x, y)) {

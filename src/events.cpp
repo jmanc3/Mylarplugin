@@ -138,13 +138,13 @@ void handle_mouse_motion(Container* root, int x, int y) {
     // when_mouse_leaves_container needs to be called and mouse_hovering needs to
     // be set to false and if the container is not doing anything else like being
     // dragged or pressed then concerned can be set to false
-    for (int i = 0; i < concerned.size(); i++) {
+    for (int i = 0; i < (int) concerned.size(); i++) {
         auto c = concerned[i];
 
         // TODO we need to remove from concered if not on top as well not just pierced
         bool in_pierced = false;
         bool top = false;
-        for (int j = 0; j < pierced.size(); j++) {
+        for (int j = 0; j < (int) pierced.size(); j++) {
             auto p = pierced[j];
             if (p == c) {
                 in_pierced = true;
@@ -199,14 +199,14 @@ void handle_mouse_motion(Container* root, int x, int y) {
     }
 
     bool a_concerned_container_mouse_pressed = false;
-    for (int i = 0; i < concerned.size(); i++) {
+    for (int i = 0; i < (int) concerned.size(); i++) {
         auto c = concerned[i];
 
         if (c->state.mouse_pressing || c->state.mouse_dragging)
             a_concerned_container_mouse_pressed = true;
     }
 
-    for (int i = 0; i < pierced.size(); i++) {
+    for (int i = 0; i < (int) pierced.size(); i++) {
         auto p = pierced[i];
         bool non_top = i != 0;
         //if (c->when_mouse_leaves_container && !p) {
@@ -367,7 +367,7 @@ void handle_mouse_button_press(Container* root, const Event& e) {
 
     //notify(std::format("{} {} {} {}", e.scroll, pierced.size(), root->mouse_current_x, root->mouse_current_y));
 
-    for (int i = 0; i < pierced.size(); i++) {
+    for (int i = 0; i < (int) pierced.size(); i++) {
         auto p = pierced[i];
 
         // pierced[0] will always be the top or "real" container we are actually
@@ -450,7 +450,7 @@ bool handle_mouse_button_release(Container* root, const Event& e) {
     for (auto c : concerned)
         lifetimes.push_back(c->lifetime);
 
-    for (int i = 0; i < concerned.size(); i++) {
+    for (int i = 0; i < (int) concerned.size(); i++) {
         const auto &still_alive = lifetimes[i];
         if (!still_alive.lock())
             continue;
@@ -503,7 +503,6 @@ void log_json(const std::string& msg) {
     static bool firstCall = true;
     static std::ofstream ofs;
     static std::mutex writeMutex;
-    static long num = 0;
 
     std::lock_guard<std::mutex> lock(writeMutex);
 
@@ -619,7 +618,7 @@ void paint_outline(Container* root, Container* c) {
     if (c->type == ::newscroll) {
         auto s = (ScrollContainer *) c;
         std::vector<int> render_order;
-        for (int i = 0; i < s->content->children.size(); i++) {
+        for (int i = 0; i < (int) s->content->children.size(); i++) {
             render_order.push_back(i);
         }
         std::sort(render_order.begin(), render_order.end(), [s](int a, int b) -> bool {
@@ -638,7 +637,7 @@ void paint_outline(Container* root, Container* c) {
             paint_outline(root, s->bottom);
     } else {
         std::vector<int> render_order;
-        for (int i = 0; i < c->children.size(); i++) {
+        for (int i = 0; i < (int) c->children.size(); i++) {
             render_order.push_back(i);
         }
         std::sort(render_order.begin(), render_order.end(), [c](int a, int b) -> bool {

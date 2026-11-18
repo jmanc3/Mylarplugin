@@ -1284,7 +1284,6 @@ static Container *make_self_height_sized_parent(Container *parent) {
     c->parent_bounds_limit_input_bounds = false;
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
 
         auto left = c->children[0];
@@ -1365,7 +1364,6 @@ static void make_label_like(Container *parent, std::string title, std::string de
         auto size_title = 12 * dpi;
         auto size_desc = 11 * dpi;
 
-        auto b = c->real_bounds;
         float yoff = optiontopbottompad * dpi;
         if (!icon.empty()) {
             auto bo = draw_text(cr, 0, 0, icon, size_ico, false, icon_font, -1, -1, theme.text_secondary, false);
@@ -1392,7 +1390,6 @@ static void make_label_like(Container *parent, std::string title, std::string de
             yoff += bo.h;
         }
         if (!description.empty()) {
-            auto bo = draw_text(cr, 0, 0, description, size_desc, false, set->font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text, false);
             draw_text(cr,
                 c->real_bounds.x + 60 * dpi, 
                 c->real_bounds.y + yoff, description, size_desc, true, set->font, c->real_bounds.w - ((optionleftpad + optionrighttpad) * dpi), -1, theme.text_secondary, false);
@@ -1794,9 +1791,6 @@ static void make_slider(Container *parent, std::string title, std::string descri
 
     };
     right->when_mouse_down = [on_change, notches](Container *root, Container *c) {
-        auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
-        auto dpi = mylar->raw_window->dpi;
         auto b = c->real_bounds;
         float scalar = (root->mouse_current_x - b.x) / b.w;
         if (scalar < 0)
@@ -1883,7 +1877,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
     };
     auto right = p->child(::hbox, FILL_SPACE, FILL_SPACE);
     auto group_data = new GroupData;
-    for (int i = 0; i < options.size(); i++)
+    for (int i = 0; i < (int) options.size(); i++)
         if (options[i] == default_value)
             group_data->selected = i;
     right->user_data = group_data;
@@ -1925,7 +1919,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
         c->spacing = 4 * dpi;
 
         float w = c->wanted_pad.x + c->wanted_pad.w + c->spacing * (options.size() - 1);
-        for (int i = 0; i < options.size() && i < c->children.size(); i++) {
+        for (int i = 0; i < (int) options.size() && i < (int) c->children.size(); i++) {
             float ow = swifi_text_width(root, options[i], option_text_size) + 28 * dpi;
             c->children[i]->wanted_bounds.w = ow;
             w += ow;
@@ -1934,7 +1928,7 @@ static void make_button_group(Container *parent, std::string title, std::string 
         c->real_bounds.w = w;
         c->real_bounds.h = 40 * dpi;
     };
-    for (int i = 0; i < options.size(); i++) {
+    for (int i = 0; i < (int) options.size(); i++) {
         auto o = options[i];
         auto option = right->child(FILL_SPACE, FILL_SPACE);
         focus_skip(option);
@@ -1969,7 +1963,6 @@ static Container *make_vert_space(Container *parent, float amount) {
     auto pad = parent->child(FILL_SPACE, 8);
     pad->pre_layout = [amount](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         c->wanted_bounds.h = amount * dpi;
     };
@@ -2323,7 +2316,6 @@ static Container *make_dropdown_option(Container *parent, std::string title, std
     
     right->pre_layout = [](Container *root, Container *c, const Bounds &b) {
         auto mylar = (MylarWindow*)root->user_data;
-        auto cr = mylar->raw_window->drawing_context;
         auto dpi = mylar->raw_window->dpi;
         c->real_bounds.w = 250 * dpi;
         c->real_bounds.h = 70 * dpi;

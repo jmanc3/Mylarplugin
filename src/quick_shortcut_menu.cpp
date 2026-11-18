@@ -216,7 +216,6 @@ static bool debugging_key_presses = false;
 
 void open_quick_shortcut_menu() {
     static const float option_height = 18;
-    static const float seperator_size = 5;
     float s = scale(hypriso->monitor_from_cursor());
     parse_sequences();
     
@@ -262,7 +261,7 @@ void open_quick_shortcut_menu() {
         ::layout(actual_root, c, c->real_bounds);
     };
 
-    for (int i = 0; i < sequences.size(); i++) {
+    for (int i = 0; i < (int) sequences.size(); i++) {
         auto option = p->child(FILL_SPACE, s * option_height);
         option->skip_delete = true;
         option->custom_type = i;
@@ -286,7 +285,7 @@ void open_quick_shortcut_menu() {
 
                 auto index = c->custom_type;
                 std::string text;
-                for (int i = 0; i < sequences.size(); i++) {
+                for (int i = 0; i < (int) sequences.size(); i++) {
                     if (i == index) {
                         text = sequences[i].representation + ": " + sequences[i].name;
                     }
@@ -302,7 +301,7 @@ void open_quick_shortcut_menu() {
                 return;
 
             auto index = c->custom_type;
-            for (int i = 0; i < sequences.size(); i++) {
+            for (int i = 0; i < (int) sequences.size(); i++) {
                 if (i == index) {
                     launch_command(sequences[i].command);
                 }
@@ -385,7 +384,7 @@ bool quick_shortcut_menu::on_key_press(int id, int key, int state, bool update_m
             s.possible = true;
             for (int i = 0; i < keys_pressed_since_menu_opened; i++) {
                 auto matching_key = keys[keys.size() - keys_pressed_since_menu_opened + i];
-                if (i < s.keys.size()) {
+                if (i < (int) s.keys.size()) {
                     if (s.keys[i].key != matching_key.key || s.keys[i].state != matching_key.state) {
                         s.possible = false;
                         goto out;
@@ -395,7 +394,7 @@ bool quick_shortcut_menu::on_key_press(int id, int key, int state, bool update_m
                     goto out;
                 }
             }
-            if (s.possible && s.keys.size() == keys_pressed_since_menu_opened)
+            if (s.possible && (int) s.keys.size() == keys_pressed_since_menu_opened)
                 s.full_match = true;
             out:
         }

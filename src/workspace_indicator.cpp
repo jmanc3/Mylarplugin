@@ -55,7 +55,7 @@ void workspace_indicator::on_change(int cid) {
         auto active = hypriso->get_active_workspace(rid);        
 
         int index = 0;
-        for (int i = 0; i < spaces.size(); i++) {
+        for (int i = 0; i < (int) spaces.size(); i++) {
             if (spaces[i] == active) {
                 index = i;
                 break;
@@ -80,7 +80,7 @@ void workspace_indicator::on_change(int cid) {
         float dot_w = std::round(4 * s);
         float start_x = b.x + h * .5;
         float start_y = b.y + h * .5;
-        for (int i = 0; i < spaces.size(); i++) {
+        for (int i = 0; i < (int) spaces.size(); i++) {
             auto col = RGBA(.5, .5, .5, 1);
             float size_boost = 0;
             if (i == index) {
@@ -99,7 +99,7 @@ void workspace_indicator::on_change(int cid) {
     };
 
     later(650.0f, [indicator](Timer *) {
-        for (int i = 0; i < actual_root->children.size(); i++) {
+        for (int i = 0; i < (int) actual_root->children.size(); i++) {
             auto c = actual_root->children[i];
             if (c == indicator) {
                 delete c;

@@ -294,18 +294,18 @@ Msg sess_method_call(std::string bus, std::string path, std::string iface, std::
 }
 
 void remove_service(const std::string &service) {
-    for (int x = 0; x < status_notifier_items.size(); x++) {
+    for (int x = 0; x < (int) status_notifier_items.size(); x++) {
         if (status_notifier_items[x] == service) {
             StatusNotifierItemUnregistered(service);
             status_notifier_items.erase(status_notifier_items.begin() + x);
         }
     }
-    for (int i = 0; i < status_notifier_hosts.size(); i++) {
+    for (int i = 0; i < (int) status_notifier_hosts.size(); i++) {
         if (status_notifier_hosts[i] == service) {
             status_notifier_hosts.erase(status_notifier_hosts.begin() + i);
         }
     }
-    for (int i = 0; i < running_dbus_services.size(); i++) {
+    for (int i = 0; i < (int) running_dbus_services.size(); i++) {
         if (running_dbus_services[i] == service) {
             if (running_dbus_services[i] == "local.org_kde_powerdevil")
                 max_kde_brightness = 0;
@@ -452,7 +452,7 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
         
         if (mm.find("/org/freedesktop/NetworkManager") != std::string::npos) {
             auto any = parse_iter_message(message);
-            if (auto str = std::any_cast<std::string>(&any)) {
+            if (std::any_cast<std::string>(&any)) {
                 nm_timeout_reload();
             }
         } else if (mm.find("/org/bluez") != std::string::npos) {
@@ -476,7 +476,7 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
         }
         if (mm.find("/org/freedesktop/NetworkManager") != std::string::npos) {
             auto any = parse_iter_message(message);
-            if (auto str = std::any_cast<std::string>(&any)) {
+            if (std::any_cast<std::string>(&any)) {
                 nm_timeout_reload();
             }
         } else if (mm.find("/org/bluez") != std::string::npos) {
@@ -500,7 +500,7 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
                         dbus_message_iter_next(&removed);
                     }
                 }
-                for (int i = 0; remove_object && i < bluetooth_interfaces.size(); i++) {
+                for (int i = 0; remove_object && i < (int) bluetooth_interfaces.size(); i++) {
                     if (bluetooth_interfaces[i]->object_path == object_path) {
                         if (bluetooth_interfaces[i]->type == BluetoothInterfaceType::Device) {
                             delete (Device *) bluetooth_interfaces[i];
@@ -910,7 +910,7 @@ bool dbus_kde_set_brightness(double percentage) {
 }
 
 bool dbus_kde_running() {
-    for (int i = 0; i < running_dbus_services.size(); i++) {
+    for (int i = 0; i < (int) running_dbus_services.size(); i++) {
         if (running_dbus_services[i] == "local.org_kde_powerdevil") {
             return true;
         }
@@ -1495,8 +1495,8 @@ void dbus_start(DBusBusType dbusType) {
         if (dbusType == DBUS_BUS_SESSION) {
             // Try to become the owner of the org.freedesktop.Notification name
             //
-            int result = dbus_bus_request_name(dbus_connection, "org.freedesktop.Notifications",
-                                               DBUS_NAME_FLAG_REPLACE_EXISTING, &error);
+            dbus_bus_request_name(dbus_connection, "org.freedesktop.Notifications",
+                                   DBUS_NAME_FLAG_REPLACE_EXISTING, &error);
     
             if (dbus_error_is_set(&error)) {
                 fprintf(stderr, "Ran into error when trying to become the sessions notification manager (%s)\n",

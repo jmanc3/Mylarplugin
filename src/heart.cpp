@@ -117,11 +117,8 @@ static bool on_mouse_move(int id, float x, float y) {
     }
     
     //notify(fz("{} {}", x, y));
-    int active_mon = hypriso->monitor_from_cursor();
     {
         auto m = actual_root;
-        auto cid = *datum<int>(m, "cid");
-        auto [rid, s, stage, active_id] = from_root(m);
         Event event(x, y);
         //notify(fz("{} {}                       ", event.x, event.y));
         
@@ -190,8 +187,6 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
  
     {
         auto m = actual_root; 
-        auto cid = *datum<int>(m, "cid");
-        auto [rid, s, stage, active_id] = from_root(m);
         Event event(x, y, button, state);
         mouse_event(m, event);
     }
@@ -208,7 +203,6 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
 
 static bool on_scrolled(int id, int source, int axis, int direction, double delta, int discrete, bool from_mouse) {
     auto m = mouse();
-    int active_mon = hypriso->monitor_from_cursor();
     //auto s = scale(active_mon);
     Event event;
     event.x = m.x;
@@ -222,9 +216,6 @@ static bool on_scrolled(int id, int source, int axis, int direction, double delt
     heart::layout_containers();
     {
         auto m = actual_root;
-        auto cid = *datum<int>(m, "cid");
-        auto bounds = bounds_monitor(cid);
-        auto [rid, s, stage, active_id] = from_root(m);
         mouse_event(m, event);
     }
 
@@ -429,7 +420,6 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
     if (alt_held) {
         if (key == KEY_TAB) {
             if (state) {
-                bool is_open = alt_tab::showing();
                 alt_tab::show();
                 if (shift_held) {
                     alt_tab::move(-1);
@@ -1096,7 +1086,6 @@ static void test_container(Container *m) {
         c->real_bounds = b;
     };
     c->pre_layout = [](Container *root, Container *c, const Bounds &bounds) {
-        auto [rid, s, stage, active_id] = from_root(root);
         //nz(fz("{} {}", root->real_bounds.x * s, root->real_bounds.y));
         c->real_bounds = Bounds(20, 100, 100, 100);
         //hypriso->damage_entire(rid);
@@ -1667,7 +1656,6 @@ static void on_render(int id, int stage) {
         drag_workspace_switcher::update_drag();
         for (auto c : actual_root->children) {
             if (c->custom_type == (int) TYPE::CLIENT) {
-                auto cid = *datum<int>(c, "cid");
 //                if (hypriso->is_mapped(cid) && !hypriso->is_hidden(cid))
 //                    hypriso->screenshot_deco(cid);
             }
@@ -2835,7 +2823,7 @@ void heart::layout_containers() {
         int tly = -1;
         int brx = -1;
         int bry = -1;
-        for (int i = 0; i < actual_monitors.size(); i++) {
+        for (int i = 0; i < (int) actual_monitors.size(); i++) {
             auto mid = *datum<int>(actual_monitors[i], "cid");
             auto b = bounds_monitor(mid);
             if ((i == 0) || b.x < tlx)
@@ -2873,7 +2861,7 @@ void heart::layout_containers() {
         for (auto c : r->children) {
             auto sort_index = datum<int>(c, "sort_index");
             auto cid = *datum<int>(c, "cid");
-            for (int i = 0; i < order.size(); i++)
+            for (int i = 0; i < (int) order.size(); i++)
                if (order[i] == cid) {
                    const bool is_pinned = hypriso->is_pinned(cid);
                    const bool is_visible_special = hypriso->get_client_workspace_id(cid) < 0 && hypriso->is_window_workspace_visible(cid);

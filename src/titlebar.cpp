@@ -122,9 +122,6 @@ void titlebar_pre_layout(Container* root, Container* self, const Bounds& bounds)
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto rid = *datum<int>(root, "cid");
-    auto cid = *datum<int>(self, "cid");
-    auto s = scale(rid);
     self->wanted_bounds.h = titlebar_h; 
     self->children[1]->wanted_bounds.w = std::round(titlebar_h * titlebar_button_ratio());
     self->children[2]->wanted_bounds.w = std::round(titlebar_h * titlebar_button_ratio());
@@ -255,8 +252,6 @@ void titlebar::titlebar_right_click(int cid, bool centered, int bottom_y) {
         pop.text = "Remove titlebar";
 
         pop.on_clicked = [cid]() {
-            auto client = get_cid_container(cid);
-            auto info = (ClientInfo *) client->user_data;
             if (hypriso->has_decorations(cid)) {
                 detach_titlebar(cid, true);
             } else {
@@ -478,7 +473,7 @@ void paint_button(Container *actual_root, Container *c, std::string name, std::s
             rect(b, color, mask, hypriso->get_rounding(cid) * s, 2.0f);
         }
 
-        if (is_close && c->state.mouse_pressing || c->state.mouse_hovering) {
+        if ((is_close && c->state.mouse_pressing) || c->state.mouse_hovering) {
             if (closed->id != -1) {
                 clip(to_parent(root, c), s);
                 draw_texture(*closed, center_x(c, closed->w), center_y(c, closed->h), a);
@@ -695,7 +690,7 @@ void create_titlebar(Container *root, Container *parent) {
         auto cid = *datum<int>(client, "cid");
         if (hypriso->is_fullscreen(cid))  
             return;
-        if (auto c = get_cid_container(cid)) {
+        if (get_cid_container(cid)) {
             *datum<bool>(client, "drag_from_titlebar") = hypriso->is_floating(cid);
         }
         if (hypriso->is_floating(cid))
@@ -705,14 +700,10 @@ void create_titlebar(Container *root, Container *parent) {
         hypriso->bring_to_front(cid);
     };
     titlebar->when_drag = paint {
-        auto client = first_above_of(c, TYPE::CLIENT);
-        auto cid = *datum<int>(client, "cid");
         //drag::motion(cid);
         root->consumed_event = true;
     };
     titlebar->when_drag_end = paint {
-        auto client = first_above_of(c, TYPE::CLIENT);
-        auto cid = *datum<int>(client, "cid");
         //drag::end(cid);
         root->consumed_event = true;
     };
@@ -763,7 +754,6 @@ void create_titlebar(Container *root, Container *parent) {
         assert(client);
         int cid = *datum<int>(client, "cid");
         auto snapped = *datum<bool>(client, "snapped");
-        auto rid = get_monitor(cid);
         if (snapped) {
             drag::snap_window(hypriso->monitor_from_cursor(), cid, (int) SnapPosition::NONE);
         } else {

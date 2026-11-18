@@ -424,7 +424,7 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
 
     const auto active_workspace = hypriso->get_active_workspace_id(monitor);
     int active_index = -1;
-    for (int i = 0; i < parent->children.size(); i++) {
+    for (int i = 0; i < (int) parent->children.size(); i++) {
         if (*datum<int>(parent->children[i], "workspace") == active_workspace) {
             active_index = i;
             break;
@@ -446,7 +446,7 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     double pen_x = b.x + spacing + parent->scroll_h_real;
     double pen_y = b.y + spacing;
     
-    for (int i = 0; i < parent->children.size(); i++) {
+    for (int i = 0; i < (int) parent->children.size(); i++) {
         auto ch = parent->children[i];
         auto slide_in_amount = *datum<float>(ch, "slide_in_amount"); 
         ch->wanted_bounds = Bounds(pen_x, pen_y - thumb_h * (1.0 - slide_in_amount), thumb_w, thumb_h);
@@ -655,16 +655,10 @@ void drag_switcher_actual_open() {
                     if (!spaces.empty())
                         next = spaces[spaces.size() - 1] + 1;
                     later_immediate([next](Timer *) {
-                        auto mon = target_monitor();
-                        auto before = hypriso->get_active_workspace_id(mon);
-
                         hypriso->move_to_workspace(next, false);
                     });
                 } else {
                     later_immediate([space](Timer *) {
-                        auto mon = target_monitor();
-                        auto before = hypriso->get_active_workspace_id(mon);
-
                         hypriso->move_to_workspace(hypriso->space_id_to_raw(space), false);
                     });
                 }
@@ -767,7 +761,6 @@ void drag_switcher_actual_open() {
         if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
             return;
         auto openess = *datum<float>(c, "openess");
-        auto peaking_amount = *datum<float>(c, "peaking_amount");
         auto backup = c->real_bounds;
         defer(c->real_bounds = backup);
         auto new_h = 30;

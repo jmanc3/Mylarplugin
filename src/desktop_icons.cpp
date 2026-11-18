@@ -359,12 +359,6 @@ void on_change_in_desktop_folder() {
             continue;
         }
 
-        const auto permissions = entry.status(ec).permissions();
-        const bool isExecutable =
-            !ec && (permissions & (std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec | std::filesystem::perms::others_exec)) !=
-                std::filesystem::perms::none;
-        ec.clear();
-
         const auto fullPath = path.string();
         seenPaths.insert(fullPath);
         scanned.emplace_back();
@@ -1378,7 +1372,6 @@ void desktop_icons::start() {
     auto c = actual_root->child(FILL_SPACE, FILL_SPACE);
     c->custom_type = (int) TYPE::DESKTOP_ICONS;
     int monitor = hypriso->monitor_from_cursor();
-    auto monitor_scale = scale(monitor);
     *datum<int>(c, "monitor") = monitor;
 
     c->pre_layout = [](Container *root, Container *c, const Bounds &b) {

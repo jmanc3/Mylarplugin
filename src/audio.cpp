@@ -1904,8 +1904,8 @@ static void on_sink(pa_context *, const pa_sink_info *l, int eol, void *) {
     // PulseAudio may expose a synthetic fallback sink named auto_null.
     // Keep it out of the client list so it doesn't appear as a real device.
     if (data->name && strcmp(data->name, "auto_null") == 0) {
-        for (int i = 0; i < audio_clients.size(); i++) {
-            if (audio_clients[i]->index == data->index && audio_clients[i]->is_master) {
+        for (int i = 0; i < (int) audio_clients.size(); i++) {
+            if (audio_clients[i]->index == (int) data->index && audio_clients[i]->is_master) {
                 delete audio_clients[i];
                 audio_clients.erase(audio_clients.begin() + i);
                 sort();
@@ -1918,7 +1918,7 @@ static void on_sink(pa_context *, const pa_sink_info *l, int eol, void *) {
     AudioClient *client = nullptr;
     bool create = true;
     for (auto c: audio_clients) {
-        if (c->is_master && c->index == data->index) {
+        if (c->is_master && c->index == (int) data->index) {
             client = c;
             create = false;
             break;
@@ -1952,7 +1952,7 @@ static void on_sink_input(pa_context *, const pa_sink_input_info *l, int eol, vo
     AudioClient *client = nullptr;
     bool create = true;
     for (auto c: audio_clients) {
-        if (!c->is_master && c->index == data->index) {
+        if (!c->is_master && c->index == (int) data->index) {
             client = c;
             create = false;
             break;
@@ -2160,8 +2160,8 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
             if (event_type_masked == PA_SUBSCRIPTION_EVENT_REMOVE) {
                 mixer_pa_remove(AudioNodeKind::Sink, index);
                 bool removed = false;
-                for (int i = 0; i < audio_clients.size(); i++) {
-                    if (audio_clients[i]->index == index && audio_clients[i]->is_master) {
+                for (int i = 0; i < (int) audio_clients.size(); i++) {
+                    if (audio_clients[i]->index == (int) index && audio_clients[i]->is_master) {
                         delete audio_clients[i];
                         audio_clients.erase(audio_clients.begin() + i);
                         removed = true;
@@ -2186,8 +2186,8 @@ static void change_callback(pa_context *c, pa_subscription_event_type_t event_ty
             if (event_type_masked == PA_SUBSCRIPTION_EVENT_REMOVE) {
                 mixer_pa_remove(AudioNodeKind::SinkInput, index);
                 bool removed = false;
-                for (int i = 0; i < audio_clients.size(); i++) {
-                    if (audio_clients[i]->index == index && !audio_clients[i]->is_master) {
+                for (int i = 0; i < (int) audio_clients.size(); i++) {
+                    if (audio_clients[i]->index == (int) index && !audio_clients[i]->is_master) {
                         delete audio_clients[i];
                         audio_clients.erase(audio_clients.begin() + i);
                         removed = true;
@@ -2754,8 +2754,10 @@ bool try_establishing_connection_with_alsa() {
 
     // Watch for events and pump them when required
     int i, nfds = snd_mixer_poll_descriptors_count(alsa_handle);
-    struct pollfd pfds[nfds];
-    if (snd_mixer_poll_descriptors(alsa_handle, pfds, nfds) < 0)
+    if (nfds < 0)
+        return false;
+    std::vector<struct pollfd> pfds(nfds);
+    if (snd_mixer_poll_descriptors(alsa_handle, pfds.data(), nfds) < 0)
         return false;
     {
         // std::lock_guard<std::mutex> lock(app->running_mutex);
@@ -2899,7 +2901,7 @@ void audio_stop() {
 }
 
 void audio_join() {
-    for (int i = 0; i < threads.size(); ++i)
+    for (int i = 0; i < (int) threads.size(); ++i)
         threads[i].join();
     threads.clear();
 }
@@ -3047,7 +3049,7 @@ void meter_watching_start() {
             pa_stream_set_read_callback(audio_client->stream, on_stream_update, audio_client);
             pa_stream_set_suspended_callback(audio_client->stream, on_stream_suspend, audio_client);
 
-            if (audio_client->monitor_source_name.empty() && audio_client->index != PA_INVALID_INDEX) {
+            if (audio_client->monitor_source_name.empty() && audio_client->index != (int) PA_INVALID_INDEX) {
                 pa_stream_set_monitor_stream(audio_client->stream, audio_client->index);
                 pa_stream_connect_record(audio_client->stream, NULL, &attr, flags);
             } else {

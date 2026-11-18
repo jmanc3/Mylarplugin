@@ -1152,15 +1152,22 @@ void on_open_window(PHLWINDOW w) {
             if (auto toplevel = surface->m_toplevel.lock()) {
                 auto resource = toplevel->m_resource;
                 if (resource) {
-                    resource->setMove([](CXdgToplevel*, wl_resource*, uint32_t) {
-                        if (hypriso->on_drag_start_requested) {
-                            if (auto w = get_window_from_mouse()) {
-                                for (auto hw : hyprwindows) {
-                                    if (w == hw->w) {
-                                        hypriso->on_drag_start_requested(hw->id);
-                                    }
-                                }
-                            }
+                    resource->setMove([](CXdgToplevel* t, wl_resource*, uint32_t) {
+                        if (!hypriso->on_drag_start_requested)
+                            return;
+                        // Resolve from the requesting toplevel, not the cursor: window hit-testing
+                        // is suppressed while overlays like snap assist hold the render whitelist.
+                        for (auto hw : hyprwindows) {
+                            if (mw_is_x11(hw->w) || !mw_backend_valid(hw->w))
+                                continue;
+                            auto surf = mw_wayland_resource(hw->w);
+                            if (!surf)
+                                continue;
+                            auto top = surf->m_toplevel.lock();
+                            if (!top || top->m_resource.get() != t)
+                                continue;
+                            hypriso->on_drag_start_requested(hw->id);
+                            return;
                         }
                     });
                     resource->setResize([](CXdgToplevel* t, wl_resource*, uint32_t, xdgToplevelResizeEdge e) {
@@ -1219,7 +1226,7 @@ void on_close_window(PHLWINDOW w) {
     schedule_prune_expired_popups();
     HyprWindow *hw = nullptr;
     int target_index = 0;
-    for (int i = 0; i < hyprwindows.size(); i++) {
+    for (int i = 0; i < (int) hyprwindows.size(); i++) {
         auto hr = hyprwindows[i];
         if (hr->w == w) {
             target_index = i;
@@ -1259,7 +1266,7 @@ void on_open_monitor(PHLMONITOR m) {
 void on_close_monitor(PHLMONITOR m) {
     HyprMonitor *hm = nullptr;
     int target_index = 0;
-    for (int i = 0; i < hyprmonitors.size(); i++) {
+    for (int i = 0; i < (int) hyprmonitors.size(); i++) {
         auto hr = hyprmonitors[i];
         if (hr->m == m) {
             target_index = i;
@@ -1764,8 +1771,6 @@ void hook_RenderWindow(void* thisptr, Render::CRenderContext& ctx, PHLWINDOW pWi
     int initial_border_size = 0;
     bool set = false;
 
-    Hyprlang::CConfigCustomValueType* active_border = nullptr;
-    Hyprlang::CConfigCustomValueType* initial_active_border;
     auto current = get_current_time_in_ms();
 
     for (auto hw : hyprwindows) {
@@ -1934,8 +1939,8 @@ cairo_surface_t* HyprIso::get_icon_on_window(int id, int size) {
             continue;
         auto extent = std::max(iter.width, iter.height);
         auto best_extent = std::max(best.width, best.height);
-        if (!best.data || (best_extent < size && extent > best_extent) ||
-            (extent >= size && best_extent >= size && extent < best_extent))
+        if (!best.data || (best_extent < (uint32_t) size && extent > best_extent) ||
+            (extent >= (uint32_t) size && best_extent >= (uint32_t) size && extent < best_extent))
             best = iter;
     }
     if (!best.data)
@@ -2178,7 +2183,7 @@ static void on_open_layer(PHLLS l) {
 void on_layer_close(PHLLS l) {
     HyprLayer *hl = nullptr;
     int target_index = 0;
-    for (int i = 0; i < hyprlayers.size(); i++) {
+    for (int i = 0; i < (int) hyprlayers.size(); i++) {
         auto hlt = hyprlayers[i];
         if (hlt->l == l) {
             target_index = i;
@@ -2970,7 +2975,7 @@ float pull(std::vector<float>& fls, float scalar) {
     int   i0     = static_cast<int>(std::floor(fIndex));
     int   i1     = static_cast<int>(std::ceil(fIndex));
 
-    if (i0 == i1 || i1 >= fls.size()) {
+    if (i0 == i1 || i1 >= (int) fls.size()) {
         return fls[i0];
     }
 
@@ -5729,7 +5734,6 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
 #endif
 
         Render::GL::CHyprOpenGLImpl::SRectRenderData rectdata;
-        auto region = new CRegion(tocbox(box));
         rectdata.damage        = nullptr;
         rectdata.blur          = blur;
         rectdata.blurA         = blurA;
@@ -6492,7 +6496,6 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool
             const auto target = c->w->layoutTarget();
             if (!target || !target->space())
                 return;
-            auto scaling_factor = c->w->m_monitor->m_scale;
             const CBox previous_full = notify_effects ? c->w->getFullWindowBoundingBox() : CBox{};
 
             {
@@ -6600,7 +6603,6 @@ bool paint_png_to_surface(cairo_surface_t* surface, std::string path, int target
 
     auto* temp_context = cairo_create(surface);
     int   w            = cairo_image_surface_get_width(png_surface);
-    int   h            = cairo_image_surface_get_height(png_surface);
 
     cairo_save(temp_context);
     cairo_set_operator(temp_context, CAIRO_OPERATOR_CLEAR);
@@ -6988,7 +6990,7 @@ void free_text_texture(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (int i = 0; i < hyprtextures.size(); i++) {
+    for (int i = 0; i < (int) hyprtextures.size(); i++) {
         auto h = hyprtextures[i];
         if (h->info.id == id) {
             h->texture.reset();
@@ -7005,7 +7007,7 @@ TextureInfo create_texture(int w, int h) {
 }
 
 void draw_to_texture(TextureInfo info, std::function<void()> func) {
-    for (int i = 0; i < hyprtextures.size(); i++) {
+    for (int i = 0; i < (int) hyprtextures.size(); i++) {
         auto h = hyprtextures[i];
         if (h->info.id == info.id) {
         }
@@ -7904,7 +7906,7 @@ int HyprIso::steam_id(int cid) {
 
         int steamID = -1;
         if (propertyReply->type == XCB_ATOM_CARDINAL && propertyReply->format == 32 &&
-            xcb_get_property_value_length(propertyReply) >= sizeof(uint32_t)) {
+            xcb_get_property_value_length(propertyReply) >= (int) sizeof(uint32_t)) {
             uint32_t value = 0;
             memcpy(&value, xcb_get_property_value(propertyReply), sizeof(value));
             steamID = static_cast<int>(value);
@@ -8832,11 +8834,6 @@ void HyprIso::screenshot_all() {
     ZoneScoped;
 #endif
     for (auto w : Desktop::windowState()->windows()) {
-        bool has_mylar_bar = false;
-        for (const auto &decos : MYLAR_WINDOW_DECORATIONS(w))
-            if (decos->getDisplayName() == "MylarBar")
-                has_mylar_bar = true;
-
         if (true) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w) {
@@ -8854,11 +8851,6 @@ void HyprIso::screenshot(int id) {
     ZoneScoped;
 #endif
     for (auto w : Desktop::windowState()->windows()) {
-        bool has_mylar_bar = false;
-        for (const auto &decos : MYLAR_WINDOW_DECORATIONS(w))
-            if (decos->getDisplayName() == "MylarBar")
-                has_mylar_bar = true;
-            
         if (true) {
             for (auto hw : hyprwindows) {
                 if (hw->w == w && hw->id == id) {
@@ -9234,19 +9226,7 @@ static void draw_magic_lamp(SP<Render::ITexture> texture, const Bounds& source, 
     if (renderData.damage.empty() || progress >= 1.0f)
         return;
 
-    // First pull the lower edge into a curved neck, then feed the rest of
-    // the window through it. Both phases depend only on gesture progress,
-    // so reversing direction retraces exactly the same shape.
-    const double pinch = lamp_smoothstep(progress / 0.55);
     const double pull = lamp_smoothstep((progress - 0.25) / 0.75);
-    const double top = std::lerp(source.y, target.y, pull);
-    const double bottom = std::lerp(source.y + source.h, target.y + target.h, pinch);
-
-    const double left = std::min(source.x, target.x);
-    const double right = std::max(source.x + source.w, target.x + target.w);
-    const double canvasTop = std::min(source.y, target.y);
-    const double canvasBottom = std::max(source.y + source.h, target.y + target.h);
-    const CBox canvas = {left, canvasTop, right - left, canvasBottom - canvasTop};
 
     // 0.56.x has no mesh render entry point. Approximate the lamp with a
     // straight interpolation between the source and target rectangles.
@@ -9349,7 +9329,6 @@ void HyprIso::draw_raw_deco_thumbnail(int id, Bounds b, int rounding, float roun
                     auto tex = hw->deco_fb->getTexture();
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
 
-                    auto ex = g_pDecorationPositioner->getWindowDecorationExtents(hw->w, false);
                     auto s = hw->w->m_monitor->m_scale;
 
                     auto off = Vector2D(0, 0);
@@ -10925,7 +10904,7 @@ void popup_created(SP<Desktop::View::CPopup> popup) {
 }
 
 void popup_destroyed(int id) {
-    for (int i = 0; i < hyprpopus.size(); i++) {
+    for (int i = 0; i < (int) hyprpopus.size(); i++) {
         auto hp = hyprpopus[i];
         if (hp->id == id) {
             if (hypriso->on_popup_closed) {
@@ -11551,7 +11530,7 @@ Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
     MylarModifierMask modMask = (MylarModifierMask) 0;
     float deltaScale = 1.F;
 
-    for (; argIndex < data.size(); ++argIndex) {
+    for (; argIndex < (int) data.size(); ++argIndex) {
         const auto& arg = data[argIndex];
         if (arg.starts_with("mod:")) {
             modMask = mw_modmask_from_string(std::string { arg.substr(4) });
@@ -11602,7 +11581,11 @@ Hyprlang::CParseResult mylarGestureKeyword(const char* LHS, const char* RHS)
 }
 
 void add_mylar_gesture() {
+    // No V2 replacement exists for config keywords yet.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     HyprlandAPI::addConfigKeyword(globals->api, "mylar-gesture", ::mylarGestureKeyword, {});
+#pragma GCC diagnostic pop
 }
 
 // True while some other window on the monitor's fullscreen workspace holds

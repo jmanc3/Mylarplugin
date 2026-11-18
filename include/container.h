@@ -34,7 +34,8 @@ struct Bounds {
 
     Bounds(double x, double y, double w, double h);
 
-    Bounds(const Bounds& b);
+    Bounds(const Bounds& b) = default;
+    Bounds& operator=(const Bounds& b) = default;
 
     bool non_zero();
 

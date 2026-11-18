@@ -746,7 +746,6 @@ bottom_thumb_bounds(Container *scrollpane, Bounds thumb_area) {
 static void
 clicked_right_thumb(Container *root, Container *thumb_container, bool animate) {
     if (auto *s = dynamic_cast<ScrollContainer *>(thumb_container->parent->parent)) {
-        auto *content = s->content;
         
         double thumb_height = right_thumb_bounds(s, thumb_container->real_bounds).h;
         double mouse_y = root->mouse_current_y;
@@ -779,7 +778,6 @@ clicked_right_thumb(Container *root, Container *thumb_container, bool animate) {
 static void
 clicked_bottom_thumb(Container *root, Container *thumb_container, bool animate) {
     if (auto *s = dynamic_cast<ScrollContainer *>(thumb_container->parent->parent)) {
-        auto *content = s->content;
         
         double thumb_width =
                 bottom_thumb_bounds(thumb_container->parent->parent, thumb_container->real_bounds).w;

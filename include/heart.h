@@ -237,7 +237,6 @@ static Container *first_above_of(Container *c, int type) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    Container *client_above = nullptr; 
     Container *current = c;
     while (current->parent != nullptr) {
         if (current->parent->custom_type == type) {
@@ -281,7 +280,6 @@ static void request_damage(Container *root, Container *c) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    auto [rid, s, stage, active_id] = from_root(root);
     auto b = c->real_bounds;
     //b.scale(s);
     //b.x += root->real_bounds.x;

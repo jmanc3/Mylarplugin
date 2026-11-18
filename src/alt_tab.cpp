@@ -122,7 +122,7 @@ static void paint_tab_option(Container *actual_root, Container *c) {
 
     int real_active_index = wrap_index(ai, c->parent->children.size());
     int index = 0;
-    for (int i = 0; i < c->parent->children.size(); i++) {
+    for (int i = 0; i < (int) c->parent->children.size(); i++) {
         if (c->parent->children[i] == c) {
             index = i;
             break;
@@ -215,12 +215,6 @@ static void paint_tab_option(Container *actual_root, Container *c) {
 
     c->real_bounds = backup;
 
-    bool any_hovered = false;
-    for (auto ch : c->parent->children) {
-        if (ch->state.mouse_hovering)
-            any_hovered = true;
-    }
-
     if (real_active_index == index) {
         Bounds bo = c->real_bounds;
         auto mb = bounds_monitor(rid);
@@ -240,7 +234,6 @@ static void paint_tab_option(Container *actual_root, Container *c) {
 }
 
 static void create_tab_option(int cid, Container *parent) {
-    bool is_first = parent->children.size() <= 1;
     auto c = parent->child(::absolute, FILL_SPACE, FILL_SPACE);
 
     *datum<int>(c, "cid") = cid;
@@ -249,7 +242,7 @@ static void create_tab_option(int cid, Container *parent) {
     c->when_drag_end_is_click = false;
     c->when_mouse_enters_container = paint {
         int index = 0;
-        for (int i = 0; i < c->parent->children.size(); i++) {
+        for (int i = 0; i < (int) c->parent->children.size(); i++) {
             if (c->parent->children[i] == c) {
                 index = i;
                 break;
@@ -259,7 +252,7 @@ static void create_tab_option(int cid, Container *parent) {
     };
     c->when_clicked = paint {
         int index = 0;
-        for (int i = 0; i < c->parent->children.size(); i++) {
+        for (int i = 0; i < (int) c->parent->children.size(); i++) {
             if (c->parent->children[i] == c) {
                 index = i;
                 break;
@@ -301,7 +294,7 @@ static void create_tab_option(int cid, Container *parent) {
         }
 
         int index = 0;
-        for (int i = 0; i < c->parent->parent->children.size(); i++) {
+        for (int i = 0; i < (int) c->parent->parent->children.size(); i++) {
             if (c->parent->parent->children[i] == c->parent) {
                 index = i;
                 break;
@@ -331,8 +324,6 @@ static void create_tab_option(int cid, Container *parent) {
     close->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
         auto root = get_rendering_root();
         if (!root) return;
-        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        
         auto w = titlebar_h * titlebar_button_ratio();
         c->wanted_bounds = {b.x + b.w - w, b.y, w, (float) titlebar_h};
         c->real_bounds = c->wanted_bounds;
@@ -343,9 +334,6 @@ static void create_tab_option(int cid, Container *parent) {
 }
 
 Bounds position_tab_options(Container *parent, int max_row_width) {
-    int x = 0;
-    int y = 0;
-    int pad = 10;
     
     auto root = get_rendering_root();
     if (!root) return {0, 0, 1280, 720};
@@ -377,7 +365,7 @@ Bounds position_tab_options(Container *parent, int max_row_width) {
     };
 
     auto result = layoutAltTabThumbnails(params, items);
-    for (int i = 0; i < parent->children.size(); i++) {
+    for (int i = 0; i < (int) parent->children.size(); i++) {
         auto ch = parent->children[i];
         ch->wanted_bounds = result.items[i];
         ch->wanted_bounds.x += 20;
@@ -417,7 +405,7 @@ void alt_tab_parent_pre_layout(Container *actual_root, Container *c, const Bound
             create_tab_option(cid, parent);
         });
 
-        for (int index = 0; index < order.size(); index++) {
+        for (int index = 0; index < (int) order.size(); index++) {
             for (int i = c->children.size() - 1; i >= 0; i--) {
                 if (order[index] == (*datum<int>(c->children[i], "cid"))) {
                     *datum<int>(c->children[i], "stacking_index") = index;
@@ -672,7 +660,7 @@ void alt_tab::move_y(int dir, float off_x) {
                 return;
 
             int real_active_index = wrap_index(active_index, c->children.size());
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch->real_bounds.x < last_x) {
                     // start of line
@@ -697,7 +685,7 @@ void alt_tab::move_y(int dir, float off_x) {
 
     if (active_y < 0)
         active_y = 0;
-    if (active_y > lines.size() - 1)
+    if (active_y > (int) lines.size() - 1)
         active_y = lines.size() - 1;
     if (active_y == before_y)
         return;
@@ -718,7 +706,7 @@ void alt_tab::move_y(int dir, float off_x) {
 
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch == other)
                     active_index = i;
@@ -743,7 +731,7 @@ void alt_tab::move_x(int dir) {
                 return;
             
             int real_active_index = wrap_index(active_index, c->children.size());
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch->real_bounds.x < last_x) {
                     // start of line
@@ -767,14 +755,14 @@ void alt_tab::move_x(int dir) {
 
     if (active_x < 0)
         active_x = 0;
-    if (active_x > line.size() - 1)
+    if (active_x > (int) line.size() - 1)
         active_x = line.size() - 1;
 
     Container *target = line[active_x];
 
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::ALT_TAB) {
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch == target)
                     active_index = i;
@@ -807,7 +795,7 @@ void alt_tab::on_activated(int id) {
 }
 
 bool alt_tab::showing() {
-    return showing;
+    return is_showing;
 }
 
 void alt_tab::visual_offset(float scalar) {
@@ -832,7 +820,7 @@ bool alt_tab::at_start_col() {
                 return true;
 
             int real_active_index = wrap_index(active_index, c->children.size());
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch->real_bounds.x < last_x) {
                     // start of line
@@ -869,7 +857,7 @@ bool alt_tab::at_end_col() {
                 return true;
 
             int real_active_index = wrap_index(active_index, c->children.size());
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch->real_bounds.x < last_x) {
                     // start of line
@@ -889,7 +877,7 @@ bool alt_tab::at_end_col() {
     }
 
     auto before_line = lines[active_y];
-    return active_x == (before_line.size() - 1);
+    return active_x == ((int) before_line.size() - 1);
 }
 
 
@@ -897,7 +885,6 @@ bool alt_tab::at_start_row() {
     std::vector<std::vector<Container *>> lines;
 
     int active_y = 0;
-    int active_x = 0;
 
     float last_x = 1000000;
 
@@ -907,7 +894,7 @@ bool alt_tab::at_start_row() {
                 return true;
 
             int real_active_index = wrap_index(active_index, c->children.size());
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch->real_bounds.x < last_x) {
                     // start of line
@@ -920,7 +907,6 @@ bool alt_tab::at_start_row() {
 
                 if (i == real_active_index) {
                     active_y = lines.size() - 1;
-                    active_x = last->size() - 1;
                 }
             }
         }
@@ -933,7 +919,6 @@ bool alt_tab::at_end_row() {
     std::vector<std::vector<Container *>> lines;
 
     int active_y = 0;
-    int active_x = 0;
 
     float last_x = 1000000;
 
@@ -943,7 +928,7 @@ bool alt_tab::at_end_row() {
                 return true;
 
             int real_active_index = wrap_index(active_index, c->children.size());
-            for (int i = 0; i < c->children.size(); i++) {
+            for (int i = 0; i < (int) c->children.size(); i++) {
                 auto ch = c->children[i];
                 if (ch->real_bounds.x < last_x) {
                     // start of line
@@ -956,12 +941,11 @@ bool alt_tab::at_end_row() {
 
                 if (i == real_active_index) {
                     active_y = lines.size() - 1;
-                    active_x = last->size() - 1;
                 }
             }
         }
     }
 
-    return active_y == (lines.size() - 1);
+    return active_y == ((int) lines.size() - 1);
 }
 
