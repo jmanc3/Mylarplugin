@@ -8,6 +8,7 @@
 
 #include <string>
 #include <cmath>
+#include <algorithm>
 
 struct DraggingData {
     int cid = -1;
@@ -46,34 +47,24 @@ void drag::begin(int cid) {
 
         auto b = data->bounds_start;
         auto MOUSECOORDS = data->mouse_start;
-        auto mb = bounds_monitor(get_monitor(cid));
 
         float perc = (MOUSECOORDS.x - b.x) / b.w;
-        bool window_left_side = b.x < mb.x + b.w * .5;
+        if (perc < 0) perc = 0;
+        if (perc > 1) perc = 1;
         bool click_left_side = perc <= .5;
         float size_from_left = b.w * perc;
         float size_from_right = b.w - size_from_left;
-        bool window_smaller_after = b.w > client_pre_snap_bounds.w;
-        float x = MOUSECOORDS.x - (perc * (client_pre_snap_bounds.w)); // perc based relocation
-        log(fz("{} {} {} {} {} {} {}", perc, window_left_side, click_left_side, size_from_left, size_from_right, window_smaller_after, x));
-        // keep window fully on screen
-        if (!window_smaller_after) {
-            if (click_left_side) {
-                if (window_left_side) {
-                    x = MOUSECOORDS.x - size_from_left;
-                } else {
-                    x = MOUSECOORDS.x - client_pre_snap_bounds.w + size_from_right;
-                }
-            } else {
-                if (window_left_side) {
-                    x = b.x;
-                } else {
-                    x = MOUSECOORDS.x - client_pre_snap_bounds.w + size_from_right;
-                }
-            }
+        float pre_w = client_pre_snap_bounds.w;
+        // Keep the clicked point under the mouse: measured from the nearest edge it stays
+        // pixel exact when it fits in the restored window, otherwise it falls back to the
+        // same relative (percentage) position.
+        float offset;
+        if (click_left_side) {
+            offset = std::min(size_from_left, perc * pre_w);
         } else {
-            // if offset larger than resulting window use percentage
+            offset = pre_w - std::min(size_from_right, (1.0f - perc) * pre_w);
         }
+        float x = MOUSECOORDS.x - offset;
 
         hypriso->move_resize(cid, 
             x, 

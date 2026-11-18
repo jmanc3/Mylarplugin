@@ -1246,11 +1246,26 @@ static void on_activated(int id) {
         }
     }
     if (!grouped_with.empty()) {
-        later_immediate([grouped_with](Timer *) {
+        bool floating = hypriso->is_floating(id);
+        later_immediate([grouped_with, id, floating](Timer *) {
+            auto targets = grouped_with;
+            if (floating) {
+                // The snap group may have been broken before this ran (e.g. a client side
+                // decoration drag started right after the click that focused id), so only
+                // raise windows that are still grouped with it.
+                auto c = get_cid_container(id);
+                if (!c)
+                    return;
+                targets = ((ClientInfo *)c->user_data)->grouped_with;
+            }
             leave = true;
-            for (auto g : grouped_with) {
+            for (auto g : targets) {
                 hypriso->bring_to_front(g, false);
             }
+            // Keep the activated window above its group. Snapped windows don't
+            // overlap on the desktop, but they do while overview animates them home.
+            if (get_cid_container(id))
+                hypriso->bring_to_front(id, false);
             leave = false;
         });
     }
@@ -1778,6 +1793,10 @@ static void on_render(int id, int stage) {
 
 static void on_drag_start_requested(int id) {
     drag::begin(id);
+    // drag::begin breaks the snap group, so the dragged window has to be raised above
+    // its former group members (the titlebar drag path does the same).
+    if (hypriso->is_floating(id))
+        hypriso->bring_to_front(id);
 }
 
 static void on_resize_start_requested(int id, RESIZE_TYPE type) {
