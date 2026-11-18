@@ -81,7 +81,10 @@ uninstall:
 clean:
 	$(RM) $(OUTPUT) $(OBJECT_FILES) $(DEP_FILES)
 
-load: all unload
+# Unload only after the build succeeded: a failed compile/link stops make before
+# this recipe runs, so the currently loaded plugin keeps working.
+load: all
+	-hyprctl plugin unload ${PWD}/$(OUTPUT)
 	sleep 1s; hyprctl plugin load ${PWD}/$(OUTPUT)
 
 unload:
