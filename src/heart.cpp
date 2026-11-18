@@ -2802,7 +2802,16 @@ void heart::begin() {
 
         	hypriso->create_callbacks();
         	hypriso->create_hooks();
-        	
+
+            // create_hooks read the instance signature the last run saw. A reload
+            // of the plugin in the same Hyprland session only runs "Plugin start".
+            {
+                const bool new_session = hyprland_instance_name() != last_hyprland_instance_name();
+                for (const auto &entry : set->autostart)
+                    if (entry.when == "Plugin start" || (new_session && entry.when == "Session start"))
+                        launch_command(entry.command);
+            }
+
             hypriso->add_float_rule();
 
             later(100, [](Timer *t) {

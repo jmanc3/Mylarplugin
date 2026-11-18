@@ -354,7 +354,10 @@ static const std::vector<SettingsCategory> &settings_categories() {
             {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
         }},
         {"Behaviour", "settings-behaviour", "preferences-desktop-wallpaper", {
-            {"Behaviour", "Behaviour", "Theme, font, overview, dock, workspaces, snap windows, hot corners", "\uE771"},
+            {"Desktop", "Desktop", "Theme, font, overview, icon cache", "\uE771"},
+            {"Dock", "Dock", "Dock style, labels, which windows show", "\uE75B"},
+            {"Multitasking", "Multitasking", "App switching, workspaces, snap windows, hot corners", "\uE7C4"},
+            {"Autostart", "Autostart", "Commands run when the desktop or session starts", "\uE7E8"},
         }},
         {"Devices", "settings-devices", "preferences-desktop-peripherals", {
             {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
@@ -755,6 +758,26 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
             if (shortcut.command.empty())
                 continue;
             settings->custom_shortcuts.push_back(shortcut);
+        }
+    }
+
+    if (save) {
+        for (const auto& entry : settings->autostart)
+            out << "autostart = " << std::quoted(entry.when) << " " << std::quoted(entry.command) << "\n";
+    } else {
+        settings->autostart.clear();
+        for (const auto& line : lines) {
+            std::istringstream entry(line);
+            std::string key;
+            char separator = '\0';
+            SAutostart autostart;
+            if (!(entry >> key >> separator) || key != "autostart" || separator != '=')
+                continue;
+            if (!(entry >> std::quoted(autostart.when) >> std::quoted(autostart.command)) || autostart.command.empty())
+                continue;
+            if (autostart.when != "Session start")
+                autostart.when = "Plugin start";
+            settings->autostart.push_back(autostart);
         }
     }
 
@@ -4516,9 +4539,23 @@ static void save_multitasking_settings() {
     });
 }
 
-// Shown at the end of the Behaviour page.
-static void add_multitasking_settings(Container *padded_right) {
-    make_vert_space(padded_right, 24);
+// Empties settings_right and returns the container a page fills.
+static Container *settings_begin_page(Container *root) {
+    auto right = container_by_name("settings_right", root);
+    if (!right)
+        return nullptr;
+    for (auto child: right->children)
+        delete child;
+    right->children.clear();
+
+    right->pre_layout = layout_right_page;
+    return right->child(FILL_SPACE, FILL_SPACE);
+}
+
+static void fill_multitasking_settings(Container *root) {
+    auto padded_right = settings_begin_page(root);
+    if (!padded_right)
+        return;
     make_section_title(padded_right, "Multitasking Settings");
     make_vert_space(padded_right, 10);
     make_button_group(padded_right, "App switching",
@@ -4526,15 +4563,15 @@ static void add_multitasking_settings(Container *padded_right) {
         {"All workspaces", "Current workspace"}, [](std::string selected) {
             set->app_switcher_current_workspace_only = selected == "Current workspace";
             save_multitasking_settings();
-        }, set->app_switcher_current_workspace_only ? "Current workspace" : "All workspaces");
+        }, set->app_switcher_current_workspace_only ? "Current workspace" : "All workspaces", "\uE8AB");
     make_button_group(padded_right, "Workspace behavior",
         "Create workspaces as needed or keep a fixed number",
         {"Dynamic", "Fixed"}, [](std::string selected) {
             set->dynamic_workspaces = selected == "Dynamic";
             save_multitasking_settings();
-        }, set->dynamic_workspaces ? "Dynamic" : "Fixed");
+        }, set->dynamic_workspaces ? "Dynamic" : "Fixed", "\uE8A9");
     make_reset_textfield(padded_right, "Number of workspaces",
-        "Per monitor in Fixed mode (1–20); occupied extras are kept", "", true,
+        "Per monitor in Fixed mode (1–20); occupied extras are kept", "\uE80A", true,
         std::to_string(set->fixed_workspace_count), "4", [](std::string value) {
             try {
                 size_t end = 0;
@@ -4554,7 +4591,7 @@ static void add_multitasking_settings(Container *padded_right) {
         {"Independent", "Together"}, [](std::string selected) {
             set->workspaces_span_monitors = selected == "Together";
             save_multitasking_settings();
-        }, set->workspaces_span_monitors ? "Together" : "Independent");
+        }, set->workspaces_span_monitors ? "Together" : "Independent", "\uEBC6");
     make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
         set->hotcorners = value;
         save_multitasking_settings();
@@ -4563,24 +4600,18 @@ static void add_multitasking_settings(Container *padded_right) {
         "Drag a window to a screen edge or corner to fill half or a quarter of the screen", set->resize_at_screen_edges, [](bool value) {
             set->resize_at_screen_edges = value;
             save_multitasking_settings();
-        });
+        }, "\uF246");
     make_bool(padded_right, "Attempt to respect CSD requests",
         "Don't add a titlebar to windows that ask to draw their own decorations", set->respect_csd_requests, [](bool value) {
             set->respect_csd_requests = value;
             save_multitasking_settings();
-        });
+        }, "\uE737");
 }
 
-static void fill_behaviour_settings(Container *root, Container *c) {
-    auto right = container_by_name("settings_right", root);
-    if (!right)
+static void fill_desktop_settings(Container *root) {
+    auto padded_right = settings_begin_page(root);
+    if (!padded_right)
         return;
-    for (auto child: right->children)
-        delete child;
-    right->children.clear();
-
-    right->pre_layout = layout_right_page;
-    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
 
     make_section_title(padded_right, "Desktop Settings");
     
@@ -4629,9 +4660,13 @@ static void fill_behaviour_settings(Container *root, Container *c) {
     attach_font_completions(font_field, [](std::string value) {
         set->font = value;
     });
+}
 
-    
-    make_vert_space(padded_right, 24);
+static void fill_dock_settings(Container *root) {
+    auto padded_right = settings_begin_page(root);
+    if (!padded_right)
+        return;
+
     make_section_title(padded_right, "Dock Settings");
 
     make_vert_space(padded_right, 10);
@@ -4713,8 +4748,6 @@ static void fill_behaviour_settings(Container *root, Container *c) {
             });
         },
         "\ue75b");
-
-    add_multitasking_settings(padded_right);
 }
 
 
@@ -5999,6 +6032,218 @@ static void fill_shortcuts_settings(Container *root, bool reload_rows = true) {
         sshortcut_start_editing(index);
     }
     sshortcut_edit_after_rebuild = -1;
+}
+
+/*************************************************
+ *
+ * Autostart page
+ *
+ *************************************************/
+
+static const std::vector<std::string> sautostart_whens = {"Session start", "Plugin start"};
+
+// Shown under a row's dropdown while it is hovered or focused with the keyboard.
+static const char *sautostart_when_hint =
+    "When this command runs\n"
+    "Session start: once, when a new Hyprland session starts (not when Mylar is reloaded)\n"
+    "Plugin start: every time Mylar loads, including reloads in the same session";
+
+// Only touched on the settings thread; handed to the compositor on change.
+static std::vector<SAutostart> sautostart_rows;
+// The Autostart page must be rebuilt from sautostart_rows (rows were added or removed).
+static bool sautostart_page_stale = false;
+static void sautostart_commit() {
+    auto rows = sautostart_rows;
+    main_thread([rows]() {
+        set->autostart = rows;
+        settings::load_save_settings(true, set);
+    });
+}
+
+static void sautostart_request_rebuild() {
+    sautostart_page_stale = true;
+    if (settings_mylar)
+        windowing::redraw(settings_mylar->raw_window);
+}
+
+static void make_autostart_row(Container *parent, int index) {
+    static const float height = 62;
+    static const float round = 8;
+    auto row = parent->child(::hbox, FILL_SPACE, height);
+    row->name = "autostart_row";
+    search_tag(row, sautostart_rows[index].command, sautostart_rows[index].when);
+    row->parent_bounds_limit_input_bounds = false;
+    row->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = height * dpi;
+        c->wanted_pad = Bounds(20 * dpi, 14 * dpi, 14 * dpi, 14 * dpi);
+        c->spacing = 8 * dpi;
+    };
+    row->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto cr = window->drawing_context;
+        auto dpi = window->dpi;
+
+        // Neighbouring rows form one rounded group and share their border line.
+        bool is_first = true, is_last = true;
+        if (auto parent = c->parent) {
+            auto &siblings = parent->children;
+            auto it = std::find(siblings.begin(), siblings.end(), c);
+            if (it != siblings.begin())
+                is_first = (*(it - 1))->name != c->name;
+            if (it != siblings.end() && it + 1 != siblings.end())
+                is_last = (*(it + 1))->name != c->name;
+        }
+        auto b = c->real_bounds;
+        const auto overlap = (std::floor(1.0 * dpi) + 1.0) * 0.5;
+        b.y -= overlap;
+        b.h += 2.0 * overlap;
+
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, 0, is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_background);
+        cr->fill();
+        drawRoundedRect(cr, b.x, b.y, b.w, b.h, round * dpi, std::floor(1.0 * dpi), is_first, is_first, is_last, is_last);
+        set_argb(cr, theme.row_border);
+        cr->set_line_width(std::floor(1.0 * dpi));
+        cr->stroke();
+    };
+
+    auto command = row->child(FILL_SPACE, FILL_SPACE);
+    command->when_paint = [index](Container *root, Container *c) {
+        if (index >= (int) sautostart_rows.size())
+            return;
+        swifi_text(root, c->real_bounds, sautostart_rows[index].command, 12, theme.text);
+    };
+
+    make_dropdown(row, sautostart_rows[index].when, sautostart_whens, [index](std::string picked) {
+        if (index >= (int) sautostart_rows.size())
+            return;
+        sautostart_rows[index].when = picked;
+        sautostart_commit();
+    });
+    auto when = row->children.back();
+    when->parent_bounds_limit_input_bounds = false;
+    auto paint_when = std::move(when->when_paint);
+    when->when_paint = [paint_when](Container *root, Container *c) {
+        if (paint_when)
+            paint_when(root, c);
+        auto &focus = focus_of(root);
+        const bool focused = focus.visible && focus.current == c;
+        if (!dropdown_popup && (c->state.mouse_hovering || focused)) {
+            field_hint_text = sautostart_when_hint;
+            field_hint_anchor = c->real_bounds;
+        }
+    };
+    when->when_mouse_enters_container = [](Container *root, Container *) { swifi_redraw(root); };
+    when->when_mouse_leaves_container = [](Container *root, Container *) { swifi_redraw(root); };
+
+    swifi_card_button(row, []() { return std::string("Remove"); }, []() { return true; }, [index]() {
+        if (index >= (int) sautostart_rows.size())
+            return;
+        sautostart_rows.erase(sautostart_rows.begin() + index);
+        sautostart_commit();
+        sautostart_request_rebuild();
+    });
+}
+
+// Command and an Add button; new commands run at session start until changed on their row.
+static void make_autostart_form(Container *parent) {
+    auto card = parent->child(::vbox, FILL_SPACE, FILL_SPACE);
+    card->parent_bounds_limit_input_bounds = false;
+    card->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_pad = Bounds(16 * dpi, 12 * dpi, 12 * dpi, 12 * dpi);
+        c->spacing = 8 * dpi;
+        double h = c->wanted_pad.y + c->wanted_pad.h;
+        int shown = 0;
+        for (auto child : c->children) {
+            if (!child->exists)
+                continue;
+            if (child->pre_layout)
+                child->pre_layout(root, child, b);
+            h += child->wanted_bounds.h;
+            shown++;
+        }
+        h += std::max(0, shown - 1) * c->spacing;
+        c->wanted_bounds.h = h;
+    };
+    card->when_paint = [](Container *root, Container *c) {
+        auto window = swifi_window(root);
+        auto dpi = window->dpi;
+        auto b = c->real_bounds;
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 8 * dpi, 1.0);
+        set_argb(window->drawing_context, theme.row_background);
+        window->drawing_context->fill();
+        drawRoundedRect(window->drawing_context, b.x, b.y, b.w, b.h, 8 * dpi, std::floor(1.0 * dpi));
+        set_argb(window->drawing_context, theme.row_border);
+        window->drawing_context->set_line_width(std::floor(1.0 * dpi));
+        window->drawing_context->stroke();
+    };
+
+    auto caption = card->child(FILL_SPACE, FILL_SPACE);
+    caption->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 20 * swifi_window(root)->dpi;
+    };
+    caption->when_paint = [](Container *root, Container *c) {
+        swifi_text(root, c->real_bounds, "Add a command", 12, theme.text);
+    };
+
+    auto line = card->child(::hbox, FILL_SPACE, FILL_SPACE);
+    line->parent_bounds_limit_input_bounds = false;
+    line->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        double dpi = swifi_window(root)->dpi;
+        c->wanted_bounds.h = 34 * dpi;
+        c->spacing = 8 * dpi;
+    };
+    auto command = make_placeholder_field(line, "Command to run");
+    auto command_layout = command->pre_layout;
+    command->pre_layout = [command_layout](Container *root, Container *c, const Bounds &b) {
+        if (command_layout)
+            command_layout(root, c, b);
+        c->wanted_bounds.h = 34 * swifi_window(root)->dpi;
+    };
+    auto add_command = [command]() {
+        auto text = sshortcut_field_text(command);
+        if (text.empty())
+            return;
+        sautostart_rows.push_back({"Session start", text});
+        sautostart_commit();
+        sautostart_request_rebuild();
+    };
+    auto edit_key = std::move(command->when_key_event);
+    command->when_key_event = [edit_key, add_command](Container *root, Container *c, int key, bool pressed,
+                                                      xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+            add_command();
+            return;
+        }
+        if (edit_key)
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+    };
+    auto can_add = [command]() { return !sshortcut_field_text(command).empty(); };
+    auto add = swifi_card_button(line, []() { return std::string("Add"); }, can_add, add_command);
+    add->parent_bounds_limit_input_bounds = false;
+}
+
+static void fill_autostart_settings(Container *root, bool reload_rows = true) {
+    auto padded_right = settings_begin_page(root);
+    if (!padded_right)
+        return;
+    padded_right->name = "autostart_page";
+
+    if (reload_rows)
+        sautostart_rows = set->autostart;
+    sautostart_page_stale = false;
+
+    make_section_title(padded_right, "Autostart");
+    make_vert_space(padded_right, 10);
+    make_autostart_form(padded_right);
+
+    if (!sautostart_rows.empty()) {
+        make_vert_space(padded_right, 8);
+        for (int i = 0; i < (int) sautostart_rows.size(); i++)
+            make_autostart_row(padded_right, i);
+    }
 }
 
 static void fill_wifi_settings(Container *root) {
@@ -9617,40 +9862,45 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Display", "Monitor", "Max average luminance", "Maximum average luminance override", "brightness nits");
     search_add("Display", "Monitor", "Disabled", "Turn this monitor off without disconnecting it", "disable turn off monitor screen enable");
 
-    search_add("Behaviour", "Desktop Settings", "Desktop Settings", "", "desktop");
-    search_add("Behaviour", "Desktop Settings", "Icon Cache", "Re-scan installed icons", "icons refresh rescan reload missing icon theme");
-    search_add("Behaviour", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
-    search_add("Behaviour", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
-    search_add("Behaviour", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
-    search_add("Behaviour", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
-    search_add("Behaviour", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
-    search_add("Behaviour", "Dock Settings", "Bounce icons on minimize and restore", "Dock icons dip when their window minimizes and hop when it comes back",
+    search_add("Desktop", "Desktop Settings", "Desktop Settings", "", "desktop");
+    search_add("Desktop", "Desktop Settings", "Icon Cache", "Re-scan installed icons", "icons refresh rescan reload missing icon theme");
+    search_add("Desktop", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
+    search_add("Desktop", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
+    search_add("Desktop", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
+    search_add("Dock", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
+    search_add("Dock", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
+    search_add("Dock", "Dock Settings", "Bounce icons on minimize and restore", "Dock icons dip when their window minimizes and hop when it comes back",
                "taskbar dock bounce animation minimize restore unminimize hide");
-    search_add("Behaviour", "Dock Settings", "Same width", "When labels are showing, give every dock button the same width instead of fitting its title",
+    search_add("Dock", "Dock Settings", "Same width", "When labels are showing, give every dock button the same width instead of fitting its title",
                "taskbar dock labels width uniform same size buttons title");
-    search_add("Behaviour", "Dock Settings", "Dock style", "How dock icons are drawn", "taskbar dock style bubbly flat windows 7 glass look appearance");
-    search_add("Behaviour", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
+    search_add("Dock", "Dock Settings", "Dock style", "How dock icons are drawn", "taskbar dock style bubbly flat windows 7 glass look appearance");
+    search_add("Dock", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
                "taskbar dock workspace windows monitors");
-    search_add("Behaviour", "Dock Settings", "Show applications from other desktops",
+    search_add("Dock", "Dock Settings", "Show applications from other desktops",
                "List applications in the applications menu that are meant only for GNOME, KDE or another desktop",
                "applications menu launcher desktop files gnome kde xfce session onlyshowin apps all");
-    search_add("Behaviour", "Dock Settings", "Labels", "Give each window its own dock button with its title next to the icon",
+    search_add("Dock", "Dock Settings", "Labels", "Give each window its own dock button with its title next to the icon",
                "group merge stack combine labels titles dock taskbar buttons");
 
-    search_add("Behaviour", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
-    search_add("Behaviour", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
+    search_add("Multitasking", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
+    search_add("Multitasking", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
                "alt tab switcher windows workspace");
-    search_add("Behaviour", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
+    search_add("Multitasking", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
                "dynamic fixed workspaces virtual desktops behaviour");
-    search_add("Behaviour", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
+    search_add("Multitasking", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
                "count workspaces virtual desktops amount");
-    search_add("Behaviour", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
+    search_add("Multitasking", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
                "workspaces span displays screens independent together");
-    search_add("Behaviour", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
-    search_add("Behaviour", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
+    search_add("Multitasking", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
+    search_add("Multitasking", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
                "window resizing screen edges corners quarter snap snapping tile tiling half maximize drag edges");
-    search_add("Behaviour", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
+    search_add("Multitasking", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
                "csd ssd client side server side decorations titlebar title bar xdg kde");
+
+    search_add("Autostart", "Autostart", "Autostart", "Commands run when the desktop or session starts",
+               "autostart startup start up exec launch login boot programs apps run commands session");
+    for (const auto &entry : set->autostart)
+        search_add("Autostart", "Autostart", entry.command, entry.when, "autostart startup exec command");
 
     search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
     search_add("Mouse & Touchpad", "Mouse", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert scroll wheel");
@@ -10670,8 +10920,14 @@ static bool settings_show(Container *root, const std::string &id) {
         fill_mouse_settings(root, nullptr);
     } else if (page == "Keyboard") {
         fill_keyboard_settings(root, nullptr);
-    } else if (page == "Behaviour") {
-        fill_behaviour_settings(root, nullptr);
+    } else if (page == "Desktop") {
+        fill_desktop_settings(root);
+    } else if (page == "Dock") {
+        fill_dock_settings(root);
+    } else if (page == "Multitasking") {
+        fill_multitasking_settings(root);
+    } else if (page == "Autostart") {
+        fill_autostart_settings(root);
     } else if (page == "Display") {
         fill_display_settings(root);
     } else if (page == "Shortcuts") {
@@ -11218,6 +11474,9 @@ void fill_root(Container *root) {
         if (sshortcut_page_stale && container_by_name("shortcuts_page", root))
             fill_shortcuts_settings(root, false);
         sshortcut_page_stale = false;
+        if (sautostart_page_stale && container_by_name("autostart_page", root))
+            fill_autostart_settings(root, false);
+        sautostart_page_stale = false;
         if (skbd_page_stale && container_by_name("keyboard_page", root))
             fill_keyboard_settings(root, nullptr, false);
         skbd_page_stale = false;

@@ -108,6 +108,12 @@ struct SCustomShortcut {
     std::string keys; // Empty means unbound
 };
 
+// A command run when the plugin starts, or only when a new Hyprland session starts.
+struct SAutostart {
+    std::string when = "Session start"; // "Session start" or "Plugin start"
+    std::string command;
+};
+
 // One xkb layout, the first one in the list is the default.
 struct SKeyboardLayout {
     std::string layout;
@@ -184,6 +190,7 @@ struct ConfigSettings {
     std::vector<SWorkspaceTiling> workspace_tiling;
     std::vector<SShortcutOverride> shortcuts;
     std::vector<SCustomShortcut> custom_shortcuts;
+    std::vector<SAutostart> autostart;
     std::vector<SKeyboardLayout> keyboard_layouts;
 
     std::vector<MylarMonitor> monitors;
