@@ -71,8 +71,10 @@
 
 // Persisted in ConfigSettings::dock_merge_windows. The dock thread reads this
 // while the compositor/settings threads write it.
-static std::atomic<bool> merge_windows{false};
+static std::atomic<bool> merge_windows{true};
 static bool labels = true;
+// How long a dock icon takes to slide to (or from) its label position.
+static constexpr double kLabelAnimMs = 120.0;
 static int pixel_spacing = 1;
 
 // Persisted in ConfigSettings::dock_style. Bubbly and Bubbly flat are ports of
@@ -248,6 +250,10 @@ struct Pin : UserData {
     int natural_position_x = INT_MAX;
     bool wants_reposition_animation = true;
     float init_repo_vel = 0;
+    // 0 = icon centered with no label, 1 = icon at the left with its label.
+    // Animates when the pin gains its first window or loses its last one.
+    // -1 until the first layout, which snaps it to its target.
+    double label_amount = -1;
     int initial_mouse_click_before_drag_offset_x = 0;
 };
 
@@ -1486,9 +1492,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             paint_dock_icon_pane(cr, c->real_bounds, mylar->raw_window->dpi,
                                  pane_left, pane_middle, pane_right);
         }
-        auto none = pin->windows.empty();
-        if (!labels || merge_windows.load())
-            none = true;
+        const double label_t = std::clamp(pin->label_amount, 0.0, 1.0);
+        // Ease in-out so the icon glides instead of moving linearly.
+        const double label_eased = label_t * label_t * (3.0 - 2.0 * label_t);
+        // The label only fades in. While closing, the pin has already shrunk
+        // and the title would wrap, so it is hidden as the icon slides back.
+        const bool label_wanted = !pin->windows.empty() && labels && !merge_windows.load();
+        const bool none = label_t <= 0.0 || !label_wanted;
 
         int offx = 0;
         if (icons_loaded) {
@@ -1496,7 +1506,12 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             if (ico_surf) {
                 auto h = cairo_image_surface_get_height(ico_surf);
                 auto w = cairo_image_surface_get_width(ico_surf);
-                double ix = none ? std::round(c->real_bounds.x + c->real_bounds.w * .5 - w * .5) : std::round(c->real_bounds.x + 10);
+                // Center within the icon-only width (the pin may already have
+                // grown for its label), then slide toward the label position.
+                const double icon_cell_w = std::min((double) c->real_bounds.w, (double) (dock_is_bubbly() ? 60 : 50) * mylar->raw_window->dpi);
+                const double centered_x = c->real_bounds.x + icon_cell_w * .5 - w * .5;
+                const double labeled_x = c->real_bounds.x + 10;
+                double ix = std::round(centered_x + (labeled_x - centered_x) * label_eased);
                 double iy = std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
                 iy += pin_bounce_offset(pin, mylar->raw_window->dpi);
                 const float punch = pin_punch_scale(pin);
@@ -1521,6 +1536,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         }
 
         if (!none) {
+            const RGBA label_color(1, 1, 1, label_eased);
             std::string title = pin->stacking_rule;
             if (!pin->windows.empty())
                 title = pin->windows[0].title;
@@ -1530,13 +1546,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, set->font, text_w, c->real_bounds.h * PANGO_SCALE);
                 draw_clip_begin(cr, bc);
                 draw_text(cr, c->real_bounds.x + 10, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, set->font, text_w,
-                          c->real_bounds.h * PANGO_SCALE);
+                          c->real_bounds.h * PANGO_SCALE, label_color);
                 draw_clip_end(cr);
             } else {
                 auto text_w = (pin->actual_w - offx - 30) * PANGO_SCALE;
                 auto b = draw_text(cr, c, title, 9 * mylar->raw_window->dpi, false, set->font, text_w, c->real_bounds.h * PANGO_SCALE);
                 draw_clip_begin(cr, bc);
-                draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, set->font, text_w, c->real_bounds.h * PANGO_SCALE);
+                draw_text(cr, c->real_bounds.x + offx + 20, c->real_bounds.y + c->real_bounds.h * .5 - b.h * .5, title, 9 * mylar->raw_window->dpi, true, set->font, text_w, c->real_bounds.h * PANGO_SCALE, label_color);
                 draw_clip_end(cr);
             }
         }
@@ -2214,6 +2230,22 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         delta = 16;
     previous = current;
 
+    // Slide icons toward/away from their label position and fade the label.
+    for (auto c: icons->children) {
+        auto *data = (Pin *) c->user_data;
+        const double target = (!data->windows.empty() && labels && !merge_windows.load()) ? 1.0 : 0.0;
+        // Pins that exist when the dock starts appear in place.
+        if (data->label_amount < 0 || current - dock_start_time < 1000) {
+            data->label_amount = target;
+            continue;
+        }
+        const double step = (double) delta / kLabelAnimMs;
+        if (data->label_amount < target)
+            data->label_amount = std::min(target, data->label_amount + step);
+        else if (data->label_amount > target)
+            data->label_amount = std::max(target, data->label_amount - step);
+    }
+
     // Queue spring animations
     for (auto c: icons->children) {
         if (c->state.mouse_dragging) continue;
@@ -2259,7 +2291,8 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         // in paint) keeps it from coming back if that window closes quickly.
         if (!data->windows.empty())
             data->launch_attempt_time = 0;
-        if (data->animating || data->launch_attempt_time != 0 || data->punch_start != 0 || data->bounce_start != 0 || pin_bubbly_animating(data, current) || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
+        const double label_target = (!data->windows.empty() && labels && !merge_windows.load()) ? 1.0 : 0.0;
+        if (data->animating || std::abs(data->label_amount - label_target) > 0.001 || data->launch_attempt_time != 0 || data->punch_start != 0 || data->bounce_start != 0 || pin_bubbly_animating(data, current) || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
             std::abs(data->active_amount - ([&] {
                 for (const auto &window : data->windows)
                     if (window.cid == active_cid)

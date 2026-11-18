@@ -4675,14 +4675,16 @@ static void fill_behaviour_settings(Container *root, Container *c) {
         }, "\ue75b");
 
 
+    // Labels is the inverse of dock_merge_windows: off groups an app's
+    // windows under one icon without titles.
     make_bool(padded_right,
-        "Combine taskbar buttons and hide labels",
-        "Group all windows that belong to one dock icon under a single icon",
-        set->dock_merge_windows,
+        "Labels",
+        "Give each window its own dock button with its title next to the icon",
+        !set->dock_merge_windows,
         [](bool value) {
             main_thread([value]() {
-                set->dock_merge_windows = value;
-                dock::set_dock_merge(value);
+                set->dock_merge_windows = !value;
+                dock::set_dock_merge(!value);
                 settings::load_save_settings(true, set);
             });
         },
@@ -9632,8 +9634,8 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Behaviour", "Dock Settings", "Show applications from other desktops",
                "List applications in the applications menu that are meant only for GNOME, KDE or another desktop",
                "applications menu launcher desktop files gnome kde xfce session onlyshowin apps all");
-    search_add("Behaviour", "Dock Settings", "Combine taskbar buttons and hide labels", "Group all windows that belong to one dock icon under a single icon",
-               "group merge stack labels dock taskbar");
+    search_add("Behaviour", "Dock Settings", "Labels", "Give each window its own dock button with its title next to the icon",
+               "group merge stack combine labels titles dock taskbar buttons");
 
     search_add("Behaviour", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
     search_add("Behaviour", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
