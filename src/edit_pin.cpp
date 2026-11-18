@@ -312,6 +312,8 @@ static void button(Container *root, std::function<std::string()> get_text, std::
 
 bool desktop_file_exists(std::string wm_class) {
     const char *home = getenv("HOME");
+    if (!home)
+        return false;
     std::string desktop_path(home);
     desktop_path += "/Desktop/" + wm_class + ".desktop";
     return std::filesystem::exists(desktop_path);
@@ -319,6 +321,8 @@ bool desktop_file_exists(std::string wm_class) {
 
 static void clicked_create_destroy_desktop_file(std::string wm_class, std::string icon, std::string command) {
     const char *home = getenv("HOME");
+    if (!home)
+        return;
     std::string desktop_path(home);
     desktop_path += "/Desktop/" + wm_class + ".desktop";
 

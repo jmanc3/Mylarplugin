@@ -18,7 +18,7 @@ void PollThread::start() {
  
     thread = std::thread([this] {
         while (keep_running) {
-            std::vector<Polled *> localFds;
+            std::vector<std::shared_ptr<Polled>> localFds;
             {
                 std::lock_guard<std::mutex> lock(polling_mutex);
                 localFds = polling;
@@ -27,7 +27,7 @@ void PollThread::start() {
             std::vector<struct pollfd> pollfds;
             pollfds.reserve(localFds.size() + 1);
             pollfds.push_back({main_wake_pipe[0], POLLIN, 0});
-            for (const auto* watched : localFds) {
+            for (const auto &watched : localFds) {
                 if (watched && watched->fd >= 0)
                     pollfds.push_back({watched->fd, POLLIN, 0});
             }
@@ -49,32 +49,28 @@ void PollThread::start() {
             if (!keep_running)
                 break;
 
-            std::vector<std::pair<std::function<void(int fd, void *userdata)>, Polled *>> callbacks;
-            std::vector<int> toRemove;
+            std::vector<std::shared_ptr<Polled>> callbacks;
+            std::vector<std::shared_ptr<Polled>> toRemove;
             for (size_t i = 1; i < pollfds.size(); ++i) {
                 if (pollfds[i].revents & POLLIN) {
-                    auto* watched = localFds[i - 1];
+                    const auto &watched = localFds[i - 1];
                     if (watched && watched->on_event)
-                        callbacks.push_back({watched->on_event, watched});
+                        callbacks.push_back(watched);
                 }
                 if (pollfds[i].revents & (POLLERR | POLLHUP | POLLNVAL))
-                    toRemove.push_back(pollfds[i].fd);
+                    toRemove.push_back(localFds[i - 1]);
             }
 
-            for (const auto& cb : callbacks)
-                cb.first(cb.second->fd, cb.second->userdata);
+            for (const auto &cb : callbacks)
+                cb->on_event(cb->fd, cb->userdata);
 
             if (!toRemove.empty()) {
                 std::lock_guard<std::mutex> lock(polling_mutex);
-                for (const int fd : toRemove)
-                    std::erase_if(polling, [fd](Polled* watched) {
-                        if (!watched)
-                            return true;
-                        if (watched->fd == fd) {
-                            delete watched;
-                            return true;
-                        }
-                        return false;
+                // Compare entries, not fd numbers: the fd may have been closed and
+                // its number reused by a newer add() in the meantime.
+                for (const auto &dead : toRemove)
+                    std::erase_if(polling, [&dead](const std::shared_ptr<Polled> &watched) {
+                        return !watched || watched == dead;
                     });
             }
         }
@@ -83,25 +79,25 @@ void PollThread::start() {
     });
 }
 
-static void wake(PollThread *poll_thread) {
-    write(poll_thread->main_wake_pipe[1], "x", 1);
+static void wake(PollThread *pt) {
+    (void) !write(pt->main_wake_pipe[1], "x", 1);
 }
 
 void PollThread::add(int fd, void *userdata, std::function<void(int fd, void *userdata)> on_event) {
     if (!started)
         return;
  
-    Polled *p = new Polled;
+    auto p = std::make_shared<Polled>();
     p->fd = fd;
     p->userdata = userdata;
     p->on_event = std::move(on_event);
 
     {
         std::lock_guard<std::mutex> lock(polling_mutex);
-        polling.push_back(p);
+        polling.push_back(std::move(p));
     }
 
-    wake(poll_thread);
+    wake(this);
 }
 
 void PollThread::remove(int fd) {
@@ -110,12 +106,12 @@ void PollThread::remove(int fd) {
  
     {
         std::lock_guard<std::mutex> lock(polling_mutex);
-        for (int i = polling.size() - 1; i >= 0; i--) {
-            polling.erase(polling.begin() + i);
-        }
+        std::erase_if(polling, [fd](const std::shared_ptr<Polled> &watched) {
+            return !watched || watched->fd == fd;
+        });
     }
-    
-    wake(poll_thread);
+
+    wake(this);
 }
 
 void PollThread::stop() {
@@ -127,7 +123,7 @@ void PollThread::stop() {
         keep_running = false;
     }
     
-    wake(poll_thread);
+    wake(this);
 
     thread.join();
     close(main_wake_pipe[0]);

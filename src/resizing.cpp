@@ -111,6 +111,7 @@ void update_resize_edge_preview_bar(int cid) {
             }
         }
     }
+    if (!cr) return;
 
     auto current_vertical = datum<int>(cr, "vertical_bar_position");
     auto current_horizontal = datum<int>(cr, "horizontal_bar_position");

@@ -628,7 +628,8 @@ class GLContext final : public OpenGLContext {
             for (size_t i = 0; i < segments; ++i) {
                 auto a = points[i], b = points[(i + 1) % points.size()];
                 double length = std::hypot(b.x - a.x, b.y - a.y);
-                Point direction{(b.x - a.x) / length, (b.y - a.y) / length};
+                // Repeated points give a zero-length segment; keep its vertices finite.
+                Point direction = length > 1e-12 ? Point{(b.x - a.x) / length, (b.y - a.y) / length} : Point{0, 0};
                 Point n{-direction.y * half, direction.x * half};
                 normals.push_back(n);
                 if (!closed && state_.cap == CAIRO_LINE_CAP_SQUARE) {

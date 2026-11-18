@@ -2705,14 +2705,17 @@ bool try_establishing_connection_with_alsa() {
     const char *card = "default"; // can be replaced with hw:0
     if (snd_mixer_attach(alsa_handle, card) != 0) {
         snd_mixer_close(alsa_handle);
+        alsa_handle = nullptr;
         return false;
     }
     if (snd_mixer_selem_register(alsa_handle, NULL, NULL) != 0) {
         snd_mixer_close(alsa_handle);
+        alsa_handle = nullptr;
         return false;
     }
     if (snd_mixer_load(alsa_handle) != 0) {
         snd_mixer_close(alsa_handle);
+        alsa_handle = nullptr;
         return false;
     }
 
@@ -2724,6 +2727,8 @@ bool try_establishing_connection_with_alsa() {
     if ((master_volume = snd_mixer_find_selem(alsa_handle, master_sid)) == nullptr) {
         snd_mixer_selem_id_free(master_sid);
         master_sid = nullptr;
+        snd_mixer_close(alsa_handle);
+        alsa_handle = nullptr;
         return false;
     }
 
@@ -2736,8 +2741,8 @@ bool try_establishing_connection_with_alsa() {
         const char *name = "Headphone";
         snd_mixer_selem_id_set_name(headphone_sid, name);
         if ((headphone_volume = snd_mixer_find_selem(alsa_handle, headphone_sid)) == nullptr) {
-            headphone_sid = nullptr;
             snd_mixer_selem_id_free(headphone_sid);
+            headphone_sid = nullptr;
         }
     }
     { // Speaker Front (optional)
@@ -2747,8 +2752,8 @@ bool try_establishing_connection_with_alsa() {
         const char *name = "Speaker Front";
         snd_mixer_selem_id_set_name(speaker_sid, name);
         if ((speaker_volume = snd_mixer_find_selem(alsa_handle, speaker_sid)) == nullptr) {
-            speaker_sid = nullptr;
             snd_mixer_selem_id_free(speaker_sid);
+            speaker_sid = nullptr;
         }
     }
 

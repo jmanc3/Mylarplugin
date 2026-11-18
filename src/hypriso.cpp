@@ -6650,15 +6650,24 @@ cairo_surface_t* cairo_image_surface_create_from_xpm(const std::string& path) {
 
     // Parse header
     std::istringstream header(lines[0]);
-    int                width, height, num_colors, chars_per_pixel;
+    int                width = 0, height = 0, num_colors = 0, chars_per_pixel = 0;
     header >> width >> height >> num_colors >> chars_per_pixel;
+    if (!header || width <= 0 || height <= 0 || num_colors <= 0 || chars_per_pixel <= 0 || width > 4096 || height > 4096)
+        return nullptr;
+    if (lines.size() < (size_t) 1 + num_colors + height)
+        return nullptr;
 
     // Parse color map
     std::unordered_map<std::string, uint32_t> color_map;
     for (int i = 1; i <= num_colors; ++i) {
         std::string entry     = lines[i];
+        if (entry.size() < (size_t) chars_per_pixel)
+            continue;
         std::string key       = entry.substr(0, chars_per_pixel);
-        std::string color_str = entry.substr(entry.find("c ") + 2);
+        auto        c_pos     = entry.find("c ", chars_per_pixel);
+        std::string color_str = c_pos == std::string::npos ? "None" : entry.substr(c_pos + 2);
+        while (!color_str.empty() && color_str.back() == ' ')
+            color_str.pop_back();
 
         uint32_t    color = 0x00000000; // Default to transparent
 
@@ -6669,10 +6678,12 @@ cairo_surface_t* cairo_image_surface_create_from_xpm(const std::string& path) {
             color_str      = color_str.substr(1); // skip '#'
             unsigned int r = 0, g = 0, b = 0;
 
-            if (color_str.length() == 6) {
+            // #RRGGBB, or #RRRRGGGGBBBB (keep the high byte of each channel)
+            if (color_str.length() == 6 || color_str.length() == 12) {
+                size_t step = color_str.length() / 3;
                 std::istringstream(color_str.substr(0, 2)) >> std::hex >> r;
-                std::istringstream(color_str.substr(2, 2)) >> std::hex >> g;
-                std::istringstream(color_str.substr(4, 2)) >> std::hex >> b;
+                std::istringstream(color_str.substr(step, 2)) >> std::hex >> g;
+                std::istringstream(color_str.substr(step * 2, 2)) >> std::hex >> b;
             }
 
             color = (0xFF << 24) | (r << 16) | (g << 8) | b; // ARGB
@@ -6683,6 +6694,11 @@ cairo_surface_t* cairo_image_surface_create_from_xpm(const std::string& path) {
 
     // Create surface
     cairo_surface_t* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+    if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(surface);
+        return nullptr;
+    }
+    cairo_surface_flush(surface);
     unsigned char*   data    = cairo_image_surface_get_data(surface);
     int              stride  = cairo_image_surface_get_stride(surface);
 
@@ -6690,8 +6706,10 @@ cairo_surface_t* cairo_image_surface_create_from_xpm(const std::string& path) {
     for (int y = 0; y < height; ++y) {
         const std::string& row = lines[y + 1 + num_colors];
         for (int x = 0; x < width; ++x) {
-            std::string    key   = row.substr(x * chars_per_pixel, chars_per_pixel);
-            uint32_t       color = color_map.count(key) ? color_map[key] : 0x00000000;
+            size_t         key_pos = (size_t) x * chars_per_pixel;
+            std::string    key     = key_pos < row.size() ? row.substr(key_pos, chars_per_pixel) : std::string();
+            auto           found   = color_map.find(key);
+            uint32_t       color   = found != color_map.end() ? found->second : 0x00000000;
 
             unsigned char* pixel = data + y * stride + x * 4;
             pixel[0]             = (color >> 0) & 0xFF;  // B

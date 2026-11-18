@@ -4,6 +4,7 @@
 
 #include "icons.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <dirent.h>
@@ -106,13 +107,28 @@ struct IconCache {
 static std::atomic<std::shared_ptr<const IconCache>> active_cache{std::make_shared<IconCache>()};
 static std::mutex cache_update_mutex;
 
-static void traverse_dir(const char* path, OptionsData *data, const std::vector<std::string>& icon_search_paths) {
+// 'ancestors' holds the (device, inode) of every directory on the current
+// recursion path, so a symlink pointing back up the tree can't recurse forever.
+static void traverse_dir(const char* path, OptionsData *data, const std::vector<std::string>& icon_search_paths,
+                         std::vector<std::pair<dev_t, ino_t>> &ancestors) {
     DIR* dir = opendir(path);
     if (dir == nullptr) {
         return;
     }
     auto close_directory = [](DIR *directory) { closedir(directory); };
     std::unique_ptr<DIR, decltype(close_directory)> directory(dir, close_directory);
+
+    struct stat dirStat{};
+    if (fstat(dirfd(dir), &dirStat) != 0)
+        return;
+    const std::pair<dev_t, ino_t> dir_id = {dirStat.st_dev, dirStat.st_ino};
+    if (std::find(ancestors.begin(), ancestors.end(), dir_id) != ancestors.end())
+        return;
+    ancestors.push_back(dir_id);
+    struct AncestorPop {
+        std::vector<std::pair<dev_t, ino_t>> &v;
+        ~AncestorPop() { v.pop_back(); }
+    } ancestor_pop{ancestors};
 
     std::string path_as_string(path);
     std::string theme;
@@ -179,16 +195,9 @@ static void traverse_dir(const char* path, OptionsData *data, const std::vector<
         snprintf(file, PATH_MAX, "%s/%s", path, entry->d_name);
         if (stat(file, &entryStat) == -1)
             continue;
-        if (S_ISDIR(entryStat.st_mode)) {
-            traverse_dir(file, data, icon_search_paths);
-        } else if (S_ISLNK(entryStat.st_mode)) {
-            char    link[PATH_MAX];
-            ssize_t len = readlink(file, link, sizeof(link));
-            if (len != -1) {
-                link[len] = '\0';
-                traverse_dir(link, data, icon_search_paths);
-            }
-        }
+        // stat() follows symlinks, so symlinked directories are handled here too
+        if (S_ISDIR(entryStat.st_mode))
+            traverse_dir(file, data, icon_search_paths, ancestors);
     }
 }
 
@@ -196,7 +205,7 @@ static void generate_data(OptionsData *data, const std::vector<std::string>& ico
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto item : data->options)
+    for (auto &item : data->options)
         item.second.clear();
     data->options.clear();
     data->parentPaths.clear();
@@ -207,7 +216,8 @@ static void generate_data(OptionsData *data, const std::vector<std::string>& ico
         if (stat(search_path.c_str(), &st) != 0)
             continue;
 
-        traverse_dir(search_path.data(), data, icon_search_paths);
+        std::vector<std::pair<dev_t, ino_t>> ancestors;
+        traverse_dir(search_path.data(), data, icon_search_paths, ancestors);
     }
 }
 
@@ -905,143 +915,43 @@ std::string c3ic_fix_desktop_file_icon(const std::string& given_name, const std:
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    // mmap tofix.csv file
+    // tofix.csv: a header line, then "name,wm_class,path,icon" rows. A row
+    // matches if any of name, wm_class or the file name of path match.
     const char* home_directory = getenv("HOME");
+    if (!home_directory)
+        return given_icon;
     std::string to_fix_path(home_directory);
     to_fix_path += "/.config/winbar/tofix.csv";
 
-    struct stat buffer{};
-    int         cache_exists = stat(to_fix_path.c_str(), &buffer) == 0;
-
-    // TODO: we have to compare modified time of the folders to see if we are up
-    // to date
-    if (!cache_exists) {
-        //        printf("%s doesn't exists\n", to_fix_path.c_str());
+    std::ifstream file(to_fix_path);
+    if (!file)
         return given_icon;
-    }
 
-    // Attempt to mmap the file
-    int         file_descriptor = open(to_fix_path.c_str(), O_RDWR, S_IRUSR | S_IWUSR);
-    struct stat sb;
-    if (fstat(file_descriptor, &sb) == -1) {
-        //        printf("Couldn't get file size: %s\n", to_fix_path.c_str());
-        close(file_descriptor);
-        return given_icon;
-    }
+    auto file_name_of = [](const std::string &path) {
+        auto slash = path.rfind('/');
+        return slash == std::string::npos ? path : path.substr(slash + 1);
+    };
+    const std::string given_file_name = file_name_of(given_path);
 
-    char* to_fix_data = (char*)mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, file_descriptor, 0);
-    if (!to_fix_data) {
-        //        printf("Couldn't mmap file.\n");
-        close(file_descriptor);
-        return given_icon;
-    }
-
-    unsigned long index_into_file = 0;
-
-    // Eat the first line;
-#define MNOT_DONE index_into_file < (unsigned long) buffer.st_size
-    while (MNOT_DONE && to_fix_data[index_into_file] != '\n') {
-        index_into_file++;
-    }
-    index_into_file++;
-
-    int         loading_type     = 0;
-    int         offset           = 0;
-    char        first[1024 * 6]  = {0};
-    char        second[1024 * 6] = {0};
-    char        third[1024 * 6]  = {0};
-    char        fourth[1024 * 6] = {0};
-    bool        should_change    = false;
-
-    const char* given_name_c     = given_name.c_str();
-    const char* given_wm_class_c = given_wm_class.c_str();
-
-    char        given_path_c[1024 * 6] = {0};
-    const char* temp_given_path_c      = given_path.c_str();
-
-    for (int i = 0; i < (int) given_path.size() + 1; i++) {
-        char c = temp_given_path_c[i];
-        if (c == '/') {
-            offset = 0;
-        } else {
-            given_path_c[offset++] = c;
+    std::string line;
+    std::getline(file, line); // Eat the first line
+    while (std::getline(file, line)) {
+        std::vector<std::string> fields;
+        size_t field_start = 0;
+        while (true) {
+            auto comma = line.find(',', field_start);
+            fields.push_back(line.substr(field_start, comma == std::string::npos ? std::string::npos : comma - field_start));
+            if (comma == std::string::npos)
+                break;
+            field_start = comma + 1;
         }
-    }
-    offset = 0;
-
-    while (MNOT_DONE) {
-        if (to_fix_data[index_into_file] == ',') {
-            switch (loading_type) {
-                case 0: {
-                    first[offset] = '\0';
-                    if (strcmp(first, given_name_c) == 0) {
-                        should_change = true;
-                    }
-                    break;
-                }
-                case 1: {
-                    second[offset] = '\0';
-                    if (strcmp(second, given_wm_class_c) == 0) {
-                        should_change = true;
-                    }
-                    break;
-                }
-                case 2: {
-                    third[offset] = '\0';
-
-                    if (strcmp(third, given_path_c) == 0) {
-                        should_change = true;
-                    }
-                    break;
-                }
-            }
-            index_into_file++;
-            loading_type++;
-            offset = 0;
+        if (fields.size() < 4)
             continue;
-        }
-        if (to_fix_data[index_into_file] == '\n') {
-            fourth[offset] = '\0';
-            index_into_file++;
-            if (should_change) {
-                should_change = false;
-                // return fourth
-                munmap(to_fix_data, sb.st_size);
-                close(file_descriptor);
-                return fourth;
-            }
-            loading_type = 0;
-            offset       = 0;
-            continue;
-        }
-        switch (loading_type) {
-            case 0: {
-                first[offset++] = to_fix_data[index_into_file++];
-                break;
-            }
-            case 1: {
-                second[offset++] = to_fix_data[index_into_file++];
-                break;
-            }
-            case 2: {
-                // for the directory, we only want to save the file name not the entire
-                // directory path
-                char previous_char = to_fix_data[index_into_file];
-                third[offset++]    = to_fix_data[index_into_file++];
-                if (previous_char == '/') {
-                    offset = 0;
-                }
-                break;
-            }
-            default: {
-                fourth[offset++] = to_fix_data[index_into_file++];
-                break;
-            }
-        }
-    }
 
-    munmap(to_fix_data, sb.st_size);
-    close(file_descriptor);
+        bool should_change = fields[0] == given_name || fields[1] == given_wm_class || file_name_of(fields[2]) == given_file_name;
+        if (should_change)
+            return fields.back();
+    }
 
     return given_icon;
 }

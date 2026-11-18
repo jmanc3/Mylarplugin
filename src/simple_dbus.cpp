@@ -3212,7 +3212,7 @@ static DBusHandlerResult upower_device_signal_filter(DBusConnection *dbus_connec
                                 DBusMessageIter variant;
                                 dbus_message_iter_recurse(&dict, &variant);
                                 
-                                if (strcmp(key, "Percentage") == 0) {
+                                if (key && strcmp(key, "Percentage") == 0) {
                                     if (interface->type == BluetoothInterfaceType::Device) {
                                         auto device = (Device *) interface;
                                         if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_DOUBLE) {

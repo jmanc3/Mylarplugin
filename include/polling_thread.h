@@ -5,6 +5,7 @@
 #include "thread"
 #include "functional"
 #include <atomic>
+#include <memory>
 
 struct Polled {
     int fd = -1;
@@ -18,7 +19,7 @@ struct PollThread {
     int main_wake_pipe[2] = {-1, -1};
 
     std::mutex polling_mutex;
-    std::vector<Polled *> polling;
+    std::vector<std::shared_ptr<Polled>> polling;
 
     std::thread thread;
     
