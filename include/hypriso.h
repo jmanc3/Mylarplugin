@@ -694,6 +694,8 @@ Bounds bounds_monitor(int id);
 Bounds bounds_reserved_monitor(int id);
 
 Bounds bounds_popup(int id);
+// Hyprland's fade-in/out value for the popup (0..1), 0 if it isn't mapped or has no buffer yet
+float alpha_popup(int id);
 
 Bounds bounds_client(int id);
 Bounds bounds_client_final(int id);

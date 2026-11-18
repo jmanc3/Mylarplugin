@@ -10432,6 +10432,22 @@ Bounds bounds_popup(int id) {
     return {0, 0, 0, 0};
 }
 
+float alpha_popup(int id) {
+    for (auto hp : hyprpopus) {
+        if (hp->id == id) {
+            if (auto p = hp->p.lock()) {
+                if (!p->m_mapped || (p->m_windowOwner.expired() && p->m_layerOwner.expired()))
+                    return 0.0f;
+                auto surf = p->wlSurface() ? p->wlSurface()->resource() : nullptr;
+                if (!surf || !surf->m_current.texture)
+                    return 0.0f;
+                return std::clamp(p->alpha()[Desktop::View::POPUP_ALPHA_FADE]->value(), 0.0f, 1.0f);
+            }
+        }
+    }
+    return 0.0f;
+}
+
 Bounds bounds_reserved_monitor(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;

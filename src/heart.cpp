@@ -2598,6 +2598,14 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
                 damage_popup_shadow(bounds);
             }
             c->real_bounds = bounds;
+            if (*datum<bool>(c, "dock_popup")) {
+                // The shadow follows Hyprland's popup fade; keep its area repainting until it settles.
+                auto alpha = alpha_popup(*datum<int>(c, "cid"));
+                auto last = datum<float>(c, "shadow_alpha");
+                if (alpha != *last)
+                    damage_popup_shadow(bounds);
+                *last = alpha;
+            }
         };
         c->when_paint = [](Container *actual_root, Container *c) {
             if (!*datum<bool>(c, "dock_popup") || c->real_bounds.w <= 0 || c->real_bounds.h <= 0)
@@ -2613,9 +2621,13 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
             renderfix
             const auto radius = std::min(std::round(dock::popup_corner_radius * s),
                                          std::floor(std::min(c->real_bounds.w, c->real_bounds.h) * .5));
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .036f}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
+            const auto alpha = alpha_popup(*datum<int>(c, "cid"));
+            if (alpha <= 0.0f)
+                return;
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .036f * alpha}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
         };
         *datum<int>(c, "cid") = id; 
+        *datum<float>(c, "shadow_alpha") = 0.0f;
         *datum<int>(c, "parent_cid") = parent_id; 
         *datum<bool>(c, "owner_is_window") = owner_is_window; 
     }
