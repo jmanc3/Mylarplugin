@@ -7569,8 +7569,7 @@ static Container *saudio_row(Container *parent) {
         auto b = c->real_bounds;
         double r = 8 * dpi;
         double value = std::clamp(saudio_shown_volume(data), 0.0, 1.0);
-        // Thicker than other sliders so the level meter in its bottom half stays readable.
-        double track_h = std::round(10 * dpi);
+        double track_h = 6 * dpi;
         double x0 = b.x + r;
         double w = std::max(1.0, b.w - 2 * r);
         double y = b.y + b.h * .5 - track_h * .5;
@@ -7579,35 +7578,39 @@ static Container *saudio_row(Container *parent) {
         drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
         cr->fill();
         double cx = x0 + w * value;
-        if (value > 0) {
-            cr->save();
-            drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
-            cr->clip_path();
-            // The volume itself: solid up to the knob.
-            set_argb(cr, fill);
-            cr->rectangle(x0, y, cx - x0, track_h);
-            cr->fill();
-            // Like winbar, the bottom half shows what is playing right now, scaled by the volume
-            // so it never runs past the knob: a slow falling high-water mark behind a faster level.
-            if (data->node.peak_supported && !data->node.mute) {
-                double meter_h = std::round(track_h * .5);
-                double meter_y = y + track_h - meter_h;
-                double level = saudio_meter_level(data->shown_peak);
-                double mark = std::max((double) data->high_water_shown, level);
-                RGBA mark_color = set->dark_theme ? RGBA(.40, .40, .40, 1) : RGBA(.76, .76, .76, 1);
-                RGBA level_color = set->dark_theme ? RGBA(.78, .78, .78, 1) : RGBA(.46, .46, .46, 1);
-                if (mark > 0.001) {
-                    set_argb(cr, mark_color);
-                    cr->rectangle(x0, meter_y, (cx - x0) * mark, meter_h);
+        // The level meter fills the track, scaled by the volume so it never runs past the knob.
+        // Behind it, like winbar, a pale high-water mark that holds the recent peak and falls slowly.
+        if (data->node.peak_supported && !data->node.mute) {
+            double level_w = (cx - x0) * saudio_meter_level(data->shown_peak);
+            double mark_w = std::max(level_w, (cx - x0) * data->high_water_shown);
+            if (mark_w > 0.5) {
+                cr->save();
+                drawRoundedRect(cr, x0, y, w, track_h, track_h * .5, 1.0);
+                cr->clip_path();
+                // A pill whose right end sits at the level; when it is shorter than it is tall,
+                // its left end slides out of the track and is clipped away.
+                auto pill = [cr, x0, y, track_h](double fill_w) {
+                    double pill_w = std::max(fill_w, track_h);
+                    double pill_x = x0 + fill_w - pill_w;
+                    double rad = track_h * .5;
+                    cr->new_path();
+                    cr->arc(pill_x + pill_w - rad, y + rad, rad, -M_PI / 2, M_PI / 2);
+                    cr->arc(pill_x + rad, y + rad, rad, M_PI / 2, 3 * M_PI / 2);
+                    cr->close_path();
+                };
+                RGBA color = theme.accent;
+                color.a = .22;
+                set_argb(cr, color);
+                pill(mark_w);
+                cr->fill();
+                if (level_w > 0.5) {
+                    color.a = .55;
+                    set_argb(cr, color);
+                    pill(level_w);
                     cr->fill();
                 }
-                if (level > 0.001) {
-                    set_argb(cr, level_color);
-                    cr->rectangle(x0, meter_y, (cx - x0) * level, meter_h);
-                    cr->fill();
-                }
+                cr->restore();
             }
-            cr->restore();
         }
         Bounds thumb(cx - r, b.y + b.h * .5 - r, r * 2, r * 2);
         set_argb(cr, theme.slider_thumb);
