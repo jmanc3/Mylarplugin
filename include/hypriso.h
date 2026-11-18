@@ -131,6 +131,13 @@ struct ConfigSettings {
     bool battery_history_enabled = true;
     bool dock_current_workspace_only = true;
     bool dock_merge_windows = false;
+    // Default, Bubbly or Bubbly flat (winbar's Windows 7 and Windows 7 flat).
+    std::string dock_style = "Default";
+    // Dock icons bounce down when their window minimizes and up when it restores.
+    bool dock_bounce_animation = true;
+    // With labels showing, every dock button gets the same width instead of
+    // fitting its title (winbar's label_uniform_size).
+    bool dock_label_same_width = true;
     bool draw_wallpaper = true;
     // Fill, Fit, Stretch, Center, Tile or Custom (see wallpaper_layout.h).
     std::string wallpaper_scaling = "Fill";

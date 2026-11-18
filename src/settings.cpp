@@ -642,6 +642,9 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(bool, "battery_history_enabled", &settings->battery_history_enabled);
     bind(bool, "dock_current_workspace_only", &settings->dock_current_workspace_only);
     bind(bool, "dock_merge_windows", &settings->dock_merge_windows);
+    bind(std::string, "dock_style", &settings->dock_style);
+    bind(bool, "dock_bounce_animation", &settings->dock_bounce_animation);
+    bind(bool, "dock_label_same_width", &settings->dock_label_same_width);
     bind(bool, "draw_wallpaper", &settings->draw_wallpaper);
     bind(std::string, "wallpaper_scaling", &settings->wallpaper_scaling);
     bind(float, "wallpaper_zoom", &settings->wallpaper_zoom);
@@ -4643,6 +4646,23 @@ static void fill_behaviour_settings(Container *root, Container *c) {
         }
     }, "\ue75b");
 
+    make_dropdown_option(padded_right, "Dock style", "How dock icons are drawn", "\ue790", set->dock_style,
+        {"Default", "Bubbly", "Bubbly flat"}, [](std::string style) {
+            main_thread([style]() {
+                set->dock_style = style;
+                dock::set_dock_style(style);
+                settings::load_save_settings(true, set);
+            });
+        });
+
+    make_bool(padded_right, "Bounce icons on minimize and restore",
+        "Dock icons dip when their window minimizes and hop when it comes back",
+        set->dock_bounce_animation, [](bool value) {
+            main_thread([value]() {
+                set->dock_bounce_animation = value;
+                settings::load_save_settings(true, set);
+            });
+        }, "\ue75b");
 
     make_bool(padded_right, "Only show windows on the current workspace",
         "Turn off to show windows from all workspaces and monitors",
@@ -4668,6 +4688,16 @@ static void fill_behaviour_settings(Container *root, Container *c) {
         },
         "\ue75b");
 
+
+    make_bool(padded_right, "Same width",
+        "When labels are showing, give every dock button the same width instead of fitting its title",
+        set->dock_label_same_width, [](bool value) {
+            main_thread([value]() {
+                set->dock_label_same_width = value;
+                dock::relayout();
+                settings::load_save_settings(true, set);
+            });
+        }, "\ue75b");
 
     // Read by the applications menu each time it opens.
     make_bool(padded_right,
@@ -9592,6 +9622,11 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Behaviour", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
     search_add("Behaviour", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
     search_add("Behaviour", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
+    search_add("Behaviour", "Dock Settings", "Bounce icons on minimize and restore", "Dock icons dip when their window minimizes and hop when it comes back",
+               "taskbar dock bounce animation minimize restore unminimize hide");
+    search_add("Behaviour", "Dock Settings", "Same width", "When labels are showing, give every dock button the same width instead of fitting its title",
+               "taskbar dock labels width uniform same size buttons title");
+    search_add("Behaviour", "Dock Settings", "Dock style", "How dock icons are drawn", "taskbar dock style bubbly flat windows 7 glass look appearance");
     search_add("Behaviour", "Dock Settings", "Only show windows on the current workspace", "Turn off to show windows from all workspaces and monitors",
                "taskbar dock workspace windows monitors");
     search_add("Behaviour", "Dock Settings", "Show applications from other desktops",

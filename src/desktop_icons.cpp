@@ -444,6 +444,9 @@ struct IcoContainerData : UserData {
     float settle_from_x = 0;
     float settle_from_y = 0;
     long settle_start_ms = 0;
+    // Open feedback: icon and label punch in and spring back (see punch_scale).
+    bool is_punching = false;
+    long punch_start_ms = 0;
     TextureInfo icon_shadow;
     TextureInfo label_shadow;
     int icon_shadow_source = -1;
@@ -479,6 +482,45 @@ static void damage_icon(Container *icon) {
     auto b = icon->real_bounds;
     b.grow(20);
     hypriso->damage_box(b);
+}
+
+// Taken from calibre's cover grid (gui2/library/alternate_views.py, CoverDelegate):
+// a 500ms QPropertyAnimation with key values 1.0 -> 0.5 (at 0.5) -> 1.0 and
+// QEasingCurve::OutInCirc applied to the whole progress before keyframe lookup.
+static constexpr float ICON_PUNCH_MS = 500.f;
+static constexpr float ICON_PUNCH_DEPTH = 0.5f;
+// When false only the icon punches; the label stays put.
+static constexpr bool include_label = false;
+
+static float punch_scale(float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    const float u = 2.f * t - 1.f;
+    const float root = std::sqrt(std::max(0.f, 1.f - u * u));
+    // Qt easeOutInCirc: easeOutCirc(2t)/2, then easeInCirc(2t-1)/2 + 0.5.
+    const float e = t < .5f ? root * .5f : (1.f - root) * .5f + .5f;
+    if (e < .5f)
+        return 1.f + (ICON_PUNCH_DEPTH - 1.f) * (e / .5f);
+    return ICON_PUNCH_DEPTH + (1.f - ICON_PUNCH_DEPTH) * ((e - .5f) / .5f);
+}
+
+static void begin_icon_punch(Container *icon) {
+    auto *ico = (IcoContainerData *)icon->user_data;
+    ico->is_punching = true;
+    ico->punch_start_ms = get_current_time_in_ms();
+    damage_icon(icon);
+    request_refresh();
+}
+
+static void punch_icons_for_paths(const std::vector<std::string> &paths) {
+    for (auto *desktop : actual_root->children) {
+        if (desktop->custom_type != (int) TYPE::DESKTOP_ICONS)
+            continue;
+        for (auto *icon : desktop->children) {
+            auto *item = *datum<DesktopItem *>(icon, "DesktopItem");
+            if (item && std::find(paths.begin(), paths.end(), item->full_filepath) != paths.end())
+                begin_icon_punch(icon);
+        }
+    }
 }
 
 static void begin_icon_settle(Container *icon) {
@@ -926,6 +968,10 @@ static void create_icon_popup(Container *icon) {
     PopOption open;
     open.text = items.size() == 1 ? "Open" : fz("Open {} Items", items.size());
     open.on_clicked = [items]() {
+        std::vector<std::string> paths;
+        for (const auto& item : items)
+            paths.push_back(item.full_filepath);
+        punch_icons_for_paths(paths);
         for (const auto& item : items)
             open_desktop_item(item);
     };
@@ -1018,13 +1064,24 @@ static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, 
     auto transform = [&](Bounds b) {
         return Bounds(bounds.x + b.x * factor, bounds.y + b.y * factor, b.w * factor, b.h * factor);
     };
-    auto paint_texture = [&](TextureInfo info, double x, double y, float alpha) {
-        draw_texture(info, transform(Bounds(x, y, info.w, info.h)), alpha);
-    };
-
     DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
 
     auto* ico = (IcoContainerData*)(c->user_data);
+
+    // Icon and label shrink toward the icon cell's center while punching.
+    float punch = 1.f;
+    if (ico->is_punching)
+        punch = punch_scale((get_current_time_in_ms() - ico->punch_start_ms) / ICON_PUNCH_MS);
+    const double punch_cx = c->real_bounds.x + c->real_bounds.w * .5;
+    // Without the label, punch toward the icon's own center so it doesn't drift down.
+    const double punch_cy = include_label ? c->real_bounds.y + c->real_bounds.h * .5
+                                          : c->real_bounds.y + 2 * s + conf_icon_size() * s * .5;
+    auto paint_texture = [&](TextureInfo info, double x, double y, float alpha, bool punchable = true) {
+        Bounds b(x, y, info.w, info.h);
+        if (punch != 1.f && punchable)
+            b = Bounds(punch_cx + (x - punch_cx) * punch, punch_cy + (y - punch_cy) * punch, info.w * punch, info.h * punch);
+        draw_texture(info, transform(b), alpha);
+    };
     if (ico->texture_scale != s) {
         ico->clear_textures();
         ico->texture_scale = s;
@@ -1101,9 +1158,9 @@ static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, 
     const int text_y = c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s;
     if (ico->label_shadow.id != -1) {
         const int padding = (ico->label_shadow.w - text_img.w) / 2;
-        paint_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.9f);
+        paint_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.9f, include_label);
     }
-    paint_texture(text_img, text_x, text_y, overview_alpha);
+    paint_texture(text_img, text_x, text_y, overview_alpha, include_label);
 }
 
 void desktop_icons::paint_overview(int monitor, const Bounds &bounds, float alpha) {
@@ -1202,6 +1259,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         auto current = get_current_time_in_ms();
         if ((current - ico->last_time_pressed) < 700) {
             DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
+            begin_icon_punch(c);
             open_desktop_item(*item);
         } else {
             ico->is_selected = true;
@@ -1430,6 +1488,14 @@ void desktop_icons::start() {
                                             m.width,
                                             m.height);
                 continue;
+            }
+
+            if (ico->is_punching) {
+                damage_icon(child);
+                if (get_current_time_in_ms() - ico->punch_start_ms >= ICON_PUNCH_MS)
+                    ico->is_punching = false;
+                else
+                    request_refresh();
             }
 
             const auto target = bounds_for_grid_slot(m, ico->x_pos, ico->y_pos);

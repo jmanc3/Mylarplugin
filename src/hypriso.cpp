@@ -7,6 +7,7 @@
  */
 
 #define STB_IMAGE_IMPLEMENTATION
+#include "dock/dock.h"
 #include "stb_image.h"
 
 #include <any>
@@ -7802,9 +7803,11 @@ void HyprIso::set_hidden(int id, bool state, bool animate_to_dock) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    bool changed = false;
     for (auto hw : hyprwindows) {
         if (hw->id == id) {
             mw_update_decorations(hw->w);
+            changed = hw->is_hidden != state;
             hw->w->setHidden(state);
             hw->animate_to_dock = animate_to_dock;
             hw->is_hidden = state;
@@ -7813,6 +7816,8 @@ void HyprIso::set_hidden(int id, bool state, bool animate_to_dock) {
     for (auto m : hyprmonitors) {
         hypriso->damage_entire(m->id);
     }
+    if (changed)
+        dock::on_hidden(id, state);
 }
 
 static void updateRelativeCursorCoords() {

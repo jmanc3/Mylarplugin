@@ -18,6 +18,8 @@ namespace dock {
     void remove_window(int cid);
     void title_change(int cid, std::string title);
     void on_activated(int cid);
+    // A window was minimized (hidden) or restored. Main thread.
+    void on_hidden(int cid, bool hidden);
 
     void create_slept_button();
     void throb_slept_button();
@@ -33,6 +35,10 @@ namespace dock {
 
     void toggle_dock_merge();
     void set_dock_merge(bool enabled);
+    // "Default", "Bubbly" or "Bubbly flat".
+    void set_dock_style(const std::string &style);
+    // Recompute icon widths and slide icons to their new places.
+    void relayout();
 
     void open_applications();
     // The extra menu's Project page (mirror / extend / turn off other monitors)

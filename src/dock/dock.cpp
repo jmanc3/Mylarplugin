@@ -74,6 +74,26 @@
 static std::atomic<bool> merge_windows{false};
 static bool labels = true;
 static int pixel_spacing = 1;
+
+// Persisted in ConfigSettings::dock_style. Bubbly and Bubbly flat are ports of
+// winbar's "win7" and "win7flat" pinned icon styles.
+enum class DockStyle { Default, Bubbly, BubblyFlat };
+static std::atomic<DockStyle> dock_style{DockStyle::Default};
+// Window open animations are skipped for windows that already existed when the
+// dock started (winbar checks the same against its creation time).
+static long dock_start_time = 0;
+
+static DockStyle parse_dock_style(const std::string &style) {
+    if (style == "Bubbly")
+        return DockStyle::Bubbly;
+    if (style == "Bubbly flat")
+        return DockStyle::BubblyFlat;
+    return DockStyle::Default;
+}
+
+static bool dock_is_bubbly() {
+    return dock_style.load() != DockStyle::Default;
+}
 static float max_width = 200;
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
@@ -189,9 +209,38 @@ struct Pin : UserData {
     void *hover_timer_data = nullptr;
     bool suppress_hover_preview = false;
 
+    // Set when a pin with no windows is clicked to launch its app. Until a
+    // window shows up (or kLaunchPretendMs passes), the icon is drawn as if
+    // the window already exists, and further clicks don't launch again.
+    // Ported from winbar's attempting_to_launch_first_window.
+    long launch_attempt_time = 0;
+
+    // Icon punches in and springs back when the app is launched (same as
+    // desktop icons when opened). 0 while not punching.
+    long punch_start = 0;
+
+    // winbar's minimize / restore bounce. 0 while not bouncing.
+    long bounce_start = 0;
+    bool bounce_up = false;
+
+    // Bubbly style state (winbar's win7 style).
+    cairo_surface_t *bubbly_surf = nullptr;
+    size_t last_frame_window_count = 0;
+    // Gloss fades in when the first window opens and out when the last closes.
+    double opened_from = 0;
+    double opened_to = 0;
+    long opened_start = 0;
+    long opened_len = 0;
+    // Colored flash when a window opens.
+    long bloom_start = 0;
+    bool average_color_set = false;
+    RGBA average_color = RGBA(1, 1, 1, 1);
+
     ~Pin() {
         if (icon_surf)
             cairo_surface_destroy(icon_surf);
+        if (bubbly_surf)
+            cairo_surface_destroy(bubbly_surf);
     }
 
 
@@ -348,6 +397,335 @@ static void paint_dock_highlight_bar(drawing::Context *cr, const Bounds &bounds,
     paint_dock_horizontal_bands(cr, bar, dpi, left, middle, right);
 }
 
+// ---- Bubbly style: a port of winbar's "win7" / "win7flat" pinned icons ----
+//
+// It needs radial gradients and curves, which drawing::Context doesn't have,
+// so each icon's background is drawn with Cairo into its own surface and then
+// composited into the dock.
+
+static constexpr long kBubblyBloomMs = 1820;
+
+// winbar's window opened flash: quick rise, then a long fade.
+static std::vector<float> bubbly_bloom_curve = { 0, 0.18300000000000005, 0.32299999999999995, 0.43700000000000006, 0.534, 0.618, 0.692, 0.757, 0.8160000000000001, 0.869, 0.917, 0.96, 1, 0.985, 0.971, 0.956, 0.942, 0.927, 0.913, 0.898, 0.883, 0.869, 0.854, 0.84, 0.825, 0.79, 0.758, 0.727, 0.6990000000000001, 0.671, 0.645, 0.621, 0.597, 0.5740000000000001, 0.5529999999999999, 0.532, 0.513, 0.494, 0.475, 0.45799999999999996, 0.44099999999999995, 0.42500000000000004, 0.40900000000000003, 0.394, 0.379, 0.365, 0.351, 0.33799999999999997, 0.32499999999999996, 0.31299999999999994, 0.30100000000000005, 0.29000000000000004, 0.279, 0.268, 0.257, 0.247, 0.237, 0.22799999999999998, 0.21899999999999997, 0.20999999999999996, 0.20099999999999996, 0.19299999999999995, 0.18400000000000005, 0.17700000000000005, 0.16900000000000004, 0.16200000000000003, 0.15400000000000003, 0.14700000000000002, 0.14100000000000001, 0.134, 0.128, 0.122, 0.11599999999999999, 0.10999999999999999, 0.10399999999999998, 0.09899999999999998, 0.09399999999999997, 0.08899999999999997, 0.08399999999999996, 0.07899999999999996, 0.07499999999999996, 0.06999999999999995, 0.06599999999999995, 0.062000000000000055, 0.05800000000000005, 0.05400000000000005, 0.051000000000000045, 0.04700000000000004, 0.04400000000000004, 0.041000000000000036, 0.038000000000000034, 0.03500000000000003, 0.03200000000000003, 0.029000000000000026, 0.026000000000000023, 0.02400000000000002, 0.02200000000000002, 0.019000000000000017, 0.017000000000000015, 0.015000000000000013, 0.013000000000000012, 0.01100000000000001, 0.010000000000000009, 0.008000000000000007, 0.006000000000000005, 0.0050000000000000044, 0.0040000000000000036, 0.0020000000000000018, 0.0010000000000000009, 0 };
+
+static double pin_opened_scalar(Pin *pin, long now) {
+    if (pin->opened_len <= 0)
+        return pin->opened_to;
+    double t = std::clamp((double) (now - pin->opened_start) / pin->opened_len, 0.0, 1.0);
+    if (pin->opened_to > pin->opened_from)
+        t = t * t; // EaseInQuad, like winbar
+    return pin->opened_from + (pin->opened_to - pin->opened_from) * t;
+}
+
+static bool pin_bubbly_animating(Pin *pin, long now) {
+    return (pin->opened_len > 0 && now - pin->opened_start < pin->opened_len) ||
+           (pin->bloom_start != 0 && now - pin->bloom_start < kBubblyBloomMs);
+}
+
+// Tracked in every style so switching to Bubbly doesn't replay open animations.
+static void pin_track_window_count(Pin *pin, long now) {
+    const size_t count = pin->windows.size();
+    if (count == pin->last_frame_window_count)
+        return;
+    if (count == 0) {
+        pin->opened_from = pin_opened_scalar(pin, now);
+        pin->opened_to = 0;
+        pin->opened_start = now;
+        pin->opened_len = 100;
+    } else if (pin_opened_scalar(pin, now) != 1.0 || pin->opened_to != 1.0) {
+        pin->opened_from = pin_opened_scalar(pin, now);
+        pin->opened_to = 1;
+        pin->opened_start = now;
+        pin->opened_len = 200;
+        if (pin->last_frame_window_count == 0 && now - dock_start_time > 1000)
+            pin->bloom_start = now;
+    }
+    pin->last_frame_window_count = count;
+}
+
+static void bubbly_average_color(Pin *pin) {
+    if (pin->average_color_set || !pin->icon_surf)
+        return;
+    pin->average_color_set = true;
+    auto surface = pin->icon_surf;
+    cairo_surface_flush(surface);
+    unsigned char *data = cairo_image_surface_get_data(surface);
+    if (!data)
+        return;
+    int width = cairo_image_surface_get_width(surface);
+    int height = cairo_image_surface_get_height(surface);
+    int stride = cairo_image_surface_get_stride(surface);
+    long total = 0;
+    double r = 0, g = 0, b = 0;
+    for (int y = 0; y < height; y++) {
+        auto row = (uint32_t *) (data + y * stride);
+        for (int x = 0; x < width; x++) {
+            uint32_t color = row[x];
+            if (((color >> 24) & 0xFF) == 0)
+                continue;
+            total++;
+            r += ((color >> 16) & 0xFF) / 255.0;
+            g += ((color >> 8) & 0xFF) / 255.0;
+            b += (color & 0xFF) / 255.0;
+        }
+    }
+    if (total > 0)
+        pin->average_color = RGBA(r / total, g / total, b / total, 1);
+}
+
+// winbar's drawRoundedRect: a rounded rect kept inside the bounds.
+static void bubbly_rounded_rect(cairo_t *cr, double x, double y, double width, double height, double radius, double stroke_width) {
+    double half_stroke = stroke_width / 2.0;
+    double adjusted_radius = std::fmin(radius, std::fmin(width, height) / 2.0);
+    double inner_width = width - stroke_width;
+    double inner_height = height - stroke_width - 1;
+    if (inner_width <= 0 || inner_height <= 0)
+        return;
+    double ax = x + half_stroke;
+    double ay = y + half_stroke;
+    cairo_new_path(cr);
+    cairo_move_to(cr, ax + adjusted_radius, ay);
+    cairo_line_to(cr, ax + inner_width - adjusted_radius, ay);
+    cairo_arc(cr, ax + inner_width - adjusted_radius, ay + adjusted_radius, adjusted_radius, -M_PI / 2, 0);
+    cairo_line_to(cr, ax + inner_width, ay + inner_height - adjusted_radius);
+    cairo_arc(cr, ax + inner_width - adjusted_radius, ay + inner_height - adjusted_radius, adjusted_radius, 0, M_PI / 2);
+    cairo_line_to(cr, ax + adjusted_radius, ay + inner_height);
+    cairo_arc(cr, ax + adjusted_radius, ay + inner_height - adjusted_radius, adjusted_radius, M_PI / 2, M_PI);
+    cairo_line_to(cr, ax, ay + adjusted_radius);
+    cairo_arc(cr, ax + adjusted_radius, ay + adjusted_radius, adjusted_radius, M_PI, 3 * M_PI / 2);
+    cairo_close_path(cr);
+    cairo_set_line_width(cr, stroke_width);
+}
+
+static void bubbly_fill(cairo_t *cr, const Bounds &b, RGBA color, double alpha = 1) {
+    cairo_set_source_rgba(cr, color.r, color.g, color.b, color.a * alpha);
+    cairo_rectangle(cr, b.x, b.y, b.w, b.h);
+    cairo_fill(cr);
+}
+
+struct BubblyColors {
+    RGBA background_hovered;
+    RGBA background_pressed;
+    RGBA foreground_default;
+    RGBA foreground_hovered;
+    RGBA foreground_pressed;
+};
+
+// winbar's draw_win7_pane.
+static void bubbly_pane(cairo_t *cr, double dpi, const Bounds &real_bounds, bool active, bool pressed, bool hovered,
+                        const BubblyColors &colors, double alpha, bool clip, const Bounds &clip_bounds) {
+    double line_w = std::floor(1 * dpi);
+    double pos_x = std::round(real_bounds.x);
+    double radius = 2 * dpi;
+    if (clip) {
+        cairo_rectangle(cr, clip_bounds.x, clip_bounds.y, clip_bounds.w, clip_bounds.h);
+        cairo_clip(cr);
+    }
+    bubbly_rounded_rect(cr, pos_x + line_w, real_bounds.y + line_w, real_bounds.w - line_w * 2, real_bounds.h - line_w * 2, radius, line_w);
+    cairo_clip(cr);
+
+    if (hovered || pressed || active)
+        bubbly_fill(cr, real_bounds, (pressed || active) ? colors.background_pressed : colors.background_hovered, alpha);
+
+    RGBA foreground = colors.foreground_default;
+    if (pressed || active)
+        foreground = colors.foreground_pressed;
+    else if (hovered)
+        foreground = colors.foreground_hovered;
+    bubbly_fill(cr, real_bounds, foreground, alpha);
+
+    cairo_reset_clip(cr);
+    if (clip) {
+        cairo_rectangle(cr, clip_bounds.x, clip_bounds.y, clip_bounds.w, clip_bounds.h);
+        cairo_clip(cr);
+    }
+
+    cairo_set_source_rgba(cr, 1, 1, 1, .35 * alpha);
+    bubbly_rounded_rect(cr, pos_x + line_w, real_bounds.y + line_w, real_bounds.w - line_w * 2, real_bounds.h - line_w * 2, radius * .4, line_w);
+    cairo_stroke(cr);
+
+    cairo_set_source_rgba(cr, 0, 0, 0, .8 * alpha);
+    bubbly_rounded_rect(cr, pos_x, real_bounds.y, real_bounds.w, real_bounds.h, radius, line_w);
+    cairo_stroke(cr);
+    if (clip)
+        cairo_reset_clip(cr);
+}
+
+// winbar's paint_icon_background_win7, drawn into pin->bubbly_surf.
+static void paint_bubbly_icon_background(Container *root, Container *c, Pin *pin, drawing::Context *ctx, double dpi,
+                                         bool active, double launch_amount) {
+    const Bounds bounds = c->real_bounds;
+    const double origin_x = std::floor(bounds.x);
+    const double origin_y = std::floor(bounds.y);
+    const int surf_w = (int) std::ceil(bounds.x + bounds.w - origin_x);
+    const int surf_h = (int) std::ceil(bounds.y + bounds.h - origin_y);
+    if (surf_w <= 0 || surf_h <= 0)
+        return;
+
+    if (!pin->bubbly_surf || cairo_image_surface_get_width(pin->bubbly_surf) != surf_w ||
+        cairo_image_surface_get_height(pin->bubbly_surf) != surf_h) {
+        if (pin->bubbly_surf)
+            cairo_surface_destroy(pin->bubbly_surf);
+        pin->bubbly_surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, surf_w, surf_h);
+    }
+
+    const long now = get_current_time_in_ms();
+    const int windows_count = (int) pin->windows.size();
+    const bool pressed = c->state.mouse_pressing;
+    const bool hovered = c->state.mouse_hovering;
+    const double hover_amount = pin->hover_amount;
+    const bool flat = dock_style.load() == DockStyle::BubblyFlat;
+
+    cairo_t *cr = cairo_create(pin->bubbly_surf);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    // Draw in dock coordinates, like winbar does.
+    cairo_translate(cr, -origin_x, -origin_y);
+
+    RGBA background(1, 1, 1, 0.11 + pin->active_amount * .05);
+    BubblyColors colors;
+    colors.background_hovered = darken_dock_color(background, 15);
+    colors.background_pressed = darken_dock_color(background, 20);
+    colors.foreground_default = darken_dock_color(background, 10);
+    colors.foreground_hovered = darken_dock_color(background, 0);
+    colors.foreground_pressed = darken_dock_color(background, 2);
+
+    bool show_hover_spotlight = false;
+    if (windows_count >= 3) {
+        show_hover_spotlight = true;
+        auto diff = std::round(4 * dpi);
+        Bounds b = bounds;
+        b.x += b.w - diff;
+        b.w = diff;
+        bubbly_pane(cr, dpi, bounds, active, pressed, hovered, colors, 0.33, true, b);
+
+        Bounds draw_b = bounds;
+        draw_b.w -= diff;
+        b.x -= diff;
+        bubbly_pane(cr, dpi, draw_b, active, pressed, hovered, colors, 0.66, true, b);
+
+        b = bounds;
+        b.w -= diff * 2;
+        bubbly_pane(cr, dpi, b, active, pressed, hovered, colors, 1.0, false, b);
+    } else if (windows_count == 2) {
+        show_hover_spotlight = true;
+        auto diff = std::round(5 * dpi);
+        Bounds b = bounds;
+        b.x += b.w - diff;
+        b.w = diff;
+        bubbly_pane(cr, dpi, bounds, active, pressed, hovered, colors, 0.66, true, b);
+
+        b = bounds;
+        b.w -= diff;
+        bubbly_pane(cr, dpi, b, active, pressed, hovered, colors, 1.0, false, b);
+    } else if (windows_count == 1) {
+        show_hover_spotlight = true;
+        bubbly_pane(cr, dpi, bounds, active, pressed, hovered, colors, 1.0, false, Bounds());
+    } else if (launch_amount > 0) {
+        // Pretend the window being launched already exists.
+        bubbly_pane(cr, dpi, bounds, true, false, hovered, colors, 0.42 * launch_amount, false, Bounds());
+    } else if (hover_amount > 0.001 && !c->state.mouse_dragging) {
+        double x = bounds.x + bounds.w / 2;
+        double r = (bounds.h * .4) * hover_amount;
+        double y = bounds.y + bounds.h - r * .24;
+        if (r > 0) {
+            cairo_pattern_t *radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
+            cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.1 * hover_amount);
+            cairo_pattern_add_color_stop_rgba(radial, 1.0, 1, 1, 1, 0.0);
+            cairo_set_source(cr, radial);
+            cairo_arc(cr, x, y, r, 0, 2 * M_PI);
+            cairo_fill(cr);
+            cairo_pattern_destroy(radial);
+        }
+    }
+
+    if (windows_count >= 1 && pin->bloom_start != 0 && now - pin->bloom_start < kBubblyBloomMs) {
+        bubbly_average_color(pin);
+        double bg_fade = pull(bubbly_bloom_curve, (float) (now - pin->bloom_start) / kBubblyBloomMs);
+        bubbly_fill(cr, bounds, RGBA(pin->average_color.r, pin->average_color.g, pin->average_color.b, .45 * bg_fade));
+    }
+
+    if (show_hover_spotlight && hover_amount > 0.001) {
+        bubbly_average_color(pin);
+        double x = root->mouse_current_x;
+        double y = root->mouse_current_y;
+        double r = bounds.w * hover_amount * 1.5;
+        if (r > 0) {
+            cairo_pattern_t *radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
+            const auto &avg = pin->average_color;
+            cairo_pattern_add_color_stop_rgba(radial, 0.0, avg.r, avg.g, avg.b, 0.7 * hover_amount);
+            cairo_pattern_add_color_stop_rgba(radial, 0.7, avg.r, avg.g, avg.b, 0.55 * hover_amount);
+            cairo_pattern_add_color_stop_rgba(radial, 1.0, avg.r, avg.g, avg.b, 0.0);
+            cairo_set_source(cr, radial);
+
+            double radius = 2 * dpi;
+            double line_w = std::floor(1 * dpi);
+            bubbly_rounded_rect(cr, bounds.x + line_w, bounds.y + line_w, bounds.w - line_w * 2, bounds.h - line_w * 2, radius, line_w);
+            cairo_clip(cr);
+            cairo_arc(cr, x, y, r * hover_amount, 0, 2 * M_PI);
+            cairo_fill(cr);
+            cairo_reset_clip(cr);
+            cairo_pattern_destroy(radial);
+        }
+    }
+
+    const double opened = pin_opened_scalar(pin, now);
+    if (windows_count >= 1 && !flat && opened > 0) {
+        // Glass gloss across the top left.
+        double line_w = std::floor(1 * dpi);
+        double x = bounds.x + line_w * 2;
+        double r = bounds.w;
+        double y = bounds.y + line_w * 2;
+        x += bounds.w * .1;
+        y -= bounds.w * .5;
+        cairo_pattern_t *radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
+        x = bounds.x + line_w * 2;
+        y = bounds.y + line_w * 2;
+        cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.35 * opened);
+        cairo_pattern_add_color_stop_rgba(radial, 1.0, 1, 1, 1, 0.0);
+        cairo_set_source(cr, radial);
+
+        cairo_new_path(cr);
+        cairo_move_to(cr, x, y);
+        cairo_line_to(cr, x + bounds.w, y);
+        cairo_line_to(cr, x + bounds.w, y + bounds.h * .2);
+        cairo_curve_to(cr,
+                       x + bounds.w, y + bounds.h * .2,
+                       x + bounds.w * .15, y + bounds.h * .15,
+                       x, y + bounds.h);
+        cairo_line_to(cr, x, y);
+        cairo_clip(cr);
+        cairo_arc(cr, x, y, r, 0, 2 * M_PI);
+        cairo_fill(cr);
+        cairo_reset_clip(cr);
+        cairo_pattern_destroy(radial);
+
+        r = bounds.h * .6;
+        radial = cairo_pattern_create_radial(x, y, 0, x, y, r);
+        cairo_pattern_add_color_stop_rgba(radial, 0.0, 1, 1, 1, 0.2 * opened);
+        cairo_pattern_add_color_stop_rgba(radial, 1.0, 1, 1, 1, 0.0);
+        cairo_set_source(cr, radial);
+        cairo_rectangle(cr, bounds.x, bounds.y, bounds.w, bounds.h);
+        cairo_clip(cr);
+        cairo_arc(cr, x, y, r, 0, 2 * M_PI);
+        cairo_fill(cr);
+        cairo_reset_clip(cr);
+        cairo_pattern_destroy(radial);
+    }
+
+    cairo_destroy(cr);
+    cairo_surface_mark_dirty(pin->bubbly_surf);
+    drawing::invalidate_surface(pin->bubbly_surf);
+
+    ctx->save();
+    ctx->rectangle(origin_x, origin_y, surf_w, surf_h);
+    ctx->clip_path();
+    ctx->set_source_surface(pin->bubbly_surf, origin_x, origin_y);
+    ctx->paint_source();
+    ctx->restore();
+}
+
 static void paint_root_func(Container *root, Container *c) {
     auto dock = (Dock *) root->user_data;
     auto mylar = dock->window;
@@ -365,6 +743,17 @@ static void paint_root_func(Container *root, Container *c) {
     auto color = color_dock_color();
     cr->set_source_rgba(color.r, color.g, color.b, color.a);
     cr->fill();
+
+    if (dock_is_bubbly()) {
+        // winbar's win7 top edge: a dark line over a light one.
+        auto h = std::floor(1 * mylar->raw_window->dpi);
+        cr->set_source_rgba(0, 0, 0, .7);
+        cr->rectangle(root->real_bounds.x, root->real_bounds.y, root->real_bounds.w, h);
+        cr->fill();
+        cr->set_source_rgba(1, 1, 1, .29);
+        cr->rectangle(root->real_bounds.x, root->real_bounds.y + h, root->real_bounds.w, h);
+        cr->fill();
+    }
 }
 
 static void paint_label(Container *root, Container *c, std::string text) {
@@ -671,6 +1060,8 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
     });
 }
 
+static void launch_pin(Pin *pin);
+
 static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff, std::string full_icon_path) {
     main_thread([cid, startoff, cw, uuid, pin, dpi, yoff, full_icon_path] {
         auto m = mouse();
@@ -686,7 +1077,11 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                         for (auto p : icons->children) {
                             auto pin = (Pin*)p->user_data;
                             if (p->uuid == uuid) {
-                                launch_command(pin->command);
+                                {
+                                    std::lock_guard<std::mutex> lock(d->app->mutex);
+                                    launch_pin(pin);
+                                }
+                                windowing::redraw(d->window->raw_window);
                             }
                         }
                     }
@@ -869,6 +1264,95 @@ static std::vector<int> pin_window_ids(Pin *pin) {
     return ids;
 }
 
+static constexpr long kLaunchPretendMs = 10000;
+static constexpr long kLaunchFadeMs = 250;
+
+// How strongly the pretend "window exists" indicator should show, 0 when the
+// pin isn't launching. Clears the launch once a real window has arrived.
+static double pin_launch_amount(Pin *pin) {
+    if (pin->launch_attempt_time == 0)
+        return 0;
+    if (!pin->windows.empty()) {
+        pin->launch_attempt_time = 0;
+        return 0;
+    }
+    const long elapsed = get_current_time_in_ms() - pin->launch_attempt_time;
+    if (elapsed >= kLaunchPretendMs) {
+        pin->launch_attempt_time = 0;
+        return 0;
+    }
+    // Breathe from the start so it's clear the app is opening: dip to 30%
+    // once a second, like winbar.
+    const double period = 1000;
+    double phase = std::fmod((double) elapsed, period) / period;
+    double scalar = std::abs(phase * 2.0 - 1.0);
+    double amount = 1.0 - (1.0 - scalar) * .7;
+    const long remaining = kLaunchPretendMs - elapsed;
+    if (remaining < kLaunchFadeMs)
+        amount *= (double) remaining / kLaunchFadeMs;
+    return amount;
+}
+
+static void start_launch_pretend(Pin *pin) {
+    if (pin->windows.empty())
+        pin->launch_attempt_time = get_current_time_in_ms();
+}
+
+// Desktop icons' open punch (see punch_scale in desktop_icons.cpp): 1.0 ->
+// 0.5 -> 1.0 over 500ms with Qt's OutInCirc easing.
+static constexpr float kPunchMs = 500.f;
+// How much the icon shrinks at the deepest point of the punch (0.2 = 20%).
+static constexpr float kPunchShrink = 0.3f;
+static constexpr float kPunchDepth = 1.f - kPunchShrink;
+
+static float dock_punch_scale(float t) {
+    t = std::clamp(t, 0.f, 1.f);
+    const float u = 2.f * t - 1.f;
+    const float root = std::sqrt(std::max(0.f, 1.f - u * u));
+    const float e = t < .5f ? root * .5f : (1.f - root) * .5f + .5f;
+    if (e < .5f)
+        return 1.f + (kPunchDepth - 1.f) * (e / .5f);
+    return kPunchDepth + (1.f - kPunchDepth) * ((e - .5f) / .5f);
+}
+
+// Current icon scale, 1 when not punching. Ends the punch once it's done.
+static float pin_punch_scale(Pin *pin) {
+    if (pin->punch_start == 0)
+        return 1.f;
+    const long elapsed = get_current_time_in_ms() - pin->punch_start;
+    if (elapsed >= kPunchMs) {
+        pin->punch_start = 0;
+        return 1.f;
+    }
+    return dock_punch_scale(elapsed / kPunchMs);
+}
+
+// winbar's bounce_slam_animation: a quick dip (or hop) and a slower return,
+// played over the first quarter of kBounceMs.
+static constexpr float kBounceMs = 2000.f;
+// How far the icon moves, in logical pixels.
+static constexpr float kBounceDistance = 2.f;
+static std::vector<float> bounce_curve = { 0, 0, 0, 0, 0.121, 0.256, 0.40800000000000003, 0.579, 0.779, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.952, 0.847, 0.732, 0.605, 0.469, 0.32199999999999995, 0.16600000000000004, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+// Vertical icon offset in pixels (positive is down). Ends the bounce once done.
+static double pin_bounce_offset(Pin *pin, double dpi) {
+    if (pin->bounce_start == 0)
+        return 0;
+    const long elapsed = get_current_time_in_ms() - pin->bounce_start;
+    if (elapsed >= kBounceMs || pin->windows.empty()) {
+        pin->bounce_start = 0;
+        return 0;
+    }
+    double offset = pull(bounce_curve, elapsed / kBounceMs) * kBounceDistance * dpi;
+    return pin->bounce_up ? -offset : offset;
+}
+
+static void launch_pin(Pin *pin) {
+    start_launch_pretend(pin);
+    pin->punch_start = get_current_time_in_ms();
+    launch_command(pin->command);
+}
+
 static void cancel_hover_timer(Dock *dock, Pin *pin) {
     if (pin->hover_timer_fd != -1 && dock) {
         windowing::timer_stop(dock->app, pin->hover_timer_fd);
@@ -960,12 +1444,18 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         pin->hover_amount += std::clamp((hovered ? 1.0 : 0.0) - pin->hover_amount, -animation_step, animation_step);
         pin->active_amount += std::clamp((is_active ? 1.0 : 0.0) - pin->active_amount, -animation_step, animation_step);
         const double eased_active = pin->active_amount * pin->active_amount * (3.0 - 2.0 * pin->active_amount);
+        const double launch_amount = pin_launch_amount(pin);
+        pin_track_window_count(pin, get_current_time_in_ms());
+        const bool bubbly = dock_is_bubbly();
+
+        if (bubbly && !c->state.mouse_dragging)
+            paint_bubbly_icon_background(root, c, pin, cr, mylar->raw_window->dpi, is_active, launch_amount);
 
         // Ported from winbar's paint_icon_background: the background pane is
         // only shown while pressed/hovered, or while one of the pinned windows
         // is active. It gets a subtle left-to-right shading compared to the
         // flat rectangle the dock used to draw.
-        if (pressed || pin->hover_amount > 0.001 || pin->active_amount > 0.001) {
+        if (!bubbly && (pressed || pin->hover_amount > 0.001 || pin->active_amount > 0.001)) {
             RGBA pane_left, pane_middle, pane_right;
             if (pressed) {
                 auto base = color_dock_sel_press_color();
@@ -1003,12 +1493,25 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             if (ico_surf) {
                 auto h = cairo_image_surface_get_height(ico_surf);
                 auto w = cairo_image_surface_get_width(ico_surf);
-                if (none) {
-                    cr->set_source_surface(ico_surf, std::round(c->real_bounds.x + c->real_bounds.w * .5 - w * .5), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
+                double ix = none ? std::round(c->real_bounds.x + c->real_bounds.w * .5 - w * .5) : std::round(c->real_bounds.x + 10);
+                double iy = std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
+                iy += pin_bounce_offset(pin, mylar->raw_window->dpi);
+                const float punch = pin_punch_scale(pin);
+                if (punch != 1.f) {
+                    // Shrink toward the icon's own center.
+                    const double cx = ix + w * .5;
+                    const double cy = iy + h * .5;
+                    cr->save();
+                    cr->translate(cx, cy);
+                    cr->scale(punch, punch);
+                    cr->translate(-cx, -cy);
+                    cr->set_source_surface(ico_surf, ix, iy);
+                    cr->paint_source();
+                    cr->restore();
                 } else {
-                    cr->set_source_surface(ico_surf, std::round(c->real_bounds.x + 10), std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5));
+                    cr->set_source_surface(ico_surf, ix, iy);
+                    cr->paint_source();
                 }
-                cr->paint_source();
                 auto wi = cairo_image_surface_get_height(ico_surf);
                 offx = wi;
             }
@@ -1035,14 +1538,30 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             }
         }
 
-        if (windows_count > 0) {
+        if (bubbly) {
+            // Bubbly has no highlight bar; its panes show the windows.
+        } else if (windows_count > 0) {
             auto accent_color = color_dock_sel_accent_color();
             auto bar_left = accent_color;
             auto bar_middle = windows_count > 1 ? darken_dock_color(accent_color, 20) : accent_color;
             auto bar_right = windows_count > 1 ? darken_dock_color(accent_color, 15) : accent_color;
             paint_dock_highlight_bar(cr, c->real_bounds, mylar->raw_window->dpi, std::max(pin->hover_amount, eased_active),
                                      bar_left, bar_middle, bar_right);
+        } else if (launch_amount > 0) {
+            // Pretend the window being launched already exists.
+            auto accent_color = color_dock_sel_accent_color();
+            accent_color.a *= launch_amount;
+            paint_dock_highlight_bar(cr, c->real_bounds, mylar->raw_window->dpi, pin->hover_amount,
+                                     accent_color, accent_color, accent_color);
         }
+    };
+    ch->when_mouse_motion = paint {
+        // Bubbly's hover spotlight follows the pointer.
+        if (!dock_is_bubbly())
+            return;
+        auto dock = (Dock *) root->user_data;
+        if (dock && dock->window && dock->window->raw_window)
+            windowing::redraw(dock->window->raw_window);
     };
     ch->when_mouse_enters_container = paint {
         Pin *pin = (Pin *) c->user_data;
@@ -1197,7 +1716,11 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         }
 
         if (pin->windows.empty() && c->state.mouse_button_pressed == BTN_LEFT) {
-            launch_command(pin->command);
+            // Already launching: wait for that window instead of opening another.
+            if (pin_launch_amount(pin) > 0)
+                return;
+            launch_pin(pin);
+            windowing::redraw(mylar->raw_window);
             return;
         }
 
@@ -1245,7 +1768,8 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 }
             });
         } else if (c->state.mouse_button_pressed == BTN_MIDDLE) {
-            launch_command(pin->command);
+            launch_pin(pin);
+            windowing::redraw(mylar->raw_window);
         } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
             int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
             int cw = c->real_bounds.w / mylar->raw_window->dpi;
@@ -1494,13 +2018,27 @@ calc_largest(Container *icons) {
 static int
 size_icons(Dock *dock, Container *icons) {
     int total_width = 0;
+    // Bubbly panes have their own black border, which can butt up against the
+    // next icon (same as winbar's win7 style on a dark taskbar).
+    pixel_spacing = dock_is_bubbly() ? 0 : 1;
+    const int icon_width = dock_is_bubbly() ? 60 : 50;
     for (auto c: icons->children) {
         //auto w = get_label_width(client, c);
         auto pin = (Pin *) c->user_data;
+        const double dpi = dock->window->raw_window->dpi;
         if (pin->windows.empty() || !labels || merge_windows.load()) {
-            c->real_bounds.w = 50 * dock->window->raw_window->dpi;
+            c->real_bounds.w = icon_width * dpi;
+        } else if (!set || set->dock_label_same_width || !dock->window->raw_window->drawing_context) {
+            c->real_bounds.w = max_width * dpi;
         } else {
-            c->real_bounds.w = max_width * dock->window->raw_window->dpi;
+            // Fit the title, up to the same-width size (winbar's
+            // get_label_width without label_uniform_size). Matches the
+            // icon and text placement in the pin's when_paint.
+            auto cr = dock->window->raw_window->drawing_context;
+            auto text = draw_text(cr, 0, 0, pin->windows[0].title, 9 * dpi, false, set->font);
+            int icon_w = pin->icon_surf && icons_loaded ? cairo_image_surface_get_height(pin->icon_surf) : 0;
+            double fit = (icon_w ? text.w + icon_w + 30 : text.w + 20) + 5 * dpi;
+            c->real_bounds.w = std::round(std::clamp(fit, icon_width * dpi, (double) max_width * dpi));
         }
         c->real_bounds.h = icons->real_bounds.h;
         c->real_bounds.y = 0;
@@ -1714,7 +2252,11 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     bool needs_refresh = false;
     for (auto c: icons->children) {
         auto *data = (Pin *) c->user_data;
-        if (data->animating || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
+        // A window arrived, so the launch is over. Clearing it here (not only
+        // in paint) keeps it from coming back if that window closes quickly.
+        if (!data->windows.empty())
+            data->launch_attempt_time = 0;
+        if (data->animating || data->launch_attempt_time != 0 || data->punch_start != 0 || data->bounce_start != 0 || pin_bubbly_animating(data, current) || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
             std::abs(data->active_amount - ([&] {
                 for (const auto &window : data->windows)
                     if (window.cid == active_cid)
@@ -2800,8 +3342,11 @@ static void schedule_startup_audio_update(Dock *dock) {
 void dock_start(std::string monitor_name) {
     // Docks can be recreated, so always pick up the persisted setting before
     // the first grouping pass.
-    if (set)
+    if (set) {
         merge_windows = set->dock_merge_windows;
+        dock_style = parse_dock_style(set->dock_style);
+    }
+    dock_start_time = get_current_time_in_ms();
 
     if (!monitor_name.empty()) {
         for (auto d : docks) {
@@ -2874,8 +3419,10 @@ static int get_dock_alignment() {
 }
 
 void dock::start(std::string monitor_name) {
-    if (set)
+    if (set) {
         merge_windows = set->dock_merge_windows;
+        dock_style = parse_dock_style(set->dock_style);
+    }
 
     if (monitor_name.empty())
         monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
@@ -3075,6 +3622,31 @@ void dock::on_activated(int cid) {
     }
 }
 
+void dock::on_hidden(int cid, bool hidden) {
+    if (set && !set->dock_bounce_animation)
+        return;
+    const long now = get_current_time_in_ms();
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        bool bounced = false;
+        if (auto icons = container_by_name("icons", d->window->root)) {
+            for (auto p : icons->children) {
+                auto pin = (Pin *) p->user_data;
+                for (const auto &window : pin->windows) {
+                    if (window.cid == cid) {
+                        pin->bounce_start = now;
+                        pin->bounce_up = !hidden; // down when minimizing, up when restoring
+                        bounced = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (bounced)
+            windowing::redraw(d->window->raw_window);
+    }
+}
+
 void dock::change_in_systray() {
     for (auto d : docks) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
@@ -3120,6 +3692,24 @@ void dock::set_dock_merge(bool enabled) {
                 pin->wants_reposition_animation = true;
             }
             d->thumbnails_dirty = true;
+        }
+    }
+    dock::redraw();
+}
+
+void dock::set_dock_style(const std::string &style) {
+    dock_style = parse_dock_style(style);
+    dock::relayout();
+}
+
+void dock::relayout() {
+    for (auto d : docks) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        if (auto icons = container_by_name("icons", d->window->root)) {
+            for (auto pin_container : icons->children) {
+                if (auto *pin = (Pin *) pin_container->user_data)
+                    pin->wants_reposition_animation = true;
+            }
         }
     }
     dock::redraw();
