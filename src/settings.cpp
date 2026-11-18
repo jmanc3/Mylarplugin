@@ -341,17 +341,8 @@ struct SettingsCategory {
 
 static const std::vector<SettingsCategory> &settings_categories() {
     static const std::vector<SettingsCategory> categories = {
-        {"System", "settings-system", "preferences-desktop-display", {
+        {"Display", "settings-system", "preferences-desktop-display", {
             {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper, desktop icons", "\uE7F4"},
-            {"Multitasking", "Multitasking", "Workspaces, snap windows, app switching, hot corners", "\uE7C4"},
-        }},
-        {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
-            {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
-        }},
-        {"Devices", "settings-devices", "preferences-desktop-peripherals", {
-            {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
-            {"Keyboard", "Keyboard", "Layouts, repeat delay and rate", "\uE765"},
-            {"Shortcuts", "Keyboard shortcuts", "System and custom key combinations", "\uEDA7"},
         }},
         {"Network & internet", "settings-network", "network-wireless", {
             {"Wifi", "Wi-Fi", "Connect to wireless networks", "\uE701"},
@@ -359,8 +350,16 @@ static const std::vector<SettingsCategory> &settings_categories() {
         {"Sound", "settings-sound", "preferences-desktop-sound", {
             {"Audio", "Sound", "Volume, output and input devices, app volume", "\uE767"},
         }},
-        {"Personalization", "settings-personalization", "preferences-desktop-wallpaper", {
-            {"Desktop", "Desktop & dock", "Theme, font, overview, dock", "\uE771"},
+        {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
+            {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
+        }},
+        {"Behaviour", "settings-personalization", "preferences-desktop-wallpaper", {
+            {"Desktop", "Behaviour", "Theme, font, overview, dock, workspaces, snap windows, hot corners", "\uE771"},
+        }},
+        {"Devices", "settings-devices", "preferences-desktop-peripherals", {
+            {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
+            {"Keyboard", "Keyboard", "Layouts, repeat delay and rate", "\uE765"},
+            {"Shortcuts", "Keyboard shortcuts", "System and custom key combinations", "\uEDA7"},
         }},
         {"Time & language", "settings-time", "preferences-system-time", {
             {"Time & Date", "Date & time", "Time zone, clock format, automatic time", "\uEC92"},
@@ -369,7 +368,8 @@ static const std::vector<SettingsCategory> &settings_categories() {
     // Only machines with a battery get the Battery page.
     static const std::vector<SettingsCategory> with_battery = []() {
         auto list = categories;
-        list.insert(list.begin() + 1, {"Battery", "settings-power", "battery", {
+        // After Bluetooth, before Behaviour.
+        list.insert(list.begin() + 4, {"Battery", "settings-power", "battery", {
             {"Battery", "Battery", "Charge, battery usage history, time remaining", "\uEBAA"},
         }});
         return list;
@@ -4505,6 +4505,68 @@ static void fill_display_settings(Container *root) {
 
 }
 
+static void save_multitasking_settings() {
+    main_thread([]() {
+        settings::load_save_settings(true, set);
+        hypriso->apply_workspace_settings();
+        hypriso->generate_mylar_hyprland_config();
+    });
+}
+
+// Shown at the end of the Behaviour (Desktop) page.
+static void add_multitasking_settings(Container *padded_right) {
+    make_section_title(padded_right, "Multitasking Settings");
+    make_vert_space(padded_right, 12);
+    make_button_group(padded_right, "App switching",
+        "Choose which windows appear in the app switcher",
+        {"All workspaces", "Current workspace"}, [](std::string selected) {
+            set->app_switcher_current_workspace_only = selected == "Current workspace";
+            save_multitasking_settings();
+        }, set->app_switcher_current_workspace_only ? "Current workspace" : "All workspaces");
+    make_button_group(padded_right, "Workspace behavior",
+        "Create workspaces as needed or keep a fixed number",
+        {"Dynamic", "Fixed"}, [](std::string selected) {
+            set->dynamic_workspaces = selected == "Dynamic";
+            save_multitasking_settings();
+        }, set->dynamic_workspaces ? "Dynamic" : "Fixed");
+    make_reset_textfield(padded_right, "Number of workspaces",
+        "Per monitor in Fixed mode (1–20); occupied extras are kept", "", true,
+        std::to_string(set->fixed_workspace_count), "4", [](std::string value) {
+            try {
+                size_t end = 0;
+                const int count = std::stoi(value, &end);
+                if (end != value.size() || count < 1 || count > 20)
+                    throw std::out_of_range("workspace count");
+                set->fixed_workspace_count = count;
+                save_multitasking_settings();
+            } catch (const std::exception&) {
+                main_thread([]() {
+                    notify("Enter a workspace count from 1 to 20");
+                });
+            }
+        }, nullptr, "Whole number from 1 to 20");
+    make_button_group(padded_right, "Multiple monitors",
+        "Switch workspaces independently or on all monitors together",
+        {"Independent", "Together"}, [](std::string selected) {
+            set->workspaces_span_monitors = selected == "Together";
+            save_multitasking_settings();
+        }, set->workspaces_span_monitors ? "Together" : "Independent");
+    make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
+        set->hotcorners = value;
+        save_multitasking_settings();
+    }, "\ue8b0");
+    make_bool(padded_right, "Snap windows",
+        "Drag a window to a screen edge or corner to fill half or a quarter of the screen", set->resize_at_screen_edges, [](bool value) {
+            set->resize_at_screen_edges = value;
+            save_multitasking_settings();
+        });
+    make_bool(padded_right, "Attempt to respect CSD requests",
+        "Don't add a titlebar to windows that ask to draw their own decorations", set->respect_csd_requests, [](bool value) {
+            set->respect_csd_requests = value;
+            save_multitasking_settings();
+        });
+}
+
 static void fill_desktop_settings(Container *root, Container *c) {
     auto right = container_by_name("settings_right", root);
     if (!right)
@@ -4618,6 +4680,8 @@ static void fill_desktop_settings(Container *root, Container *c) {
             });
         },
         "\ue75b");
+
+    add_multitasking_settings(padded_right);
 }
 
 
@@ -4820,77 +4884,6 @@ static void fill_mouse_settings(Container *root, Container *c) {
         });
     }, 0, "\uec49", ConfigSettings().touchpad_speed);
 
-}
-
-static void save_multitasking_settings() {
-    main_thread([]() {
-        settings::load_save_settings(true, set);
-        hypriso->apply_workspace_settings();
-        hypriso->generate_mylar_hyprland_config();
-    });
-}
-
-static void fill_multitasking_settings(Container *root) {
-    auto right = container_by_name("settings_right", root);
-    if (!right)
-        return;
-    for (auto child: right->children)
-        delete child;
-    right->children.clear();
-
-    right->pre_layout = layout_right_page;
-    auto padded_right = right->child(FILL_SPACE, FILL_SPACE);
-
-    make_section_title(padded_right, "Multitasking Settings");
-    make_vert_space(padded_right, 12);
-    make_button_group(padded_right, "App switching",
-        "Choose which windows appear in the app switcher",
-        {"All workspaces", "Current workspace"}, [](std::string selected) {
-            set->app_switcher_current_workspace_only = selected == "Current workspace";
-            save_multitasking_settings();
-        }, set->app_switcher_current_workspace_only ? "Current workspace" : "All workspaces");
-    make_button_group(padded_right, "Workspace behavior",
-        "Create workspaces as needed or keep a fixed number",
-        {"Dynamic", "Fixed"}, [](std::string selected) {
-            set->dynamic_workspaces = selected == "Dynamic";
-            save_multitasking_settings();
-        }, set->dynamic_workspaces ? "Dynamic" : "Fixed");
-    make_reset_textfield(padded_right, "Number of workspaces",
-        "Per monitor in Fixed mode (1–20); occupied extras are kept", "", true,
-        std::to_string(set->fixed_workspace_count), "4", [](std::string value) {
-            try {
-                size_t end = 0;
-                const int count = std::stoi(value, &end);
-                if (end != value.size() || count < 1 || count > 20)
-                    throw std::out_of_range("workspace count");
-                set->fixed_workspace_count = count;
-                save_multitasking_settings();
-            } catch (const std::exception&) {
-                main_thread([]() {
-                    notify("Enter a workspace count from 1 to 20");
-                });
-            }
-        }, nullptr, "Whole number from 1 to 20");
-    make_button_group(padded_right, "Multiple monitors",
-        "Switch workspaces independently or on all monitors together",
-        {"Independent", "Together"}, [](std::string selected) {
-            set->workspaces_span_monitors = selected == "Together";
-            save_multitasking_settings();
-        }, set->workspaces_span_monitors ? "Together" : "Independent");
-    make_bool(padded_right, "Hotcorners", "Activates shortcuts when an edge is hit", set->hotcorners, [](bool value) {
-        set->hotcorners = value;
-        save_multitasking_settings();
-    }, "\ue8b0");
-    make_bool(padded_right, "Snap windows",
-        "Drag a window to a screen edge or corner to fill half or a quarter of the screen", set->resize_at_screen_edges, [](bool value) {
-            set->resize_at_screen_edges = value;
-            save_multitasking_settings();
-        });
-    make_bool(padded_right, "Attempt to respect CSD requests",
-        "Don't add a titlebar to windows that ask to draw their own decorations", set->respect_csd_requests, [](bool value) {
-            set->respect_csd_requests = value;
-            save_multitasking_settings();
-        });
 }
 
 /*************************************************
@@ -9606,19 +9599,19 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Desktop", "Dock Settings", "Combine taskbar buttons and hide labels", "Group all windows that belong to one dock icon under a single icon",
                "group merge stack labels dock taskbar");
 
-    search_add("Multitasking", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
-    search_add("Multitasking", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
+    search_add("Desktop", "Multitasking Settings", "Multitasking Settings", "", "multitasking windows workspaces");
+    search_add("Desktop", "Multitasking Settings", "App switching", "Choose which windows appear in the app switcher",
                "alt tab switcher windows workspace");
-    search_add("Multitasking", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
+    search_add("Desktop", "Multitasking Settings", "Workspace behavior", "Create workspaces as needed or keep a fixed number",
                "dynamic fixed workspaces virtual desktops behaviour");
-    search_add("Multitasking", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
+    search_add("Desktop", "Multitasking Settings", "Number of workspaces", "Per monitor in Fixed mode (1–20); occupied extras are kept",
                "count workspaces virtual desktops amount");
-    search_add("Multitasking", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
+    search_add("Desktop", "Multitasking Settings", "Multiple monitors", "Switch workspaces independently or on all monitors together",
                "workspaces span displays screens independent together");
-    search_add("Multitasking", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
-    search_add("Multitasking", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
+    search_add("Desktop", "Multitasking Settings", "Hotcorners", "Activates shortcuts when an edge is hit", "hot corners edge corner");
+    search_add("Desktop", "Multitasking Settings", "Snap windows", "Drag a window to a screen edge or corner to fill half or a quarter of the screen",
                "window resizing screen edges corners quarter snap snapping tile tiling half maximize drag edges");
-    search_add("Multitasking", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
+    search_add("Desktop", "Multitasking Settings", "Attempt to respect CSD requests", "Don't add a titlebar to windows that ask to draw their own decorations",
                "csd ssd client side server side decorations titlebar title bar xdg kde");
 
     search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
@@ -10645,8 +10638,6 @@ static bool settings_show(Container *root, const std::string &id) {
         fill_display_settings(root);
     } else if (page == "Shortcuts") {
         fill_shortcuts_settings(root);
-    } else if (page == "Multitasking") {
-        fill_multitasking_settings(root);
     } else if (page == "Wifi") {
         fill_wifi_settings(root);
     } else if (page == "Bluetooth") {
@@ -11517,8 +11508,8 @@ void settings::start(std::string page, bool focus_search) {
     if (!page.empty()) {
         requested_page = page;
     } else if (!settings_app) {
-        // Opening fresh without a page: show System rather than a blank page.
-        requested_page = "System";
+        // Opening fresh without a page: show Display rather than a blank page.
+        requested_page = "Display";
     }
     if (focus_search)
         search_focus_requested = true;
