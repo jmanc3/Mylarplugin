@@ -3309,12 +3309,6 @@ static std::string lua_string(const std::string& value) {
     return result + "\"";
 }
 
-// Lua color string for an RGBA, e.g. "rgba(76b9edff)".
-static std::string lua_rgba(const RGBA& color) {
-    auto channel = [](float v) { return (int)std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f); };
-    return std::format("\"rgba({:02x}{:02x}{:02x}{:02x})\"", channel(color.r), channel(color.g), channel(color.b), channel(color.a));
-}
-
 static std::string monitor_lua(const MylarMonitor& monitor) {
     std::string out = "hl.monitor({\n";
     out += "    output = " + lua_string(monitor.output) + ",\n";
@@ -3719,11 +3713,11 @@ hl.config({ input = { float_switch_override_focus = false } })
 
 
 
-    // Tiling workspaces paint the active border with the dock accent color
-    // (the bar under pinned icons that have windows); floating workspaces
-    // keep the regular active border.
+    // Tiling workspaces paint the active border with Hyprland's default
+    // cyan-to-green gradient so tiling mode is easy to spot; floating
+    // workspaces keep the regular active border.
     const std::string floating_border = set->active_window_border_hint ? "\"rgba(a9a9a9aa)\"" : "\"rgba(595959aa)\"";
-    const std::string tiling_border = lua_rgba(hypriso->get_varcolor("plugin:mylardesktop:dock_sel_accent_color", RGBA("76b9edff")));
+    const std::string tiling_border = "\"rgba(33ccffee) rgba(00ff99ee) 45deg\"";
 
     // The fallback covers workspaces that have not been created yet.
     const bool default_tiling = set->new_workspace_is_tiling;
