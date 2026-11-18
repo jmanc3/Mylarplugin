@@ -61,7 +61,7 @@ static struct {
 // After a drop onto a thumbnail, the preview keeps flying to the window's
 // final place on the screen instead of vanishing on release.
 static constexpr double landing_ms = 260.0;
-static constexpr float landing_fade_start = .85f;
+static constexpr float landing_release_start = .85f;
 static unsigned int landing_generation = 0;
 static struct {
     int cid = -1;
@@ -339,7 +339,7 @@ static void start_landing(int cid, Container *target) {
         const auto t_norm = (get_current_time_in_ms() - landing.started) / landing_ms;
         const int workspace = hypriso->get_client_workspace_id(landing.cid);
         if (!landing.snapshot_released && workspace >= 0 &&
-            (workspace != landing.source_workspace || t_norm >= landing_fade_start)) {
+            (workspace != landing.source_workspace || t_norm >= landing_release_start)) {
             // The copy flies to the window's place on screen, not over the
             // destination thumbnail, so that thumbnail can show the window as
             // soon as it has moved there.
@@ -364,9 +364,8 @@ static void paint_landing(int monitor) {
     if (!landing_target(target))
         return;
     const auto b = lerp(landing.from, target, pull(slidetopos2, t));
-    float alpha = landing.alpha;
-    if (t > landing_fade_start)
-        alpha *= 1.0f - (t - landing_fade_start) / (1.0f - landing_fade_start);
+    // No fade: the copy stays opaque until it hands over to the real window.
+    const float alpha = landing.alpha;
     damage_all();
     if (alpha <= 0.0f)
         return;
