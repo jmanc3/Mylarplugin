@@ -307,8 +307,12 @@ static void bluetooth_preload() {
     });
 }
 
+static void bluetooth_notify_docks();
+
 void dock::change_in_bluetooth() {
-    bluetooth_available = bluetooth_running;
+    const bool was_available = bluetooth_available.exchange(bluetooth_running);
+    if (was_available != bluetooth_running)
+        bluetooth_notify_docks();
     if (bluetooth_running) {
         bluetooth_preload();
     } else {
@@ -782,44 +786,62 @@ static void bluetooth_rebuild(Dock *dock, const BluetoothMenuView &view) {
     }
 }
 
+// Runs on the dock's own thread: shows or hides the Bluetooth entry in the
+// dock and in its extra menu.
+static void bluetooth_sync_icons(Dock *dock) {
+    if (finished) return;
+    std::lock_guard<std::mutex> lock(dock->app->mutex);
+    const bool available = bluetooth_available.load();
+    auto update_icon = [available](MylarWindow *window) {
+        if (!window || !windowing::has_window(window->raw_window)) return;
+        if (auto item = container_by_name("bluetooth", window->root)) {
+            if (item->exists != available) {
+                item->exists = available;
+                windowing::redraw(window->raw_window);
+            }
+        }
+    };
+    update_icon(dock->window);
+    update_icon(dock->extra);
+}
+
 void bluetooth_watch_dock(Dock *dock) {
-    windowing::timer(dock->app, dock->bluetooth ? 16 : 100, [](void *data) {
-        auto dock = static_cast<Dock *>(data);
+    // After this first sync, dock::change_in_bluetooth pushes availability
+    // changes, so nothing polls while the popup is closed.
+    bluetooth_sync_icons(dock);
+}
+
+// Main thread: BlueZ appeared or went away.
+static void bluetooth_notify_docks() {
+    run_on_every_dock(bluetooth_sync_icons);
+}
+
+// Keeps the open popup in step with the latest snapshot and its animations.
+// Stops as soon as the popup closes.
+static void bluetooth_popup_watch(Dock *dock, MylarWindow *window) {
+    windowing::timer(dock->app, 16, [dock, window](void *) {
         if (finished) return;
         RawWindow *popup_to_redraw = nullptr;
         {
             std::lock_guard<std::mutex> lock(dock->app->mutex);
-            const bool available = bluetooth_available.load();
-            auto update_icon = [available](MylarWindow *window) {
-                if (!window || !windowing::has_window(window->raw_window)) return;
-                if (auto item = container_by_name("bluetooth", window->root)) {
-                    if (item->exists != available) {
-                        item->exists = available;
-                        windowing::redraw(window->raw_window);
-                    }
-                }
-            };
-            update_icon(dock->window);
-            update_icon(dock->extra);
-            if (dock->bluetooth) {
-                bool redraw = false;
-                auto view = bluetooth_latest_view.load();
-                if (view && view->revision != dock->bluetooth_revision) {
-                    bluetooth_rebuild(dock, *view);
-                    dock->bluetooth_revision = view->revision;
-                    redraw = true;
-                }
-                auto menu = bluetooth_menu_data(dock->bluetooth->root);
-                redraw |= menu->animating || menu->view.scanning || menu->view.busy;
-                menu->animating = false;
-                if (redraw) popup_to_redraw = dock->bluetooth->raw_window;
+            if (dock->bluetooth != window) return; // Popup closed; stop polling.
+            bool redraw = false;
+            auto view = bluetooth_latest_view.load();
+            if (view && view->revision != dock->bluetooth_revision) {
+                bluetooth_rebuild(dock, *view);
+                dock->bluetooth_revision = view->revision;
+                redraw = true;
             }
+            auto menu = bluetooth_menu_data(window->root);
+            redraw |= menu->animating || menu->view.scanning || menu->view.busy;
+            menu->animating = false;
+            if (redraw) popup_to_redraw = window->raw_window;
         }
         // on_render takes the app mutex itself. This timer runs on the owning
         // Wayland thread, so the popup cannot close between unlock and paint.
         if (popup_to_redraw) windowing::redraw_now(popup_to_redraw);
-        bluetooth_watch_dock(dock);
-    }, dock);
+        bluetooth_popup_watch(dock, window);
+    }, nullptr);
 }
 
 void fill_bluetooth_container(Dock *dock) {
@@ -857,6 +879,7 @@ void fill_bluetooth_container(Dock *dock) {
         BluetoothMenuView empty;
         bluetooth_rebuild(dock, empty);
     }
+    bluetooth_popup_watch(dock, window);
     bluetooth_menu_opened();
 }
 

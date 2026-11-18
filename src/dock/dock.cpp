@@ -3814,6 +3814,11 @@ Bounds dock::get_location(std::string name, int cid) {
     return {0, 0, 100, 100};
 }
 
+void run_on_every_dock(std::function<void(Dock *)> func) {
+    for (auto d : docks)
+        windowing::run_on_app(d->app, [d, func]() { func(d); });
+}
+
 void total_update() {
     main_thread([]() {
         auto clients = snapshot_audio_clients();

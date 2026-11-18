@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <dbus/dbus.h>
+#include <wayland-server-core.h>
 #include <defer.h>
 #include <cstring>
 #include <iomanip>
@@ -1364,6 +1365,143 @@ void notification_action_invoked_signal(App *app, NotificationInfo *ni, Notifica
  *************************************************/
 
 
+// libdbus tells us when it needs the main loop: queued incoming messages
+// (dispatch status), work queued from another thread (wakeup main), and
+// pending-call timeouts. Each of those schedules a dispatch on the compositor
+// thread, so nothing needs to poll the connections on a fast timer.
+
+void dbus_poll_wakeup(PF *pf);
+
+static std::thread::id dbus_main_thread_id;
+static std::atomic<bool> dbus_dispatch_queued[2] = {};
+
+// Safe to call from any thread, including from inside libdbus callbacks.
+static void dbus_schedule_dispatch(int bus) {
+    if (dbus_dispatch_queued[bus].exchange(true))
+        return;
+    main_thread([bus]() {
+        dbus_dispatch_queued[bus] = false;
+        PF pf;
+        pf.data = bus == 0 ? dbus_connection_system : dbus_connection_session;
+        if (pf.data)
+            dbus_poll_wakeup(&pf);
+    });
+}
+
+static void dbus_on_dispatch_status(DBusConnection *, DBusDispatchStatus status, void *data) {
+    if (status == DBUS_DISPATCH_DATA_REMAINS)
+        dbus_schedule_dispatch((int) (intptr_t) data);
+}
+
+static void dbus_on_wakeup_main(void *data) {
+    dbus_schedule_dispatch((int) (intptr_t) data);
+}
+
+struct DBusTimerEntry {
+    DBusTimeout *timeout = nullptr;
+    Timer *timer = nullptr;
+    int bus = 0;
+    bool firing = false;
+    std::atomic<bool> removed = false;
+    // Set when the remove came from another thread; its queued
+    // dbus_timer_destroy then owns freeing the entry.
+    std::atomic<bool> destroy_queued = false;
+};
+
+static void dbus_timer_arm(DBusTimerEntry *entry) {
+    const bool enabled = dbus_timeout_get_enabled(entry->timeout);
+    // A delay of 0 disarms the wl timer without destroying it.
+    entry->timer->delay = enabled ? std::max(1, dbus_timeout_get_interval(entry->timeout)) : 0;
+    if (!entry->firing)
+        wl_event_source_timer_update(entry->timer->source, (int) entry->timer->delay);
+}
+
+static void dbus_timer_destroy(DBusTimerEntry *entry) {
+    if (entry->firing)
+        return; // The firing callback finishes the teardown.
+    if (entry->timer) {
+        wl_event_source_remove(entry->timer->source);
+        delete entry->timer;
+    }
+    delete entry;
+}
+
+static dbus_bool_t dbus_on_add_timeout(DBusTimeout *timeout, void *data) {
+    // Timers live on the compositor's wl event loop, so they can only be made
+    // here. Off-thread timeouts stay unarmed (libdbus' behaviour without a loop).
+    if (std::this_thread::get_id() != dbus_main_thread_id)
+        return TRUE;
+    auto entry = new DBusTimerEntry;
+    entry->timeout = timeout;
+    entry->bus = (int) (intptr_t) data;
+    entry->timer = later(entry, 0, [](Timer *t) {
+        auto entry = static_cast<DBusTimerEntry *>(t->data);
+        t->keep_running = true;
+        if (!entry->removed) {
+            entry->firing = true;
+            dbus_timeout_handle(entry->timeout);
+            entry->firing = false;
+        }
+        if (entry->removed) {
+            t->keep_running = false; // later_action frees the timer and its source.
+            entry->timer = nullptr;
+            if (!entry->destroy_queued)
+                delete entry;
+            return;
+        }
+        dbus_timer_arm(entry);
+        dbus_schedule_dispatch(entry->bus);
+    });
+    dbus_timeout_set_data(timeout, entry, nullptr);
+    dbus_timer_arm(entry);
+    return TRUE;
+}
+
+static void dbus_on_remove_timeout(DBusTimeout *timeout, void *) {
+    auto entry = static_cast<DBusTimerEntry *>(dbus_timeout_get_data(timeout));
+    if (!entry)
+        return;
+    dbus_timeout_set_data(timeout, nullptr, nullptr);
+    if (std::this_thread::get_id() == dbus_main_thread_id) {
+        entry->removed = true;
+        dbus_timer_destroy(entry);
+    } else {
+        entry->destroy_queued = true;
+        entry->removed = true;
+        main_thread([entry]() { dbus_timer_destroy(entry); });
+    }
+}
+
+static void dbus_on_toggle_timeout(DBusTimeout *timeout, void *) {
+    auto entry = static_cast<DBusTimerEntry *>(dbus_timeout_get_data(timeout));
+    if (!entry || entry->removed)
+        return;
+    if (std::this_thread::get_id() == dbus_main_thread_id) {
+        dbus_timer_arm(entry);
+    } else {
+        // Re-read the state on the main thread; it may have changed again by then.
+        main_thread([entry]() {
+            if (!entry->removed)
+                dbus_timer_arm(entry);
+        });
+    }
+}
+
+static void dbus_install_loop_hooks(DBusConnection *connection, int bus) {
+    void *data = (void *) (intptr_t) bus;
+    dbus_connection_set_dispatch_status_function(connection, dbus_on_dispatch_status, data, nullptr);
+    dbus_connection_set_wakeup_main_function(connection, dbus_on_wakeup_main, data, nullptr);
+    dbus_connection_set_timeout_functions(connection, dbus_on_add_timeout, dbus_on_remove_timeout,
+                                          dbus_on_toggle_timeout, data, nullptr);
+}
+
+static void dbus_remove_loop_hooks(DBusConnection *connection) {
+    // Clearing the timeout functions removes every armed timeout through the old ones.
+    dbus_connection_set_timeout_functions(connection, nullptr, nullptr, nullptr, nullptr, nullptr);
+    dbus_connection_set_wakeup_main_function(connection, nullptr, nullptr, nullptr);
+    dbus_connection_set_dispatch_status_function(connection, nullptr, nullptr, nullptr);
+}
+
 void dbus_poll_wakeup(PF *pf) {
     auto connection = static_cast<DBusConnection *>(pf->data);
     if (!connection || (connection != dbus_connection_system && connection != dbus_connection_session)) return;
@@ -1480,10 +1618,12 @@ void dbus_start(DBusBusType dbusType) {
     if (poll_descriptor(file_descriptor, dbus_poll_wakeup, dbus_connection, "dbus")) {
         // Get the names of all the services running
         //
+        dbus_main_thread_id = std::this_thread::get_id();
+        dbus_install_loop_hooks(dbus_connection, dbusType == DBUS_BUS_SYSTEM ? 0 : 1);
         watch_dbus_services(dbus_connection);
         request_name_of_every_service_running(dbus_connection);
-        // Pending calls also need dispatch when there is no readable fd activity.
-        later(50, [dbusType](Timer *timer) {
+        // The loop hooks above drive dispatch; this slow sweep is only a safety net.
+        later(2000, [dbusType](Timer *timer) {
             auto connection = dbusType == DBUS_BUS_SYSTEM ? dbus_connection_system : dbus_connection_session;
             if (!connection) return;
             timer->keep_running = true;
@@ -1564,6 +1704,7 @@ void dbus_end() {
 
         registered_object_path = false;
 
+        dbus_remove_loop_hooks(dbus_connection);
         dbus_connection_close(dbus_connection);
         dbus_connection_unref(dbus_connection);
     }

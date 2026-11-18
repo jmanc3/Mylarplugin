@@ -999,12 +999,20 @@ static void update_xrdb_dpi() {
     xrdb_update_pending = true;
     // Coalesce bursts of monitor events, and wait for Xwayland to set DISPLAY.
     later(300, [](Timer *t) {
+        static int display_attempts = 0;
         const char *display = std::getenv("DISPLAY");
         if (!display || !*display) {
-            t->keep_running = true;
+            // Without Xwayland DISPLAY never appears; give up after ~2 minutes.
+            // The next monitor change starts a fresh round.
+            t->keep_running = ++display_attempts < 120;
             t->delay = 1000;
+            if (!t->keep_running) {
+                display_attempts = 0;
+                xrdb_update_pending = false;
+            }
             return;
         }
+        display_attempts = 0;
         t->keep_running = false;
         xrdb_update_pending = false;
         float max_scale = 0;
@@ -2798,7 +2806,10 @@ void heart::begin() {
             hypriso->add_float_rule();
 
             later(100, [](Timer *t) {
-                t->keep_running = !icons_loaded;
+                // Retry for up to ~30s; a slower first-run cache build is
+                // handled by the worker thread below when it finishes.
+                static int attempts = 0;
+                t->keep_running = !icons_loaded && ++attempts < 300;
                 desktop_icons::start();
                 damage_all();
             });
@@ -2807,6 +2818,10 @@ void heart::begin() {
                 std::thread th([] {
                     icon_cache_generate();
                     icon_cache_load();
+                    main_thread([]() {
+                        desktop_icons::start();
+                        damage_all();
+                    });
                 });
                 th.detach();
             } else {

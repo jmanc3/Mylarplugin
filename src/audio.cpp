@@ -50,6 +50,23 @@
 
 // Global stuff
 bool audio_running = false;
+
+// The PipeWire backend's work happens on pw_thread_loop; our audio thread just
+// parks here until audio_running goes false instead of polling it.
+static std::mutex pipewire_park_mutex;
+static std::condition_variable pipewire_park_condition;
+
+// Call after setting audio_running = false. Taking the mutex orders this with
+// the waiter's predicate check, so the wakeup can't slip in before it blocks.
+static void pipewire_unpark() {
+    { std::lock_guard<std::mutex> lock(pipewire_park_mutex); }
+    pipewire_park_condition.notify_all();
+}
+
+static void pipewire_park() {
+    std::unique_lock<std::mutex> lock(pipewire_park_mutex);
+    pipewire_park_condition.wait(lock, []() { return !audio_running; });
+}
 bool allow_audio_thread_creation = true;
 
 enum AudioBackend {
@@ -2607,6 +2624,7 @@ static void pipewire_core_error_callback(void *, uint32_t id, int, int res, cons
         return;
     ready = false;
     audio_running = false;
+    pipewire_unpark();
     pw_thread_loop_signal(pw_thread_loop_instance, false);
 }
 
@@ -2815,9 +2833,7 @@ void audio_start() {
             if (try_establishing_connection_with_pipewire()) {
                 backend = AudioBackend::PIPEWIRE;
                 audio_thread_id = std::this_thread::get_id();
-                while (audio_running) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                }
+                pipewire_park();
                 cleanup_pipewire_state();
                 delete_all_audio_clients();
                 audio_running = false;
@@ -2862,9 +2878,7 @@ void audio_start() {
         	} else if (try_establishing_connection_with_pipewire()) {
         	    backend = AudioBackend::PIPEWIRE;
         	    audio_thread_id = std::this_thread::get_id();
-        	    while (audio_running) {
-            		std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        	    }
+        	    pipewire_park();
         	    cleanup_pipewire_state();
         	    delete_all_audio_clients();
                 audio_running = false;
@@ -2885,6 +2899,7 @@ void audio_stop() {
         //audio_change_callback();
     ready = false;
     audio_running = false;
+    pipewire_unpark(); // Also covers a stop that lands before backend is set.
     if (backend == AudioBackend::PULSEAUDIO) {
         pa_mainloop_wakeup(mainloop);
     } else if (backend == AudioBackend::PIPEWIRE) {
@@ -2943,7 +2958,10 @@ void audio(const std::function<void()> &callback) {
         return;
     }
 
-    while (audio_thread_busy && audio_running); // If audio thread is doing something, wait for it to finish
+    // If audio thread is doing something, wait for it to finish. The short sleep
+    // (~50µs in practice, due to Linux timer slack) keeps this from pinning a core.
+    while (audio_thread_busy && audio_running)
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
 
     if (callback == nullptr) {
         pa_mainloop_wakeup(mainloop);
@@ -3019,7 +3037,10 @@ void audio_read(const std::function<void()> &callback) {
         return;
     }
 
-    while (audio_thread_busy && audio_running); // If audio thread is doing something, wait for it to finish
+    // If audio thread is doing something, wait for it to finish. The short sleep
+    // (~50µs in practice, due to Linux timer slack) keeps this from pinning a core.
+    while (audio_thread_busy && audio_running)
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
 
     std::unique_lock<std::mutex> read_lock(read_mutex);
 

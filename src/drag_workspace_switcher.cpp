@@ -58,8 +58,8 @@ static struct {
     double fit_height = 0;
 } dragged_preview;
 
-// After a drop onto a thumbnail, the preview keeps flying into the window's
-// final place inside that thumbnail instead of vanishing on release.
+// After a drop onto a thumbnail, the preview keeps flying to the window's
+// final place on the screen instead of vanishing on release.
 static constexpr double landing_ms = 260.0;
 static constexpr float landing_fade_start = .85f;
 static unsigned int landing_generation = 0;
@@ -67,7 +67,6 @@ static struct {
     int cid = -1;
     int monitor = -1;
     int source_workspace = -1;
-    std::string target_uuid;
     Bounds from;
     float alpha = 1.0f;
     long started = 0;
@@ -289,37 +288,13 @@ static Bounds window_bounds_with_extents(int cid) {
     return b;
 }
 
-// Where the window shows up inside its destination thumbnail right now. The
-// destination follows the thumbnail's hover scale, the panel's movement, and
-// the newly created thumbnail when dropped on the "+" tile.
+// Where the window ends up on the screen right now. It follows the window's
+// own placement (including retiling) on its destination workspace.
 static bool landing_target(Bounds &out) {
-    for (auto c : actual_root->children) {
-        if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
-            continue;
-        const int workspace = hypriso->get_client_workspace_id(landing.cid);
-        Container *target = nullptr;
-        if (workspace != landing.source_workspace) {
-            for (auto ch : c->children)
-                if (*datum<int>(ch, "workspace") == workspace)
-                    target = ch;
-        }
-        if (!target) {
-            for (auto ch : c->children)
-                if (ch->uuid == landing.target_uuid)
-                    target = ch;
-        }
-        if (!target)
-            return false;
-        const auto tb = target->real_bounds;
-        const auto mb = bounds_monitor(landing.monitor);
-        if (mb.w <= 0 || mb.h <= 0)
-            return false;
-        const auto wb = window_bounds_with_extents(landing.cid);
-        out = Bounds(tb.x + (wb.x - mb.x) / mb.w * tb.w, tb.y + (wb.y - mb.y) / mb.h * tb.h,
-            wb.w / mb.w * tb.w, wb.h / mb.h * tb.h);
-        return true;
-    }
-    return false;
+    if (!hypriso->is_mapped(landing.cid))
+        return false;
+    out = window_bounds_with_extents(landing.cid);
+    return out.w > 0 && out.h > 0;
 }
 
 static void finish_landing(bool run_pending_close) {
@@ -346,7 +321,6 @@ static void start_landing(int cid, Container *target) {
     landing.cid = cid;
     landing.monitor = target_monitor();
     landing.source_workspace = source_workspace;
-    landing.target_uuid = target->uuid;
     landing.from = dragged_bounds();
     landing.alpha = p.alpha;
     landing.started = get_current_time_in_ms();
@@ -363,13 +337,14 @@ static void start_landing(int cid, Container *target) {
             return;
         }
         const auto t_norm = (get_current_time_in_ms() - landing.started) / landing_ms;
-        if (t_norm >= landing_fade_start && !landing.snapshot_released) {
-            // Let the destination thumbnail include the window again while
-            // the copy covering it fades out.
+        const int workspace = hypriso->get_client_workspace_id(landing.cid);
+        if (!landing.snapshot_released && workspace >= 0 &&
+            (workspace != landing.source_workspace || t_norm >= landing_fade_start)) {
+            // The copy flies to the window's place on screen, not over the
+            // destination thumbnail, so that thumbnail can show the window as
+            // soon as it has moved there.
             landing.snapshot_released = true;
-            const int workspace = hypriso->get_client_workspace_id(landing.cid);
-            if (workspace >= 0)
-                hypriso->screenshot_space(landing.monitor, workspace);
+            hypriso->screenshot_space(landing.monitor, workspace);
         }
         if (t_norm >= 1.0) {
             finish_landing(true);
@@ -1011,7 +986,7 @@ static void actual_drag_workspace_switcher_close() {
 void drag_workspace_switcher::close_visually() {
     if (!switcher_showing || switcher_closing || overview::is_showing())
         return;
-    // Close once the dropped window has landed in its thumbnail.
+    // Close once the dropped window has landed.
     if (landing.cid != -1) {
         landing.close_pending = true;
         return;

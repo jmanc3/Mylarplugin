@@ -36,3 +36,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+// Runs `func` on each dock's own thread. Call from the compositor main thread.
+void run_on_every_dock(std::function<void(Dock *)> func);
