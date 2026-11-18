@@ -5671,6 +5671,20 @@ void HyprIso::end() {
     gestures_created.clear();
 
     xcb_ewmh_connection_wipe(&ewmh);
+
+    // Compiled shaders keep our corner_rounding.glsl/shadow.glsl and the last
+    // cornerDisableMask written to them, so windows would keep sharp corners after
+    // unload. Drop the shader hooks now (Hyprland only removes them after
+    // PLUGIN_EXIT) and rebuild Hyprland's stock shaders.
+    if (g_pOnSurfacePassDraw)
+        g_pOnSurfacePassDraw->unhook();
+    if (g_pOnUseShader)
+        g_pOnUseShader->unhook();
+    if (g_pLoadShader)
+        g_pLoadShader->unhook();
+    surface_mask = 0;
+    if (Render::GL::g_pHyprOpenGL)
+        Render::GL::g_pHyprOpenGL->initShaders();
 }
 
 CBox tocbox(Bounds b) {
