@@ -1257,6 +1257,7 @@ static void start_edit_pin(std::string stacking_rule, std::string icon, std::str
     settings.pos.w = 800;
     settings.pos.h = 600;
     settings.name = "Edit pin";
+    settings.app_id = edit_pin::kAppId;
     auto mylar = open_mylar_window(app, WindowType::NORMAL, settings);
     auto pin_data = new PinData;
     pin_data->original_stacking_rule = stacking_rule;
