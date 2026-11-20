@@ -181,6 +181,8 @@ void SpringAnimation::setTarget(float newTarget) {
 // How long a drag-and-drop must rest on a pinned icon before it raises the
 // window (or opens the preview when the app has several).
 static constexpr int kDndHoverMs = 450;
+// How long the pointer must rest on a dock icon before the thumbnail preview opens.
+static constexpr int kHoverPreviewMs = 495;
 
 struct HoverTimerData {
     RawApp *app = nullptr;
@@ -1678,7 +1680,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
 
         auto *hover = new HoverTimerData{dock->app, c->uuid};
         pin->hover_timer_data = hover;
-        pin->hover_timer_fd = windowing::timer(dock->app, 450, [](void *data) {
+        pin->hover_timer_fd = windowing::timer(dock->app, kHoverPreviewMs, [](void *data) {
             auto *hover = (HoverTimerData *) data;
             std::vector<int> ids;
             Bounds icon;
