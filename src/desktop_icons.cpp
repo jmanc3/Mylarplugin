@@ -542,7 +542,7 @@ static void damage_icon(Container *icon) {
 static constexpr float ICON_PUNCH_MS = 500.f;
 static constexpr float ICON_PUNCH_DEPTH = 0.5f;
 // When false only the icon punches; the label stays put.
-static constexpr bool include_label = false;
+static constexpr bool include_label = true;
 
 static float punch_scale(float t) {
     t = std::clamp(t, 0.f, 1.f);
@@ -1210,7 +1210,7 @@ static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, 
     const int text_y = c->real_bounds.y + c->real_bounds.h - text_img.h - 6 * s;
     if (ico->label_shadow.id != -1) {
         const int padding = (ico->label_shadow.w - text_img.w) / 2;
-        paint_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.9f, include_label);
+        paint_texture(ico->label_shadow, text_x - padding + s, text_y - padding, overview_alpha * 0.7f, include_label);
     }
     paint_texture(text_img, text_x, text_y, overview_alpha, include_label);
 }

@@ -2657,6 +2657,9 @@ void HyprIso::create_callbacks() {
         auto s = sref.lock();
         if (!s)
             return;
+        for (auto space : hyprspaces)
+            if (space->w == s)
+                return;
         auto hs = new HyprWorkspaces;
         hs->w = s;
         hs->id = unique_id++;
@@ -2695,6 +2698,8 @@ void HyprIso::create_callbacks() {
             }
     }));
     eventListeners.emplace_back(Event::bus()->m_events.workspace.active.listen([this](PHLWORKSPACE w) {
+        if (w)
+            w->ready();
         sync_monitor_workspaces(w);
         if (hypriso->on_mouse_move) {
             auto mouse = g_pInputManager->getMouseCoordsInternal();

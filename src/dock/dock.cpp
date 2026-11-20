@@ -2630,6 +2630,30 @@ static void fill_root(Container *root) {
     }
 
     {
+        auto workspace = simple_dock_item(root, ICON("\uE7C4"));
+        workspace->name = "workspace";
+        workspace->when_clicked = paint {
+            auto dock = (Dock *) root->user_data;
+            auto monitor_name = dock->creation_settings.monitor_name;
+            main_thread([monitor_name]() {
+                if (overview::is_showing() && !overview::is_closing()) {
+                    overview::close();
+                } else {
+                    int monitor_id = hypriso->monitor_from_cursor();
+                    for (auto m : actual_monitors) {
+                        const int id = *datum<int>(m, "cid");
+                        if (hypriso->monitor_name(id) == monitor_name) {
+                            monitor_id = id;
+                            break;
+                        }
+                    }
+                    overview::open(monitor_id);
+                }
+            });
+        };
+    }
+
+    {
         auto icons = root->child(FILL_SPACE, FILL_SPACE);
         icons->type = ::hbox;
         icons->should_layout_children = false;

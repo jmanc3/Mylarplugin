@@ -1,6 +1,7 @@
 #include "workspace_indicator.h"
 
 #include "heart.h"
+#include "overview.h"
 #include <cstring>
 
 // Is this per monitor?
@@ -16,6 +17,8 @@ void workspace_indicator::on_change(int cid) {
     auto copy_index = index_id;
 
     indicator->when_paint = [copy_index](Container *actual_root, Container *c) {
+        if (overview::is_showing())
+            return;
         // only paint top indicator
         if (copy_index != index_id)
             return;
@@ -71,7 +74,7 @@ void workspace_indicator::on_change(int cid) {
         {
             auto sm = b;
             sm.shrink(1.0);
-            render_drop_shadow(rid, 1, {0, 0, 0, .35f}, h * .5, 2.0, sm, std::round(10 * s));
+            render_drop_shadow(rid, 1, {0, 0, 0, .05f}, h * .5, 2.0, sm, std::round(10 * s));
 
             // Each dot occupies an h-by-h cell, including the rounded end caps.
             rect(b, {.14, .14, .14, 1}, 0, h * .5, 2.0, true);
