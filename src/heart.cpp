@@ -2454,7 +2454,7 @@ void add_hyprctl_dispatchers() {
         return 0;
     });
 
-    // Cycles the focused window: normal -> fake fullscreen -> fullscreen -> normal.
+    // Toggles the focused window between floating and fullscreen.
     hypriso->add_hyprctl_dispatcher("cycle_fullscreen", [](lua_State *) {
         for (auto m : actual_root->children) {
             if (m->custom_type != (int) TYPE::CLIENT)
@@ -2462,13 +2462,7 @@ void add_hyprctl_dispatchers() {
             auto cid = *datum<int>(m, "cid");
             if (!hypriso->has_focus(cid))
                 continue;
-            if (hypriso->is_fullscreen(cid)) {
-                hypriso->set_fullscreen(cid, false);
-            } else if (hypriso->is_fake_fullscreen(cid)) {
-                hypriso->set_fullscreen(cid, true);
-            } else {
-                hypriso->fake_fullscreen(cid, true);
-            }
+            hypriso->set_fullscreen(cid, !hypriso->is_fullscreen(cid));
             // Fullscreen geometry belongs to the layout; only pin the floating box otherwise.
             // Fullscreen bounds would also overwrite the remembered floating size.
             if (!hypriso->is_fullscreen(cid)) {

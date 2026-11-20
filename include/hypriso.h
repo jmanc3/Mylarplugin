@@ -193,6 +193,20 @@ struct ConfigSettings {
     std::string tiling_layout = "Master";
     // Night light (hyprsunset) colour temperature in kelvin.
     int nightlight_temperature = 5000;
+    // Hyprland decoration:blur settings.
+    bool blur_enabled = true;
+    std::string blur_variant = "kawase";
+    int blur_size = 4;
+    int blur_passes = 2;
+    float blur_noise = 0.0117f;
+    float blur_contrast = 0.8916f;
+    float blur_brightness = 1.0f;
+    float blur_vibrancy = 0.1696f;
+    float blur_vibrancy_darkness = 0.0f;
+    bool blur_ignore_opacity = true;
+    bool blur_xray = false;
+    bool blur_popups = false;
+    bool blur_special = false;
     std::vector<SWorkspaceTiling> workspace_tiling;
     std::vector<SShortcutOverride> shortcuts;
     std::vector<SCustomShortcut> custom_shortcuts;

@@ -355,7 +355,7 @@ static const std::vector<SettingsCategory> &settings_categories() {
             {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
         }},
         {"Behaviour", "settings-behaviour", "preferences-desktop-wallpaper", {
-            {"Desktop", "Desktop", "Theme, font, overview, icon cache", "\uE771"},
+            {"Desktop", "Desktop", "Theme, font, blur, overview, icon cache", "\uE771"},
             {"Dock", "Dock", "Dock style, labels, which windows show", "\uE75B"},
             {"Multitasking", "Multitasking", "App switching, workspaces, snap windows, hot corners", "\uE7C4"},
             {"Autostart", "Autostart", "Commands run when the desktop or session starts", "\uE7E8"},
@@ -686,6 +686,35 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     settings->nightlight_temperature = std::clamp(settings->nightlight_temperature, 2500, 6500);
     if (settings->tiling_layout != "Scrolling")
         settings->tiling_layout = "Master";
+
+    bind(bool, "blur_enabled", &settings->blur_enabled);
+    bind(std::string, "blur_variant", &settings->blur_variant);
+    {
+        static const std::array<const char *, 11> valid_variants = {
+            "kawase", "frost", "ripple", "drops", "water",
+            "fluid_jar", "prism", "heat_shimmer", "acrylic", "aurora", "haze"
+        };
+        if (std::ranges::find(valid_variants, settings->blur_variant) == valid_variants.end())
+            settings->blur_variant = "kawase";
+    }
+    bind(int, "blur_size", &settings->blur_size);
+    settings->blur_size = std::clamp(settings->blur_size, 0, 100);
+    bind(int, "blur_passes", &settings->blur_passes);
+    settings->blur_passes = std::clamp(settings->blur_passes, 0, 10);
+    bind(float, "blur_noise", &settings->blur_noise);
+    settings->blur_noise = std::clamp(settings->blur_noise, 0.0f, 1.0f);
+    bind(float, "blur_contrast", &settings->blur_contrast);
+    settings->blur_contrast = std::clamp(settings->blur_contrast, 0.0f, 2.0f);
+    bind(float, "blur_brightness", &settings->blur_brightness);
+    settings->blur_brightness = std::clamp(settings->blur_brightness, 0.0f, 2.0f);
+    bind(float, "blur_vibrancy", &settings->blur_vibrancy);
+    settings->blur_vibrancy = std::clamp(settings->blur_vibrancy, 0.0f, 1.0f);
+    bind(float, "blur_vibrancy_darkness", &settings->blur_vibrancy_darkness);
+    settings->blur_vibrancy_darkness = std::clamp(settings->blur_vibrancy_darkness, 0.0f, 1.0f);
+    bind(bool, "blur_ignore_opacity", &settings->blur_ignore_opacity);
+    bind(bool, "blur_xray", &settings->blur_xray);
+    bind(bool, "blur_popups", &settings->blur_popups);
+    bind(bool, "blur_special", &settings->blur_special);
 
     if (save) {
         for (const auto& workspace : settings->workspace_tiling)
@@ -4714,6 +4743,155 @@ static void fill_desktop_settings(Container *root) {
     attach_font_completions(font_field, [](std::string value) {
         set->font = value;
     });
+
+    make_vert_space(padded_right, 24);
+    make_section_title(padded_right, "Blur");
+    make_vert_space(padded_right, 10);
+
+    auto apply_blur_now = []() {
+        main_thread([]() {
+            settings::load_save_settings(true, set);
+            hypriso->generate_mylar_hyprland_config();
+        });
+    };
+    auto apply_blur_debounced = []() {
+        debounce_main("blur_settings", 200, []() {
+            settings::load_save_settings(true, set);
+            hypriso->generate_mylar_hyprland_config();
+        });
+    };
+
+    const ConfigSettings defaults;
+
+    make_bool(padded_right, "Window blur", "Blur backgrounds behind translucent windows and surfaces", set->blur_enabled,
+        [apply_blur_now](bool value) {
+            set->blur_enabled = value;
+            apply_blur_now();
+        }, "\uE771");
+
+    struct BlurVariantEntry {
+        const char *label;
+        const char *id;
+    };
+    static const std::array<BlurVariantEntry, 11> blur_variants = {{
+        {"Kawase", "kawase"},
+        {"Frost", "frost"},
+        {"Acrylic", "acrylic"},
+        {"Prism", "prism"},
+        {"Haze", "haze"},
+        {"Aurora", "aurora"},
+        {"Ripple", "ripple"},
+        {"Drops", "drops"},
+        {"Water", "water"},
+        {"Heat shimmer", "heat_shimmer"},
+        {"Fluid jar", "fluid_jar"},
+    }};
+    std::vector<std::string> variant_labels;
+    variant_labels.reserve(blur_variants.size());
+    std::string selected_variant = blur_variants[0].label;
+    for (const auto &v : blur_variants) {
+        variant_labels.push_back(v.label);
+        if (set->blur_variant == v.id)
+            selected_variant = v.label;
+    }
+    make_dropdown_option(padded_right, "Blur style", "Blur effect style; animated styles use more GPU", "\uE790",
+        selected_variant, variant_labels, [apply_blur_now](std::string selected) {
+            for (const auto &v : blur_variants) {
+                if (selected == v.label) {
+                    set->blur_variant = v.id;
+                    apply_blur_now();
+                    return;
+                }
+            }
+        });
+
+    auto norm = [](float v, float lo, float hi) {
+        return std::clamp((v - lo) / (hi - lo), 0.0f, 1.0f);
+    };
+
+    make_slider(padded_right, "Blur size", "Blur radius distance (1–20)",
+        norm((float) set->blur_size, 1.0f, 20.0f),
+        [apply_blur_debounced](float value) {
+            set->blur_size = std::clamp((int) std::round(1.0f + value * 19.0f), 1, 20);
+            apply_blur_debounced();
+        }, 0, "\uE740", norm((float) defaults.blur_size, 1.0f, 20.0f));
+
+    make_slider(padded_right, "Blur passes", "Number of blur passes (1–6); more passes look smoother but use more GPU",
+        norm((float) set->blur_passes, 1.0f, 6.0f),
+        [apply_blur_debounced](float value) {
+            set->blur_passes = std::clamp((int) std::round(1.0f + value * 5.0f), 1, 6);
+            apply_blur_debounced();
+        }, 5, "\uE81E", norm((float) defaults.blur_passes, 1.0f, 6.0f));
+
+    make_slider(padded_right, "Vibrancy", "Increase saturation of blurred colors",
+        norm(set->blur_vibrancy, 0.0f, 1.0f),
+        [apply_blur_debounced](float value) {
+            set->blur_vibrancy = std::clamp(value, 0.0f, 1.0f);
+            apply_blur_debounced();
+        }, 0, "\uEB42", norm(defaults.blur_vibrancy, 0.0f, 1.0f));
+
+    static bool blur_advanced_open = false;
+    auto blur_advanced = make_accordion(padded_right, "Advanced",
+        "Contrast, brightness, noise, X-ray, popups and special workspace blur", "\uE9E9", &blur_advanced_open);
+    const size_t first_blur_advanced = padded_right->children.size();
+
+    make_slider(padded_right, "Contrast", "Contrast modulation applied to blurred backgrounds",
+        norm(set->blur_contrast, 0.0f, 2.0f),
+        [apply_blur_debounced](float value) {
+            set->blur_contrast = std::clamp(value * 2.0f, 0.0f, 2.0f);
+            apply_blur_debounced();
+        }, 0, "\uE793", norm(defaults.blur_contrast, 0.0f, 2.0f));
+
+    make_slider(padded_right, "Brightness", "Brightness modulation applied to blurred backgrounds",
+        norm(set->blur_brightness, 0.0f, 2.0f),
+        [apply_blur_debounced](float value) {
+            set->blur_brightness = std::clamp(value * 2.0f, 0.0f, 2.0f);
+            apply_blur_debounced();
+        }, 0, "\uE706", norm(defaults.blur_brightness, 0.0f, 2.0f));
+
+    make_slider(padded_right, "Noise", "Subtle grain added to blurred backgrounds",
+        norm(set->blur_noise, 0.0f, 0.25f),
+        [apply_blur_debounced](float value) {
+            set->blur_noise = std::clamp(value * 0.25f, 0.0f, 0.25f);
+            apply_blur_debounced();
+        }, 0, "\uE9D2", norm(defaults.blur_noise, 0.0f, 0.25f));
+
+    make_slider(padded_right, "Vibrancy darkness", "Strength of vibrancy on dark blurred areas",
+        norm(set->blur_vibrancy_darkness, 0.0f, 1.0f),
+        [apply_blur_debounced](float value) {
+            set->blur_vibrancy_darkness = std::clamp(value, 0.0f, 1.0f);
+            apply_blur_debounced();
+        }, 0, "\uF08C", norm(defaults.blur_vibrancy_darkness, 0.0f, 1.0f));
+
+    make_bool(padded_right, "Ignore window opacity", "Keep full blur strength even on semi-transparent windows", set->blur_ignore_opacity,
+        [apply_blur_now](bool value) {
+            set->blur_ignore_opacity = value;
+            apply_blur_now();
+        }, "\uE737");
+
+    make_bool(padded_right, "X-ray blur", "Floating windows blur the wallpaper directly, ignoring tiled windows behind them", set->blur_xray,
+        [apply_blur_now](bool value) {
+            set->blur_xray = value;
+            apply_blur_now();
+        }, "\uE2B1");
+
+    make_bool(padded_right, "Blur popups", "Apply background blur behind menus and popups", set->blur_popups,
+        [apply_blur_now](bool value) {
+            set->blur_popups = value;
+            apply_blur_now();
+        }, "\uE8A9");
+
+    make_bool(padded_right, "Blur special workspace", "Apply background blur behind the special workspace", set->blur_special,
+        [apply_blur_now](bool value) {
+            set->blur_special = value;
+            apply_blur_now();
+        }, "\uE7C4");
+
+    auto blur_accordion = (AccordionData *) blur_advanced->user_data;
+    for (size_t i = first_blur_advanced; i < padded_right->children.size(); i++) {
+        blur_accordion->rows.push_back(padded_right->children[i]);
+        padded_right->children[i]->exists = blur_advanced_open;
+    }
 }
 
 static void fill_dock_settings(Container *root) {
@@ -9916,6 +10094,29 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Desktop", "Desktop Settings", "Overview", "Change layout type", "expose grid adaptive mission control windows overview");
     search_add("Desktop", "Desktop Settings", "Theme", "Choose the settings appearance", "dark light mode colors colours appearance night");
     search_add("Desktop", "Desktop Settings", "Font", "User interface font", "typeface text fonts ui");
+    search_add("Desktop", "Blur", "Blur", "", "blur transparency glass acrylic frost kawase decoration");
+    search_add("Desktop", "Blur", "Window blur", "Blur backgrounds behind translucent windows and surfaces",
+               "blur enable disable background glass frosted transparency");
+    search_add("Desktop", "Blur", "Blur style", "Blur effect style; animated styles use more GPU",
+               "blur variant kawase frost acrylic prism haze aurora ripple drops water heat shimmer fluid jar");
+    search_add("Desktop", "Blur", "Blur size", "Blur radius distance (1–20)", "blur radius distance strength amount");
+    search_add("Desktop", "Blur", "Blur passes", "Number of blur passes (1–6); more passes look smoother but use more GPU",
+               "blur passes quality smoothness iterations");
+    search_add("Desktop", "Blur", "Vibrancy", "Increase saturation of blurred colors", "blur saturation color vibrancy");
+    search_add("Desktop", "Blur", "Advanced", "Contrast, brightness, noise, X-ray, popups and special workspace blur",
+               "blur advanced tuning");
+    search_add("Desktop", "Blur", "Contrast", "Contrast modulation applied to blurred backgrounds", "blur contrast");
+    search_add("Desktop", "Blur", "Brightness", "Brightness modulation applied to blurred backgrounds", "blur brightness");
+    search_add("Desktop", "Blur", "Noise", "Subtle grain added to blurred backgrounds", "blur noise grain");
+    search_add("Desktop", "Blur", "Vibrancy darkness", "Strength of vibrancy on dark blurred areas", "blur vibrancy darkness dark");
+    search_add("Desktop", "Blur", "Ignore window opacity", "Keep full blur strength even on semi-transparent windows",
+               "blur ignore opacity alpha transparency");
+    search_add("Desktop", "Blur", "X-ray blur", "Floating windows blur the wallpaper directly, ignoring tiled windows behind them",
+               "blur xray x-ray wallpaper floating");
+    search_add("Desktop", "Blur", "Blur popups", "Apply background blur behind menus and popups",
+               "blur popups menus context right click");
+    search_add("Desktop", "Blur", "Blur special workspace", "Apply background blur behind the special workspace",
+               "blur special workspace scratchpad");
     search_add("Dock", "Dock Settings", "Dock Settings", "", "dock taskbar panel bar");
     search_add("Dock", "Dock Settings", "Show docks", "", "taskbar panel bar dock hide");
     search_add("Dock", "Dock Settings", "Bounce icons on minimize and restore", "Dock icons dip when their window minimizes and hop when it comes back",

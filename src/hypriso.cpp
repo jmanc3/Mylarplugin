@@ -11,7 +11,10 @@
 #include "stb_image.h"
 
 #include <any>
+#include <array>
 #include <climits>
+#include <iomanip>
+#include <locale>
 #include <sstream>
 #include <unordered_set>
 #define private public
@@ -3463,13 +3466,6 @@ hl.config({
             render_power = 2,
             color        = 0x38000000,
         },
-
-        blur = {
-            enabled   = true,
-            size      = 4,
-            passes    = 2,
-            vibrancy  = 0.1696,
-        },
     },
 
     animations = {
@@ -3758,6 +3754,45 @@ hl.config({ input = { float_switch_override_focus = false } })
     const int window_gap = std::clamp(set->tiling_window_gap, 0, 32);
     base += "hl.config({ general = { gaps_in = " + std::to_string(window_gap)
         + ", gaps_out = " + std::to_string(window_gap) + " } })\n\n";
+
+    {
+        auto fmt_float = [](float v) {
+            std::ostringstream ss;
+            ss.imbue(std::locale::classic());
+            ss << std::fixed << std::setprecision(4) << v;
+            return ss.str();
+        };
+        static const std::array<const char *, 11> valid_variants = {
+            "kawase", "frost", "ripple", "drops", "water",
+            "fluid_jar", "prism", "heat_shimmer", "acrylic", "aurora", "haze"
+        };
+        std::string variant = "kawase";
+        for (const char *v : valid_variants) {
+            if (set->blur_variant == v) {
+                variant = v;
+                break;
+            }
+        }
+        base += "hl.config({\n"
+                "    decoration = {\n"
+                "        blur = {\n"
+                "            enabled = " + std::string(set->blur_enabled ? "true" : "false") + ",\n"
+                "            variant = " + lua_string(variant) + ",\n"
+                "            size = " + std::to_string(std::clamp(set->blur_size, 0, 100)) + ",\n"
+                "            passes = " + std::to_string(std::clamp(set->blur_passes, 0, 10)) + ",\n"
+                "            noise = " + fmt_float(std::clamp(set->blur_noise, 0.0f, 1.0f)) + ",\n"
+                "            contrast = " + fmt_float(std::clamp(set->blur_contrast, 0.0f, 2.0f)) + ",\n"
+                "            brightness = " + fmt_float(std::clamp(set->blur_brightness, 0.0f, 2.0f)) + ",\n"
+                "            vibrancy = " + fmt_float(std::clamp(set->blur_vibrancy, 0.0f, 1.0f)) + ",\n"
+                "            vibrancy_darkness = " + fmt_float(std::clamp(set->blur_vibrancy_darkness, 0.0f, 1.0f)) + ",\n"
+                "            ignore_opacity = " + std::string(set->blur_ignore_opacity ? "true" : "false") + ",\n"
+                "            xray = " + std::string(set->blur_xray ? "true" : "false") + ",\n"
+                "            popups = " + std::string(set->blur_popups ? "true" : "false") + ",\n"
+                "            special = " + std::string(set->blur_special ? "true" : "false") + ",\n"
+                "        },\n"
+                "    },\n"
+                "})\n\n";
+    }
 
     // A nested session's output is named WAYLAND-<n> (or X11-<n>) and <n>
     // isn't stable between runs, so a rule saved for WAYLAND-1 would miss
