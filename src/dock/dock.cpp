@@ -855,18 +855,9 @@ void set_brightness(float amount) {
 
 static constexpr int brightness_osd_w = 220;
 static constexpr int brightness_osd_h = 44;
-static constexpr long brightness_osd_fade_ms = 250;
-
-static void brightness_osd_stop_timer(Dock *dock) {
-    if (dock->brightness_osd_timer != -1)
-        windowing::timer_stop(dock->app, dock->brightness_osd_timer);
-    dock->brightness_osd_timer = -1;
-}
 
 // Called with the dock app's mutex held (container events).
 static void brightness_osd_show(Dock *dock, Container *anchor) {
-    brightness_osd_stop_timer(dock);
-    dock->brightness_osd_fade_start = 0;
     if (dock->brightness_osd) {
         windowing::redraw(dock->brightness_osd->raw_window);
         return;
@@ -887,27 +878,14 @@ static void brightness_osd_show(Dock *dock, Container *anchor) {
     root->wanted_bounds.h = FILL_SPACE;
     root->on_closed = [](Container *root) {
         auto dock = (Dock *) root->user_data;
-        brightness_osd_stop_timer(dock);
         dock->brightness_osd = nullptr;
-        dock->brightness_osd_fade_start = 0;
     };
     root->when_paint = [](Container *root, Container *c) {
         auto dock = (Dock *) root->user_data;
         auto rw = dock->brightness_osd->raw_window;
         auto cr = rw->drawing_context;
         auto dpi = rw->dpi;
-        double alpha = 1;
-        if (dock->brightness_osd_fade_start != 0) {
-            double t = (double) (get_current_time_in_ms() - dock->brightness_osd_fade_start) / brightness_osd_fade_ms;
-            alpha = std::clamp(1.0 - t, 0.0, 1.0);
-            alpha = alpha * alpha;
-            if (alpha > 0)
-                windowing::redraw(rw);
-        }
-        if (alpha <= 0)
-            return;
 
-        cr->push_group();
         auto b = c->real_bounds;
         paint_popup_background(cr, b, dpi);
         RGBA ink = {.12, .17, .24, 1};
@@ -937,31 +915,20 @@ static void brightness_osd_show(Dock *dock, Container *anchor) {
                 cr->fill();
             }
         }
-        cr->pop_group_to_source();
-        cr->paint_source(alpha);
     };
     windowing::redraw(dock->brightness_osd->raw_window);
 }
 
 // Called with the dock app's mutex held (container events).
+// Closing the popup lets Hyprland drive the fade-out snapshot so the drop shadow fades with it.
 static void brightness_osd_fade_out(Dock *dock) {
-    if (!dock->brightness_osd || dock->brightness_osd_fade_start != 0)
+    auto osd = dock->brightness_osd;
+    if (!osd)
         return;
-    dock->brightness_osd_fade_start = get_current_time_in_ms();
-    windowing::redraw(dock->brightness_osd->raw_window);
-    dock->brightness_osd_timer = windowing::timer(dock->app, brightness_osd_fade_ms + 20, [](void *data) {
-        auto dock = (Dock *) data;
-        std::lock_guard<std::mutex> lock(dock->app->mutex);
-        dock->brightness_osd_timer = -1;
-        auto osd = dock->brightness_osd;
-        if (finished || !osd || dock->brightness_osd_fade_start == 0)
-            return;
-        windowing::close_window(osd->raw_window);
-        if (dock->window->popup_window == osd)
-            dock->window->popup_window = nullptr;
-        dock->brightness_osd = nullptr;
-        dock->brightness_osd_fade_start = 0;
-    }, dock);
+    dock->brightness_osd = nullptr;
+    if (dock->window->popup_window == osd)
+        dock->window->popup_window = nullptr;
+    windowing::close_window(osd->raw_window);
 }
 
 static void set_master_volume(float amount) {
