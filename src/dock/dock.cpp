@@ -3521,8 +3521,11 @@ void dock::stop(std::string monitor_name) {
         battery_stop();
         wifi_stop();
 
+        // Never call close_app() while holding app->mutex: it takes the loop's
+        // dispatch_mut, and the dock thread takes app->mutex *inside* dispatch
+        // (frame callback -> on_render, pointer motion, ...). Holding both in the
+        // opposite order deadlocks the compositor thread, freezing all input.
         for (auto d : docks) {
-            std::lock_guard<std::mutex> lock(d->app->mutex);
             //windowing::close_window(d->window->raw_window);
             windowing::close_app(d->app);
         }
@@ -3541,12 +3544,17 @@ void dock::stop(std::string monitor_name) {
         docks.clear();
     } else {
         for (auto d : docks) {
-            std::lock_guard<std::mutex> lock(d->app->mutex);
-
-            if (d->creation_settings.monitor_name == monitor_name) {
-                d->closing = true;
-                windowing::close_app(d->app);
+            bool close = false;
+            {
+                std::lock_guard<std::mutex> lock(d->app->mutex);
+                if (d->creation_settings.monitor_name == monitor_name) {
+                    d->closing = true;
+                    close = true;
+                }
             }
+            // Outside app->mutex (see above): close_app() takes dispatch_mut.
+            if (close)
+                windowing::close_app(d->app);
         }
     }
 }
