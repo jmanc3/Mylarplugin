@@ -4,6 +4,7 @@
 namespace screenshot_tool {
     void open(bool draw = false);
     void close();
+    bool is_open();
     bool is_drawing();
 };
 

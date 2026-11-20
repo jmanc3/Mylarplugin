@@ -441,7 +441,7 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
         //));
     }
 
-    if (key == KEY_ESC && state == 0) {
+    if (key == KEY_ESC && state == 0 && !screenshot_tool::is_open()) {
         if (drag::dragging()) {
             drag::end(drag::dragging());
         }
@@ -1933,6 +1933,7 @@ static CombinedDesktopGesture minimize_overview_combined_gesture() {
     static double horizontal_offset = 0;
     static double horizontal_applied = 0;
     static bool horizontal_active = false;
+    static bool gesture_blocked = false;
 
     const auto activate = []() {
         if (gesture.owner == desktop_gesture::Owner::Overview) {
@@ -1949,6 +1950,9 @@ static CombinedDesktopGesture minimize_overview_combined_gesture() {
 
     // Both starting directions share ownership, progress, and release handling.
     return {[activate](bool horizontal) {
+        gesture_blocked = screenshot_tool::is_open();
+        if (gesture_blocked)
+            return;
         // A closing view is returning to normal; let the new swipe choose its view.
         const bool overview_open = overview::is_showing() && !overview::is_closing();
         const bool desktop_open = show_desktop::is_opened() && !show_desktop::is_closing();
@@ -1964,6 +1968,8 @@ static CombinedDesktopGesture minimize_overview_combined_gesture() {
         // Hyprland delivers the begin event's movement again to update.
         request_refresh();
     }, [activate](Bounds s) {
+        if (gesture_blocked)
+            return;
         horizontal_offset += s.x;
         vertical_stroke.update(s.y, get_current_time_in_ms());
         const auto previous_owner = gesture.owner;
@@ -1994,6 +2000,10 @@ static CombinedDesktopGesture minimize_overview_combined_gesture() {
             show_desktop::set_scalar(gesture.progress());
         request_refresh();
     }, []() {
+        if (gesture_blocked) {
+            gesture_blocked = false;
+            return;
+        }
         const auto end = get_current_time_in_ms();
         if (gesture.owner == desktop_gesture::Owner::Overview) {
             if (workspace_gesture_started)
@@ -2321,6 +2331,8 @@ void do_snap(SnapPosition pos) {
 
 void add_hyprctl_dispatchers() {
     hypriso->add_hyprctl_dispatcher("overview_open_or_show_desktop", [](lua_State *) {
+        if (screenshot_tool::is_open())
+            return 0;
         if (!overview::is_showing())
             overview::open(hypriso->monitor_from_cursor()); 
         return 0;
@@ -2335,6 +2347,8 @@ void add_hyprctl_dispatchers() {
         return 0; 
     }); 
     hypriso->add_hyprctl_dispatcher("overview_close_or_hide_desktop", [](lua_State *) {
+        if (screenshot_tool::is_open())
+            return 0;
         if (overview::is_showing()) {
             overview::close(); 
             return 0;

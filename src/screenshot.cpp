@@ -2,6 +2,8 @@
 
 #include "heart.h"
 #include "overview.h"
+#include "show_desktop.h"
+#include "snap_assist.h"
 #include <algorithm>
 #include <cairo.h>
 #include <cmath>
@@ -12,6 +14,7 @@
 
 static bool showing = true;
 static int mode = 0; // 1 rectangle, 2 window, 3 colorpick, 4 draw
+static unsigned int open_generation = 0;
 static constexpr float DRAW_BRUSH_MIN = 2.0f;
 static constexpr float DRAW_BRUSH_MAX = 40.0f;
 static constexpr float DRAW_BRUSH_DEFAULT = 5.0f;
@@ -270,6 +273,7 @@ void actual_open_screenshot_tool() {
     //setCursorImageUntilUnset("crosshair");
     auto tool = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
     tool->custom_type = (int) TYPE::SCREENSHOT_TOOL;
+    tool->z_index = 1000;
     tool->automatically_paint_children = false;
     consume_everything(tool);
 
@@ -539,10 +543,18 @@ void actual_open_screenshot_tool() {
     {
         auto ch = label(type, "\uECE9", "Window");
         ch->when_clicked = paint {
+            if (overview::is_showing())
+                overview::instant_close();
+            if (show_desktop::is_opened())
+                show_desktop::stop();
+            if (snap_assist::is_showing())
+                snap_assist::instant_close();
             showing = false;
+            hypriso->render_whitelist.clear();
             hypriso->whitelist_on = false;
             mode = 2;
             setCursorImageUntilUnset("crosshair");
+            damage_all();
         }; 
     }
     {
@@ -895,19 +907,22 @@ void actual_open_screenshot_tool() {
         }
         if (mode == 2) {
             auto cid = hypriso->window_from_mouse();
-            hypriso->bring_to_front(cid);
-            later_immediate([cid](Timer *) {
-                screenshot_tool::close();
-                damage_all();
-                
+            if (cid != -1) {
+                hypriso->bring_to_front(cid);
                 later_immediate([cid](Timer *) {
-                    hypriso->screenshot_deco(cid);
+                    screenshot_tool::close();
+                    damage_all();
+                    
                     later_immediate([cid](Timer *) {
-                        hypriso->save_window_to_png(cid, true, "/tmp/out.png");
-                        notify("Saved to: /tmp/out.png");
+                        hypriso->screenshot_deco(cid);
+                        later_immediate([cid](Timer *) {
+                            hypriso->save_window_to_png(cid, true, "/tmp/out.png");
+                            notify("Saved to: /tmp/out.png");
+                        });
                     });
                 });
-            });
+                return;
+            }
         }
         if (mode == 3) {
             auto rid = hypriso->monitor_from_cursor();
@@ -1047,12 +1062,18 @@ void actual_open_screenshot_tool() {
 }
 
 void screenshot_tool::open(bool draw) {
+    screenshot_tool::close();
     showing = true;
     mode = draw ? 4 : 0;
-    
-    screenshot_tool::close();
+    const auto generation = ++open_generation;
     heart::set_force_meta_open(true);
-    later(300, [draw](Timer *) {
+    later(300, [draw, generation](Timer *) {
+        if (generation != open_generation)
+            return;
+        if (!overview::is_showing() && !show_desktop::is_opened() && !snap_assist::is_showing()) {
+            hypriso->render_whitelist.clear();
+            hypriso->whitelist_on = false;
+        }
         for (auto m : actual_monitors) {
             int monitor = *datum<int>(m, "cid");
             hypriso->screenshot_monitor(monitor);
@@ -1071,7 +1092,8 @@ void screenshot_tool::open(bool draw) {
 }
 
 void screenshot_tool::close() {
-    if (!overview::is_showing())
+    open_generation++;
+    if (!overview::is_showing() && !show_desktop::is_opened() && !snap_assist::is_showing())
         hypriso->whitelist_on = false;
     set_cursor_hidden_for_screenshot_draw(false);
     unsetCursorImage();
@@ -1086,15 +1108,20 @@ void screenshot_tool::close() {
     heart::set_force_meta_open(false);
     heart::set_zoom(1.0);
     set_input_takeover("screenshot", false);
+    damage_all();
+}
+
+bool screenshot_tool::is_open() {
+    for (auto c : actual_root->children) {
+        if (c->custom_type == (int) TYPE::SCREENSHOT_TOOL)
+            return true;
+    }
+    return false;
 }
 
 bool screenshot_tool::is_drawing() {
     if (mode != 4)
         return false;
 
-    for (auto c : actual_root->children) {
-        if (c->custom_type == (int) TYPE::SCREENSHOT_TOOL)
-            return true;
-    }
-    return false;
+    return screenshot_tool::is_open();
 }

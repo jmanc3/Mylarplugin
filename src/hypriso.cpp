@@ -8114,11 +8114,19 @@ void screenshot_monitor(SP<Render::IFramebuffer> buffer, PHLMONITOR m) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    if (!buffer || !m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
+    if (!buffer || !m || !m->m_output || m->m_transformedSize.x <= 0 || m->m_transformedSize.y <= 0)
         return;
 
+    const auto previousRenderingMonitor = rendering_monitor;
+    rendering_monitor = m;
+    defer(rendering_monitor = previousRenderingMonitor);
+
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
-    buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
+    const Vector2D targetSize = m->m_transformedSize;
+    if (!buffer->isAllocated() || buffer->m_size != targetSize) {
+        buffer->release();
+        buffer->alloc(targetSize.x, targetSize.y, m->m_output->state->state().drmFormat);
+    }
 
     // A render session cannot be nested, so snapshot the monitor scene directly
     // instead of re-entering renderMonitor() with an already active context.
@@ -8132,17 +8140,36 @@ void screenshot_monitor(SP<Render::IFramebuffer> buffer, PHLMONITOR m) {
             g_pHyprRenderer->abortRender();
     });
 
+    // When neither overview nor show-desktop is intentionally hiding live windows,
+    // suspend any stale whitelist so windows always appear in the capture (while
+    // keeping m_renderingSnapshot false so live window blur is preserved).
+    const bool previousWhitelistOn = hypriso->whitelist_on;
+    const auto previousWhitelist = hypriso->render_whitelist;
+    const bool suspendWhitelist = !overview::is_showing() && !show_desktop::is_opened();
+    if (suspendWhitelist) {
+        hypriso->whitelist_on = false;
+        hypriso->render_whitelist.clear();
+    }
+    defer({
+        if (suspendWhitelist) {
+            hypriso->whitelist_on = previousWhitelistOn;
+            hypriso->render_whitelist = previousWhitelist;
+        }
+    });
+
     auto&      ctx = g_pHyprRenderer->context();
     const auto NOW = Time::steadyNow();
 
-    ctx.m_renderingSnapshot = true;
-
-    g_pHyprRenderer->draw(ctx, CClearPassElement::SClearData{CHyprColor(0, 0, 0, 0)});
+    g_pHyprRenderer->draw(ctx, CClearPassElement::SClearData{CHyprColor(0, 0, 0, 1)});
     g_pHyprRenderer->startRenderPass(ctx);
 
     Render::CMonitorScene scene(m);
     scene.draw(ctx, NOW);
 
+    Event::bus()->m_events.render.stage.emit({sc<eRenderStage>(STAGE::RENDER_PRE_CURSOR), m, ctx});
+    Event::bus()->m_events.render.stage.emit({sc<eRenderStage>(STAGE::RENDER_POST_CURSOR), m, ctx});
+
+    ctx.m_data.blockScreenShader = true;
     finishing = true;
     g_pHyprRenderer->endRender();
 }
@@ -8230,6 +8257,9 @@ void screenshot_workspace(SP<Render::IFramebuffer> buffer, PHLWORKSPACE startedO
 
     overview::should_force_paint(true);
     defer(overview::should_force_paint(false));
+    const auto previousRenderingMonitor = rendering_monitor;
+    rendering_monitor = pMonitor;
+    defer(rendering_monitor = previousRenderingMonitor);
     const auto previous_capture = capturing_workspace;
     capturing_workspace = true;
     defer(capturing_workspace = previous_capture);
@@ -12070,10 +12100,9 @@ void HyprIso::screenshot_monitor(int mon) {
         if (h->id == mon) {
             if (!h->monfb)
                 h->monfb = g_pHyprRenderer->createFB();
-            PHLWORKSPACEREF startedOn = h->m->m_activeWorkspace;
-            screenshot_workspace(h->monfb, startedOn.lock(), startedOn, h->m, false);
-            h->mon_size.y = h->m->m_pixelSize.x;
-            h->mon_size.x = h->m->m_pixelSize.y;
+            ::screenshot_monitor(h->monfb, h->m);
+            h->mon_size.x = h->m->m_transformedSize.x;
+            h->mon_size.y = h->m->m_transformedSize.y;
         }
     }
 }
@@ -12433,13 +12462,19 @@ void HyprIso::draw_monitor(int mon, Bounds b, Bounds uvBounds) {
                     const double uvRight  = std::clamp((uvBounds.x + uvBounds.w) / framebufferW, 0.0, 1.0);
                     const double uvBottom = std::clamp((uvBounds.y + uvBounds.h) / framebufferH, 0.0, 1.0);
 
+                    data.primarySurfaceUVTopLeft                                  = Vector2D(uvLeft, uvTop);
+                    data.primarySurfaceUVBottomRight                              = Vector2D(uvRight, uvBottom);
                     g_pHyprRenderer->context().m_data.primarySurfaceUVTopLeft     = Vector2D(uvLeft, uvTop);
                     g_pHyprRenderer->context().m_data.primarySurfaceUVBottomRight = Vector2D(uvRight, uvBottom);
                 } else {
+                    data.primarySurfaceUVTopLeft                                  = Vector2D(0, 0);
+                    data.primarySurfaceUVBottomRight                              = Vector2D(1, 1);
                     g_pHyprRenderer->context().m_data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
                     g_pHyprRenderer->context().m_data.primarySurfaceUVBottomRight = Vector2D(1, 1);
                 }
             } else {
+                data.primarySurfaceUVTopLeft                                  = Vector2D(0, 0);
+                data.primarySurfaceUVBottomRight                              = Vector2D(1, 1);
                 g_pHyprRenderer->context().m_data.primarySurfaceUVTopLeft     = Vector2D(0, 0);
                 g_pHyprRenderer->context().m_data.primarySurfaceUVBottomRight = Vector2D(1, 1);
             }

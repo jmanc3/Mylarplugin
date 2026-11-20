@@ -10,6 +10,7 @@
 #include "titlebar.h"
 #include "desktop_gesture.h"
 #include "desktop_icons.h"
+#include "screenshot.h"
 #include "show_desktop.h"
 #include "snap_assist.h"
 #include "spring.h"
@@ -1128,7 +1129,8 @@ void overview_actual_close() {
         // A workspace swipe can finish on the same event that closes overview.
         // Settle both incoming and outgoing workspaces before revealing live windows.
         hypriso->finish_workspace_animations();
-        hypriso->whitelist_on = false;
+        if (!screenshot_tool::is_open())
+            hypriso->whitelist_on = false;
         hypriso->input_bypass_whitelist = false;
         hypriso->simulateMouseMovement();
     }
