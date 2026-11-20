@@ -22,6 +22,9 @@
 bool running = false;
 float openess = 0.0f;
 float overview_open_time_ms = 700;
+static constexpr double overview_close_time_ms = 260.0;
+// {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.5747808419081069,"y":0.8429629431830512}]}
+std::vector<float> overview_settle_curve = { 0.000, 0.005, 0.010, 0.015, 0.021, 0.027, 0.033, 0.040, 0.047, 0.054, 0.061, 0.069, 0.078, 0.086, 0.095, 0.105, 0.115, 0.125, 0.135, 0.146, 0.157, 0.169, 0.181, 0.193, 0.206, 0.220, 0.233, 0.247, 0.262, 0.277, 0.292, 0.308, 0.324, 0.341, 0.359, 0.376, 0.394, 0.413, 0.432, 0.452, 0.472, 0.493, 0.514, 0.536, 0.559, 0.582, 0.605, 0.629, 0.654, 0.679, 0.705, 0.731, 0.759, 0.786, 0.815, 0.844, 0.874, 0.904, 0.935, 0.967, 1.000 };
 static bool initialized = false;
 static bool capturing_overview = false;
 static unsigned int lifecycle = 0;
@@ -1187,11 +1190,19 @@ static void animate_overview(float target, float velocity, SpringParams params, 
         const auto now = get_current_time_in_ms();
         if (start == 0)
             start = now;
-        const auto state = springEvaluate((now - start) / 1000.0, initial_progress, target, velocity, params);
-        const bool finished = gesture_release
-            ? (target == 0.0f ? state.value <= .001 : state.value >= .999)
-            : (std::abs(state.value - target) <= .001 && std::abs(state.velocity) <= .001);
-        openess = finished ? target : static_cast<float>(state.value);
+        bool finished = false;
+        if (target == 0.0f) {
+            const double duration = overview_close_time_ms * std::max(0.0f, initial_progress);
+            const float t = duration <= 0.0 ? 1.0f : static_cast<float>(std::clamp((now - start) / duration, 0.0, 1.0));
+            finished = t >= 1.0f;
+            openess = finished ? 0.0f : initial_progress * (1.0f - pull(overview_settle_curve, t));
+        } else {
+            const auto state = springEvaluate((now - start) / 1000.0, initial_progress, target, velocity, params);
+            finished = gesture_release
+                ? state.value >= .999
+                : (std::abs(state.value - target) <= .001 && std::abs(state.velocity) <= .001);
+            openess = finished ? target : static_cast<float>(state.value);
+        }
         // An interrupted entrance must still close onto the desktop.
         if (target == 0.0f && initial_progress > 0.0f)
             scene->desktop_origin_weight = initial_origin_weight * std::clamp(openess / initial_progress, 0.0f, 1.0f);
