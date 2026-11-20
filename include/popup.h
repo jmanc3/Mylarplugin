@@ -43,6 +43,14 @@ namespace popup {
 
     // Logical height of a menu built from these options.
     float menu_height(const std::vector<PopOption>& options);
+
+    // Jump-list style menu with a titled section separated above the main options.
+    void open_tasks_menu(const std::string& tasks_title,
+                         const std::vector<PopOption>& tasks,
+                         const std::vector<PopOption>& options,
+                         int x, int y, int cid = -1);
+    float tasks_menu_height(const std::vector<PopOption>& tasks,
+                            const std::vector<PopOption>& options);
     void close(std::string container_uuid);
     bool dismiss_outside(int x, int y);
 

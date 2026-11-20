@@ -215,24 +215,35 @@ std::string desktop_file::exec_without_field_codes(const std::string& exec) {
     return remove_desktop_exec_field_codes(exec);
 }
 
-std::unordered_map<std::string, std::string> desktop_file::read_entry(const std::filesystem::path& path) {
+std::unordered_map<std::string, std::string> desktop_file::read_entry(const std::filesystem::path& path,
+                                                                      std::vector<Action>* actions) {
     std::unordered_map<std::string, std::string> entry;
+    if (actions)
+        actions->clear();
     std::ifstream file(path);
     if (!file)
         return entry;
 
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> action_groups;
+    static constexpr std::string_view kActionPrefix = "[Desktop Action ";
+
     std::string line;
     bool inDesktopEntry = false;
+    std::string current_action_id;
     while (std::getline(file, line)) {
         if (!line.empty() && line.back() == '\r')
             line.pop_back();
         if (line.empty() || line[0] == '#')
             continue;
         if (line.starts_with('[') && line.ends_with(']')) {
-            inDesktopEntry = line == "[Desktop Entry]";
+            inDesktopEntry = (line == "[Desktop Entry]");
+            if (actions && line.starts_with(kActionPrefix) && line.size() > kActionPrefix.size() + 1)
+                current_action_id = line.substr(kActionPrefix.size(), line.size() - kActionPrefix.size() - 1);
+            else
+                current_action_id.clear();
             continue;
         }
-        if (!inDesktopEntry)
+        if (!inDesktopEntry && current_action_id.empty())
             continue;
 
         const auto separator = line.find('=');
@@ -241,8 +252,49 @@ std::unordered_map<std::string, std::string> desktop_file::read_entry(const std:
 
         // Spaces around the '=' are not part of the key or the value.
         auto key = trim_copy(line.substr(0, separator));
-        if (!key.empty())
-            entry[std::move(key)] = trim_copy(line.substr(separator + 1));
+        if (key.empty())
+            continue;
+        auto value = trim_copy(line.substr(separator + 1));
+
+        if (inDesktopEntry)
+            entry[std::move(key)] = std::move(value);
+        else
+            action_groups[current_action_id][std::move(key)] = std::move(value);
+    }
+
+    if (actions) {
+        if (auto it = entry.find("Actions"); it != entry.end() && !it->second.empty()) {
+            const auto& actions_list = it->second;
+            size_t start = 0;
+            while (start < actions_list.size()) {
+                size_t end = actions_list.find(';', start);
+                if (end == std::string::npos)
+                    end = actions_list.size();
+                auto id = trim_copy(actions_list.substr(start, end - start));
+                start = end + 1;
+                if (id.empty())
+                    continue;
+
+                auto group_it = action_groups.find(id);
+                if (group_it == action_groups.end())
+                    continue;
+                const auto& group = group_it->second;
+                auto name_it = group.find("Name");
+                auto exec_it = group.find("Exec");
+                if (name_it == group.end() || name_it->second.empty() || exec_it == group.end())
+                    continue;
+                auto exec = remove_desktop_exec_field_codes(exec_it->second);
+                if (exec.empty())
+                    continue;
+
+                Action action;
+                action.name = name_it->second;
+                action.exec = std::move(exec);
+                if (auto icon_it = group.find("Icon"); icon_it != group.end())
+                    action.icon = icon_it->second;
+                actions->push_back(std::move(action));
+            }
+        }
     }
     return entry;
 }

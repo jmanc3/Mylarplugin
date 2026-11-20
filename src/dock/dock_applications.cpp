@@ -50,6 +50,9 @@ struct Script : UserData {
     // full_path is the .desktop file, exec what it runs.
     bool is_desktop = false;
     std::string desktop_id;
+    std::string startup_wm_class;
+    std::string dbus_service_name;
+    std::vector<desktop_file::Action> actions;
     std::string exec;
     std::string icon;
     bool terminal = false;
@@ -390,7 +393,8 @@ static void desktop_entries_load(std::vector<Script> &entries, const std::string
             if (!seen.insert(id).second)
                 continue;
 
-            auto entry = desktop_file::read_entry(path);
+            std::vector<desktop_file::Action> actions;
+            auto entry = desktop_file::read_entry(path, &actions);
             auto value = [&entry](const char *key) {
                 auto found = entry.find(key);
                 return found == entry.end() ? std::string() : found->second;
@@ -419,6 +423,9 @@ static void desktop_entries_load(std::vector<Script> &entries, const std::string
                                        names_current_desktop(value("NotShowIn"));
             }
             script.desktop_id = id;
+            script.startup_wm_class = value("StartupWMClass");
+            script.dbus_service_name = value("X-DBUS-ServiceName");
+            script.actions = std::move(actions);
             script.name = value("Name");
             if (script.name.empty())
                 script.name = path.stem().string();
@@ -1409,4 +1416,56 @@ std::vector<ApplicationEntry> get_application_entries(bool refresh, bool *scan_i
         out.push_back(std::move(e));
     }
     return out;
+}
+
+std::vector<desktop_file::Action> desktop_actions_for_wm_class(const std::string &stacking_rule) {
+    if (stacking_rule.empty())
+        return {};
+
+    std::lock_guard<std::mutex> lock(scripts_mutex);
+    if (!scripts_refresh.valid())
+        scripts_refresh = load_scripts_async();
+    if (scripts_refresh.valid() &&
+        (scripts.empty() || scripts_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready)) {
+        scripts = scripts_refresh.get();
+    }
+
+    const std::string lower_rule = to_lower(stacking_rule);
+    const std::string fixed_lower_rule = to_lower(c3ic_fix_wm_class(stacking_rule));
+    auto match_candidate = [&](const std::string &candidate, int base_rank) -> int {
+        if (candidate.empty())
+            return 99;
+        if (candidate == stacking_rule)
+            return base_rank;
+        if (to_lower(candidate) == lower_rule)
+            return base_rank + 1;
+        if (to_lower(c3ic_fix_wm_class(candidate)) == fixed_lower_rule)
+            return base_rank + 2;
+        return 99;
+    };
+
+    const Script *best = nullptr;
+    int best_rank = 99;
+    for (const auto &s : scripts) {
+        if (!s.is_desktop || !s.builtin.empty() || s.actions.empty())
+            continue;
+        std::string desktop_name = s.desktop_id;
+        if (desktop_name.ends_with(".desktop"))
+            desktop_name.resize(desktop_name.size() - 8);
+        std::string file_stem = std::filesystem::path(s.full_path).stem().string();
+
+        int rank = std::min({
+            match_candidate(s.startup_wm_class, 0),
+            match_candidate(s.dbus_service_name, 3),
+            match_candidate(desktop_name, 6),
+            match_candidate(file_stem, 6),
+        });
+        if (rank < best_rank) {
+            best_rank = rank;
+            best = &s;
+            if (best_rank == 0)
+                break;
+        }
+    }
+    return best ? best->actions : std::vector<desktop_file::Action>{};
 }

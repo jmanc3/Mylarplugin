@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 struct Bounds;
 
@@ -15,9 +16,17 @@ namespace desktop_icons {
 
 // Small .desktop reader shared by the desktop icons and the dock's applications menu.
 namespace desktop_file {
+    struct Action {
+        std::string name;
+        std::string exec;
+        std::string icon;
+    };
+
     // Keys of the [Desktop Entry] group (localized ones keep their suffix, e.g. "Name[de]").
-    // Empty when the file can't be read.
-    std::unordered_map<std::string, std::string> read_entry(const std::filesystem::path &path);
+    // When `actions` is non-null, also parses [Desktop Action <id>] groups listed in Actions=
+    // in the same pass. Empty when the file can't be read.
+    std::unordered_map<std::string, std::string> read_entry(const std::filesystem::path &path,
+                                                            std::vector<Action> *actions = nullptr);
     // Exec= without the %f, %U, ... field codes.
     std::string exec_without_field_codes(const std::string &exec);
 }

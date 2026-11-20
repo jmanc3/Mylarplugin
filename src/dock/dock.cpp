@@ -1240,7 +1240,25 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             }
         }
 
-        popup::open(root, m.x - startoff + cw * .5 - (277 * .5) + 1.4, m.y - (yoff / dpi) - 5 - popup::menu_height(root));
+        std::vector<PopOption> tasks;
+        for (const auto &action : desktop_actions_for_wm_class(stacking_rule)) {
+            PopOption pop;
+            pop.text = action.name;
+            pop.icon_left = action.icon;
+            auto exec = action.exec;
+            pop.on_clicked = [exec]() {
+                launch_command(exec);
+            };
+            tasks.push_back(std::move(pop));
+        }
+
+        const int menu_x = m.x - startoff + cw * .5 - (277 * .5) + 1.4;
+        if (!tasks.empty()) {
+            popup::open_tasks_menu("Tasks", tasks, root, menu_x,
+                                   m.y - (yoff / dpi) - 5 - popup::tasks_menu_height(tasks, root));
+        } else {
+            popup::open(root, menu_x, m.y - (yoff / dpi) - 5 - popup::menu_height(root));
+        }
     });
 }
 
