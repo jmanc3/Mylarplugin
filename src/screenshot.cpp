@@ -816,9 +816,14 @@ void actual_open_screenshot_tool() {
                             swatch.shrink(std::round(2.0f * s));
                         rect(swatch, draw_palette[i], 0, 4.0f * s);
                         if (i == draw_color_index) {
+                            const float ring_thickness = std::max(1.0f, std::round(2.0f * s));
+                            const float outer_expand = std::max(1.0f, std::round(ring_thickness * .5f));
                             Bounds ring = b;
                             ring.grow(std::round(3.0f * s));
-                            border(ring, {1, 1, 1, .95}, std::max(1.0f, std::round(2.0f * s)), 0, 6.0f * s);
+                            Bounds outer_ring = ring;
+                            outer_ring.grow(outer_expand);
+                            border(outer_ring, {0, 0, 0, 1}, ring_thickness, 0, 6.0f * s + outer_expand);
+                            border(ring, {1, 1, 1, .95}, ring_thickness, 0, 6.0f * s);
                         }
                     }
                 }
