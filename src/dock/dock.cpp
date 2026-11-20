@@ -1126,7 +1126,8 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             };
             root.push_back(pop);
         }
-        {
+        const bool allow_pin = !stacking_rule.empty() && stacking_rule != edit_pin::kAppId;
+        if (pin->pinned || allow_pin) {
             PopOption pop;
 #ifdef PROBLEMS
             assert(false && "Pin could've been destroyed");
