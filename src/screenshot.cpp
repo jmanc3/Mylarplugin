@@ -218,7 +218,9 @@ static void copy_screenshot_to_clipboard(bool has_selection, Bounds selection) {
 
 Container *label(Container *parent, std::string icon, std::string text) {
     static float label_h = 20;
-    static float pad = 10;
+    static float pad_x = 14;
+    static float pad_y = 6;
+    static float icon_gap = 8;
     
     auto full = parent->child(0, 0);
     full->parent_bounds_limit_input_bounds = false;
@@ -228,17 +230,19 @@ Container *label(Container *parent, std::string icon, std::string text) {
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         if (rid != hypriso->monitor_from_cursor())
             return;
+        if (s <= 0) s = 1.0f;
         auto info = gen_text_texture(icon_font, icon, label_h * s, {1, 1, 1, 1});
         free_text_texture(info.id); 
         auto info2 = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});
         free_text_texture(info2.id); 
-        c->wanted_bounds.w = info.w + info2.w + pad * s;
-        c->wanted_bounds.h = std::max(info.h, info2.h) + pad * s;
+        c->wanted_bounds.w = std::ceil((info.w + info2.w) / s + icon_gap + pad_x * 2);
+        c->wanted_bounds.h = std::ceil(std::max(info.h, info2.h) / s + pad_y * 2);
     };
     full->when_paint = [icon, text](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        if (s <= 0) s = 1.0f;
         renderfix
 
         if (c->state.mouse_pressing) {
@@ -248,22 +252,22 @@ Container *label(Container *parent, std::string icon, std::string text) {
         } else {
             rect(c->real_bounds, {.2, .2, .2, .7}, 0, 0, 2.0, true);
         }
-        float xoff = pad * s * 2;
-        {
-            auto info = gen_text_texture(icon_font, icon, label_h * s, {1, 1, 1, 1});
-            draw_texture(info, {c->real_bounds.x + pad * s + xoff, 
+        auto info = gen_text_texture(icon_font, icon, label_h * s, {1, 1, 1, 1});
+        auto info2 = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});
+        float gap = icon_gap * s;
+        float content_w = info.w + gap + info2.w;
+        float start_x = c->real_bounds.x + (c->real_bounds.w - content_w) * .5f;
+        if (info.id != -1) {
+            draw_texture(info, {start_x, 
                                c->real_bounds.y + c->real_bounds.h * .5 - info.h * .5, 
                                (double) info.w, (double) info.h});
-            xoff += info.w;
             free_text_texture(info.id); 
         }
-        xoff += 8 * s;
-        {
-            auto info = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});
-            draw_texture(info, {c->real_bounds.x + pad * s + xoff, 
-                               c->real_bounds.y + c->real_bounds.h * .5 - info.h * .5, 
-                               (double) info.w, (double) info.h});
-            free_text_texture(info.id); 
+        if (info2.id != -1) {
+            draw_texture(info2, {start_x + info.w + gap, 
+                                c->real_bounds.y + c->real_bounds.h * .5 - info2.h * .5, 
+                                (double) info2.w, (double) info2.h});
+            free_text_texture(info2.id); 
         }
     };
     return full;
@@ -593,7 +597,8 @@ void actual_open_screenshot_tool() {
             return;
         
         auto type = c->children[0];
-        auto fixed_w = (type->wanted_pad.x + type->wanted_pad.w + (type->spacing * type->children.size() - 1));
+        auto spacing_w = type->children.size() > 1 ? type->spacing * (type->children.size() - 1) : 0;
+        auto fixed_w = type->wanted_pad.x + type->wanted_pad.w + spacing_w;
         auto fixed_h = type->wanted_pad.y + type->wanted_pad.h;
         float calc_w = 0;
         float calc_h = 0;
@@ -601,7 +606,7 @@ void actual_open_screenshot_tool() {
             if (ch->pre_layout) {
                 ch->pre_layout(actual_root, ch, b);
                 calc_w += ch->wanted_bounds.w;
-                if (calc_h > ch->wanted_bounds.h)
+                if (ch->wanted_bounds.h > calc_h)
                     calc_h = ch->wanted_bounds.h;
             }
         }
