@@ -7,6 +7,7 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "dock/dock.h"
+#include "dock/dock_applications.h"
 #include "events.h"
 #include "hypriso.h"
 #include "icons.h"
@@ -15,6 +16,7 @@
 #include <cairo.h>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -27,12 +29,28 @@
 #include <pango/pangocairo.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
+enum class DropdownKind {
+    None,
+    Icon,
+    Command,
+};
+
 // One suggestion in the icon name drop-down.
 struct IconOption {
     std::string value; // What goes in the field: "name", or ":theme:name" to pin a theme
     std::string name;
     std::string theme;
     std::string path;
+    cairo_surface_t *surface = nullptr;
+    bool attempted = false;
+};
+
+// One suggestion in the command drop-down ($PATH executable or .desktop file).
+struct CommandOption {
+    std::string value; // What goes in the field (full path, or "gio launch <path>" for .desktop)
+    std::string name;
+    std::string full_path;
+    ApplicationEntry entry;
     cairo_surface_t *surface = nullptr;
     bool attempted = false;
 };
@@ -46,11 +64,13 @@ struct PinData : UserData {
     std::string icon;
     std::string command;
 
-    // Icon name suggestions (like winbar's pinned icon editor)
+    // Icon and command suggestions drop-down (only one field's list is open at a time)
+    DropdownKind dropdown_kind = DropdownKind::None;
     std::vector<IconOption> options;
+    std::vector<CommandOption> command_options;
+    std::vector<ApplicationEntry> cached_apps;
     int active_option = 0;
     bool active_option_preferred = false;
-    bool dropdown_open = false;
     float dropdown_scroll = 0;
     float dropdown_overflow = 0;
     float dropdown_view_h = 0;
@@ -69,6 +89,9 @@ struct PinData : UserData {
         for (auto &o : options)
             if (o.surface)
                 cairo_surface_destroy(o.surface);
+        for (auto &o : command_options)
+            if (o.surface)
+                cairo_surface_destroy(o.surface);
         if (preview)
             cairo_surface_destroy(preview);
     }
@@ -76,6 +99,8 @@ struct PinData : UserData {
 
 static constexpr int icon_option_row_h = 34;
 static constexpr int icon_option_icon_size = 22;
+static constexpr int command_option_row_h = 46;
+static constexpr int command_option_icon_size = 26;
 static constexpr int icon_preview_size = 64;
 
 static void paint_bg(Container *root, Container *c) {
@@ -367,9 +392,49 @@ static void free_icon_options(PinData *data) {
     data->options.clear();
 }
 
-static void close_icon_dropdown(PinData *data) {
-    data->dropdown_open = false;
+static void free_command_options(PinData *data) {
+    for (auto &o : data->command_options)
+        if (o.surface)
+            cairo_surface_destroy(o.surface);
+    data->command_options.clear();
+}
+
+static void close_dropdown(PinData *data) {
+    data->dropdown_kind = DropdownKind::None;
     data->active_option_preferred = false;
+}
+
+static bool dropdown_is_open(const PinData *data) {
+    return data->dropdown_kind != DropdownKind::None;
+}
+
+static int dropdown_option_count(const PinData *data) {
+    if (data->dropdown_kind == DropdownKind::Command)
+        return (int) data->command_options.size();
+    if (data->dropdown_kind == DropdownKind::Icon)
+        return (int) data->options.size();
+    return 0;
+}
+
+static double dropdown_row_height(const PinData *data, double dpi) {
+    return (data->dropdown_kind == DropdownKind::Command ? command_option_row_h : icon_option_row_h) * dpi;
+}
+
+static const char *dropdown_field_name(DropdownKind kind) {
+    return kind == DropdownKind::Command ? "command_container" : "icon_container";
+}
+
+static std::string shell_quote_if_needed(const std::string &path) {
+    if (path.find_first_of(" \t'\"$`\\&;|<>()*?[]{}!#~") == std::string::npos)
+        return path;
+    std::string quoted = "'";
+    for (char ch : path) {
+        if (ch == '\'')
+            quoted += "'\\''";
+        else
+            quoted += ch;
+    }
+    return quoted + "'";
 }
 
 // Fills the drop-down with icons whose names contain `text`: first the plain names (which follow
@@ -380,8 +445,9 @@ static void rebuild_icon_options(Container *root, const std::string &text) {
     free_icon_options(data);
     data->active_option = 0;
     data->active_option_preferred = false;
+    data->dropdown_smooth.stop();
     data->dropdown_scroll = 0;
-    data->dropdown_open = false;
+    data->dropdown_kind = DropdownKind::None;
     if (text.empty() || !icons_loaded)
         return;
 
@@ -455,11 +521,130 @@ static void rebuild_icon_options(Container *root, const std::string &text) {
     }
     data->options = std::move(plain);
     data->options.insert(data->options.end(), themed.begin(), themed.end());
-    data->dropdown_open = !data->options.empty();
+    if (!data->options.empty())
+        data->dropdown_kind = DropdownKind::Icon;
+}
+
+// Fills the drop-down with matching $PATH scripts and .desktop files (excluding Mylar's settings/builtins).
+static void rebuild_command_options(Container *root, const std::string &text) {
+    auto data = (PinData *) root->user_data;
+    free_command_options(data);
+    data->active_option = 0;
+    data->active_option_preferred = false;
+    data->dropdown_smooth.stop();
+    data->dropdown_scroll = 0;
+    data->dropdown_kind = DropdownKind::None;
+
+    std::string query = text;
+    auto ltrim = [](std::string &s) {
+        size_t pos = s.find_first_not_of(" \t");
+        if (pos == std::string::npos)
+            s.clear();
+        else if (pos > 0)
+            s.erase(0, pos);
+    };
+    ltrim(query);
+    if (query.starts_with("gio launch ")) {
+        query.erase(0, strlen("gio launch "));
+        ltrim(query);
+    } else if (query.starts_with("xdg-open ")) {
+        query.erase(0, strlen("xdg-open "));
+        ltrim(query);
+    }
+    if (!query.empty() && (query.front() == '\'' || query.front() == '"')) {
+        char q = query.front();
+        query.erase(0, 1);
+        if (!query.empty() && query.back() == q)
+            query.pop_back();
+    }
+    if (query.empty() || data->cached_apps.empty())
+        return;
+
+    const std::string lowercase_query = to_lower(query);
+    const bool has_slash = query.find('/') != std::string::npos;
+
+    struct RankedEntry {
+        int level;
+        const ApplicationEntry *entry;
+    };
+    std::vector<RankedEntry> matches;
+    matches.reserve(64);
+    for (const auto &entry : data->cached_apps) {
+        int level = match_application(entry, query, lowercase_query);
+        if (level < 0 && has_slash) {
+            if (entry.full_path == query) {
+                level = 0;
+            } else {
+                auto lower_path = to_lower(entry.full_path);
+                if (lower_path == lowercase_query)
+                    level = 1;
+                else if (entry.full_path.starts_with(query))
+                    level = 2;
+                else if (lower_path.starts_with(lowercase_query))
+                    level = 3;
+                else if (entry.full_path.find(query) != std::string::npos)
+                    level = 6;
+                else if (lower_path.find(lowercase_query) != std::string::npos)
+                    level = 7;
+            }
+        }
+        if (level >= 0)
+            matches.push_back({level, &entry});
+    }
+    if (matches.empty())
+        return;
+
+    std::stable_sort(matches.begin(), matches.end(), [](const RankedEntry &a, const RankedEntry &b) {
+        return a.level < b.level;
+    });
+
+    static constexpr size_t max_command_options = 200;
+    if (matches.size() > max_command_options)
+        matches.resize(max_command_options);
+
+    data->command_options.reserve(matches.size());
+    for (const auto &m : matches) {
+        CommandOption o;
+        o.entry = *m.entry;
+        o.name = m.entry->name;
+        o.full_path = m.entry->full_path;
+        auto quoted_path = shell_quote_if_needed(m.entry->full_path);
+        o.value = m.entry->is_desktop ? ("gio launch " + quoted_path) : quoted_path;
+        data->command_options.push_back(std::move(o));
+    }
+    if (!data->command_options.empty())
+        data->dropdown_kind = DropdownKind::Command;
+}
+
+static void watch_cached_apps(Container *window_root) {
+    auto data = (PinData *) window_root->user_data;
+    std::weak_ptr<bool> root_lifetime = window_root->lifetime;
+    windowing::timer(data->app, 50, [window_root, root_lifetime](void *) {
+        if (root_lifetime.expired())
+            return;
+        auto data = (PinData *) window_root->user_data;
+        bool scan_in_progress = false;
+        const bool was_empty = data->cached_apps.empty();
+        auto entries = get_application_entries(false, &scan_in_progress);
+        if (!entries.empty())
+            data->cached_apps = std::move(entries);
+        if (scan_in_progress) {
+            watch_cached_apps(window_root);
+            return;
+        }
+        if (auto field = container_by_name("command_container", window_root)) {
+            bool focused = field->active || (field->parent && field->parent->active);
+            const auto &text = ((LabelData *) field->user_data)->text;
+            if (focused && !text.empty() && (data->dropdown_kind == DropdownKind::Command || was_empty)) {
+                rebuild_command_options(window_root, text);
+                windowing::redraw(pin_window(window_root));
+            }
+        }
+    }, nullptr);
 }
 
 static void scroll_to_active_option(PinData *data, double dpi) {
-    double row_h = icon_option_row_h * dpi;
+    double row_h = dropdown_row_height(data, dpi);
     double top = data->active_option * row_h;
     if (top + data->dropdown_scroll < 0)
         data->dropdown_scroll = -top;
@@ -468,24 +653,29 @@ static void scroll_to_active_option(PinData *data, double dpi) {
     data->dropdown_scroll = std::clamp(data->dropdown_scroll, -data->dropdown_overflow, 0.0f);
 }
 
-// Puts the highlighted suggestion into the icon field. Returns whether one was applied.
+// Puts the highlighted suggestion into the active field. Returns whether one was applied.
 static bool apply_active_option(Container *root) {
     auto data = (PinData *) root->user_data;
     bool applied = false;
-    if (data->active_option_preferred && data->active_option >= 0 && data->active_option < (int) data->options.size()) {
-        if (auto field = container_by_name("icon_container", root)) {
-            reset_text_editor(field, data->options[data->active_option].value);
+    int count = dropdown_option_count(data);
+    if (data->active_option_preferred && data->active_option >= 0 && data->active_option < count) {
+        auto field = container_by_name(dropdown_field_name(data->dropdown_kind), root);
+        if (field) {
+            const std::string &val = data->dropdown_kind == DropdownKind::Command
+                ? data->command_options[data->active_option].value
+                : data->options[data->active_option].value;
+            reset_text_editor(field, val);
             applied = true;
         }
     }
-    close_icon_dropdown(data);
+    close_dropdown(data);
     return applied;
 }
 
-// The name the preview shows: the highlighted suggestion while browsing, else the field's text.
+// The name the preview shows: the highlighted suggestion while browsing icons, else the field's text.
 static std::string preview_icon_name(Container *root) {
     auto data = (PinData *) root->user_data;
-    if (data->dropdown_open && data->active_option_preferred && data->active_option >= 0 && data->active_option < (int) data->options.size())
+    if (data->dropdown_kind == DropdownKind::Icon && data->active_option_preferred && data->active_option >= 0 && data->active_option < (int) data->options.size())
         return data->options[data->active_option].value;
     if (auto field = container_by_name("icon_container", root))
         return ((LabelData *) field->user_data)->text;
@@ -559,9 +749,9 @@ static void scroll_dropdown_to_thumb_top(PinData *data, Bounds dropdown, double 
     data->dropdown_scroll = (float) (-t * data->dropdown_overflow);
 }
 
-static void make_icon_dropdown(Container *root) {
+static void make_suggestions_dropdown(Container *root) {
     auto dropdown = root->child(FILL_SPACE, FILL_SPACE);
-    dropdown->name = "icon_dropdown";
+    dropdown->name = "suggestions_dropdown";
     dropdown->z_index = 10;
     dropdown->exists = false;
     dropdown->when_paint = [](Container *root, Container *c) {
@@ -591,46 +781,89 @@ static void make_icon_dropdown(Container *root) {
         cr->save();
         cr->rectangle(list.x, list.y, list.w, list.h);
         cr->clip_path();
-        double row_h = icon_option_row_h * dpi;
-        int icon_size = icon_option_icon_size * dpi;
+        double row_h = dropdown_row_height(data, dpi);
+        int count = dropdown_option_count(data);
         int first = std::max(0, (int) std::floor(-data->dropdown_scroll / row_h));
-        for (int i = first; i < (int) data->options.size(); i++) {
-            double y = list.y + data->dropdown_scroll + i * row_h;
-            if (y > list.y + list.h)
-                break;
-            auto &o = data->options[i];
-            Bounds rb(list.x, y, list.w - (data->dropdown_overflow > 0 ? 10 * dpi : 0), row_h);
-            if (i == data->active_option && data->active_option_preferred) {
-                set_argb(cr, c->state.mouse_pressing ? RGBA(.23, .6, 1, .3) : RGBA(.23, .6, 1, .16));
-                rounded_rect_new(cr, 5 * dpi, rb.x, rb.y, rb.w, rb.h);
-                cr->fill();
-            }
+        if (data->dropdown_kind == DropdownKind::Icon) {
+            int icon_size = icon_option_icon_size * dpi;
+            for (int i = first; i < count; i++) {
+                double y = list.y + data->dropdown_scroll + i * row_h;
+                if (y > list.y + list.h)
+                    break;
+                auto &o = data->options[i];
+                Bounds rb(list.x, y, list.w - (data->dropdown_overflow > 0 ? 10 * dpi : 0), row_h);
+                if (i == data->active_option && data->active_option_preferred) {
+                    set_argb(cr, c->state.mouse_pressing ? RGBA(.23, .6, 1, .3) : RGBA(.23, .6, 1, .16));
+                    rounded_rect_new(cr, 5 * dpi, rb.x, rb.y, rb.w, rb.h);
+                    cr->fill();
+                }
 
-            // Icons are only loaded once their row is first shown.
-            if (!o.attempted) {
-                o.attempted = true;
-                if (!o.path.empty())
-                    load_icon_full_path(&o.surface, o.path, icon_size);
-            }
-            double icon_x = std::round(rb.x + 8 * dpi);
-            double icon_y = std::round(rb.y + rb.h * .5 - icon_size * .5);
-            if (o.surface) {
-                cr->set_source_surface(o.surface, icon_x, icon_y);
-                cr->paint_source();
-            }
+                // Icons are only loaded once their row is first shown.
+                if (!o.attempted) {
+                    o.attempted = true;
+                    if (!o.path.empty())
+                        load_icon_full_path(&o.surface, o.path, icon_size);
+                }
+                double icon_x = std::round(rb.x + 8 * dpi);
+                double icon_y = std::round(rb.y + rb.h * .5 - icon_size * .5);
+                if (o.surface) {
+                    cr->set_source_surface(o.surface, icon_x, icon_y);
+                    cr->paint_source();
+                }
 
-            std::string theme = o.theme.empty() ? "unthemed" : o.theme;
-            auto theme_bounds = draw_text(cr, 0, 0, theme, 10 * dpi, false);
-            double theme_x = rb.x + rb.w - 10 * dpi - theme_bounds.w;
-            draw_text(cr, theme_x, rb.y + rb.h * .5 - theme_bounds.h * .5, theme, 10 * dpi, true, set->font, -1, -1, {0, 0, 0, .5});
+                std::string theme = o.theme.empty() ? "unthemed" : o.theme;
+                auto theme_bounds = draw_text(cr, 0, 0, theme, 10 * dpi, false);
+                double theme_x = rb.x + rb.w - 10 * dpi - theme_bounds.w;
+                draw_text(cr, theme_x, rb.y + rb.h * .5 - theme_bounds.h * .5, theme, 10 * dpi, true, set->font, -1, -1, {0, 0, 0, .5});
 
-            double name_x = icon_x + icon_size + 10 * dpi;
-            auto name_bounds = draw_text(cr, 0, 0, o.name, 12 * dpi, false);
-            cr->save();
-            cr->rectangle(name_x, rb.y, std::max(0.0, theme_x - 12 * dpi - name_x), rb.h);
-            cr->clip_path();
-            draw_text(cr, name_x, rb.y + rb.h * .5 - name_bounds.h * .5, o.name, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, .9});
-            cr->restore();
+                double name_x = icon_x + icon_size + 10 * dpi;
+                auto name_bounds = draw_text(cr, 0, 0, o.name, 12 * dpi, false);
+                cr->save();
+                cr->rectangle(name_x, rb.y, std::max(0.0, theme_x - 12 * dpi - name_x), rb.h);
+                cr->clip_path();
+                draw_text(cr, name_x, rb.y + rb.h * .5 - name_bounds.h * .5, o.name, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, .9});
+                cr->restore();
+            }
+        } else if (data->dropdown_kind == DropdownKind::Command) {
+            int icon_size = command_option_icon_size * dpi;
+            for (int i = first; i < count; i++) {
+                double y = list.y + data->dropdown_scroll + i * row_h;
+                if (y > list.y + list.h)
+                    break;
+                auto &o = data->command_options[i];
+                Bounds rb(list.x, y, list.w - (data->dropdown_overflow > 0 ? 10 * dpi : 0), row_h);
+                if (i == data->active_option && data->active_option_preferred) {
+                    set_argb(cr, c->state.mouse_pressing ? RGBA(.23, .6, 1, .3) : RGBA(.23, .6, 1, .16));
+                    rounded_rect_new(cr, 5 * dpi, rb.x, rb.y, rb.w, rb.h);
+                    cr->fill();
+                }
+
+                if (!o.attempted && icons_loaded) {
+                    o.attempted = true;
+                    auto path = resolve_application_icon(o.entry, icon_size);
+                    if (!path.empty())
+                        load_icon_full_path(&o.surface, path, icon_size);
+                }
+                double icon_x = std::round(rb.x + 8 * dpi);
+                double icon_y = std::round(rb.y + rb.h * .5 - icon_size * .5);
+                if (o.surface) {
+                    cr->set_source_surface(o.surface, icon_x, icon_y);
+                    cr->paint_source();
+                }
+
+                double text_x = icon_x + icon_size + 10 * dpi;
+                double text_w = std::max(0.0, rb.x + rb.w - 10 * dpi - text_x);
+                auto name_bounds = draw_text(cr, 0, 0, o.name, 12 * dpi, false);
+                auto path_bounds = draw_text(cr, 0, 0, o.full_path, 10 * dpi, false);
+                double total_h = name_bounds.h + path_bounds.h;
+                double text_y = rb.y + (rb.h - total_h) * .5;
+                cr->save();
+                cr->rectangle(text_x, rb.y, text_w, rb.h);
+                cr->clip_path();
+                draw_text(cr, text_x, text_y, o.name, 12 * dpi, true, set->font, -1, -1, {0, 0, 0, .9});
+                draw_text(cr, text_x, text_y + name_bounds.h, o.full_path, 10 * dpi, true, set->font, -1, -1, {0, 0, 0, .5});
+                cr->restore();
+            }
         }
         cr->restore();
 
@@ -648,8 +881,10 @@ static void make_icon_dropdown(Container *root) {
         auto data = (PinData *) root->user_data;
         auto dpi = pin_window(root)->dpi;
         double list_y = c->real_bounds.y + 4 * dpi;
-        int i = (int) std::floor((root->mouse_current_y - list_y - data->dropdown_scroll) / (icon_option_row_h * dpi));
-        return i >= 0 && i < (int) data->options.size() ? i : -1;
+        double row_h = dropdown_row_height(data, dpi);
+        int i = (int) std::floor((root->mouse_current_y - list_y - data->dropdown_scroll) / row_h);
+        int count = dropdown_option_count(data);
+        return i >= 0 && i < count ? i : -1;
     };
     // Hovering highlights a suggestion and previews it, like moving through them with the arrow keys.
     dropdown->when_mouse_motion = [option_under_mouse](Container *root, Container *c) {
@@ -686,8 +921,10 @@ static void make_icon_dropdown(Container *root) {
         windowing::redraw(pin_window(root));
     };
     // The scrollbar can be grabbed and dragged; pressing the track elsewhere jumps the thumb there.
-    auto give_keyboard_back = [](Container *root) {
-        if (auto field = container_by_name("icon_container", root)) {
+    auto give_keyboard_back = [](Container *root, DropdownKind kind) {
+        if (kind == DropdownKind::None)
+            return;
+        if (auto field = container_by_name(dropdown_field_name(kind), root)) {
             std::vector<Container *> coll = {field, field->parent};
             set_active(root, coll, root, true, false);
         }
@@ -724,7 +961,7 @@ static void make_icon_dropdown(Container *root) {
         if (!data->dragging_scrollbar)
             return;
         data->dragging_scrollbar = false;
-        give_keyboard_back(root);
+        give_keyboard_back(root, data->dropdown_kind);
         windowing::redraw(pin_window(root));
     };
     dropdown->when_drag_end = end_scrollbar_drag;
@@ -732,10 +969,11 @@ static void make_icon_dropdown(Container *root) {
     dropdown->when_clicked = [option_under_mouse, give_keyboard_back](Container *root, Container *c) {
         auto data = (PinData *) root->user_data;
         auto dpi = pin_window(root)->dpi;
+        DropdownKind kind = data->dropdown_kind;
         if (data->dragging_scrollbar || (data->dropdown_overflow > 0 &&
             bounds_contains(dropdown_scrollbar(data, c->real_bounds, dpi).track, root->mouse_initial_x, root->mouse_initial_y))) {
             data->dragging_scrollbar = false;
-            give_keyboard_back(root);
+            give_keyboard_back(root, kind);
             return;
         }
         int i = option_under_mouse(root, c);
@@ -744,34 +982,36 @@ static void make_icon_dropdown(Container *root) {
         data->active_option = i;
         data->active_option_preferred = true;
         apply_active_option(root);
-        give_keyboard_back(root);
+        give_keyboard_back(root, kind);
         windowing::redraw(pin_window(root));
     };
 }
 
-// Closes the drop-down once the icon field loses focus, unless focus went to the drop-down itself.
-static void icon_field_focus_changed(Container *root, Container *self) {
+// Closes the drop-down once its owning field loses focus, unless focus went to the drop-down itself.
+static void dropdown_field_focus_changed(Container *root, Container *) {
     auto data = (PinData *) root->user_data;
-    auto field = container_by_name("icon_container", root);
+    if (!dropdown_is_open(data))
+        return;
+    auto field = container_by_name(dropdown_field_name(data->dropdown_kind), root);
     if (!field || field->active || (field->parent && field->parent->active))
         return;
-    auto dropdown = container_by_name("icon_dropdown", root);
+    auto dropdown = container_by_name("suggestions_dropdown", root);
     if (dropdown && dropdown->exists && bounds_contains(dropdown->real_bounds, root->mouse_current_x, root->mouse_current_y))
         return;
-    close_icon_dropdown(data);
+    close_dropdown(data);
 }
 
 // Up/Down move through the suggestions, Return/Tab take the highlighted one, Escape closes the list.
-static void setup_icon_field_keys(Container *label) {
+static void setup_dropdown_field_keys(Container *label, DropdownKind kind) {
     auto edit_key = std::move(label->when_key_event);
-    label->when_key_event = [edit_key](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+    label->when_key_event = [edit_key, kind](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         auto data = (PinData *) root->user_data;
         bool focused = c->active || (c->parent && c->parent->active);
-        if (pressed && focused && data->dropdown_open) {
+        if (pressed && focused && data->dropdown_kind == kind) {
             auto dpi = pin_window(root)->dpi;
-            int max_option = (int) data->options.size() - 1;
+            int max_option = dropdown_option_count(data) - 1;
             if (sym == XKB_KEY_Escape) {
-                close_icon_dropdown(data);
+                close_dropdown(data);
                 data->swallow_escape = true;
                 return;
             } else if (sym == XKB_KEY_Up) {
@@ -798,16 +1038,24 @@ static void setup_icon_field_keys(Container *label) {
         if (edit_key)
             edit_key(root, c, key, pressed, sym, mods, is_text, text);
     };
-    label->when_active_status_changed = icon_field_focus_changed;
-    label->parent->when_active_status_changed = icon_field_focus_changed;
+    label->when_active_status_changed = dropdown_field_focus_changed;
+    label->parent->when_active_status_changed = dropdown_field_focus_changed;
 }
 
 static void fill_root(Container *window_root) {
+    {
+        auto data = (PinData *) window_root->user_data;
+        bool scan_in_progress = false;
+        data->cached_apps = get_application_entries(true, &scan_in_progress);
+        if (scan_in_progress)
+            watch_cached_apps(window_root);
+    }
+
     window_root->when_paint = paint_bg;
     window_root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         auto pin_data = (PinData *) root->user_data;
         if (sym == XKB_KEY_Escape && pin_data->swallow_escape) {
-            // Escape only closed the icon suggestions.
+            // Escape only closed the suggestions drop-down.
             if (pressed)
                 pin_data->swallow_escape = false;
             return;
@@ -836,29 +1084,30 @@ static void fill_root(Container *window_root) {
             windowing::close_window(mylar->window->raw_window);
         }
     };
-    // The window holds the form and, above it, the icon suggestions drop-down. The drop-down comes
+    // The window holds the form and, above it, the suggestions drop-down. The drop-down comes
     // first among the children so it is hit first, and its z_index paints it over the form.
     window_root->type = ::absolute;
-    make_icon_dropdown(window_root);
+    make_suggestions_dropdown(window_root);
     auto root = window_root->child(::vbox, FILL_SPACE, FILL_SPACE);
     root->name = "edit_pin_form";
     window_root->pre_layout = [](Container *window_root, Container *c, const Bounds &b) {
         auto data = (PinData *) window_root->user_data;
         auto dpi = pin_window(window_root)->dpi;
         auto form = container_by_name("edit_pin_form", window_root);
-        auto dropdown = container_by_name("icon_dropdown", window_root);
+        auto dropdown = container_by_name("suggestions_dropdown", window_root);
         ::layout(window_root, form, b);
 
-        auto field = container_by_name("icon_container", window_root);
-        dropdown->exists = data->dropdown_open && field;
+        auto field = dropdown_is_open(data) ? container_by_name(dropdown_field_name(data->dropdown_kind), window_root) : nullptr;
+        dropdown->exists = dropdown_is_open(data) && field;
         if (!dropdown->exists)
             return;
         auto anchor = field->parent->real_bounds;
         double pad = 4 * dpi;
         double y = anchor.y + anchor.h + 2 * dpi;
-        double content = data->options.size() * icon_option_row_h * dpi;
+        double row_h = dropdown_row_height(data, dpi);
+        double content = dropdown_option_count(data) * row_h;
         double max_h = std::min(300.0 * dpi, b.y + b.h - y - 10 * dpi);
-        double h = std::max(icon_option_row_h * dpi + pad * 2, std::min(content + pad * 2, max_h));
+        double h = std::max(row_h + pad * 2, std::min(content + pad * 2, max_h));
         data->dropdown_view_h = h - pad * 2;
         data->dropdown_overflow = (float) std::max(0.0, content - data->dropdown_view_h);
         data->dropdown_scroll = std::clamp(data->dropdown_scroll, -data->dropdown_overflow, 0.0f);
@@ -879,7 +1128,7 @@ static void fill_root(Container *window_root) {
                 rebuild_icon_options(window_root, text);
             });
         label->name = "icon_container";
-        setup_icon_field_keys(label);
+        setup_dropdown_field_keys(label, DropdownKind::Icon);
         activate_next_activatable(window_root, window_root);
     }
     {        
@@ -888,8 +1137,12 @@ static void fill_root(Container *window_root) {
     } 
     {
         auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
-        auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; });
+        auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; },
+            [window_root](std::string text) {
+                rebuild_command_options(window_root, text);
+            });
         label->name = "command_container";
+        setup_dropdown_field_keys(label, DropdownKind::Command);
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);

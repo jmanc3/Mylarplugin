@@ -258,10 +258,7 @@ static void scripts_load(std::vector<Script> &temp_scripts) {
                         Script entry;
                         auto *script = &entry;
                         script->name = name;
-                        script->lowercase_name = script->name;
-                        std::transform(script->lowercase_name.begin(),
-                                       script->lowercase_name.end(),
-                                       script->lowercase_name.begin(), ::tolower);
+                        script->lowercase_name = to_lower(script->name);
 
                         script->full_path = path;
                         script->full_path += "/" + name;
@@ -480,23 +477,65 @@ static bool starts_a_word(const std::string &words, const std::string &text) {
 }
 
 /*
- * How well an entry matches the search text: 0 exact name, 1 name prefix,
- * 2 a later word of the name, the generic name or a keyword, -1 not at all.
- * Executables are matched as typed, applications ignoring case.
+ * How well an entry matches the search text, lower is better (-1 = no match):
+ * 0 exact name (case-sensitive), 1 exact name (case-insensitive),
+ * 2 name prefix (case-sensitive), 3 name prefix (case-insensitive),
+ * 4 later word of name (case-sensitive, applications only),
+ * 5 later word of name, generic name or keyword (case-insensitive, applications only).
  */
-static int match_script(const Script &s, const std::string &text, const std::string &lowercase_text) {
-    if (!s.is_desktop)
-        return s.name == text ? 0 : s.name.starts_with(text) ? 1 : -1;
-    if (s.lowercase_name == lowercase_text)
+static int match_entry(const std::string &name,
+                       const std::string &lowercase_name,
+                       bool is_desktop,
+                       const std::string &generic_name,
+                       const std::vector<std::string> &keywords,
+                       const std::string &text,
+                       const std::string &lowercase_text) {
+    if (name == text)
         return 0;
-    if (s.lowercase_name.starts_with(lowercase_text))
+    if (lowercase_name == lowercase_text)
         return 1;
-    if (starts_a_word(s.lowercase_name, lowercase_text) || starts_a_word(s.generic_name, lowercase_text))
+    if (name.starts_with(text))
         return 2;
-    for (const auto &keyword : s.keywords)
+    if (lowercase_name.starts_with(lowercase_text))
+        return 3;
+    if (!is_desktop)
+        return -1;
+    if (starts_a_word(name, text))
+        return 4;
+    if (starts_a_word(lowercase_name, lowercase_text) || starts_a_word(generic_name, lowercase_text))
+        return 5;
+    for (const auto &keyword : keywords)
         if (keyword.starts_with(lowercase_text))
-            return 2;
+            return 5;
     return -1;
+}
+
+static int match_script(const Script &s, const std::string &text, const std::string &lowercase_text) {
+    return match_entry(s.name, s.lowercase_name, s.is_desktop, s.generic_name, s.keywords, text, lowercase_text);
+}
+
+int match_application(const ApplicationEntry &entry, const std::string &text, const std::string &lowercase_text) {
+    return match_entry(entry.name, entry.lowercase_name, entry.is_desktop, entry.generic_name, entry.keywords, text, lowercase_text);
+}
+
+std::string resolve_application_icon(const ApplicationEntry &entry, int icon_size) {
+    if (!icons_loaded)
+        return "";
+    if (entry.is_desktop) {
+        if (entry.icon.starts_with('/') && access(entry.icon.c_str(), R_OK) == 0)
+            return entry.icon;
+        std::vector<std::string> candidates;
+        auto stem = std::filesystem::path(entry.full_path).stem().string();
+        for (const auto &candidate : {entry.icon, to_lower(entry.icon), stem, to_lower(stem)})
+            if (!candidate.empty())
+                candidates.push_back(candidate);
+        candidates.push_back("application-x-executable");
+        return one_shot_icon(icon_size, candidates);
+    }
+    auto icon_name = c3ic_fix_wm_class(entry.name);
+    return one_shot_icon(icon_size, {
+        entry.name, to_lower(entry.name), icon_name, to_lower(icon_name), "application-x-executable"
+    });
 }
 
 static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
@@ -1092,10 +1131,10 @@ void fill_applications_container(Container *root) {
             s->selected = false;
             if (s->is_run_command) {
                 s->full_path = field_text;
-                s->match_level = field_text.find_first_not_of(' ') == std::string::npos ? -1 : 4;
+                s->match_level = field_text.find_first_not_of(' ') == std::string::npos ? -1 : 7;
             } else {
                 // Settings come after every application and executable.
-                s->match_level = s->is_setting ? 3 : match_script(*s, field_text, lowercase_text);
+                s->match_level = s->is_setting ? 6 : match_script(*s, field_text, lowercase_text);
             }
             ch->exists = s->match_level >= 0;
             if (ch->exists)
@@ -1337,4 +1376,37 @@ void preload_scripts() {
     std::lock_guard<std::mutex> lock(scripts_mutex);
     if (!scripts_refresh.valid())
         scripts_refresh = load_scripts_async();
+}
+
+std::vector<ApplicationEntry> get_application_entries(bool refresh, bool *scan_in_progress) {
+    std::vector<ApplicationEntry> out;
+    std::lock_guard<std::mutex> lock(scripts_mutex);
+    const bool refresh_ready = scripts_refresh.valid() &&
+        scripts_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    if (refresh_ready)
+        scripts = scripts_refresh.get();
+    if (!scripts_refresh.valid() || (refresh && refresh_ready))
+        scripts_refresh = load_scripts_async();
+    if (scan_in_progress) {
+        *scan_in_progress = scripts_refresh.valid() &&
+            scripts_refresh.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+    }
+    out.reserve(scripts.size());
+    for (const auto &s : scripts) {
+        if (s.is_setting || s.is_run_command || !s.builtin.empty())
+            continue;
+        if (s.other_desktop && set && !set->applications_show_other_desktops)
+            continue;
+        ApplicationEntry e;
+        e.name = s.name;
+        e.lowercase_name = s.lowercase_name;
+        e.generic_name = s.generic_name;
+        e.keywords = s.keywords;
+        e.full_path = s.full_path;
+        e.icon = s.icon;
+        e.is_desktop = s.is_desktop;
+        e.other_desktop = s.other_desktop;
+        out.push_back(std::move(e));
+    }
+    return out;
 }
