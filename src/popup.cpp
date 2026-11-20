@@ -4,13 +4,56 @@
 #include "icons.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <unordered_set>
 #include <linux/input-event-codes.h>
 
 namespace {
 
+struct PopOptionTextures {
+    float scale = -1.0f;
+    float max_w = -1.0f;
+    float max_h = -1.0f;
+
+    bool left_loaded = false;
+    TextureInfo left;
+
+    bool arrow_loaded = false;
+    TextureInfo arrow;
+
+    bool label_loaded = false;
+    TextureInfo label;
+
+    void clear() {
+        if (left.id != -1) {
+            free_text_texture(left.id);
+            left = {};
+        }
+        if (arrow.id != -1) {
+            free_text_texture(arrow.id);
+            arrow = {};
+        }
+        if (label.id != -1) {
+            free_text_texture(label.id);
+            label = {};
+        }
+        left_loaded = false;
+        arrow_loaded = false;
+        label_loaded = false;
+        scale = -1.0f;
+        max_w = -1.0f;
+        max_h = -1.0f;
+    }
+};
+
 struct PopOptionData : UserData {
     PopOption p;
+    std::unordered_map<int, PopOptionTextures> textures;
+
+    ~PopOptionData() override {
+        for (auto &[rid, tex] : textures)
+            tex.clear();
+    }
 };
 
 Container *find_popup(const std::string& uuid) {
@@ -290,6 +333,8 @@ void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_i
             if (!root)
                 return;
             auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+            auto *pdata = popup_data(c->parent);
+            if (!pdata || rid != pdata->mid) return;
             if (stage == paint_stage(c->parent)) {
                 renderfix
                 auto b = c->real_bounds;
@@ -309,10 +354,12 @@ void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_i
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        auto *pdata = popup_data(c->parent);
+        if (!pdata || rid != pdata->mid) return;
         if (stage == paint_stage(c->parent)) {
             renderfix
 
-            auto *child = popup_data(find_popup(popup_data(c->parent)->child_uuid));
+            auto *child = popup_data(find_popup(pdata->child_uuid));
             const bool expanded = child && !child->closing && child->owner_row_uuid == c->uuid;
             if (c->state.mouse_hovering || expanded) {
                 auto b = c->real_bounds;
@@ -330,41 +377,64 @@ void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_i
 
             if (!pop_option.has_attempted_loadin_icon) {
                 pop_option.has_attempted_loadin_icon = true;
-                if (!pop_option.icon_left.empty()) {
-                    if (pop_option.is_text_icon) {
-
-                    } else {
-                        auto icon = pop_option.icon_left;
-                        pop_option.icon_path= one_shot_icon(14 * s, {icon, to_lower(icon), c3ic_fix_wm_class(icon), to_lower(icon)});
-                    }
+                if (!pop_option.icon_left.empty() && !pop_option.is_text_icon) {
+                    auto icon = pop_option.icon_left;
+                    pop_option.icon_path = one_shot_icon(14 * s, {icon, to_lower(icon), c3ic_fix_wm_class(icon), to_lower(icon)});
                 }
             }
-            if (pop_option.checked) {
-                auto info = gen_text_texture(set->font, "✓", 14 * s, {0, 0, 0, 1});
-                draw_texture(info, c->real_bounds.x + 20 * s - info.w * .5, center_y(c, info.h));
-                free_text_texture(info.id);
-            } else if (pop_option.is_text_icon) {
-                auto info = gen_text_texture(icon_font, pop_option.icon_left, 14 * s, {0, 0, 0, 1});
-                draw_texture(info, c->real_bounds.x + (40 * s * .5) - info.w * .5, center_y(c, info.h));
-                free_text_texture(info.id);
-            } else if (!pop_option.icon_path.empty()) {
-                auto info = gen_texture(pop_option.icon_path, 18 * s);
-                draw_texture(info, c->real_bounds.x + (40 * s * .5) - info.w * .5, center_y(c, info.h));
-                free_text_texture(info.id);
+
+            auto& tex = popdata->textures[rid];
+            if (tex.scale != s) {
+                tex.clear();
+                tex.scale = s;
+            }
+
+            if (!tex.left_loaded) {
+                tex.left_loaded = true;
+                if (pop_option.checked) {
+                    tex.left = gen_text_texture(set->font, "✓", 14 * s, {0, 0, 0, 1});
+                } else if (pop_option.is_text_icon) {
+                    tex.left = gen_text_texture(icon_font, pop_option.icon_left, 14 * s, {0, 0, 0, 1});
+                } else if (!pop_option.icon_path.empty()) {
+                    tex.left = gen_texture(pop_option.icon_path, 18 * s);
+                }
+            }
+            if (tex.left.id != -1) {
+                if (pop_option.checked) {
+                    draw_texture(tex.left, c->real_bounds.x + 20 * s - tex.left.w * .5, center_y(c, tex.left.h));
+                } else {
+                    draw_texture(tex.left, c->real_bounds.x + (40 * s * .5) - tex.left.w * .5, center_y(c, tex.left.h));
+                }
             }
 
             if (!pop_option.submenu.empty()) {
-                auto arrow = gen_text_texture(set->font, "›", 18 * s, {0, 0, 0, 1});
-                draw_texture(arrow, c->real_bounds.right() - 16 * s - arrow.w * .5, center_y(c, arrow.h));
-                free_text_texture(arrow.id);
+                if (!tex.arrow_loaded) {
+                    tex.arrow_loaded = true;
+                    tex.arrow = gen_text_texture(set->font, "›", 18 * s, {0, 0, 0, 1});
+                }
+                if (tex.arrow.id != -1) {
+                    draw_texture(tex.arrow, c->real_bounds.right() - 16 * s - tex.arrow.w * .5, center_y(c, tex.arrow.h));
+                }
             }
+
             const bool has_icon = pop_option.checked || pop_option.is_text_icon || !pop_option.icon_path.empty();
             const float text_x = has_icon ? 40.0f : text_x_no_icon;
             const float right_pad = pop_option.submenu.empty() ? 16.0f : 32.0f;
-            auto info = gen_text_texture(set->font, pop_option.text, 14 * s, {0, 0, 0, 1},
-                                         c->real_bounds.w - (text_x + right_pad) * s, c->real_bounds.h);
-            draw_texture(info, c->real_bounds.x + text_x * s, center_y(c, info.h));
-            free_text_texture(info.id);
+            const float label_max_w = c->real_bounds.w - (text_x + right_pad) * s;
+            const float label_max_h = c->real_bounds.h;
+            if (!tex.label_loaded || tex.max_w != label_max_w || tex.max_h != label_max_h) {
+                if (tex.label.id != -1) {
+                    free_text_texture(tex.label.id);
+                    tex.label = {};
+                }
+                tex.label_loaded = true;
+                tex.max_w = label_max_w;
+                tex.max_h = label_max_h;
+                tex.label = gen_text_texture(set->font, pop_option.text, 14 * s, {0, 0, 0, 1}, label_max_w, label_max_h);
+            }
+            if (tex.label.id != -1) {
+                draw_texture(tex.label, c->real_bounds.x + text_x * s, center_y(c, tex.label.h));
+            }
         }
     };
     option->when_clicked = paint {
@@ -406,6 +476,7 @@ Container *build_tasks_menu(const std::string& tasks_title,
     auto p = create_menu_panel(popup::tasks_menu_height(tasks, options), x, y, mid, cid);
     if (!tasks.empty()) {
         auto header = p->child(FILL_SPACE, TASKS_HEADER_HEIGHT);
+        header->user_data = new PopOptionData;
         header->when_mouse_enters_container = paint {
             consume_event(root, c);
         };
@@ -414,12 +485,31 @@ Container *build_tasks_menu(const std::string& tasks_title,
             if (!root)
                 return;
             auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+            auto *pdata = popup_data(c->parent);
+            if (!pdata || rid != pdata->mid) return;
             if (stage == paint_stage(c->parent)) {
                 renderfix
-                auto info = gen_text_texture(set->font, tasks_title, 13 * s, {0, 0, 0, .58},
-                                             c->real_bounds.w - (TASKS_LEFT_PAD * 2) * s, c->real_bounds.h);
-                draw_texture(info, c->real_bounds.x + TASKS_LEFT_PAD * s, c->real_bounds.bottom() - info.h - 6 * s);
-                free_text_texture(info.id);
+                auto *header_data = (PopOptionData *)c->user_data;
+                auto &tex = header_data->textures[rid];
+                const float max_w = c->real_bounds.w - (TASKS_LEFT_PAD * 2) * s;
+                const float max_h = c->real_bounds.h;
+                if (tex.scale != s) {
+                    tex.clear();
+                    tex.scale = s;
+                }
+                if (!tex.label_loaded || tex.max_w != max_w || tex.max_h != max_h) {
+                    if (tex.label.id != -1) {
+                        free_text_texture(tex.label.id);
+                        tex.label = {};
+                    }
+                    tex.label_loaded = true;
+                    tex.max_w = max_w;
+                    tex.max_h = max_h;
+                    tex.label = gen_text_texture(set->font, tasks_title, 13 * s, {0, 0, 0, .58}, max_w, max_h);
+                }
+                if (tex.label.id != -1) {
+                    draw_texture(tex.label, c->real_bounds.x + TASKS_LEFT_PAD * s, c->real_bounds.bottom() - tex.label.h - 6 * s);
+                }
             }
         };
         for (const auto& task : tasks)
