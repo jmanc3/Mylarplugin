@@ -11,8 +11,10 @@
 #include "events.h"
 #include "hypriso.h"
 #include "icons.h"
+#include "screenshot.h"
 #include "smooth_scroll.h"
 
+#include <atomic>
 #include <cairo.h>
 #include <climits>
 #include <cmath>
@@ -58,6 +60,7 @@ struct CommandOption {
 struct PinData : UserData {
     RawApp *app = nullptr;
     MylarWindow *window = nullptr;
+    std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);
     std::string original_stacking_rule;
     
     std::string stacking_rule;
@@ -250,7 +253,8 @@ static Bounds draw_text(drawing::Context *cr, int x, int y, std::string text, in
     return Bounds(ink.width, ink.height, logical.width, logical.height);
 }
 
-static void button(Container *root, std::function<std::string()> get_text, std::function<void(Container *, Container *)> on_click) {
+static void button(Container *root, std::function<std::string()> get_text, std::function<void(Container *, Container *)> on_click,
+                   double corner_radius = 0, double horizontal_pad = 50) {
     int size = 12;
     
     auto child = root->child(FILL_SPACE, FILL_SPACE);
@@ -292,12 +296,16 @@ static void button(Container *root, std::function<std::string()> get_text, std::
             self->state.mouse_pressing = false;
     };
     child->name = child->uuid;
-    child->when_paint = [size, get_text](Container *root, Container *c) {
+    child->when_paint = [size, get_text, corner_radius](Container *root, Container *c) {
         auto mylar = (PinData*)root->user_data;
         auto cr = mylar->window->raw_window->drawing_context;
         auto dpi = mylar->window->raw_window->dpi;
  
-        set_rect(cr, c->real_bounds);
+        if (corner_radius > 0) {
+            rounded_rect_new(cr, corner_radius * dpi, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        } else {
+            set_rect(cr, c->real_bounds);
+        }
         if (c->state.mouse_pressing) {
             set_argb(cr, {.4, .4, .4, 1});
         } else if (c->state.mouse_hovering) {
@@ -310,7 +318,11 @@ static void button(Container *root, std::function<std::string()> get_text, std::
         if (c->active && c->viakey) {
             auto b = c->real_bounds;
             b.shrink(std::round(1 * dpi));
-            set_rect(cr, b);
+            if (corner_radius > 0) {
+                rounded_rect_new(cr, std::max(0.0, corner_radius * dpi - std::round(1 * dpi)), b.x, b.y, b.w, b.h);
+            } else {
+                set_rect(cr, b);
+            }
             set_argb(cr, {.4, .4, .4, 1});
             auto hehe = cr->get_line_width();
             cr->set_line_width(std::round(2 * dpi));
@@ -324,14 +336,14 @@ static void button(Container *root, std::function<std::string()> get_text, std::
             c->real_bounds.x + c->real_bounds.w * .5 - bounds.w * .5,
             c->real_bounds.y + c->real_bounds.h * .5 - bounds.h * .5, text, size * dpi, true, set->font, -1, -1, {0, 0, 0, 1});
     };
-    child->pre_layout = [size, get_text](Container* root, Container* c, const Bounds& b) {
+    child->pre_layout = [size, get_text, horizontal_pad](Container* root, Container* c, const Bounds& b) {
         auto mylar = (PinData*)root->user_data;
         auto cr = mylar->window->raw_window->drawing_context;
         auto dpi = mylar->window->raw_window->dpi;
         auto text = get_text();
 
         auto bounds = draw_text(cr, 0, 0, text, size * dpi, false);
-        c->wanted_bounds.w = bounds.w + 50 * dpi;
+        c->wanted_bounds.w = bounds.w + horizontal_pad * dpi;
     };
 };
 
@@ -1149,9 +1161,49 @@ static void fill_root(Container *window_root) {
         setup_label(window_root, label, true, false, [](Container* root, Container* c) { return "Stacking rule"; });
     }
     {
-        auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
+        auto row = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+        row->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dpi = static_cast<PinData *>(root->user_data)->window->raw_window->dpi;
+            auto label_parent = c->children[0];
+            label_parent->pre_layout(root, label_parent, b);
+            c->wanted_bounds.w = FILL_SPACE;
+            c->wanted_bounds.h = label_parent->wanted_bounds.h;
+            c->spacing = 8 * dpi;
+        };
+        auto label_parent = row->child(FILL_SPACE, FILL_SPACE);
         auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
         label->name = "stacking_rule_container";
+        button(row, []() { return "Click window"; }, [](Container *root, Container *c) {
+            auto data = static_cast<PinData *>(root->user_data);
+            auto app = data->app;
+            auto alive = data->alive;
+            main_thread([app, root, alive]() {
+                if (!*alive)
+                    return;
+                screenshot_tool::pick_window([app, root, alive](int cid) {
+                    if (!*alive)
+                        return;
+                    std::string cls = hypriso->class_name(cid);
+                    std::string rule = c3ic_fix_wm_class(cls);
+                    if (rule.empty())
+                        rule = cls;
+                    if (rule.empty())
+                        return;
+                    windowing::run_on_app(app, [root, alive, rule = std::move(rule)]() {
+                        if (!*alive)
+                            return;
+                        auto data = static_cast<PinData *>(root->user_data);
+                        {
+                            std::lock_guard<std::mutex> lock(data->app->mutex);
+                            if (auto field = container_by_name("stacking_rule_container", root))
+                                reset_text_editor(field, rule);
+                            data->stacking_rule = rule;
+                        }
+                        windowing::redraw(data->window->raw_window);
+                    });
+                });
+            });
+        }, 6, 28);
     }
 
     root->child(FILL_SPACE, FILL_SPACE);
@@ -1214,10 +1266,15 @@ static void start_edit_pin(std::string stacking_rule, std::string icon, std::str
     pin_data->window = mylar;
     pin_data->app = app;
     mylar->root->user_data = pin_data;
+    auto alive = pin_data->alive;
+    mylar->root->on_closed = [alive](Container *) {
+        *alive = false;
+    };
     
     fill_root(mylar->root);
     
     windowing::main_loop(app);
+    *alive = false;
     
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();

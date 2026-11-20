@@ -1950,7 +1950,7 @@ static CombinedDesktopGesture minimize_overview_combined_gesture() {
 
     // Both starting directions share ownership, progress, and release handling.
     return {[activate](bool horizontal) {
-        gesture_blocked = screenshot_tool::is_open();
+        gesture_blocked = screenshot_tool::is_open() && !screenshot_tool::is_picking_window();
         if (gesture_blocked)
             return;
         // A closing view is returning to normal; let the new swipe choose its view.
@@ -2331,7 +2331,7 @@ void do_snap(SnapPosition pos) {
 
 void add_hyprctl_dispatchers() {
     hypriso->add_hyprctl_dispatcher("overview_open_or_show_desktop", [](lua_State *) {
-        if (screenshot_tool::is_open())
+        if (screenshot_tool::is_open() && !screenshot_tool::is_picking_window())
             return 0;
         if (!overview::is_showing())
             overview::open(hypriso->monitor_from_cursor()); 
@@ -2347,7 +2347,7 @@ void add_hyprctl_dispatchers() {
         return 0; 
     }); 
     hypriso->add_hyprctl_dispatcher("overview_close_or_hide_desktop", [](lua_State *) {
-        if (screenshot_tool::is_open())
+        if (screenshot_tool::is_open() && !screenshot_tool::is_picking_window())
             return 0;
         if (overview::is_showing()) {
             overview::close(); 

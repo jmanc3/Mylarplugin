@@ -89,7 +89,7 @@ bool any_fullscreen(int monitor) {
 }
 
 void monitor_hotspot(Container *m, int x, int y, int monitor_id) {
-    if (drag::dragging() || resizing::resizing() || overview::is_showing() || screenshot_tool::is_open() || any_fullscreen(monitor_id))
+    if (drag::dragging() || resizing::resizing() || overview::is_showing() || (screenshot_tool::is_open() && !screenshot_tool::is_picking_window()) || any_fullscreen(monitor_id))
         return;
     auto current = get_current_time_in_ms();
     auto drag_end_time = *datum<long>(actual_root, "drag_end_time");

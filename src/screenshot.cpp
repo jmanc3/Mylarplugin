@@ -15,6 +15,8 @@
 static bool showing = true;
 static int mode = 0; // 1 rectangle, 2 window, 3 colorpick, 4 draw
 static unsigned int open_generation = 0;
+static std::function<void(int)> window_pick_callback;
+static bool suspended_for_overview = false;
 static constexpr float DRAW_BRUSH_MIN = 2.0f;
 static constexpr float DRAW_BRUSH_MAX = 40.0f;
 static constexpr float DRAW_BRUSH_DEFAULT = 5.0f;
@@ -586,6 +588,18 @@ void actual_open_screenshot_tool() {
     //label(type, "\uF408", "Freeform");
     
     tool->pre_layout = [](Container *actual_root, Container *c, const Bounds &b) {
+        const bool suspend = mode == 2 && overview::is_showing();
+        c->exists = !suspend;
+        if (suspend != suspended_for_overview) {
+            suspended_for_overview = suspend;
+            if (suspend)
+                unsetCursorImage();
+            else
+                setCursorImageUntilUnset("crosshair");
+        }
+        if (suspend)
+            return;
+
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -916,7 +930,19 @@ void actual_open_screenshot_tool() {
             return;
         }
         if (mode == 2) {
+            if (overview::is_showing())
+                return;
             auto cid = hypriso->window_from_mouse();
+            if (window_pick_callback) {
+                auto cb = std::move(window_pick_callback);
+                window_pick_callback = nullptr;
+                if (cid != -1)
+                    cb(cid);
+                later_immediate([](Timer *) {
+                    screenshot_tool::close();
+                });
+                return;
+            }
             if (cid != -1) {
                 hypriso->bring_to_front(cid);
                 later_immediate([cid](Timer *) {
@@ -1009,6 +1035,21 @@ void actual_open_screenshot_tool() {
     };
     
     tool->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
+        if (mode == 2) {
+            if (key == KEY_ESC) {
+                actual_root->consumed_event = true;
+                if (!pressed) {
+                    if (overview::is_showing()) {
+                        overview::close();
+                    } else {
+                        later_immediate([](Timer *) {
+                            screenshot_tool::close();
+                        });
+                    }
+                }
+            }
+            return;
+        }
         actual_root->consumed_event = true;
         
         if (key == KEY_ESC && !pressed) {
@@ -1024,7 +1065,7 @@ void actual_open_screenshot_tool() {
                 });
             }
         }
-        if (pressed && key == KEY_C && heart::ctrl_pressed()) {
+        if (!window_pick_callback && pressed && key == KEY_C && heart::ctrl_pressed()) {
             copy_screenshot_to_clipboard(mode == 1 && rect_showing, rect_selection);
             later_immediate([](Timer *) {
                 screenshot_tool::close();
@@ -1101,8 +1142,30 @@ void screenshot_tool::open(bool draw) {
     });
 }
 
+void screenshot_tool::pick_window(std::function<void(int)> on_picked) {
+    screenshot_tool::close();
+    if (overview::is_showing())
+        overview::instant_close();
+    if (show_desktop::is_opened())
+        show_desktop::stop();
+    if (snap_assist::is_showing())
+        snap_assist::instant_close();
+    window_pick_callback = std::move(on_picked);
+    suspended_for_overview = false;
+    showing = false;
+    mode = 2;
+    hypriso->render_whitelist.clear();
+    hypriso->whitelist_on = false;
+    actual_open_screenshot_tool();
+    set_input_takeover("screenshot", true);
+    setCursorImageUntilUnset("crosshair");
+    damage_all();
+}
+
 void screenshot_tool::close() {
     open_generation++;
+    window_pick_callback = nullptr;
+    suspended_for_overview = false;
     if (!overview::is_showing() && !show_desktop::is_opened() && !snap_assist::is_showing())
         hypriso->whitelist_on = false;
     set_cursor_hidden_for_screenshot_draw(false);
@@ -1134,4 +1197,8 @@ bool screenshot_tool::is_drawing() {
         return false;
 
     return screenshot_tool::is_open();
+}
+
+bool screenshot_tool::is_picking_window() {
+    return mode == 2 && screenshot_tool::is_open();
 }

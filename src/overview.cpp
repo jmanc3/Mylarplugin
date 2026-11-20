@@ -1129,7 +1129,7 @@ void overview_actual_close() {
         // A workspace swipe can finish on the same event that closes overview.
         // Settle both incoming and outgoing workspaces before revealing live windows.
         hypriso->finish_workspace_animations();
-        if (!screenshot_tool::is_open())
+        if (!screenshot_tool::is_open() || screenshot_tool::is_picking_window())
             hypriso->whitelist_on = false;
         hypriso->input_bypass_whitelist = false;
         hypriso->simulateMouseMovement();
