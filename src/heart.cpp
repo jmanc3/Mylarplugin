@@ -2499,6 +2499,7 @@ void on_requests_max_or_min(int cid, int wants) {
 
 void on_title_change(int cid) {
     dock::title_change(cid, hypriso->title_name(cid));
+    damage_all();
 }
 
 void on_workspace_change(int cid) {
