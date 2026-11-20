@@ -89,6 +89,12 @@ struct MylarMonitor {
     bool operator==(const MylarMonitor&) const = default;
 };
 
+// Outputs of Hyprland running nested in another compositor (wayland or x11
+// backend). Their number suffix changes between runs.
+inline bool is_nested_output(const std::string &name) {
+    return name.starts_with("WAYLAND-") || name.starts_with("X11-");
+}
+
 struct SWorkspaceTiling {
     // Hyprland config selector, never the plugin's session-local unique_id.
     std::string workspace;

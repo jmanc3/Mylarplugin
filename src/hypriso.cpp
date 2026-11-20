@@ -1344,6 +1344,10 @@ typedef float (*origDefaultScale)(void*);
 float hook_onDefaultScale(void* thisptr) {
     const auto original = (*(origDefaultScale)g_pOnDefaultScale->m_original)(thisptr);
     const auto monitor  = (Monitor::CMonitor*)thisptr;
+    // A nested session's output reports no physical size, so Hyprland's PPI
+    // guess comes out infinite and picks 2x. Auto means 1x in a nested window.
+    if (is_nested_output(monitor->m_name))
+        return 1.0f;
     const double shorter = std::min(monitor->m_pixelSize.x, monitor->m_pixelSize.y);
     if (shorter <= 0 || shorter >= 1080)
         return original;
@@ -3750,11 +3754,28 @@ hl.config({ input = { float_switch_override_focus = false } })
     base += "hl.config({ general = { gaps_in = " + std::to_string(window_gap)
         + ", gaps_out = " + std::to_string(window_gap) + " } })\n\n";
 
+    // A nested session's output is named WAYLAND-<n> (or X11-<n>) and <n>
+    // isn't stable between runs, so a rule saved for WAYLAND-1 would miss
+    // WAYLAND-2 and fall back to auto. The latest saved nested config is
+    // written for every likely name so the chosen scale always sticks.
+    const MylarMonitor *nested = nullptr;
+    for (const auto& hm : set->monitors)
+        if (is_nested_output(hm.output))
+            nested = &hm;
     for (const auto& hm : set->monitors) {
-        if (hm.output.empty())
+        if (hm.output.empty() || is_nested_output(hm.output))
             continue;
         base += monitor_lua(hm);
         base += "\n";
+    }
+    if (nested) {
+        const std::string prefix = nested->output.substr(0, nested->output.find('-') + 1);
+        for (int i = 1; i <= 9; i++) {
+            MylarMonitor copy = *nested;
+            copy.output       = prefix + std::to_string(i);
+            base += monitor_lua(copy);
+            base += "\n";
+        }
     }
 
     // Mice use the global sensitivity. Touchpads get their own speed and

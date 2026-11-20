@@ -3002,6 +3002,10 @@ static void commit_monitor_configs(std::vector<MylarMonitor> configs) {
 
         settings::display_change_begin();
         for (const auto& config : configs) {
+            // Only one nested config is kept (its output name isn't stable),
+            // so the latest one always wins.
+            if (is_nested_output(config.output))
+                std::erase_if(set->monitors, [&config](const MylarMonitor& m) { return is_nested_output(m.output) && m.output != config.output; });
             auto existing = find(config);
             if (existing != set->monitors.end())
                 *existing = config;
