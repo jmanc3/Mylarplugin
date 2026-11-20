@@ -16,6 +16,7 @@
 #include "dock/dock_bluetooth.h"
 #include "dock/dock_brightness.h"
 #include "dock/dock_battery.h"
+#include "dock/dock_extra.h"
 #include "audio.h"
 #include "events.h"
 #include "datetime.h"
@@ -4423,6 +4424,20 @@ static void make_wallpaper_row(Container *padded_right) {
     make_slider(padded_right, "Brightness", "Screen backlight level", std::clamp(brightness_level / 100.0f, 0.0f, 1.0f), [](float value) {
         set_brightness(std::round(value * 100.0f));
     }, 0, "\uE706");
+
+    make_bool(padded_right, "Night light", "Warmer colors that cut down on blue light", nightlight_on, [](bool value) {
+        if (value != nightlight_on)
+            toggle_nightlight();
+    }, "\uE708");
+
+    auto nightlight_slider_value = [](int kelvin) {
+        return std::clamp((float) (nightlight_max_kelvin - kelvin) / (nightlight_max_kelvin - nightlight_min_kelvin), 0.0f, 1.0f);
+    };
+    make_slider(padded_right, "Night light temperature", "Higher values make the screen warmer",
+        nightlight_slider_value(nightlight_temperature()),
+        [](float value) {
+            set_nightlight_temperature(nightlight_max_kelvin - std::clamp(value, 0.0f, 1.0f) * (nightlight_max_kelvin - nightlight_min_kelvin));
+        }, 0, "\uE790", nightlight_slider_value(ConfigSettings().nightlight_temperature));
 }
 
 static void fill_display_settings(Container *root) {
@@ -9864,6 +9879,8 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     search_add("Display", "Display Settings", "Span across monitors", "Stretch one image over every monitor using the shared wallpaper", "wallpaper background span stretch multiple monitors displays");
     search_add("Display", "Display Settings", "Wallpaper for", "Monitors can each have their own wallpaper", "wallpaper background per monitor display separate own");
     search_add("Display", "Display Settings", "Brightness", "Screen backlight level", "brightness backlight dim bright screen");
+    search_add("Display", "Display Settings", "Night light", "Warmer colors that cut down on blue light", "night light blue light warm yellow hyprsunset");
+    search_add("Display", "Display Settings", "Night light temperature", "Higher values make the screen warmer", "night light temperature kelvin warm yellow color tone hyprsunset");
     search_add("Display", "Display Settings", "Desktop Icons", "", "show icons files folders on desktop");
     search_add("Display", "Monitor", "Mode", "Resolution and refresh rate", "resolution refresh rate hz fps size");
     search_add("Display", "Monitor", "Scale", "Scale factor, or \"auto\"", "zoom size dpi hidpi fractional scaling bigger smaller");

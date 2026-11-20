@@ -91,11 +91,11 @@ void make_nightlight_slider(Container *parent, MylarWindow *(*get_window)(Dock *
             Container *root = c;
             while (root->parent) root = root->parent;
             amount = std::clamp(amount, 0.0f, 1.0f);
-            set_nightlight_temperature(nightlight_min_kelvin + amount * (nightlight_max_kelvin - nightlight_min_kelvin));
+            set_nightlight_temperature(nightlight_max_kelvin - amount * (nightlight_max_kelvin - nightlight_min_kelvin));
             windowing::redraw(get_window((Dock *) root->user_data)->raw_window);
         },
         [](Container *) {
-            return (float) (nightlight_temperature() - nightlight_min_kelvin) / (nightlight_max_kelvin - nightlight_min_kelvin);
+            return (float) (nightlight_max_kelvin - nightlight_temperature()) / (nightlight_max_kelvin - nightlight_min_kelvin);
         },
         get_window);
 }
