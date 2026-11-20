@@ -1,5 +1,7 @@
 #pragma once
 
+#include "desktop_icons.h"
+
 #include <string>
 #include <vector>
 
@@ -33,3 +35,7 @@ int match_application(const ApplicationEntry &entry, const std::string &text, co
 
 // Resolves the icon file path for an ApplicationEntry at `icon_size` pixels.
 std::string resolve_application_icon(const ApplicationEntry &entry, int icon_size);
+
+// Custom [Desktop Action ...] entries from the .desktop file whose
+// StartupWMClass matches `stacking_rule`.
+std::vector<desktop_file::Action> desktop_actions_for_wm_class(const std::string &stacking_rule);

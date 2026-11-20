@@ -50,6 +50,7 @@ struct Script : UserData {
     // full_path is the .desktop file, exec what it runs.
     bool is_desktop = false;
     std::string desktop_id;
+    std::string startup_wm_class;
     std::string exec;
     std::string icon;
     bool terminal = false;
@@ -419,6 +420,7 @@ static void desktop_entries_load(std::vector<Script> &entries, const std::string
                                        names_current_desktop(value("NotShowIn"));
             }
             script.desktop_id = id;
+            script.startup_wm_class = value("StartupWMClass");
             script.name = value("Name");
             if (script.name.empty())
                 script.name = path.stem().string();
@@ -1409,4 +1411,46 @@ std::vector<ApplicationEntry> get_application_entries(bool refresh, bool *scan_i
         out.push_back(std::move(e));
     }
     return out;
+}
+
+std::vector<desktop_file::Action> desktop_actions_for_wm_class(const std::string &stacking_rule) {
+    if (stacking_rule.empty())
+        return {};
+
+    std::vector<std::pair<std::string, int>> candidates;
+    {
+        std::lock_guard<std::mutex> lock(scripts_mutex);
+        if (!scripts_refresh.valid())
+            scripts_refresh = load_scripts_async();
+        if (scripts_refresh.valid() &&
+            (scripts.empty() || scripts_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready)) {
+            scripts = scripts_refresh.get();
+        }
+        const std::string lower_rule = to_lower(stacking_rule);
+        const std::string fixed_lower_rule = to_lower(c3ic_fix_wm_class(stacking_rule));
+        for (const auto &s : scripts) {
+            if (!s.is_desktop || !s.builtin.empty() || s.startup_wm_class.empty())
+                continue;
+            int rank = -1;
+            if (s.startup_wm_class == stacking_rule) {
+                rank = 0;
+            } else if (to_lower(s.startup_wm_class) == lower_rule) {
+                rank = 1;
+            } else if (to_lower(c3ic_fix_wm_class(s.startup_wm_class)) == fixed_lower_rule) {
+                rank = 2;
+            }
+            if (rank != -1)
+                candidates.emplace_back(s.full_path, rank);
+        }
+    }
+
+    std::stable_sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b) {
+        return a.second < b.second;
+    });
+    for (const auto &[path, rank] : candidates) {
+        auto actions = desktop_file::read_actions(path);
+        if (!actions.empty())
+            return actions;
+    }
+    return {};
 }

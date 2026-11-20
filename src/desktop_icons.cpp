@@ -247,6 +247,89 @@ std::unordered_map<std::string, std::string> desktop_file::read_entry(const std:
     return entry;
 }
 
+std::vector<desktop_file::Action> desktop_file::read_actions(const std::filesystem::path& path) {
+    std::vector<Action> result;
+    std::ifstream file(path);
+    if (!file)
+        return result;
+
+    std::string actions_list;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> action_groups;
+
+    static constexpr std::string_view kActionPrefix = "[Desktop Action ";
+    bool in_desktop_entry = false;
+    std::string current_action_id;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty() || line[0] == '#')
+            continue;
+        if (line.starts_with('[') && line.ends_with(']')) {
+            in_desktop_entry = (line == "[Desktop Entry]");
+            if (line.starts_with(kActionPrefix) && line.size() > kActionPrefix.size() + 1)
+                current_action_id = line.substr(kActionPrefix.size(), line.size() - kActionPrefix.size() - 1);
+            else
+                current_action_id.clear();
+            continue;
+        }
+        if (!in_desktop_entry && current_action_id.empty())
+            continue;
+
+        const auto separator = line.find('=');
+        if (separator == std::string::npos)
+            continue;
+
+        auto key = trim_copy(line.substr(0, separator));
+        if (key.empty())
+            continue;
+        auto value = trim_copy(line.substr(separator + 1));
+
+        if (in_desktop_entry) {
+            if (key == "Actions")
+                actions_list = std::move(value);
+        } else {
+            action_groups[current_action_id][std::move(key)] = std::move(value);
+        }
+    }
+
+    if (actions_list.empty())
+        return result;
+
+    size_t start = 0;
+    while (start < actions_list.size()) {
+        size_t end = actions_list.find(';', start);
+        if (end == std::string::npos)
+            end = actions_list.size();
+        auto id = trim_copy(actions_list.substr(start, end - start));
+        start = end + 1;
+        if (id.empty())
+            continue;
+
+        auto group_it = action_groups.find(id);
+        if (group_it == action_groups.end())
+            continue;
+        const auto& group = group_it->second;
+        auto name_it = group.find("Name");
+        auto exec_it = group.find("Exec");
+        if (name_it == group.end() || name_it->second.empty() || exec_it == group.end())
+            continue;
+        auto exec = remove_desktop_exec_field_codes(exec_it->second);
+        if (exec.empty())
+            continue;
+
+        Action action;
+        action.name = name_it->second;
+        action.exec = std::move(exec);
+        if (auto icon_it = group.find("Icon"); icon_it != group.end())
+            action.icon = icon_it->second;
+        result.push_back(std::move(action));
+    }
+
+    return result;
+}
+
 static void read_desktop_file(DesktopItem& item, const std::filesystem::path& path) {
     auto entry = desktop_file::read_entry(path);
     if (auto it = entry.find("Name"); it != entry.end())

@@ -1102,6 +1102,16 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             };
             root.push_back(pop);
         }
+        for (const auto &action : desktop_actions_for_wm_class(stacking_rule)) {
+            PopOption pop;
+            pop.text = action.name;
+            pop.icon_left = action.icon;
+            auto exec = action.exec;
+            pop.on_clicked = [exec]() {
+                launch_command(exec);
+            };
+            root.push_back(pop);
+        }
         if (pin->pinned) {
             PopOption pop;
             pop.text = "Edit pin";
