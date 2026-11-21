@@ -1525,6 +1525,7 @@ static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved re
             wall_slot_clear(wall_slot(c, *wall1_active));
         }
         damage_all();
+        overview::on_wallpaper_changed(id);
         return;
     }
 
@@ -1586,6 +1587,7 @@ static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved re
                 *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
             }
             damage_all();
+            overview::on_wallpaper_changed(id);
         });
         if (disk_copy) {
             wall_write_disk_cache(m.name, key, disk_copy);
@@ -1634,6 +1636,7 @@ static void wall_load_source(int id, bool first_slot, WallSlot *slot) {
                 free_text_texture(slot->source.id);
             slot->source = info;
             damage_all();
+            overview::on_wallpaper_changed(id);
         });
     }).detach();
 }
@@ -1672,6 +1675,7 @@ static void wall_make_cache(int id, bool first_slot, std::string key, WallResolv
             slot->cache = info;
             slot->cache_key = key;
             damage_all();
+            overview::on_wallpaper_changed(id);
         });
         if (disk_copy) {
             wall_write_disk_cache(m.name, key, disk_copy);
@@ -1763,8 +1767,10 @@ static void wall_refresh_monitor(Container *c) {
 
 void wallpaper_settings_changed() {
     publish_wall_monitors();
-    for (auto c : actual_monitors)
+    for (auto c : actual_monitors) {
         wall_refresh_monitor(c);
+        overview::on_wallpaper_changed(*datum<int>(c, "cid"));
+    }
     damage_all();
     settings::preload_wallpapers();
 }
@@ -1776,10 +1782,10 @@ static void paint_wallpaper(int current_monitor, Container *m) {
     // {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.08437150831111269,"y":0.011981451924641935}]}
     static std::vector<float> curve = { 0.000, 0.139, 0.228, 0.298, 0.355, 0.404, 0.448, 0.486, 0.521, 0.553, 0.582, 0.609, 0.634, 0.657, 0.678, 0.698, 0.717, 0.735, 0.752, 0.767, 0.782, 0.796, 0.810, 0.822, 0.834, 0.845, 0.856, 0.866, 0.875, 0.884, 0.893, 0.901, 0.909, 0.916, 0.923, 0.929, 0.935, 0.941, 0.946, 0.951, 0.956, 0.961, 0.965, 0.969, 0.972, 0.976, 0.979, 0.982, 0.984, 0.987, 0.989, 0.991, 0.993, 0.994, 0.996, 0.997, 0.998, 0.999, 0.999, 1.000, 1.000 };
     auto scalar = pull(curve, initial_fade_in_scalar);
-    const double zoom = 1 + .4 * (1.0 - scalar);
+    const double zoom = hypriso->capturing_wallpaper() ? 1.0 : 1 + .4 * (1.0 - scalar);
     float trans = 700.0f;
 
-    if (delta < trans) {
+    if (delta < trans && !(hypriso->capturing_wallpaper() && !overview::is_showing())) {
         draw_wall_slot(current_monitor, m, !wall1_active, false, zoom, 1.0); // old base
         draw_wall_slot(current_monitor, m, wall1_active, true, zoom, delta / trans); // new fades in
         request_refresh();

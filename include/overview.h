@@ -7,6 +7,7 @@ namespace overview {
     void start_preloader();
     void on_window_open(int cid);
     void on_monitor_open(int mid);
+    void on_wallpaper_changed(int mid);
 
     void open(int monitor);
     void close(bool focus = true);

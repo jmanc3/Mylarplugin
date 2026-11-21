@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -44,6 +45,11 @@ constexpr float kMediaMinSize = 18;
 constexpr float kMediaMaxSize = 28;
 constexpr float kMediaGap = 4;
 constexpr int kMediaPollMs = 1000; // re-link audio streams/players while the preview is open
+// Timers use whole milliseconds: 42ms ~= 24 FPS for focused/below/hovered windows.
+constexpr long kFastCaptureMs = 42;
+constexpr long kMaxFastCaptureMs = 250;
+constexpr long kSlowCaptureMs = 400;
+constexpr long kMaxSlowCaptureMs = 2000;
 
 // Roles of the buttons inside a thumbnail (stored in datum "role").
 enum ButtonRole {
@@ -109,6 +115,11 @@ struct State {
 
     // Media controls per window id of the open preview.
     std::map<int, Media> media;
+
+    // Adaptive thumbnail capture state (matches overview/alt_tab/snap_assist).
+    std::map<int, long> window_captures;
+    double smoothed_capture_ms = 0.0;
+    size_t capture_cursor = 0;
 };
 
 State &state() {
@@ -176,25 +187,123 @@ void watch_rebuilt_preview(const std::string &source, int generation, const Boun
     });
 }
 
-// Newly opened windows can be captured before they have drawn their first
-// frame (the opening animation may still have size zero), which leaves the
-// thumbnail black. Re-capture shortly after building the preview so the new
-// window gets a real frame without waiting for the user to hover again.
-void refresh_preview_screenshots(Container *preview, int token, std::vector<int> ids, int attempt) {
-    static constexpr int delays[] = {120, 250, 500, 900, 1500};
-    constexpr int delay_count = sizeof(delays) / sizeof(delays[0]);
-    if (attempt >= delay_count)
-        return;
+// Captures live window thumbnails while the preview is open, using the same
+// adaptive timing as overview: the top two focused windows on each monitor's
+// active workspace and the hovered thumbnail refresh at ~24 FPS (42ms), while
+// other windows refresh at a slower rate when dirty or due for fallback.
+long capture_thumbnails(Container *preview) {
+    if (!preview || preview->children.empty())
+        return kFastCaptureMs;
 
-    later(delays[attempt], [preview, token, ids = std::move(ids), attempt](Timer *) {
-        auto &s = state();
-        if (!s.container || s.container != preview || s.refresh_token != token || !same_ids(s.ids, ids))
-            return;
-        for (int cid : ids)
-            hypriso->screenshot(cid);
-        damage_all();
-        refresh_preview_screenshots(preview, token, std::move(ids), attempt + 1);
-    });
+    auto &s = state();
+    const auto tick_start = std::chrono::steady_clock::now();
+    const auto now = get_current_time_in_ms();
+    const int monitor = *datum<int>(preview, "mid");
+
+    const double render_ms = hypriso->last_render_ms(monitor);
+    const double fps = std::max(1.0, (double) hypriso->fps(monitor));
+    const double frame_budget_ms = 1000.0 / fps;
+    const double load_ratio = (render_ms + s.smoothed_capture_ms) / std::max(1.0, frame_budget_ms);
+    const double load_scale = load_ratio <= 0.35 ? 1.0 : 1.0 + (load_ratio - 0.35) * 4.0;
+
+    const long effective_fast_ms = std::clamp<long>(std::lround(kFastCaptureMs * load_scale), kFastCaptureMs, kMaxFastCaptureMs);
+    const long effective_slow_ms = std::clamp<long>(std::lround(kSlowCaptureMs * load_scale), kSlowCaptureMs, kMaxSlowCaptureMs);
+    const double tick_budget_ms = std::clamp(frame_budget_ms * 0.35 - render_ms * 0.5, 1.5, 6.0);
+
+    // The compositor stack runs from bottom to top. Capture the focused window
+    // and the one directly below it on each monitor's active workspace at 24 FPS.
+    std::map<int, int> active_workspaces;
+    std::map<int, int> priority_counts;
+    std::vector<int> priority_windows;
+    for (auto m : actual_monitors) {
+        const int mid = *datum<int>(m, "cid");
+        active_workspaces[mid] = hypriso->get_active_workspace_id(mid);
+    }
+    const auto stacking = get_window_stacking_order();
+    for (auto it = stacking.rbegin(); it != stacking.rend(); ++it) {
+        const int mid = get_monitor(*it);
+        if (!active_workspaces.contains(mid) || priority_counts[mid] >= 2 || is_slept(*it) || !get_cid_container(*it))
+            continue;
+        if (hypriso->get_active_workspace_id_client(*it) != active_workspaces.at(mid))
+            continue;
+        priority_windows.push_back(*it);
+        priority_counts[mid]++;
+    }
+
+    struct CaptureCandidate {
+        int cid;
+        int tier; // 0 = missing thumbnail, 1 = hovered, 2 = priority, 3 = dirty/fallback
+        Bounds bounds;
+    };
+    std::vector<CaptureCandidate> candidates;
+    for (auto *thumb : preview->children) {
+        const int cid = *datum<int>(thumb, "cid");
+        if (!get_cid_container(cid))
+            continue;
+        const bool hovered = thumb->state.mouse_hovering ||
+            (s.dnd_hover_cid != -1 && s.dnd_hover_cid == cid) ||
+            std::any_of(thumb->children.begin(), thumb->children.end(), [](Container *sub) { return sub->state.mouse_hovering; });
+        const bool missing = !hypriso->has_thumbnail(cid);
+        const bool fast = hovered || std::find(priority_windows.begin(), priority_windows.end(), cid) != priority_windows.end();
+        const bool dirty = hypriso->is_thumb_dirty(cid);
+        auto prev = s.window_captures.find(cid);
+        const long last_cap = prev != s.window_captures.end() ? prev->second : 0;
+        const long elapsed = last_cap == 0 ? effective_slow_ms * 4 : now - last_cap;
+        if (!missing) {
+            const long min_interval = fast ? effective_fast_ms : effective_slow_ms;
+            if (elapsed < min_interval)
+                continue;
+            // Focused, one-below, and hovered windows always refresh at the fast
+            // 24 FPS rate so they appear real-time (including video subsurfaces).
+            // Background windows skip re-capture unless dirty or due for fallback.
+            if (!fast && !dirty && elapsed < effective_slow_ms * 3)
+                continue;
+        }
+        const int tier = missing ? 0 : (hovered ? 1 : (fast ? 2 : 3));
+        candidates.push_back({cid, tier, thumb->real_bounds});
+    }
+
+    if (!candidates.empty()) {
+        std::stable_sort(candidates.begin(), candidates.end(), [](const CaptureCandidate &a, const CaptureCandidate &b) {
+            return a.tier < b.tier;
+        });
+        // Rotate equal-priority non-missing candidates so budgeted ticks never starve a window.
+        size_t rot_start = 0;
+        while (rot_start < candidates.size() && candidates[rot_start].tier <= 1)
+            rot_start++;
+        if (candidates.size() - rot_start > 1) {
+            const size_t span = candidates.size() - rot_start;
+            const size_t shift = s.capture_cursor % span;
+            std::rotate(candidates.begin() + rot_start, candidates.begin() + rot_start + shift, candidates.end());
+        }
+    }
+
+    bool budget_exceeded = false;
+    size_t captured_count = 0;
+    for (const auto &cand : candidates) {
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+        if (cand.tier > 0 && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
+            budget_exceeded = true;
+            break;
+        }
+        hypriso->screenshot(cand.cid);
+        s.window_captures[cand.cid] = get_current_time_in_ms();
+        captured_count++;
+        if (cand.bounds.w > 0 && cand.bounds.h > 0) {
+            Bounds dmg = cand.bounds;
+            dmg.grow(4.0);
+            hypriso->damage_box(dmg);
+        }
+    }
+    if (captured_count > 0)
+        s.capture_cursor += captured_count;
+    std::erase_if(s.window_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
+
+    const double total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+    s.smoothed_capture_ms = s.smoothed_capture_ms * 0.75 + total_ms * 0.25;
+    if (budget_exceeded)
+        return std::min(effective_fast_ms, 50L);
+    return effective_fast_ms;
 }
 
 void destroy_now() {
@@ -210,6 +319,9 @@ void destroy_now() {
     s.source.clear();
     s.ids.clear();
     s.media.clear();
+    s.window_captures.clear();
+    s.smoothed_capture_ms = 0.0;
+    s.capture_cursor = 0;
     if (!s.container)
         return;
     auto *c = s.container;
@@ -835,6 +947,7 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
     // captured has no thumbnail geometry yet, and falling back to 16:9 would
     // stretch the resulting screenshot. The fresh capture also makes sure the
     // width can be squeezed to the screenshot's real aspect ratio.
+    const long initial_capture_time = get_current_time_in_ms();
     for (int cid : ids)
         hypriso->screenshot(cid);
 
@@ -1082,6 +1195,10 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
             s.pending_close = false;
             s.has_anchor = false;
             s.has_icon = false;
+            s.refresh_token++;
+            s.window_captures.clear();
+            s.smoothed_capture_ms = 0.0;
+            s.capture_cursor = 0;
         }
     };
 
@@ -1230,6 +1347,12 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
     s.has_icon = placement && placement->has_icon;
     const int token = ++s.refresh_token;
 
+    s.window_captures.clear();
+    for (int cid : ids)
+        s.window_captures[cid] = initial_capture_time;
+    s.smoothed_capture_ms = 0.0;
+    s.capture_cursor = 0;
+
     start_media_tracking();
     s.media = compute_media(ids);
     watch_media(preview, token);
@@ -1237,9 +1360,13 @@ void build_preview(const std::vector<int> &ids, const Placement *placement = nul
     preview->pre_layout(actual_root, preview, actual_root->real_bounds);
     damage_all();
 
-    // Capture again shortly after so windows that are still opening produce a
-    // real frame instead of a black thumbnail.
-    refresh_preview_screenshots(preview, token, ids, 0);
+    later(kFastCaptureMs, [preview, token](Timer *t) {
+        auto &s = state();
+        t->keep_running = s.container && s.container == preview && s.refresh_token == token;
+        if (!t->keep_running)
+            return;
+        t->delay = static_cast<float>(capture_thumbnails(preview));
+    });
 
     if (hypriso->dnd_active())
         watch_dnd_hover();

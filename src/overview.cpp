@@ -19,6 +19,7 @@
 #include <linux/input-event-codes.h>
 #include <map>
 #include <memory>
+#include <set>
 #include <utility>
 
 bool running = false;
@@ -50,6 +51,7 @@ static constexpr double initial_capture_budget_ms = 6.0;
 static constexpr double damage_pad_px = 4.0;
 static bool preloader_started = false;
 static std::map<int, long> preloaded_captures;
+static std::set<int> dirty_wallpapers;
 static size_t preload_cursor = 0;
 
 // All geometry below is in global logical coordinates. Only painting converts
@@ -1385,7 +1387,7 @@ static long screenshots(bool initial = false) {
 
     for (auto m : actual_monitors) {
         const int mid = *datum<int>(m, "cid");
-        const bool missing_wall = !hypriso->has_wallpaper_thumbnail(mid);
+        const bool missing_wall = !hypriso->has_wallpaper_thumbnail(mid) || dirty_wallpapers.contains(mid) || (initial && !set->draw_wallpaper);
         if (!missing_wall && (initial || busy_motion))
             continue;
         const auto previous = scene->wallpaper_captures.find(mid);
@@ -1397,6 +1399,8 @@ static long screenshots(bool initial = false) {
             break;
         }
         hypriso->screenshot_wallpaper(mid);
+        if (hypriso->has_wallpaper_thumbnail(mid))
+            dirty_wallpapers.erase(mid);
         scene->wallpaper_captures[mid] = get_current_time_in_ms();
         if (!initial)
             damage_monitor_wallpapers(mid);
@@ -1769,9 +1773,45 @@ void overview::on_window_open(int cid) {
 
 void overview::on_monitor_open(int mid) {
     later(250, [mid](Timer *) {
-        if (running || hypriso->has_wallpaper_thumbnail(mid))
+        if (running || (hypriso->has_wallpaper_thumbnail(mid) && !dirty_wallpapers.contains(mid)))
             return;
         hypriso->screenshot_wallpaper(mid);
+        if (hypriso->has_wallpaper_thumbnail(mid))
+            dirty_wallpapers.erase(mid);
+    });
+}
+
+void overview::on_wallpaper_changed(int mid) {
+    dirty_wallpapers.insert(mid);
+    later_immediate([mid](Timer *) {
+        if (!dirty_wallpapers.contains(mid))
+            return;
+        bool monitor_exists = false;
+        for (auto m : actual_monitors) {
+            if (*datum<int>(m, "cid") == mid) {
+                monitor_exists = true;
+                break;
+            }
+        }
+        if (!monitor_exists) {
+            dirty_wallpapers.erase(mid);
+            return;
+        }
+        if (running) {
+            if (!initialized || !scene)
+                return;
+            hypriso->screenshot_wallpaper(mid);
+            if (hypriso->has_wallpaper_thumbnail(mid))
+                dirty_wallpapers.erase(mid);
+            scene->wallpaper_captures[mid] = get_current_time_in_ms();
+            damage_monitor_wallpapers(mid);
+            return;
+        }
+        if (show_desktop::is_opened() || drag::dragging() || screenshot_tool::is_open())
+            return;
+        hypriso->screenshot_wallpaper(mid);
+        if (hypriso->has_wallpaper_thumbnail(mid))
+            dirty_wallpapers.erase(mid);
     });
 }
 
@@ -1786,11 +1826,13 @@ void overview::start_preloader() {
 
         std::erase_if(preloaded_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
 
-        // Preload at most one missing monitor wallpaper per tick.
+        // Preload at most one missing or stale monitor wallpaper per tick.
         for (auto m : actual_monitors) {
             const int mid = *datum<int>(m, "cid");
-            if (!hypriso->has_wallpaper_thumbnail(mid)) {
+            if (!hypriso->has_wallpaper_thumbnail(mid) || dirty_wallpapers.contains(mid)) {
                 hypriso->screenshot_wallpaper(mid);
+                if (hypriso->has_wallpaper_thumbnail(mid))
+                    dirty_wallpapers.erase(mid);
                 break;
             }
         }
