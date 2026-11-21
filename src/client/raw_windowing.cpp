@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <ctype.h>
 #include <sys/timerfd.h>
@@ -37,6 +38,7 @@
 #include <wayland-client.h>
 #include <cairo/cairo.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <cerrno>
@@ -736,7 +738,13 @@ void on_window_render(wl_window *win) {
     wl_callback_add_listener(win->frame_callback, &surface_frame_listener, win);
     drawing::Context *context = nullptr;
     if (win->gpu) {
-        win->gpu->begin_frame();
+        try {
+            win->gpu->begin_frame();
+        } catch (const std::exception &error) {
+            if (win->ctx && win->ctx->running)
+                fprintf(stderr, "OpenGL begin_frame failed: %s\n", error.what());
+            return;
+        }
         context = win->gpu->context();
     } else {
         context = slot->cr.get();
@@ -2663,7 +2671,8 @@ void windowing::main_loop(RawApp *app) {
                 break;
             }
         }
-        ctx->running = any_keepers;
+        if (!any_keepers)
+            ctx->running = false;
     }
 
     // 4. Cleanup
@@ -3353,6 +3362,11 @@ void windowing::close_app(RawApp *app) {
         std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
         ctx->running = false;
     }
+    // Unblock an in-process client thread waiting on the Wayland socket (e.g.
+    // inside Mesa's eglSwapBuffers / eglMakeCurrent) while the compositor main
+    // thread is joining it during plugin unload.
+    if (ctx->display)
+        shutdown(wl_display_get_fd(ctx->display), SHUT_RDWR);
     write(ctx->wake_pipe[1], "x", 1);
 }
 

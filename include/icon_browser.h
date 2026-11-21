@@ -6,6 +6,7 @@
 // search text, every theme's version of each matching icon.
 namespace icon_browser {
     void open();
+    void stop();
 };
 
 #endif // icon_browser_h_INCLUDED

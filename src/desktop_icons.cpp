@@ -1581,6 +1581,8 @@ static void place_new_desktop_entries_near(const std::vector<std::filesystem::pa
     request_refresh();
 }
 
+static void spawn_desktop_icons_worker(std::function<void()> fn);
+
 static void perform_desktop_drop(std::vector<std::string> source_paths,
                                  DesktopDropAction action,
                                  float drop_x,
@@ -1598,7 +1600,7 @@ static void perform_desktop_drop(std::vector<std::string> source_paths,
         return;
     }
 
-    std::thread([source_paths = std::move(source_paths), dest_dir, action, drop_x, drop_y]() {
+    spawn_desktop_icons_worker([source_paths = std::move(source_paths), dest_dir, action, drop_x, drop_y]() {
         std::vector<std::filesystem::path> created;
         std::vector<std::string> errors;
 
@@ -1677,7 +1679,49 @@ static void perform_desktop_drop(std::vector<std::string> source_paths,
             if (!errors.empty())
                 notify(errors.front());
         });
-    }).detach();
+    });
+}
+
+struct DesktopIconsWorker {
+    std::atomic<bool> done = false;
+    std::thread thread;
+};
+
+static std::atomic<bool> desktop_icons_workers_stopping = false;
+static std::mutex desktop_icons_workers_mutex;
+static std::vector<std::shared_ptr<DesktopIconsWorker>> desktop_icons_workers;
+
+static void spawn_desktop_icons_worker(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lock(desktop_icons_workers_mutex);
+    for (int i = (int) desktop_icons_workers.size() - 1; i >= 0; i--) {
+        if (desktop_icons_workers[i]->done.load()) {
+            if (desktop_icons_workers[i]->thread.joinable())
+                desktop_icons_workers[i]->thread.join();
+            desktop_icons_workers.erase(desktop_icons_workers.begin() + i);
+        }
+    }
+    if (desktop_icons_workers_stopping.load())
+        return;
+    auto worker = std::make_shared<DesktopIconsWorker>();
+    worker->thread = std::thread([worker, fn = std::move(fn)]() {
+        fn();
+        worker->done = true;
+    });
+    desktop_icons_workers.push_back(std::move(worker));
+}
+
+static void stop_desktop_icons_workers() {
+    std::vector<std::shared_ptr<DesktopIconsWorker>> workers;
+    {
+        std::lock_guard<std::mutex> lock(desktop_icons_workers_mutex);
+        desktop_icons_workers_stopping = true;
+        workers.swap(desktop_icons_workers);
+    }
+    for (auto &worker : workers) {
+        if (worker->thread.joinable())
+            worker->thread.join();
+    }
+    desktop_icons_workers_stopping = false;
 }
 
 static bool is_image_file(const std::string& path) {
@@ -1762,13 +1806,13 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
         wallpaper.on_clicked = [image_path, drop_x, drop_y]() {
             wallpaper_working_indicator_start();
             const std::string target = wallpaper_target_for_drop(drop_x, drop_y);
-            std::thread([image_path, target]() {
+            spawn_desktop_icons_worker([image_path, target]() {
                 if (!settings::set_wallpaper_from_file(image_path, target)) {
                     main_thread([]() {
                         notify("Unable to set wallpaper.");
                     });
                 }
-            }).detach();
+            });
         };
         options.push_back(wallpaper);
     }
@@ -1989,6 +2033,7 @@ void desktop_icons::stop() {
     damage_all();
     if (latest_desktop_watch != -1)
         remove_watch(latest_desktop_watch);
+    stop_desktop_icons_workers();
 }
 
 void desktop_icons::deselect() {

@@ -203,47 +203,105 @@ static Bounds text(drawing::Context *cr, double x, double y, const std::string &
     return Bounds(0, 0, logical.width, logical.height);
 }
 
+struct BrowserSession {
+    std::mutex mutex;
+    RawApp *app = nullptr;
+    bool close_requested = false;
+    std::atomic<bool> exited = false;
+    std::thread thread;
+};
+
+struct WorkerThread {
+    std::atomic<bool> done = false;
+    std::thread thread;
+};
+
+static std::atomic<bool> browser_stopping = false;
+static std::mutex sessions_mutex;
+static std::vector<std::shared_ptr<BrowserSession>> browser_sessions;
+static std::vector<std::shared_ptr<WorkerThread>> browser_workers;
+
+static void reap_finished_locked() {
+    for (int i = (int) browser_sessions.size() - 1; i >= 0; i--) {
+        if (browser_sessions[i]->exited.load()) {
+            if (browser_sessions[i]->thread.joinable())
+                browser_sessions[i]->thread.join();
+            browser_sessions.erase(browser_sessions.begin() + i);
+        }
+    }
+    for (int i = (int) browser_workers.size() - 1; i >= 0; i--) {
+        if (browser_workers[i]->done.load()) {
+            if (browser_workers[i]->thread.joinable())
+                browser_workers[i]->thread.join();
+            browser_workers.erase(browser_workers.begin() + i);
+        }
+    }
+}
+
+static void spawn_worker(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lock(sessions_mutex);
+    reap_finished_locked();
+    if (browser_stopping.load())
+        return;
+    auto worker = std::make_shared<WorkerThread>();
+    worker->thread = std::thread([worker, fn = std::move(fn)]() {
+        fn();
+        worker->done = true;
+    });
+    browser_workers.push_back(std::move(worker));
+}
+
 static std::shared_ptr<BrowserIndex> build_index() {
     auto index = std::make_shared<BrowserIndex>();
     // The icon cache is loaded in the background when the desktop starts.
-    for (int i = 0; i < 600 && !icons_loaded; i++)
+    for (int i = 0; i < 600 && !icons_loaded && !browser_stopping.load(); i++)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    if (!icons_loaded)
+    if (!icons_loaded || browser_stopping.load())
         return index;
 
     std::vector<std::string> names;
     get_options(names, "", 0);
-    std::vector<IconTarget> targets;
-    targets.reserve(names.size());
-    for (auto &name : names)
-        targets.emplace_back(name);
-    search_icons(targets);
-    pick_best(targets, 32);
 
     auto strip = [](std::string s) {
         s.erase(std::remove(s.begin(), s.end(), '\0'), s.end());
         return s;
     };
-    for (auto &target : targets) {
-        if (target.candidates.empty())
-            continue;
-        // Candidates are sorted best first, so the first one of each theme is the one to show.
-        std::vector<std::string> themes;
-        for (auto &candidate : target.candidates) {
-            auto theme = strip(candidate.theme);
-            if (std::find(themes.begin(), themes.end(), theme) != themes.end())
+    constexpr size_t batch_size = 256;
+    std::vector<IconTarget> targets;
+    targets.reserve(batch_size);
+    for (size_t offset = 0; offset < names.size(); offset += batch_size) {
+        if (browser_stopping.load())
+            return index;
+        targets.clear();
+        size_t end = std::min(names.size(), offset + batch_size);
+        for (size_t i = offset; i < end; i++)
+            targets.emplace_back(names[i]);
+        search_icons(targets);
+        pick_best(targets, 32);
+
+        for (auto &target : targets) {
+            if (browser_stopping.load())
+                return index;
+            if (target.candidates.empty())
                 continue;
-            themes.push_back(theme);
-            BrowserIcon icon;
-            icon.name = strip(candidate.filename);
-            icon.lower = to_lower(icon.name);
-            icon.theme = theme;
-            icon.path = candidate.full_path();
-            icon.context = candidate.context;
-            icon.rank = themes.size() - 1;
-            if (icon.rank == 0)
-                index->best.push_back(icon);
-            index->variants.push_back(std::move(icon));
+            // Candidates are sorted best first, so the first one of each theme is the one to show.
+            std::vector<std::string> themes;
+            for (auto &candidate : target.candidates) {
+                auto theme = strip(candidate.theme);
+                if (std::find(themes.begin(), themes.end(), theme) != themes.end())
+                    continue;
+                themes.push_back(theme);
+                BrowserIcon icon;
+                icon.name = strip(candidate.filename);
+                icon.lower = to_lower(icon.name);
+                icon.theme = theme;
+                icon.path = candidate.full_path();
+                icon.context = candidate.context;
+                icon.rank = themes.size() - 1;
+                if (icon.rank == 0)
+                    index->best.push_back(icon);
+                index->variants.push_back(std::move(icon));
+            }
         }
     }
     std::sort(index->best.begin(), index->best.end(), [](const BrowserIcon &a, const BrowserIcon &b) {
@@ -1065,23 +1123,25 @@ static void add_icon(Container *root) {
         return;
     data->add_job = std::make_shared<AddIconJob>();
     show_notice(root, "Choose an image to add to the local icons…", 0);
-    std::thread([job = data->add_job]() {
+    spawn_worker([job = data->add_job]() {
         auto path = choose_file();
         chooser_open = false;
         path.erase(std::remove_if(path.begin(), path.end(), [](unsigned char c) { return c == '\n' || c == '\r'; }), path.end());
-        if (!path.empty()) {
+        if (!path.empty() && !browser_stopping.load()) {
             job->name = install_icon(path, job->error);
-            if (!job->name.empty()) {
+            if (!job->name.empty() && !browser_stopping.load()) {
                 update_gtk_icon_cache();
                 icon_cache_generate();
                 icon_cache_load();
                 job->index = build_index();
-                std::lock_guard<std::mutex> cache_lock(last_index_mutex);
-                last_index = job->index;
+                if (!browser_stopping.load()) {
+                    std::lock_guard<std::mutex> cache_lock(last_index_mutex);
+                    last_index = job->index;
+                }
             }
         }
         job->done = true;
-    }).detach();
+    });
     watch_add_icon(root);
 }
 
@@ -1119,17 +1179,17 @@ static void remove_icon(Container *root) {
     data->add_job = std::make_shared<AddIconJob>();
     data->add_job->removed = icon->name;
     show_notice(root, "Removing “" + icon->name + "”…", 0);
-    std::thread([job = data->add_job]() {
+    spawn_worker([job = data->add_job]() {
         update_gtk_icon_cache();
         icon_cache_generate();
         icon_cache_load();
         job->index = build_index();
-        {
+        if (!browser_stopping.load()) {
             std::lock_guard<std::mutex> cache_lock(last_index_mutex);
             last_index = job->index;
         }
         job->done = true;
-    }).detach();
+    });
     watch_add_icon(root);
 }
 
@@ -1303,8 +1363,18 @@ static void fill_root(Container *root) {
     set_active(root, {browser(root)->field}, root, true, false);
 }
 
-static void start_icon_browser() {
+static void start_icon_browser(std::shared_ptr<BrowserSession> session) {
     auto app = windowing::open_app();
+    {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (session->close_requested) {
+            windowing::close_app(app);
+            windowing::main_loop(app);
+            session->exited = true;
+            return;
+        }
+        session->app = app;
+    }
     RawWindowSettings settings;
     settings.pos.w = 900;
     settings.pos.h = 640;
@@ -1327,25 +1397,71 @@ static void start_icon_browser() {
         }
         if (cached && !cached->variants.empty())
             index_ready(data, cached);
-        std::thread([job = data->job]() {
-            job->result = build_index();
-            {
+        spawn_worker([job = data->job]() {
+            auto result = build_index();
+            if (!browser_stopping.load()) {
+                job->result = result;
                 std::lock_guard<std::mutex> cache_lock(last_index_mutex);
                 last_index = job->result;
             }
             job->done = true;
-        }).detach();
+        });
         watch_index(data);
     }
 
     windowing::main_loop(app);
 
+    {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        session->app = nullptr;
+    }
+
     mylar->root->user_data = nullptr;
     delete data;
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();
+    session->exited = true;
 }
 
 void icon_browser::open() {
-    std::thread(start_icon_browser).detach();
+    std::lock_guard<std::mutex> lock(sessions_mutex);
+    reap_finished_locked();
+    if (browser_stopping.load())
+        return;
+    auto session = std::make_shared<BrowserSession>();
+    session->thread = std::thread(start_icon_browser, session);
+    browser_sessions.push_back(std::move(session));
+}
+
+void icon_browser::stop() {
+    std::vector<std::shared_ptr<BrowserSession>> sessions;
+    std::vector<std::shared_ptr<WorkerThread>> workers;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex);
+        browser_stopping = true;
+        sessions.swap(browser_sessions);
+        workers.swap(browser_workers);
+    }
+    cancel_choose_file();
+    for (auto &session : sessions) {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        session->close_requested = true;
+        if (session->app)
+            windowing::close_app(session->app);
+    }
+    for (auto &session : sessions) {
+        if (session->thread.joinable())
+            session->thread.join();
+    }
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex);
+        for (auto &w : browser_workers)
+            workers.push_back(std::move(w));
+        browser_workers.clear();
+    }
+    for (auto &worker : workers) {
+        if (worker->thread.joinable())
+            worker->thread.join();
+    }
+    browser_stopping = false;
 }

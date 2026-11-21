@@ -25,6 +25,8 @@
 #include "popup.h"
 #include "quick_shortcut_menu.h"
 #include "settings.h"
+#include "icon_browser.h"
+#include "edit_pin.h"
 #include "first.h"
 #include "snap_assist.h"
 #include "overview.h"
@@ -1613,6 +1615,8 @@ static void paint_wallpaper_cursor_spinner(int current_monitor) {
 // Decodes and renders a monitor's wallpaper on a worker thread, then uploads
 // the monitor-sized surface on the main thread so setting a wallpaper never
 // stalls the compositor.
+static void spawn_heart_worker(std::function<void()> fn);
+
 static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved res, std::string stamp, bool fade) {
     auto load = datum<WallLoadState>(c, "wall_load_state");
     const uint64_t gen = ++load->gen;
@@ -1635,7 +1639,7 @@ static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved re
     load->path = res.path;
     load->stamp = stamp;
     auto key = wallpaper_cache_key(res, m, stamp);
-    std::thread([id, gen, fade, key, res, m, stamp]() {
+    spawn_heart_worker([id, gen, fade, key, res, m, stamp]() {
         cairo_surface_t *out = nullptr;
         cairo_surface_t *disk_copy = nullptr;
         std::error_code ec;
@@ -1696,7 +1700,49 @@ static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved re
             wall_write_disk_cache(m.name, key, disk_copy);
             cairo_surface_destroy(disk_copy);
         }
-    }).detach();
+    });
+}
+
+struct HeartWorker {
+    std::atomic<bool> done = false;
+    std::thread thread;
+};
+
+static std::atomic<bool> heart_workers_stopping = false;
+static std::mutex heart_workers_mutex;
+static std::vector<std::shared_ptr<HeartWorker>> heart_workers;
+
+static void spawn_heart_worker(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lock(heart_workers_mutex);
+    for (int i = (int) heart_workers.size() - 1; i >= 0; i--) {
+        if (heart_workers[i]->done.load()) {
+            if (heart_workers[i]->thread.joinable())
+                heart_workers[i]->thread.join();
+            heart_workers.erase(heart_workers.begin() + i);
+        }
+    }
+    if (heart_workers_stopping.load())
+        return;
+    auto worker = std::make_shared<HeartWorker>();
+    worker->thread = std::thread([worker, fn = std::move(fn)]() {
+        fn();
+        worker->done = true;
+    });
+    heart_workers.push_back(std::move(worker));
+}
+
+static void stop_heart_workers() {
+    std::vector<std::shared_ptr<HeartWorker>> workers;
+    {
+        std::lock_guard<std::mutex> lock(heart_workers_mutex);
+        heart_workers_stopping = true;
+        workers.swap(heart_workers);
+    }
+    for (auto &worker : workers) {
+        if (worker->thread.joinable())
+            worker->thread.join();
+    }
+    heart_workers_stopping = false;
 }
 
 static void wall_slot_load_initial(Container *c, int id) {
@@ -1713,7 +1759,7 @@ static void wall_load_source(int id, bool first_slot, WallSlot *slot) {
     slot->source_loading = true;
     std::string path = slot->path;
     std::string stamp = slot->stamp;
-    std::thread([id, first_slot, path, stamp]() {
+    spawn_heart_worker([id, first_slot, path, stamp]() {
         cairo_surface_t *src = nullptr;
         load_icon_full_path(&src, path);
         main_thread([id, first_slot, path, stamp, src]() {
@@ -1741,12 +1787,12 @@ static void wall_load_source(int id, bool first_slot, WallSlot *slot) {
             damage_all();
             overview::on_wallpaper_changed(id);
         });
-    }).detach();
+    });
 }
 
 // Renders the final image on a worker thread, then swaps it in.
 static void wall_make_cache(int id, bool first_slot, std::string key, WallResolved res, WallMonitor m, std::string stamp) {
-    std::thread([id, first_slot, key, res, m, stamp]() {
+    spawn_heart_worker([id, first_slot, key, res, m, stamp]() {
         cairo_surface_t *src = nullptr;
         load_icon_full_path(&src, res.path);
         cairo_surface_t *out = nullptr;
@@ -1784,7 +1830,7 @@ static void wall_make_cache(int id, bool first_slot, std::string key, WallResolv
             wall_write_disk_cache(m.name, key, disk_copy);
             cairo_surface_destroy(disk_copy);
         }
-    }).detach();
+    });
 }
 
 // Makes a cached image for key once it has stayed the wanted one for a moment
@@ -3132,7 +3178,7 @@ void heart::begin() {
             });
 
             if (icon_cache_needs_update()) {
-                std::thread th([] {
+                spawn_heart_worker([] {
                     icon_cache_generate();
                     icon_cache_load();
                     main_thread([]() {
@@ -3140,7 +3186,6 @@ void heart::begin() {
                         damage_all();
                     });
                 });
-                th.detach();
             } else {
                 icon_cache_load();
             }
@@ -3180,7 +3225,10 @@ void heart::end() {
     save_restore_infos();
     
     settings::stop();
+    icon_browser::stop();
+    edit_pin::stop();
     dock::stop();
+    stop_heart_workers();
     
     settings::load_save_settings(true, set);
     poll_thread->stop();

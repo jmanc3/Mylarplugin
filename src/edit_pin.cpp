@@ -15,6 +15,8 @@
 #include "smooth_scroll.h"
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <cairo.h>
 #include <climits>
 #include <cmath>
@@ -1298,8 +1300,40 @@ static void fill_root(Container *window_root) {
     }
 }
 
-static void start_edit_pin(std::string stacking_rule, std::string icon, std::string command) {
+struct EditPinSession {
+    std::mutex mutex;
+    RawApp *app = nullptr;
+    bool close_requested = false;
+    std::atomic<bool> exited = false;
+    std::thread thread;
+};
+
+static std::atomic<bool> edit_pin_stopping = false;
+static std::mutex edit_pin_sessions_mutex;
+static std::vector<std::shared_ptr<EditPinSession>> edit_pin_sessions;
+
+static void reap_edit_pin_sessions_locked() {
+    for (int i = (int) edit_pin_sessions.size() - 1; i >= 0; i--) {
+        if (edit_pin_sessions[i]->exited.load()) {
+            if (edit_pin_sessions[i]->thread.joinable())
+                edit_pin_sessions[i]->thread.join();
+            edit_pin_sessions.erase(edit_pin_sessions.begin() + i);
+        }
+    }
+}
+
+static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string stacking_rule, std::string icon, std::string command) {
     auto app = windowing::open_app();
+    {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        if (session->close_requested) {
+            windowing::close_app(app);
+            windowing::main_loop(app);
+            session->exited = true;
+            return;
+        }
+        session->app = app;
+    }
     RawWindowSettings settings;
     settings.pos.w = 800;
     settings.pos.h = 600;
@@ -1322,13 +1356,43 @@ static void start_edit_pin(std::string stacking_rule, std::string icon, std::str
     fill_root(mylar->root);
     
     windowing::main_loop(app);
+    {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        session->app = nullptr;
+    }
     *alive = false;
     
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();
+    session->exited = true;
 }
 
 void edit_pin::open(std::string stacking_rule, std::string icon, std::string command) {
-    std::thread t(start_edit_pin, stacking_rule, icon, command);
-    t.detach();
+    std::lock_guard<std::mutex> lock(edit_pin_sessions_mutex);
+    reap_edit_pin_sessions_locked();
+    if (edit_pin_stopping.load())
+        return;
+    auto session = std::make_shared<EditPinSession>();
+    session->thread = std::thread(start_edit_pin, session, std::move(stacking_rule), std::move(icon), std::move(command));
+    edit_pin_sessions.push_back(std::move(session));
+}
+
+void edit_pin::stop() {
+    std::vector<std::shared_ptr<EditPinSession>> sessions;
+    {
+        std::lock_guard<std::mutex> lock(edit_pin_sessions_mutex);
+        edit_pin_stopping = true;
+        sessions.swap(edit_pin_sessions);
+    }
+    for (auto &session : sessions) {
+        std::lock_guard<std::mutex> lock(session->mutex);
+        session->close_requested = true;
+        if (session->app)
+            windowing::close_app(session->app);
+    }
+    for (auto &session : sessions) {
+        if (session->thread.joinable())
+            session->thread.join();
+    }
+    edit_pin_stopping = false;
 }

@@ -105,6 +105,45 @@ static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
 static std::vector<std::thread> dock_threads;
 
+struct DockWorker {
+    std::atomic<bool> done = false;
+    std::thread thread;
+};
+
+static std::mutex dock_workers_mutex;
+static std::vector<std::shared_ptr<DockWorker>> dock_workers;
+
+static void spawn_dock_worker(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lock(dock_workers_mutex);
+    for (int i = (int) dock_workers.size() - 1; i >= 0; i--) {
+        if (dock_workers[i]->done.load()) {
+            if (dock_workers[i]->thread.joinable())
+                dock_workers[i]->thread.join();
+            dock_workers.erase(dock_workers.begin() + i);
+        }
+    }
+    if (finished)
+        return;
+    auto worker = std::make_shared<DockWorker>();
+    worker->thread = std::thread([worker, fn = std::move(fn)]() {
+        fn();
+        worker->done = true;
+    });
+    dock_workers.push_back(std::move(worker));
+}
+
+static void stop_dock_workers() {
+    std::vector<std::shared_ptr<DockWorker>> workers;
+    {
+        std::lock_guard<std::mutex> lock(dock_workers_mutex);
+        workers.swap(dock_workers);
+    }
+    for (auto &worker : workers) {
+        if (worker->thread.joinable())
+            worker->thread.join();
+    }
+}
+
 static void write_saved_pins_to_file(Container *icons);
 
 class Window {
@@ -957,17 +996,20 @@ void set_brightness(float amount) {
     latest = amount;
     if (queued.exchange(true))
         return;
-    std::thread t([]() {
+    spawn_dock_worker([]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         // Apply the newest value requested while we were waiting, not the first one.
         queued = false;
+        if (finished)
+            return;
         auto process = std::make_shared<TinyProcessLib::Process>(fz("brightnessctl set {}%", (int) std::round(latest.load())));
         process->get_exit_status(); // reap it
+        if (finished)
+            return;
 
         for (auto d : docks)
             windowing::redraw(d->window->raw_window);
     });
-    t.detach();
 }
 
 static constexpr int brightness_osd_w = 220;
@@ -3034,10 +3076,9 @@ static void fill_root(Container *root) {
            return std::string("100%");
         });
         auto brightness_data = new BrightnessData;
-        std::thread t([&brightness_data]() {
+        spawn_dock_worker([]() {
             brightness_level = get_brightness();
         });
-        t.detach();
 
         brightness->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
             auto brightness_data = (BrightnessData *) c->user_data;
@@ -3191,9 +3232,9 @@ static void fill_root(Container *root) {
         }, []() {
             return std::string("+100%");
         });
-        std::thread([]() {
+        spawn_dock_worker([]() {
             brightness_level = get_brightness();
-        }).detach();
+        });
         battery->when_fine_scrolled = [](Container* root, Container* c, double scroll_x, double scroll_y, bool came_from_touchpad) {
             auto dock = (Dock *) root->user_data;
             float level = brightness_level;
@@ -3243,10 +3284,11 @@ static void fill_root(Container *root) {
             dock->battery->root->wanted_bounds.h = FILL_SPACE;
             fill_battery_container(dock);
             request_battery_refresh();
-            std::thread([]() {
+            spawn_dock_worker([]() {
                 brightness_level = get_brightness();
-                dock::change_in_battery();
-            }).detach();
+                if (!finished)
+                    dock::change_in_battery();
+            });
             windowing::redraw(dock->battery->raw_window);
         };
     }
@@ -3703,6 +3745,7 @@ void dock::stop(std::string monitor_name) {
                 dock_threads[i].join();
             }
         }
+        stop_dock_workers();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -4146,10 +4189,9 @@ void dock::create_slept_button() {
         };
         sleep_button->name = "sleep_button";
         sleep_button->when_clicked = [d](Container *root, Container *c) {
-            std::thread t([]() {
+            spawn_dock_worker([]() {
                 dock::remove_slept_button();
             });
-            t.detach();
         };
         for (int i = root->children.size() - 1; i >= 0; i--)
             if (root->children[i]->name == "sleep_button") {

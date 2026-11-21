@@ -478,6 +478,59 @@ static std::string trim_newline(std::string s) {
     return s;
 }
 
+static std::mutex choose_file_mutex;
+static GtkWidget *active_choose_file_dialog = nullptr;
+static bool choose_file_cancelled = false;
+
+void cancel_choose_file() {
+    std::lock_guard<std::mutex> lock(choose_file_mutex);
+    choose_file_cancelled = true;
+    if (active_choose_file_dialog) {
+        GtkWidget *dialog = active_choose_file_dialog;
+        g_object_ref(dialog);
+        g_idle_add(+[](gpointer data) -> gboolean {
+            auto *dlg = static_cast<GtkWidget *>(data);
+            if (GTK_IS_DIALOG(dlg))
+                gtk_dialog_response(GTK_DIALOG(dlg), GTK_RESPONSE_CANCEL);
+            g_object_unref(dlg);
+            return G_SOURCE_REMOVE;
+        }, dialog);
+    }
+}
+
+struct SettingsWorker {
+    std::atomic<bool> done = false;
+    std::thread thread;
+};
+
+static std::atomic<bool> settings_workers_stopping = false;
+static std::mutex settings_workers_mutex;
+static std::vector<std::shared_ptr<SettingsWorker>> settings_workers;
+static std::atomic<pid_t> sddm_pkexec_pid = -1;
+
+static void reap_settings_workers_locked() {
+    for (int i = (int) settings_workers.size() - 1; i >= 0; i--) {
+        if (settings_workers[i]->done.load()) {
+            if (settings_workers[i]->thread.joinable())
+                settings_workers[i]->thread.join();
+            settings_workers.erase(settings_workers.begin() + i);
+        }
+    }
+}
+
+static void spawn_settings_worker(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lock(settings_workers_mutex);
+    reap_settings_workers_locked();
+    if (settings_workers_stopping.load())
+        return;
+    auto worker = std::make_shared<SettingsWorker>();
+    worker->thread = std::thread([worker, fn = std::move(fn)]() {
+        fn();
+        worker->done = true;
+    });
+    settings_workers.push_back(std::move(worker));
+}
+
 std::string choose_file(bool folder, GtkWindow* parent) {
     std::string filename;
 
@@ -501,12 +554,29 @@ std::string choose_file(bool folder, GtkWindow* parent) {
     if (!dialog)
         return filename;
 
+    {
+        std::lock_guard<std::mutex> lock(choose_file_mutex);
+        if (choose_file_cancelled) {
+            gtk_widget_destroy(dialog);
+            while (gtk_events_pending())
+                gtk_main_iteration();
+            return filename;
+        }
+        active_choose_file_dialog = dialog;
+    }
+
     if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
         char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
         if (path) {
             filename = path;
             g_free(path);
         }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(choose_file_mutex);
+        if (active_choose_file_dialog == dialog)
+            active_choose_file_dialog = nullptr;
     }
 
     gtk_widget_destroy(dialog);
@@ -4031,7 +4101,7 @@ static std::mutex wall_thumbs_mutex;
 static std::unordered_map<std::string, WallThumb> wall_thumbs;
 
 static void wall_thumb_load(std::string path, std::string stamp) {
-    std::thread([path, stamp]() {
+    spawn_settings_worker([path, stamp]() {
         cairo_surface_t *full = nullptr;
         load_icon_full_path(&full, path);
         cairo_surface_t *small = nullptr;
@@ -4070,7 +4140,7 @@ static void wall_thumb_load(std::string path, std::string stamp) {
             t.loading_stamp.clear();
         }
         settings_request_redraw();
-    }).detach();
+    });
 }
 
 // The thumbnail for path, or nullptr while it loads. Settings thread only.
@@ -4452,12 +4522,11 @@ static std::vector<std::string> paths_from_uri_list(const std::string &uri_list)
 // wallpaper, as if it had been picked with "Choose file".
 static void wallpaper_file_dropped(std::string uri_list) {
     std::string target = wall_target;
-    std::thread t([uri_list, target]() {
+    spawn_settings_worker([uri_list, target]() {
         for (const auto &path : paths_from_uri_list(uri_list))
             if (settings::set_wallpaper_from_file(path, target))
                 break;
     });
-    t.detach();
 }
 
 // Shown over the Display or SDDM page while files are dragged over the window.
@@ -4517,12 +4586,10 @@ static void make_wallpaper_row(Container *padded_right) {
         chooser_open = true;
 
         std::string target = wall_target;
-        std::thread t([target]() {
+        spawn_settings_worker([target]() {
             settings::set_wallpaper_from_file(trim_newline(choose_file()), target);
             chooser_open = false;
         });
-
-        t.detach();
     }, "\uE8b9");
     padded_right->children.back()->name = "display_wallpaper_row";
 
@@ -4724,7 +4791,7 @@ static void fill_display_settings(Container *root) {
 
         chooser_open = true;
 
-        std::thread t([]() {
+        spawn_settings_worker([]() {
             const auto file = trim_newline(choose_file(true));
             main_thread([file]() {
                     notify(file);
@@ -4741,8 +4808,6 @@ static void fill_display_settings(Container *root) {
 
             chooser_open = false;
         });
-
-        t.detach();
     }, "\uec6c");
 
     make_vert_space(padded_right, 10);
@@ -4847,7 +4912,7 @@ static void fill_desktop_settings(Container *root) {
         icon_cache_rescan_in_progress = true;
         damage_all();
 
-        std::thread([]() {
+        spawn_settings_worker([]() {
             bool succeeded = true;
             try {
                 icon_cache_generate();
@@ -4862,7 +4927,7 @@ static void fill_desktop_settings(Container *root) {
                     notify("Failed to re-scan icons");
                 damage_all();
             });
-        }).detach();
+        });
     }, "\uE71D", []() { return !icon_cache_rescan_in_progress; });
 
     make_dropdown_option(padded_right, "Overview", "Change layout type", "\uE8A9", set->overview_layout_type, {"Grid", "Adaptive"}, [](std::string new_type) {
@@ -6870,11 +6935,11 @@ static bool sddm_set_custom_wallpaper_from_file(const std::string &file) {
 }
 
 static void sddm_file_dropped(std::string uri_list) {
-    std::thread([uri_list]() {
+    spawn_settings_worker([uri_list]() {
         for (const auto &path : paths_from_uri_list(uri_list))
             if (sddm_set_custom_wallpaper_from_file(path))
                 break;
-    }).detach();
+    });
 }
 
 // Renders the Display wallpaper with the exact same cropping/layout as heart.cpp.
@@ -7056,7 +7121,7 @@ static void sddm_apply_async() {
     const std::string scale = sddm_effective_scale();
     const WallMonitor monitor = sddm_pick_monitor();
 
-    std::thread([mode, scale, monitor]() {
+    spawn_settings_worker([mode, scale, monitor]() {
         auto finish = [](const std::string &status, const std::string &toast = "", bool refresh = false) {
             {
                 std::lock_guard<std::mutex> lock(ssddm_mutex);
@@ -7144,8 +7209,10 @@ static void sddm_apply_async() {
             finish("Failed to launch pkexec", "Failed to launch authentication dialog");
             return;
         }
+        sddm_pkexec_pid = pid;
         int status = 0;
         while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+        sddm_pkexec_pid = -1;
 
         if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
             finish("Applied to SDDM (" + sys.theme + ", scale " + scale + ")", "SDDM settings applied", true);
@@ -7154,7 +7221,7 @@ static void sddm_apply_async() {
         } else {
             finish("Failed to apply SDDM settings", "Failed to apply SDDM settings");
         }
-    }).detach();
+    });
 }
 
 static void paint_sddm_preview(Container *root, Container *c) {
@@ -7360,10 +7427,10 @@ static void fill_sddm_settings(Container *root) {
             if (chooser_open)
                 return;
             chooser_open = true;
-            std::thread([]() {
+            spawn_settings_worker([]() {
                 sddm_set_custom_wallpaper_from_file(trim_newline(choose_file()));
                 chooser_open = false;
-            }).detach();
+            });
         }, "\uE8B9");
     }
 
@@ -9135,13 +9202,13 @@ static datetime::Status sdt_snapshot(bool *loaded = nullptr, bool *busy = nullpt
 }
 
 static void sdt_refresh_async() {
-    std::thread([]() {
+    spawn_settings_worker([]() {
         datetime::timezones(); // Parse the zone tables off the UI thread.
         auto status = datetime::query_status();
         std::lock_guard lock(sdt.mutex);
         sdt.status = status;
         sdt.loaded = true;
-    }).detach();
+    });
 }
 
 // Runs a privileged change on a worker thread (it may wait on a polkit prompt), then re-reads the state.
@@ -9152,7 +9219,7 @@ static void sdt_run_async(std::function<std::string()> job) {
             return;
         sdt.busy = true;
     }
-    std::thread([job]() {
+    spawn_settings_worker([job]() {
         auto error = job();
         auto status = datetime::query_status();
         {
@@ -9166,7 +9233,7 @@ static void sdt_run_async(std::function<std::string()> job) {
                 notify(error);
             dock::redraw();
         });
-    }).detach();
+    });
 }
 
 // Keeps the clock text fresh and picks up worker results while the page is showing.
@@ -13078,9 +13145,24 @@ static std::atomic<int> settings_open_h = 0;
 // that scale. 0 means unknown.
 static std::atomic<float> settings_open_scale = 0;
 
+static std::mutex settings_lifecycle_mutex;
+static std::thread settings_thread;
+static bool settings_close_requested = false;
+static std::atomic<bool> settings_thread_exited = true;
+
 void actual_start() {
     theme = set->dark_theme ? dark_theme : light_theme;
-    settings_app = windowing::open_app();
+    auto app = windowing::open_app();
+    {
+        std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
+        if (settings_close_requested) {
+            windowing::close_app(app);
+            windowing::main_loop(app);
+            settings_thread_exited = true;
+            return;
+        }
+        settings_app = app;
+    }
     RawWindowSettings settings;
     settings.pos.w = 1000;
     settings.pos.h = 760;
@@ -13198,8 +13280,12 @@ void actual_start() {
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();
 
-    settings_app = nullptr;
-    settings_mylar = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
+        settings_app = nullptr;
+        settings_mylar = nullptr;
+    }
+    settings_thread_exited = true;
 };
 
 void settings::start(std::string page, bool focus_search) {
@@ -13255,13 +13341,51 @@ void settings::start(std::string page, bool focus_search) {
         settings_open_h = (int) h;
         settings_open_scale = scale(hypriso->monitor_from_cursor());
     }
-    std::thread t(actual_start);
-    t.detach();
+    {
+        std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
+        if (settings_thread.joinable()) {
+            if (!settings_thread_exited.load())
+                return;
+            settings_thread.join();
+        }
+        settings_close_requested = false;
+        settings_thread_exited = false;
+        settings_thread = std::thread(actual_start);
+    }
 }
 
 void settings::stop() {
-    if (settings_app) {
-        windowing::close_app(settings_app);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    cancel_choose_file();
+    if (pid_t pid = sddm_pkexec_pid.load(); pid > 0)
+        kill(pid, SIGTERM);
+    std::thread to_join;
+    {
+        std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
+        settings_close_requested = true;
+        if (settings_app)
+            windowing::close_app(settings_app);
+        if (settings_thread.joinable())
+            to_join = std::move(settings_thread);
     }
+    if (to_join.joinable())
+        to_join.join();
+    std::vector<std::shared_ptr<SettingsWorker>> workers;
+    {
+        std::lock_guard<std::mutex> lock(settings_workers_mutex);
+        settings_workers_stopping = true;
+        workers.swap(settings_workers);
+    }
+    for (auto &worker : workers) {
+        if (worker->thread.joinable())
+            worker->thread.join();
+    }
+    {
+        std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
+        settings_close_requested = false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(choose_file_mutex);
+        choose_file_cancelled = false;
+    }
+    settings_workers_stopping = false;
 }

@@ -6135,10 +6135,54 @@ static int inotify_fd = -1;
 static PF* inotify_poll_pf = nullptr;
 static std::unordered_map<int, std::function<void(FileWatchUpdate, int)>> inotify_watchers;
 
+struct PngWriterWorker {
+    std::atomic<bool> done = false;
+    std::thread thread;
+};
+
+static std::atomic<bool> png_writers_stopping = false;
+static std::mutex png_writers_mutex;
+static std::vector<std::shared_ptr<PngWriterWorker>> png_writers;
+
+template <typename Fn>
+static void spawn_png_writer(Fn &&fn) {
+    std::lock_guard<std::mutex> lock(png_writers_mutex);
+    for (int i = (int) png_writers.size() - 1; i >= 0; i--) {
+        if (png_writers[i]->done.load()) {
+            if (png_writers[i]->thread.joinable())
+                png_writers[i]->thread.join();
+            png_writers.erase(png_writers.begin() + i);
+        }
+    }
+    if (png_writers_stopping.load())
+        return;
+    auto worker = std::make_shared<PngWriterWorker>();
+    worker->thread = std::thread([worker, fn = std::forward<Fn>(fn)]() mutable {
+        fn();
+        worker->done = true;
+    });
+    png_writers.push_back(std::move(worker));
+}
+
+static void stop_png_writers() {
+    std::vector<std::shared_ptr<PngWriterWorker>> workers;
+    {
+        std::lock_guard<std::mutex> lock(png_writers_mutex);
+        png_writers_stopping = true;
+        workers.swap(png_writers);
+    }
+    for (auto &worker : workers) {
+        if (worker->thread.joinable())
+            worker->thread.join();
+    }
+    png_writers_stopping = false;
+}
+
 void HyprIso::end() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    stop_png_writers();
     eventListeners.clear();
     closingWindowZIndices.clear();
     while (!pending_desktop_drops.empty())
@@ -12827,7 +12871,7 @@ void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_p
 
         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
 
-        std::thread t([rgbaPixels = std::move(rgbaPixels), w, h, cid, cairoStride, outputPath = std::move(output_path)]() mutable {
+        spawn_png_writer([rgbaPixels = std::move(rgbaPixels), w, h, cid, cairoStride, outputPath = std::move(output_path)]() mutable {
             const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * h;
             auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
             std::memset(cairoPixels.get(), 0, cairoPixelsSize);
@@ -12891,8 +12935,6 @@ void HyprIso::save_window_to_png(int cid, bool decorations, std::string output_p
                 return;
             }
         });
-
-        t.detach();
 
         return;
     }
@@ -12970,7 +13012,7 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds regio
 
         const int cairoStride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, readW);
 
-        std::thread t([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, cairoStride, outputPath = std::move(output_path), on_saved = std::move(on_saved)]() mutable {
+        spawn_png_writer([rgbaPixels = std::move(rgbaPixels), readW, readH, mon, cairoStride, outputPath = std::move(output_path), on_saved = std::move(on_saved)]() mutable {
             const size_t cairoPixelsSize = static_cast<size_t>(cairoStride) * readH;
             auto cairoPixels = std::unique_ptr<uint8_t[]>(new uint8_t[cairoPixelsSize]);
             std::memset(cairoPixels.get(), 0, cairoPixelsSize);
@@ -13036,8 +13078,6 @@ void HyprIso::save_monitor_to_png(int mon, std::string output_path, Bounds regio
             if (on_saved)
                 on_saved();
         });
-
-        t.detach();
 
         return;
     }
