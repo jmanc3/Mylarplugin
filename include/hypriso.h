@@ -160,6 +160,10 @@ struct ConfigSettings {
     bool wallpaper_span = false;
     // Monitors with their own wallpaper settings (see wallpaper_layout.h).
     std::string wallpaper_monitors = "";
+    // SDDM login screen settings.
+    std::string sddm_wallpaper_mode = "Display"; // "Display", "Custom", or "Theme default"
+    std::string sddm_wallpaper_monitor = "";     // monitor name when mode is "Display" (empty = primary)
+    std::string sddm_scale = "auto";             // "auto" (from Display) or scale factor like "1.0", "1.5"
     bool dark_theme = true;
     bool clock_24h = false;
     bool hotcorners = true;

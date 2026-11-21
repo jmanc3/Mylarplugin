@@ -29,6 +29,7 @@
 #include <gtk/gtk.h>
 #include <thread>
 #include <unistd.h>
+#include <sys/wait.h>
 #include <atomic>
 #include <mutex>
 #include <optional>
@@ -340,46 +341,105 @@ struct SettingsCategory {
     std::vector<SettingsPageInfo> pages;
 };
 
-static const std::vector<SettingsCategory> &settings_categories() {
-    static const std::vector<SettingsCategory> categories = {
-        {"Display", "settings-display", "preferences-desktop-display", {
-            {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper, desktop icons", "\uE7F4"},
-        }},
-        {"Network & internet", "settings-network", "network-wireless", {
-            {"Wifi", "Wi-Fi", "Connect to wireless networks", "\uE701"},
-        }},
-        {"Sound", "settings-sound", "preferences-desktop-sound", {
-            {"Audio", "Sound", "Volume, output and input devices, app volume", "\uE767"},
-        }},
-        {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
-            {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
-        }},
-        {"Behaviour", "settings-behaviour", "preferences-desktop-wallpaper", {
-            {"Desktop", "Desktop", "Theme, font, blur, overview, icon cache", "\uE771"},
-            {"Dock", "Dock", "Dock style, labels, which windows show", "\uE75B"},
-            {"Multitasking", "Multitasking", "App switching, workspaces, snap windows, hot corners", "\uE7C4"},
-            {"Autostart", "Autostart", "Commands run when the desktop or session starts", "\uE7E8"},
-        }},
-        {"Devices", "settings-devices", "preferences-desktop-peripherals", {
-            {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
-            {"Keyboard", "Keyboard", "Layouts, repeat delay and rate", "\uE765"},
-            {"Shortcuts", "Keyboard shortcuts", "System and custom key combinations", "\uEDA7"},
-        }},
-        {"Time & language", "settings-time", "preferences-system-time", {
-            {"Time & Date", "Date & time", "Time zone, clock format, automatic time", "\uEC92"},
-        }},
+static bool has_sddm_service_enabled() {
+    std::error_code ec;
+    auto exists = [&](const std::filesystem::path &p) {
+        return std::filesystem::exists(p, ec) || std::filesystem::is_symlink(p, ec);
     };
-    // Only machines with a battery get the Battery page.
-    static const std::vector<SettingsCategory> with_battery = []() {
-        auto list = categories;
-        // After Bluetooth, before Behaviour.
-        list.insert(list.begin() + 4, {"Battery", "settings-power", "battery", {
-            {"Battery", "Battery", "Charge, battery usage history, time remaining", "\uEBAA"},
-        }});
+
+    // systemd: display-manager.service symlink pointing to sddm, or direct wants symlink.
+    if (std::filesystem::is_symlink("/etc/systemd/system/display-manager.service", ec)) {
+        auto target = std::filesystem::read_symlink("/etc/systemd/system/display-manager.service", ec).string();
+        if (!ec && target.find("sddm") != std::string::npos)
+            return true;
+    }
+    if (exists("/etc/systemd/system/multi-user.target.wants/sddm.service") ||
+        exists("/etc/systemd/system/graphical.target.wants/sddm.service"))
+        return true;
+
+    // runit: enabled in active or default runsvdir.
+    for (const char *p : {
+             "/var/service/sddm",
+             "/run/runit/service/sddm",
+             "/run/runit/runsvdir/current/sddm",
+             "/etc/runit/runsvdir/default/sddm",
+         }) {
+        if (exists(p))
+            return true;
+    }
+
+    // s6 / s6-rc / 66 (r6): enabled in s6-rc bundle, live scandir, or 66 tree.
+    for (const char *p : {
+             "/etc/s6/adminsv/default/contents.d/sddm",
+             "/etc/s6/adminsv/default/contents.d/sddm-srv",
+             "/etc/s6/rc/compiled/servicedirs/sddm",
+             "/etc/s6/rc/compiled/servicedirs/sddm-srv",
+             "/etc/s6/current/sddm",
+             "/etc/s6/current/sddm-srv",
+             "/run/service/sddm",
+             "/run/service/sddm-srv",
+             "/run/s6/services/sddm",
+             "/run/s6/services/sddm-srv",
+         }) {
+        if (exists(p))
+            return true;
+    }
+    if (std::filesystem::is_directory("/var/lib/66/system", ec)) {
+        for (const auto &tree : std::filesystem::directory_iterator("/var/lib/66/system", ec)) {
+            if (!tree.is_directory(ec))
+                continue;
+            if (exists(tree.path() / "servicedirs/sddm") ||
+                exists(tree.path() / "servicedirs/svc/sddm") ||
+                exists(tree.path() / "servicedirs/sddm-srv"))
+                return true;
+        }
+    }
+    return false;
+}
+
+static const std::vector<SettingsCategory> &settings_categories() {
+    static const std::vector<SettingsCategory> categories = []() {
+        std::vector<SettingsCategory> list = {
+            {"Display", "settings-display", "preferences-desktop-display", {
+                {"Display", "Display", "Monitors, resolution, scale, brightness, wallpaper, desktop icons", "\uE7F4"},
+            }},
+            {"Network & internet", "settings-network", "network-wireless", {
+                {"Wifi", "Wi-Fi", "Connect to wireless networks", "\uE701"},
+            }},
+            {"Sound", "settings-sound", "preferences-desktop-sound", {
+                {"Audio", "Sound", "Volume, output and input devices, app volume", "\uE767"},
+            }},
+            {"Bluetooth", "settings-bluetooth", "preferences-system-bluetooth", {
+                {"Bluetooth", "Bluetooth", "Pair, connect and forget devices", "\uE702"},
+            }},
+            {"Behaviour", "settings-behaviour", "preferences-desktop-wallpaper", {
+                {"Desktop", "Desktop", "Theme, font, blur, overview, icon cache", "\uE771"},
+                {"Dock", "Dock", "Dock style, labels, which windows show", "\uE75B"},
+                {"Multitasking", "Multitasking", "App switching, workspaces, snap windows, hot corners", "\uE7C4"},
+                {"Autostart", "Autostart", "Commands run when the desktop or session starts", "\uE7E8"},
+            }},
+            {"Devices", "settings-devices", "preferences-desktop-peripherals", {
+                {"Mouse & Touchpad", "Mouse & touchpad", "Pointer speed, scrolling direction, buttons", "\uE962"},
+                {"Keyboard", "Keyboard", "Layouts, repeat delay and rate", "\uE765"},
+                {"Shortcuts", "Keyboard shortcuts", "System and custom key combinations", "\uEDA7"},
+            }},
+            {"Time & language", "settings-time", "preferences-system-time", {
+                {"Time & Date", "Date & time", "Time zone, clock format, automatic time", "\uEC92"},
+            }},
+        };
+        if (has_sddm_service_enabled()) {
+            list[4].pages.push_back(
+                {"SDDM", "Login screen (SDDM)", "Wallpaper and display scale for the SDDM login screen", "\uE77B"});
+        }
+        if (has_internal_battery()) {
+            // After Bluetooth, before Behaviour.
+            list.insert(list.begin() + 4, {"Battery", "settings-power", "battery", {
+                {"Battery", "Battery", "Charge, battery usage history, time remaining", "\uEBAA"},
+            }});
+        }
         return list;
     }();
-    static const bool battery = has_internal_battery();
-    return battery ? with_battery : categories;
+    return categories;
 }
 
 // The category holding `id`, which is either a page id or a category name.
@@ -656,6 +716,13 @@ void settings::load_save_settings(bool save, ConfigSettings* settings) {
     bind(float, "wallpaper_center_y", &settings->wallpaper_center_y);
     bind(bool, "wallpaper_span", &settings->wallpaper_span);
     bind(std::string, "wallpaper_monitors", &settings->wallpaper_monitors);
+    bind(std::string, "sddm_wallpaper_mode", &settings->sddm_wallpaper_mode);
+    if (settings->sddm_wallpaper_mode != "Display" && settings->sddm_wallpaper_mode != "Custom" && settings->sddm_wallpaper_mode != "Theme default")
+        settings->sddm_wallpaper_mode = "Display";
+    bind(std::string, "sddm_wallpaper_monitor", &settings->sddm_wallpaper_monitor);
+    bind(std::string, "sddm_scale", &settings->sddm_scale);
+    if (settings->sddm_scale.empty())
+        settings->sddm_scale = "auto";
     bind(bool, "dark_theme", &settings->dark_theme);
     bind(bool, "clock_24h", &settings->clock_24h);
     bind(bool, "hotcorners", &settings->hotcorners);
@@ -4322,10 +4389,12 @@ static void wallpaper_file_dropped(std::string uri_list) {
     t.detach();
 }
 
-// Shown over the Display page while files are dragged over the window.
+// Shown over the Display or SDDM page while files are dragged over the window.
 static void paint_wallpaper_drop_hint(Container *root, Container *right) {
     auto window = swifi_window(root);
-    if (!window->dnd_hovering || !container_by_name("display_wallpaper_row", right))
+    bool on_display = container_by_name("display_wallpaper_row", right) != nullptr;
+    bool on_sddm = container_by_name("sddm_page", right) != nullptr;
+    if (!window->dnd_hovering || (!on_display && !on_sddm))
         return;
     auto cr = window->drawing_context;
     auto dpi = window->dpi;
@@ -6482,6 +6551,814 @@ static void fill_autostart_settings(Container *root, bool reload_rows = true) {
         for (int i = 0; i < (int) sautostart_rows.size(); i++)
             make_autostart_row(padded_right, i);
     }
+}
+
+/*************************************************
+ *
+ * Login screen (SDDM)
+ *
+ *************************************************/
+
+struct SddmSystemState {
+    std::string theme;
+    std::string theme_dir;
+    std::string applied_scale;
+    std::string theme_default_background;
+    std::string applied_background;
+};
+
+static std::mutex ssddm_mutex;
+static bool ssddm_page_stale = false;
+static std::atomic<bool> ssddm_applying = false;
+static std::string ssddm_status;
+static bool ssddm_custom_scale_mode = false;
+static SddmSystemState ssddm_sys;
+
+static const std::vector<std::string> sddm_wallpaper_modes = {"Display", "Custom", "Theme default"};
+static const std::vector<std::string> sddm_scale_presets = {"1.0", "1.25", "1.5", "1.75", "2.0"};
+
+static std::string sddm_custom_wallpaper_path() {
+    return (wallpaper_config_dir() / "sddm-wall.png").string();
+}
+
+static std::string sddm_format_scale(double s) {
+    if (!std::isfinite(s) || s <= 0)
+        s = 1.0;
+    s = std::clamp(s, 0.5, 4.0);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.2f", s);
+    std::string out = buf;
+    // Trim trailing zero only when there are two decimal digits and the last is '0' (keep e.g. "1.0", "1.5").
+    if (out.size() >= 4 && out.back() == '0' && out[out.size() - 3] == '.')
+        out.pop_back();
+    return out;
+}
+
+static bool sddm_parse_scale(const std::string &text, double &out) {
+    std::string t = trim(text);
+    if (t.empty())
+        return false;
+    char *end = nullptr;
+    double v = std::strtod(t.c_str(), &end);
+    if (!end || *end != '\0' || !std::isfinite(v) || v < 0.5 || v > 4.0)
+        return false;
+    out = v;
+    return true;
+}
+
+static WallMonitor sddm_pick_monitor(bool *found_real = nullptr) {
+    auto monitors = wallpaper_monitors_copy();
+    if (!monitors.empty()) {
+        if (found_real)
+            *found_real = true;
+        if (!set->sddm_wallpaper_monitor.empty()) {
+            for (const auto &m : monitors) {
+                if (m.name == set->sddm_wallpaper_monitor)
+                    return m;
+            }
+        }
+        return monitors.front();
+    }
+    if (found_real)
+        *found_real = false;
+    WallMonitor fallback;
+    fallback.name = "Monitor";
+    fallback.w = 1920;
+    fallback.h = 1080;
+    fallback.scale = 1.0;
+    return fallback;
+}
+
+static double sddm_display_scale_value() {
+    bool found_real = false;
+    auto m = sddm_pick_monitor(&found_real);
+    if (found_real && m.scale > 0)
+        return m.scale;
+    for (const auto &mon : set->monitors) {
+        double v = 1.0;
+        if (sddm_parse_scale(mon.scale, v))
+            return v;
+    }
+    return 1.0;
+}
+
+static std::string sddm_effective_scale() {
+    if (set->sddm_scale == "auto")
+        return sddm_format_scale(sddm_display_scale_value());
+    double v = 1.0;
+    if (sddm_parse_scale(set->sddm_scale, v))
+        return sddm_format_scale(v);
+    return sddm_format_scale(sddm_display_scale_value());
+}
+
+static bool sddm_scale_is_preset(const std::string &scale) {
+    double val = 0;
+    if (!sddm_parse_scale(scale, val))
+        return false;
+    std::string fmt = sddm_format_scale(val);
+    for (const auto &p : sddm_scale_presets) {
+        if (p == fmt)
+            return true;
+    }
+    return false;
+}
+
+static std::string sddm_scale_dropdown_label() {
+    if (set->sddm_scale == "auto")
+        return "Auto";
+    if (!ssddm_custom_scale_mode && sddm_scale_is_preset(set->sddm_scale)) {
+        double val = 1.0;
+        sddm_parse_scale(set->sddm_scale, val);
+        return sddm_format_scale(val);
+    }
+    return "Custom";
+}
+
+static void sddm_parse_ini_file(const std::filesystem::path &path,
+                                std::unordered_map<std::string, std::unordered_map<std::string, std::string>> &sections) {
+    std::ifstream in(path);
+    if (!in.is_open())
+        return;
+    std::string section;
+    std::string line;
+    while (std::getline(in, line)) {
+        std::string t = trim(line);
+        if (t.empty() || t[0] == '#' || t[0] == ';')
+            continue;
+        if (t.front() == '[' && t.back() == ']') {
+            section = trim(t.substr(1, t.size() - 2));
+            continue;
+        }
+        auto eq = t.find('=');
+        if (eq == std::string::npos)
+            continue;
+        std::string key = trim(t.substr(0, eq));
+        std::string val = trim(t.substr(eq + 1));
+        sections[section][key] = val;
+    }
+}
+
+static std::string sddm_extract_qt_scale(const std::string &greeter_env) {
+    std::stringstream ss(greeter_env);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        std::string t = trim(item);
+        const std::string prefix = "QT_SCALE_FACTOR=";
+        if (t.rfind(prefix, 0) == 0)
+            return trim(t.substr(prefix.size()));
+    }
+    return "";
+}
+
+static std::string sddm_resolve_theme_bg(const std::string &theme_dir, const std::string &bg) {
+    if (bg.empty())
+        return "";
+    std::filesystem::path p(bg);
+    if (p.is_absolute())
+        return p.string();
+    return (std::filesystem::path(theme_dir) / p).string();
+}
+
+static SddmSystemState sddm_read_system_state() {
+    SddmSystemState state;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> cfg;
+
+    auto read_dir = [&](const char *dir) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec))
+            return;
+        std::vector<std::filesystem::path> files;
+        for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+            if (entry.is_regular_file(ec) && entry.path().extension() == ".conf")
+                files.push_back(entry.path());
+        }
+        std::sort(files.begin(), files.end());
+        for (const auto &f : files)
+            sddm_parse_ini_file(f, cfg);
+    };
+
+    read_dir("/usr/lib/sddm/sddm.conf.d");
+    read_dir("/etc/sddm.conf.d");
+    sddm_parse_ini_file("/etc/sddm.conf", cfg);
+
+    state.theme = cfg["Theme"]["Current"];
+    state.applied_scale = sddm_extract_qt_scale(cfg["General"]["GreeterEnvironment"]);
+
+    std::error_code ec;
+    if (state.theme.empty()) {
+        if (std::filesystem::is_directory("/usr/share/sddm/themes/breeze", ec))
+            state.theme = "breeze";
+        else if (std::filesystem::is_directory("/usr/share/sddm/themes", ec)) {
+            for (const auto &entry : std::filesystem::directory_iterator("/usr/share/sddm/themes", ec)) {
+                if (entry.is_directory(ec)) {
+                    state.theme = entry.path().filename().string();
+                    break;
+                }
+            }
+        }
+    }
+
+    if (!state.theme.empty()) {
+        state.theme_dir = "/usr/share/sddm/themes/" + state.theme;
+        std::unordered_map<std::string, std::unordered_map<std::string, std::string>> base_cfg;
+        sddm_parse_ini_file(std::filesystem::path(state.theme_dir) / "theme.conf", base_cfg);
+        state.theme_default_background = sddm_resolve_theme_bg(state.theme_dir, base_cfg["General"]["background"]);
+
+        auto user_cfg = base_cfg;
+        sddm_parse_ini_file(std::filesystem::path(state.theme_dir) / "theme.conf.user", user_cfg);
+        state.applied_background = sddm_resolve_theme_bg(state.theme_dir, user_cfg["General"]["background"]);
+    }
+    return state;
+}
+
+static bool sddm_set_custom_wallpaper_from_file(const std::string &file) {
+    if (file.empty() || !std::filesystem::is_regular_file(file))
+        return false;
+    std::string quoted = "'";
+    for (char ch : file) {
+        if (ch == '\'')
+            quoted += "'\\''";
+        else
+            quoted += ch;
+    }
+    quoted += "'";
+    auto mime = trim_newline(execAndGet(std::string("file --mime-type -b " + quoted).c_str()));
+    if (!mime.starts_with("image/"))
+        return false;
+    std::filesystem::path dest = sddm_custom_wallpaper_path();
+    std::error_code ec;
+    std::filesystem::create_directories(dest.parent_path(), ec);
+    std::filesystem::copy_file(file, dest, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec)
+        return false;
+    set->sddm_wallpaper_mode = "Custom";
+    main_thread([]() { settings::load_save_settings(true, set); });
+    ssddm_page_stale = true;
+    settings_request_redraw();
+    return true;
+}
+
+static void sddm_file_dropped(std::string uri_list) {
+    std::thread([uri_list]() {
+        for (const auto &path : paths_from_uri_list(uri_list))
+            if (sddm_set_custom_wallpaper_from_file(path))
+                break;
+    }).detach();
+}
+
+// Renders the Display wallpaper with the exact same cropping/layout as heart.cpp.
+static bool sddm_render_display_wallpaper_png(const WallMonitor &m, const std::string &dest_path, std::string &err) {
+    auto monitors = wallpaper_monitors_copy();
+    if (monitors.empty())
+        monitors.push_back(m);
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    auto res = wallpaper_resolve(wallpaper_shared_params(*set), set->wallpaper_span, overrides, monitors, m);
+
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(res.path, ec)) {
+        err = "No Display wallpaper is set yet";
+        return false;
+    }
+
+    cairo_surface_t *src = nullptr;
+    load_icon_full_path(&src, res.path);
+    if (!src) {
+        err = "Could not load Display wallpaper image";
+        return false;
+    }
+
+    const double iw = cairo_image_surface_get_width(src);
+    const double ih = cairo_image_surface_get_height(src);
+    const int ow = std::max(1, (int) std::round(m.w * (m.scale > 0 ? m.scale : 1.0)));
+    const int oh = std::max(1, (int) std::round(m.h * (m.scale > 0 ? m.scale : 1.0)));
+
+    cairo_surface_t *out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ow, oh);
+    auto cr = cairo_create(out);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    for (auto &r : wallpaper_monitor_rects(res, iw, ih, m)) {
+        cairo_save(cr);
+        cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+        cairo_clip(cr);
+        cairo_translate(cr, r.x, r.y);
+        cairo_scale(cr, r.w / iw, r.h / ih);
+        cairo_set_source_surface(cr, src, 0, 0);
+        auto pattern = cairo_get_source(cr);
+        cairo_pattern_set_filter(pattern, CAIRO_FILTER_GOOD);
+        cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+        cairo_paint(cr);
+        cairo_restore(cr);
+    }
+    cairo_destroy(cr);
+    cairo_surface_flush(out);
+    cairo_surface_destroy(src);
+
+    cairo_status_t st = cairo_surface_write_to_png(out, dest_path.c_str());
+    cairo_surface_destroy(out);
+    if (st != CAIRO_STATUS_SUCCESS) {
+        err = "Failed to encode cropped wallpaper PNG";
+        return false;
+    }
+    return true;
+}
+
+static std::string sddm_build_theme_conf_user(const std::filesystem::path &existing_path,
+                                              bool set_background, const std::string &background_path) {
+    std::vector<std::string> lines;
+    {
+        std::ifstream in(existing_path);
+        std::string line;
+        while (std::getline(in, line))
+            lines.push_back(line);
+    }
+
+    std::vector<std::string> out;
+    std::string section;
+    bool saw_general = false;
+    bool wrote_type = false;
+    bool wrote_bg = false;
+
+    auto flush_general = [&]() {
+        if (!set_background)
+            return;
+        if (!wrote_type) {
+            out.push_back("type=image");
+            wrote_type = true;
+        }
+        if (!wrote_bg) {
+            out.push_back("background=" + background_path);
+            wrote_bg = true;
+        }
+    };
+
+    for (const auto &raw : lines) {
+        std::string t = trim(raw);
+        if (!t.empty() && t.front() == '[' && t.back() == ']') {
+            if (section == "General")
+                flush_general();
+            section = trim(t.substr(1, t.size() - 2));
+            if (section == "General")
+                saw_general = true;
+            out.push_back(raw);
+            continue;
+        }
+        if (section == "General") {
+            auto eq = t.find('=');
+            if (eq != std::string::npos) {
+                std::string key = trim(t.substr(0, eq));
+                if (key == "background") {
+                    if (set_background && !wrote_bg) {
+                        out.push_back("background=" + background_path);
+                        wrote_bg = true;
+                    }
+                    continue;
+                }
+                if (key == "type" && set_background) {
+                    if (!wrote_type) {
+                        out.push_back("type=image");
+                        wrote_type = true;
+                    }
+                    continue;
+                }
+            }
+        }
+        out.push_back(raw);
+    }
+
+    if (section == "General") {
+        flush_general();
+    } else if (!saw_general && set_background) {
+        if (!out.empty() && !out.back().empty())
+            out.push_back("");
+        out.push_back("[General]");
+        flush_general();
+    }
+
+    std::string result;
+    for (const auto &l : out)
+        result += l + "\n";
+    return result;
+}
+
+static std::string sddm_shell_quote(const std::string &s) {
+    std::string out = "'";
+    for (char ch : s) {
+        if (ch == '\'')
+            out += "'\\''";
+        else
+            out += ch;
+    }
+    out += "'";
+    return out;
+}
+
+static void sddm_save_settings() {
+    main_thread([]() { settings::load_save_settings(true, set); });
+}
+
+static bool sddm_convert_to_png(const std::string &src_path, const std::string &dest_path, std::string &err) {
+    cairo_surface_t *src = nullptr;
+    load_icon_full_path(&src, src_path);
+    if (!src) {
+        err = "Could not load custom wallpaper image";
+        return false;
+    }
+    cairo_status_t st = cairo_surface_write_to_png(src, dest_path.c_str());
+    cairo_surface_destroy(src);
+    if (st != CAIRO_STATUS_SUCCESS) {
+        err = "Failed to encode custom wallpaper PNG";
+        return false;
+    }
+    return true;
+}
+
+static void sddm_apply_async() {
+    if (ssddm_applying.exchange(true))
+        return;
+    {
+        std::lock_guard<std::mutex> lock(ssddm_mutex);
+        ssddm_status = "Applying settings...";
+    }
+    settings_redraw_from_ui();
+
+    const std::string mode = set->sddm_wallpaper_mode;
+    const std::string scale = sddm_effective_scale();
+    const WallMonitor monitor = sddm_pick_monitor();
+
+    std::thread([mode, scale, monitor]() {
+        auto finish = [](const std::string &status, const std::string &toast = "", bool refresh = false) {
+            {
+                std::lock_guard<std::mutex> lock(ssddm_mutex);
+                ssddm_status = status;
+                if (refresh)
+                    ssddm_sys = sddm_read_system_state();
+            }
+            ssddm_applying = false;
+            ssddm_page_stale = true;
+            if (!toast.empty())
+                main_thread([toast]() { notify(toast); });
+            settings_request_redraw();
+        };
+
+        auto sys = sddm_read_system_state();
+        std::error_code ec;
+        if (sys.theme.empty() || sys.theme_dir.empty() || !std::filesystem::is_directory(sys.theme_dir, ec)) {
+            finish("No SDDM theme directory found in /usr/share/sddm/themes", "SDDM theme directory not found");
+            return;
+        }
+
+        char tmpl[] = "/tmp/mylar-sddm-XXXXXX";
+        char *dir_c = mkdtemp(tmpl);
+        if (!dir_c) {
+            finish("Failed to create temporary directory", "Failed to apply SDDM settings");
+            return;
+        }
+        std::filesystem::path tmpdir(dir_c);
+        defer(std::filesystem::remove_all(tmpdir, ec));
+
+        const std::filesystem::path staged_wall = tmpdir / "mylar-wallpaper.png";
+        const std::filesystem::path dest_wall = std::filesystem::path(sys.theme_dir) / "mylar-wallpaper.png";
+        bool install_wall = false;
+
+        if (mode == "Display") {
+            std::string err;
+            if (!sddm_render_display_wallpaper_png(monitor, staged_wall.string(), err)) {
+                finish(err, err);
+                return;
+            }
+            install_wall = true;
+        } else if (mode == "Custom") {
+            auto custom_path = sddm_custom_wallpaper_path();
+            if (!std::filesystem::is_regular_file(custom_path, ec)) {
+                finish("Choose a custom wallpaper image first", "Choose a custom SDDM wallpaper first");
+                return;
+            }
+            std::string err;
+            if (!sddm_convert_to_png(custom_path, staged_wall.string(), err)) {
+                finish(err, err);
+                return;
+            }
+            install_wall = true;
+        }
+
+        const std::filesystem::path staged_theme_user = tmpdir / "theme.conf.user";
+        {
+            std::ofstream out(staged_theme_user);
+            out << sddm_build_theme_conf_user(std::filesystem::path(sys.theme_dir) / "theme.conf.user",
+                                              install_wall, dest_wall.string());
+        }
+
+        const std::filesystem::path staged_greeter_conf = tmpdir / "99-mylar.conf";
+        {
+            std::ofstream out(staged_greeter_conf);
+            out << "# Managed by Mylar Settings\n"
+                << "[General]\n"
+                << "GreeterEnvironment=QT_SCALE_FACTOR=" << scale << "\n";
+        }
+
+        std::string cmd =
+            "install -Dm644 " + sddm_shell_quote(staged_greeter_conf.string()) + " /etc/sddm.conf.d/99-mylar.conf && " +
+            (install_wall
+                 ? ("install -Dm644 " + sddm_shell_quote(staged_wall.string()) + " " + sddm_shell_quote(dest_wall.string()))
+                 : ("rm -f " + sddm_shell_quote(dest_wall.string()))) +
+            " && install -Dm644 " + sddm_shell_quote(staged_theme_user.string()) + " " +
+            sddm_shell_quote((std::filesystem::path(sys.theme_dir) / "theme.conf.user").string());
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            execlp("pkexec", "pkexec", "sh", "-c", cmd.c_str(), (char *) nullptr);
+            _exit(127);
+        }
+        if (pid < 0) {
+            finish("Failed to launch pkexec", "Failed to launch authentication dialog");
+            return;
+        }
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            finish("Applied to SDDM (" + sys.theme + ", scale " + scale + ")", "SDDM settings applied", true);
+        } else if (WIFEXITED(status) && (WEXITSTATUS(status) == 126 || WEXITSTATUS(status) == 127)) {
+            finish("Authentication cancelled");
+        } else {
+            finish("Failed to apply SDDM settings", "Failed to apply SDDM settings");
+        }
+    }).detach();
+}
+
+static void paint_sddm_preview(Container *root, Container *c) {
+    auto window = swifi_window(root);
+    auto cr = window->drawing_context;
+    auto dpi = window->dpi;
+    auto b = c->real_bounds;
+    paint_smooth_frame(cr, b, settings_control_rounding * dpi, theme.dropdown_background, theme.dropdown_border);
+
+    auto m = sddm_pick_monitor();
+    const double aspect = (m.w > 0 && m.h > 0) ? (m.w / m.h) : (16.0 / 9.0);
+    const double pad = 16 * dpi;
+    double avail_w = std::max(1.0, b.w - pad * 2);
+    double avail_h = std::max(1.0, b.h - pad * 2);
+    double pw = avail_w;
+    double ph = pw / aspect;
+    if (ph > avail_h) {
+        ph = avail_h;
+        pw = ph * aspect;
+    }
+    Bounds screen(b.x + (b.w - pw) * .5, b.y + (b.h - ph) * .5, pw, ph);
+
+    cr->save();
+    drawRoundedRect(cr, screen.x, screen.y, screen.w, screen.h, 6 * dpi, 1.0);
+    cr->clip_path();
+
+    cr->set_source_rgba(0.08, 0.09, 0.11, 1.0);
+    cr->new_path();
+    cr->rectangle(screen.x, screen.y, screen.w, screen.h);
+    cr->fill();
+
+    const std::string mode = set->sddm_wallpaper_mode;
+    if (mode == "Display") {
+        auto monitors = wallpaper_monitors_copy();
+        if (monitors.empty())
+            monitors.push_back(m);
+        auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+        auto res = wallpaper_resolve(wallpaper_shared_params(*set), set->wallpaper_span, overrides, monitors, m);
+        if (auto thumb = wall_thumb(res.path)) {
+            const double k = screen.w / std::max(1.0, m.w);
+            for (auto &r : wallpaper_area_rects(res.params, thumb->iw, thumb->ih, res.area.w, res.area.h, res.pixel_scale)) {
+                Bounds rb(screen.x + (res.area.x + r.x - m.x) * k,
+                          screen.y + (res.area.y + r.y - m.y) * k,
+                          r.w * k, r.h * k);
+                if (rb.x > screen.x + screen.w || rb.y > screen.y + screen.h ||
+                    rb.x + rb.w < screen.x || rb.y + rb.h < screen.y)
+                    continue;
+                wall_draw_image(cr, thumb, rb, 1.0);
+            }
+        }
+    } else if (mode == "Custom") {
+        if (auto thumb = wall_thumb(sddm_custom_wallpaper_path())) {
+            auto r = wallpaper_image_rect(WallParams(), thumb->iw, thumb->ih, screen.w, screen.h, 1.0);
+            wall_draw_image(cr, thumb, Bounds(screen.x + r.x, screen.y + r.y, r.w, r.h), 1.0);
+        }
+    } else {
+        std::string default_bg;
+        {
+            std::lock_guard<std::mutex> lock(ssddm_mutex);
+            default_bg = ssddm_sys.theme_default_background;
+        }
+        if (!default_bg.empty()) {
+            if (auto thumb = wall_thumb(default_bg)) {
+                auto r = wallpaper_image_rect(WallParams(), thumb->iw, thumb->ih, screen.w, screen.h, 1.0);
+                wall_draw_image(cr, thumb, Bounds(screen.x + r.x, screen.y + r.y, r.w, r.h), 1.0);
+            }
+        }
+    }
+
+    // Subtle dark scrim + minimalist login UI mockup scaled with the chosen DPI factor.
+    cr->set_source_rgba(0, 0, 0, 0.25);
+    cr->new_path();
+    cr->rectangle(screen.x, screen.y, screen.w, screen.h);
+    cr->fill();
+
+    double eff_scale = 1.0;
+    sddm_parse_scale(sddm_effective_scale(), eff_scale);
+    const double ui = std::clamp(eff_scale, 0.5, 2.5) * (screen.h / 220.0);
+
+    // Mock clock at top-center
+    swifi_text(root, Bounds(screen.x, screen.y + 18 * ui, screen.w, 26 * ui), "12:00",
+               std::clamp(16.0 * ui / dpi, 7.0, 28.0), RGBA(1, 1, 1, 0.92), true);
+
+    // Mock avatar circle + password field in center
+    const double avatar_r = std::clamp(16.0 * ui, 8.0 * dpi, screen.h * 0.16);
+    const double cx = screen.x + screen.w * 0.5;
+    const double cy = screen.y + screen.h * 0.52;
+    drawRoundedRect(cr, cx - avatar_r, cy - avatar_r, avatar_r * 2, avatar_r * 2, avatar_r, 1.0);
+    set_argb(cr, RGBA(1, 1, 1, 0.28));
+    cr->fill();
+    drawRoundedRect(cr, cx - avatar_r, cy - avatar_r, avatar_r * 2, avatar_r * 2, avatar_r, std::max(1.0, 1.0 * dpi));
+    set_argb(cr, RGBA(1, 1, 1, 0.6));
+    cr->stroke();
+
+    const double field_w = std::clamp(92.0 * ui, 48.0 * dpi, screen.w * 0.65);
+    const double field_h = std::clamp(14.0 * ui, 8.0 * dpi, screen.h * 0.12);
+    const double fy = cy + avatar_r + 8 * ui;
+    drawRoundedRect(cr, cx - field_w * 0.5, fy, field_w, field_h, field_h * 0.5, 1.0);
+    set_argb(cr, RGBA(0, 0, 0, 0.45));
+    cr->fill();
+    drawRoundedRect(cr, cx - field_w * 0.5, fy, field_w, field_h, field_h * 0.5, std::max(1.0, 1.0 * dpi));
+    set_argb(cr, RGBA(1, 1, 1, 0.45));
+    cr->stroke();
+
+    // Corner badge: active theme + effective scale
+    std::string theme_name;
+    {
+        std::lock_guard<std::mutex> lock(ssddm_mutex);
+        theme_name = ssddm_sys.theme;
+    }
+    std::string badge = (theme_name.empty() ? "SDDM" : theme_name) + " · " + sddm_effective_scale() + "x";
+    double tw = swifi_text_width(root, badge, 9);
+    Bounds pill(screen.x + 8 * dpi, screen.y + screen.h - 24 * dpi, tw + 14 * dpi, 18 * dpi);
+    drawRoundedRect(cr, pill.x, pill.y, pill.w, pill.h, 4 * dpi, 1.0);
+    set_argb(cr, RGBA(0, 0, 0, 0.55));
+    cr->fill();
+    swifi_text(root, pill, badge, 9, RGBA(1, 1, 1, 0.95), true);
+
+    cr->restore();
+
+    drawRoundedRect(cr, screen.x, screen.y, screen.w, screen.h, 6 * dpi, std::max(1.0, (double) std::floor(dpi)));
+    set_argb(cr, RGBA(1, 1, 1, 0.2));
+    cr->stroke();
+}
+
+static void make_sddm_preview(Container *parent) {
+    static const int height = 220;
+    auto c = parent->child(FILL_SPACE, height);
+    c->name = "sddm_preview";
+    c->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = height * swifi_window(root)->dpi;
+    };
+    c->when_paint = paint_sddm_preview;
+}
+
+static void fill_sddm_settings(Container *root) {
+    auto padded_right = settings_begin_page(root);
+    if (!padded_right)
+        return;
+    padded_right->name = "sddm_page";
+    ssddm_page_stale = false;
+
+    SddmSystemState sys = sddm_read_system_state();
+    std::string status_text;
+    {
+        std::lock_guard<std::mutex> lock(ssddm_mutex);
+        ssddm_sys = sys;
+        status_text = ssddm_status;
+    }
+
+    make_section_title(padded_right, "Login screen (SDDM)");
+    make_vert_space(padded_right, 10);
+    make_sddm_preview(padded_right);
+    make_vert_space(padded_right, 14);
+
+    // ---- Wallpaper ----
+    make_section_title(padded_right, "Wallpaper");
+    make_vert_space(padded_right, 8);
+
+    std::string wp_desc = "Uses your Display wallpaper with the same cropping";
+    if (set->sddm_wallpaper_mode == "Custom")
+        wp_desc = "Uses a custom image chosen for SDDM";
+    else if (set->sddm_wallpaper_mode == "Theme default")
+        wp_desc = "Uses the active SDDM theme's default background";
+
+    make_dropdown_option(padded_right, "Wallpaper source", wp_desc, "\uE8B9",
+                         set->sddm_wallpaper_mode, sddm_wallpaper_modes, [](std::string selected) {
+        if (selected == set->sddm_wallpaper_mode)
+            return;
+        set->sddm_wallpaper_mode = selected;
+        sddm_save_settings();
+        ssddm_page_stale = true;
+        settings_redraw_from_ui();
+    });
+
+    auto monitors = wallpaper_monitors_copy();
+    if (set->sddm_wallpaper_mode == "Display" && monitors.size() > 1) {
+        std::vector<std::string> mon_options = {"Primary"};
+        bool selected_exists = false;
+        for (const auto &m : monitors) {
+            mon_options.push_back(m.name);
+            if (m.name == set->sddm_wallpaper_monitor)
+                selected_exists = true;
+        }
+        if (!selected_exists)
+            set->sddm_wallpaper_monitor.clear();
+        std::string current_mon = set->sddm_wallpaper_monitor.empty() ? "Primary" : set->sddm_wallpaper_monitor;
+        make_dropdown_option(padded_right, "Source monitor", "Which monitor's wallpaper and crop to use", "\uE7F4",
+                             current_mon, mon_options, [](std::string selected) {
+            set->sddm_wallpaper_monitor = (selected == "Primary") ? "" : selected;
+            sddm_save_settings();
+            settings_redraw_from_ui();
+        });
+    }
+
+    if (set->sddm_wallpaper_mode == "Custom") {
+        std::error_code ec;
+        bool has_custom = std::filesystem::is_regular_file(sddm_custom_wallpaper_path(), ec);
+        make_button_option(padded_right, "Custom wallpaper",
+                           has_custom ? "Custom image selected (can also drag and drop here)" : "Choose an image or drag and drop one here",
+                           "Choose file", []() {
+            static bool chooser_open = false;
+            if (chooser_open)
+                return;
+            chooser_open = true;
+            std::thread([]() {
+                sddm_set_custom_wallpaper_from_file(trim_newline(choose_file()));
+                chooser_open = false;
+            }).detach();
+        }, "\uE8B9");
+    }
+
+    make_vert_space(padded_right, 14);
+
+    // ---- Display scale ----
+    make_section_title(padded_right, "Display scale");
+    make_vert_space(padded_right, 8);
+
+    std::vector<std::string> scale_options = {"Auto", "1.0", "1.25", "1.5", "1.75", "2.0", "Custom"};
+    std::string scale_desc = set->sddm_scale == "auto"
+        ? ("Pulled from Display scale (currently " + sddm_format_scale(sddm_display_scale_value()) + ")")
+        : ("Sets QT_SCALE_FACTOR=" + sddm_effective_scale() + " for the SDDM greeter");
+
+    make_dropdown_option(padded_right, "Scale", scale_desc, "\uE740",
+                         sddm_scale_dropdown_label(), scale_options, [](std::string selected) {
+        if (selected == "Auto") {
+            ssddm_custom_scale_mode = false;
+            set->sddm_scale = "auto";
+        } else if (selected == "Custom") {
+            ssddm_custom_scale_mode = true;
+            if (set->sddm_scale == "auto")
+                set->sddm_scale = sddm_format_scale(sddm_display_scale_value());
+        } else {
+            ssddm_custom_scale_mode = false;
+            set->sddm_scale = selected;
+        }
+        sddm_save_settings();
+        ssddm_page_stale = true;
+        settings_redraw_from_ui();
+    });
+
+    if (ssddm_custom_scale_mode || (set->sddm_scale != "auto" && !sddm_scale_is_preset(set->sddm_scale))) {
+        make_reset_textfield(padded_right, "Custom scale", "DPI scale factor from 0.5 to 4.0 (e.g. 1.25)", "\uE740",
+                             false, sddm_effective_scale(), "1.0", [](std::string value) {
+            double parsed = 1.0;
+            if (!sddm_parse_scale(value, parsed)) {
+                main_thread([]() { notify("Enter a scale factor between 0.5 and 4.0"); });
+                return;
+            }
+            set->sddm_scale = sddm_format_scale(parsed);
+            sddm_save_settings();
+            settings_redraw_from_ui();
+        }, nullptr, "e.g. 1.0, 1.25, 1.5, 2.0");
+    }
+
+    make_vert_space(padded_right, 14);
+
+    // ---- Apply ----
+    make_section_title(padded_right, "System configuration");
+    make_vert_space(padded_right, 8);
+
+    std::string apply_desc;
+    if (!status_text.empty()) {
+        apply_desc = status_text;
+    } else {
+        apply_desc = "Theme: " + (sys.theme.empty() ? "unknown" : sys.theme);
+        if (!sys.applied_scale.empty())
+            apply_desc += " · Current SDDM scale: " + sys.applied_scale;
+        apply_desc += " · Requires administrator privileges";
+    }
+
+    make_button_option(padded_right, "Apply to SDDM", apply_desc,
+                       ssddm_applying.load() ? "Applying..." : "Apply",
+                       []() { sddm_apply_async(); }, "\uE77B",
+                       []() { return !ssddm_applying.load(); });
 }
 
 static void fill_wifi_settings(Container *root) {
@@ -10152,6 +11029,17 @@ static void search_build_into(std::vector<SearchEntry> &out) {
     for (const auto &entry : set->autostart)
         search_add("Autostart", "Autostart", entry.command, entry.when, "autostart startup exec command");
 
+    if (has_sddm_service_enabled()) {
+        search_add("SDDM", "Login screen (SDDM)", "Login screen (SDDM)", "Wallpaper and display scale for the SDDM login screen",
+                   "sddm login greeter lock screen display manager");
+        search_add("SDDM", "Wallpaper", "Wallpaper source", "Uses your Display wallpaper with the same cropping",
+                   "sddm login greeter wallpaper background image crop");
+        search_add("SDDM", "Display scale", "Scale", "DPI scale factor for the SDDM greeter",
+                   "sddm login greeter scale dpi hidpi qt_scale_factor zoom");
+        search_add("SDDM", "System configuration", "Apply to SDDM", "Write wallpaper and scale configuration to SDDM",
+                   "sddm apply save pkexec greeter");
+    }
+
     search_add("Mouse & Touchpad", "Mouse", "Mouse", "", "mouse pointer");
     search_add("Mouse & Touchpad", "Mouse", "Reverse scrolling direction", "Phone like scrolling behaviour", "natural scrolling invert scroll wheel");
     search_add("Mouse & Touchpad", "Mouse", "Primary mouse button", "Which side performs the main function of the mouse",
@@ -11178,6 +12066,8 @@ static bool settings_show(Container *root, const std::string &id) {
         fill_multitasking_settings(root);
     } else if (page == "Autostart") {
         fill_autostart_settings(root);
+    } else if (page == "SDDM") {
+        fill_sddm_settings(root);
     } else if (page == "Display") {
         fill_display_settings(root);
     } else if (page == "Shortcuts") {
@@ -11809,6 +12699,9 @@ void fill_root(Container *root) {
         if (sautostart_page_stale && container_by_name("autostart_page", root))
             fill_autostart_settings(root, false);
         sautostart_page_stale = false;
+        if (ssddm_page_stale && container_by_name("sddm_page", root))
+            fill_sddm_settings(root);
+        ssddm_page_stale = false;
         if (skbd_page_stale && container_by_name("keyboard_page", root))
             fill_keyboard_settings(root, nullptr, false);
         skbd_page_stale = false;
@@ -12189,13 +13082,22 @@ void actual_start() {
         }
         return forward_press ? forward_press(rw, button, state, x, y) : false;
     };
-    // Files can be dropped anywhere on the Display page to set the wallpaper.
+    // Files can be dropped anywhere on the Display or SDDM page to set the wallpaper.
     mylar->raw_window->accepts_file_drop = [](RawWindow *rw, float, float) {
         std::lock_guard<std::mutex> lock(rw->creator->mutex);
-        return settings_mylar && container_by_name("display_wallpaper_row", settings_mylar->root) != nullptr;
+        return settings_mylar && (container_by_name("display_wallpaper_row", settings_mylar->root) != nullptr ||
+                                  container_by_name("sddm_page", settings_mylar->root) != nullptr);
     };
-    mylar->raw_window->on_file_drop = [](RawWindow *, float, float, std::string uri_list) {
-        wallpaper_file_dropped(uri_list);
+    mylar->raw_window->on_file_drop = [](RawWindow *rw, float, float, std::string uri_list) {
+        bool on_sddm = false;
+        {
+            std::lock_guard<std::mutex> lock(rw->creator->mutex);
+            on_sddm = settings_mylar && container_by_name("sddm_page", settings_mylar->root) != nullptr;
+        }
+        if (on_sddm)
+            sddm_file_dropped(uri_list);
+        else
+            wallpaper_file_dropped(uri_list);
     };
     mylar->raw_window->on_close = [](RawWindow *w) {
         settings_wifi_release();
