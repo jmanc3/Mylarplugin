@@ -2525,7 +2525,9 @@ void HyprIso::create_callbacks() {
     }
 
     for (auto w : Desktop::windowState()->windows()) {
-        on_open_window(w);
+        // Unmapped windows will emit window.open when they can accept decorations.
+        if (Desktop::View::validMapped(w))
+            on_open_window(w);
     }
     
     for (auto l : Desktop::layerState()->layers()) {
