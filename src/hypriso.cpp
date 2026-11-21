@@ -2525,7 +2525,9 @@ void HyprIso::create_callbacks() {
     }
 
     for (auto w : Desktop::windowState()->windows()) {
-        on_open_window(w);
+        // Unmapped windows will emit window.open when they can accept decorations.
+        if (Desktop::View::validMapped(w))
+            on_open_window(w);
     }
     
     for (auto l : Desktop::layerState()->layers()) {
@@ -6222,6 +6224,22 @@ static CBox clip_box_for_current_pass(CBox box) {
     const double x2 = std::ceil(box.x + box.w);
     const double y2 = std::ceil(box.y + box.h);
     return CBox(x1, y1, x2 - x1, y2 - y1);
+}
+
+void render_popup_background(Bounds box, RGBA color, float radius) {
+    // The native element declares the backdrop bounds during blur damage planning.
+    CRectPassElement::SRectData data;
+    data.box = tocbox(box);
+    data.color = CHyprColor(color.r, color.g, color.b, color.a);
+    data.round = std::round(radius);
+    data.blur = true;
+    if (hypriso->clip) {
+        const auto clip = tocbox(hypriso->clipbox);
+        if (!clip.overlaps(data.box))
+            return;
+        data.clipBox = clip_box_for_current_pass(clip);
+    }
+    Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<CRectPassElement>(data));
 }
 
 void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPower, bool blur, float blurA) {

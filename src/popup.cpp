@@ -299,7 +299,7 @@ Container *create_menu_panel(float height, int x, int y, int mid, int cid,
             renderfix
             auto b = c->real_bounds;
             render_drop_shadow(rid, 1.0, {0, 0, 0, .0108f}, 7 * s, 2.0f, b, std::round(16 * s));
-            rect(b, {1, 1, 1, .75}, 0, 7 * s, 2.0, true);
+            render_popup_background(b, {1, 1, 1, .75}, 7 * s);
         }
     };
     p->after_paint = [](Container *actual_root, Container *c) {

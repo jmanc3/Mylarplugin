@@ -710,6 +710,7 @@ struct HyprIso {
 extern HyprIso *hypriso;
 
 void rect(Bounds box, RGBA color, int conrnermask = 0, float round = 0.0, float roundingPower = 2.0, bool blur = false, float blurA = 1.0);
+void render_popup_background(Bounds box, RGBA color, float radius);
 void border(Bounds box, RGBA color, float size, int cornermask = 0, float round = 0.0, float roundingPower = 2.0, bool blur = false, float blurA = 1.0);
 void shadow(Bounds box, RGBA color, float rounding, float roundingPower, float size);
 // color is used as-is (rgb + opacity); size is the shadow extent in physical pixels (0 = 12 logical px)
