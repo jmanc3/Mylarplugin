@@ -1628,7 +1628,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                     if (shadow_surf) {
                         const double pad_x = (cairo_image_surface_get_width(shadow_surf) - w) * .5;
                         const double pad_y = (cairo_image_surface_get_height(shadow_surf) - h) * .5;
-                        cr->set_source_surface(shadow_surf, ix - pad_x, iy - pad_y + std::round(2.0 * mylar->raw_window->dpi));
+                        cr->set_source_surface(shadow_surf, ix - pad_x, iy - pad_y);
                         cr->paint_source();
                     }
                     cr->set_source_surface(ico_surf, ix, iy);

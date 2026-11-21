@@ -1819,6 +1819,7 @@ static void paint_initial_fade_in() {
     if (!initial_fade_in_forced && hyprland_instance_name() == last_hyprland_instance_name())
         done = true;
     if (done) {
+        initial_fade_in_scalar = 1.0;
         set_cursor_hidden_for_desktop_fade(false);
         return;
     }
@@ -2910,6 +2911,10 @@ void heart::begin() {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
+    if (!initial_fade_in_forced && hyprland_instance_name() == last_hyprland_instance_name()) {
+        initial_fade_in_done = true;
+        initial_fade_in_scalar = 1.0;
+    }
     set_cursor_hidden_for_desktop_fade(!initial_fade_in_done);
     load_restore_infos();
             
