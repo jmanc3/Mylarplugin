@@ -52,6 +52,8 @@ static constexpr double damage_pad_px = 4.0;
 static bool preloader_started = false;
 static std::map<int, long> preloaded_captures;
 static std::set<int> dirty_wallpapers;
+static std::map<int, long> wallpaper_fade_until;
+static std::set<int> wallpaper_fade_active;
 static size_t preload_cursor = 0;
 
 // All geometry below is in global logical coordinates. Only painting converts
@@ -1227,6 +1229,50 @@ static void damage_monitor_wallpapers(int mid) {
     }
 }
 
+static bool monitor_exists_in_actual(int mid) {
+    for (auto m : actual_monitors) {
+        if (*datum<int>(m, "cid") == mid)
+            return true;
+    }
+    return false;
+}
+
+static void start_wallpaper_fade_capture(int mid) {
+    if (!running || !initialized || !scene || wallpaper_fade_active.contains(mid))
+        return;
+    auto fade_it = wallpaper_fade_until.find(mid);
+    if (fade_it == wallpaper_fade_until.end())
+        return;
+    wallpaper_fade_active.insert(mid);
+    const auto generation = lifecycle;
+    const float base_ms = 1000.0f / std::max(1.0f, hypriso->fps(mid));
+    later(base_ms, [mid, generation](Timer *t) {
+        const bool alive = running && generation == lifecycle && initialized && scene && monitor_exists_in_actual(mid);
+        if (!alive) {
+            wallpaper_fade_active.erase(mid);
+            t->keep_running = false;
+            return;
+        }
+        const long now = get_current_time_in_ms();
+        hypriso->screenshot_wallpaper(mid);
+        scene->wallpaper_captures[mid] = now;
+        damage_monitor_entire(mid);
+        auto it = wallpaper_fade_until.find(mid);
+        if (it == wallpaper_fade_until.end() || now >= it->second) {
+            if (it != wallpaper_fade_until.end())
+                wallpaper_fade_until.erase(it);
+            if (hypriso->has_wallpaper_thumbnail(mid))
+                dirty_wallpapers.erase(mid);
+            wallpaper_fade_active.erase(mid);
+            t->keep_running = false;
+            return;
+        }
+        const float frame_ms = 1000.0f / std::max(1.0f, hypriso->fps(mid));
+        t->delay = std::max(frame_ms, static_cast<float>(max_monitor_render_ms() * 0.85));
+        t->keep_running = true;
+    });
+}
+
 static long screenshots(bool initial = false) {
     if (!scene)
         return fast_capture_ms;
@@ -1387,7 +1433,15 @@ static long screenshots(bool initial = false) {
 
     for (auto m : actual_monitors) {
         const int mid = *datum<int>(m, "cid");
-        const bool missing_wall = !hypriso->has_wallpaper_thumbnail(mid) || dirty_wallpapers.contains(mid) || (initial && !set->draw_wallpaper);
+        if (!initial && wallpaper_fade_active.contains(mid))
+            continue;
+        auto fade_it = wallpaper_fade_until.find(mid);
+        const bool fading_wall = fade_it != wallpaper_fade_until.end() && now < fade_it->second;
+        if (fade_it != wallpaper_fade_until.end() && !fading_wall) {
+            wallpaper_fade_until.erase(fade_it);
+            dirty_wallpapers.insert(mid);
+        }
+        const bool missing_wall = !hypriso->has_wallpaper_thumbnail(mid) || dirty_wallpapers.contains(mid) || fading_wall || (initial && !set->draw_wallpaper);
         if (!missing_wall && (initial || busy_motion))
             continue;
         const auto previous = scene->wallpaper_captures.find(mid);
@@ -1399,7 +1453,7 @@ static long screenshots(bool initial = false) {
             break;
         }
         hypriso->screenshot_wallpaper(mid);
-        if (hypriso->has_wallpaper_thumbnail(mid))
+        if (!fading_wall && hypriso->has_wallpaper_thumbnail(mid))
             dirty_wallpapers.erase(mid);
         scene->wallpaper_captures[mid] = get_current_time_in_ms();
         if (!initial)
@@ -1492,6 +1546,11 @@ static bool initialize_overview(int monitor) {
         hypriso->render_whitelist.clear();
         hypriso->whitelist_on = true;
         initialized = true;
+        const long now = get_current_time_in_ms();
+        for (const auto &[mid, until] : wallpaper_fade_until) {
+            if (now < until)
+                start_wallpaper_fade_capture(mid);
+        }
         // No window is focused in overview, even a fullscreen game hiding its cursor.
         set_input_takeover("overview", true);
         hold_overview_open();
@@ -1554,6 +1613,7 @@ void overview_actual_close() {
     initialized = false;
     openess = 0.0;
     running = false;
+    wallpaper_fade_active.clear();
     drag_workspace_switcher::close();
     if (scene && scene->taking_desktop)
         show_desktop::stop();
@@ -1781,32 +1841,34 @@ void overview::on_monitor_open(int mid) {
     });
 }
 
-void overview::on_wallpaper_changed(int mid) {
+void overview::on_wallpaper_changed(int mid, long transition_ms) {
     dirty_wallpapers.insert(mid);
+    if (transition_ms > 0)
+        wallpaper_fade_until[mid] = get_current_time_in_ms() + transition_ms + 50;
     later_immediate([mid](Timer *) {
-        if (!dirty_wallpapers.contains(mid))
-            return;
-        bool monitor_exists = false;
-        for (auto m : actual_monitors) {
-            if (*datum<int>(m, "cid") == mid) {
-                monitor_exists = true;
-                break;
-            }
-        }
-        if (!monitor_exists) {
+        if (!monitor_exists_in_actual(mid)) {
             dirty_wallpapers.erase(mid);
+            wallpaper_fade_until.erase(mid);
+            wallpaper_fade_active.erase(mid);
             return;
         }
+        const long now = get_current_time_in_ms();
+        auto fade_it = wallpaper_fade_until.find(mid);
+        const bool fading = fade_it != wallpaper_fade_until.end() && now < fade_it->second;
         if (running) {
             if (!initialized || !scene)
                 return;
             hypriso->screenshot_wallpaper(mid);
-            if (hypriso->has_wallpaper_thumbnail(mid))
+            if (!fading && hypriso->has_wallpaper_thumbnail(mid))
                 dirty_wallpapers.erase(mid);
-            scene->wallpaper_captures[mid] = get_current_time_in_ms();
-            damage_monitor_wallpapers(mid);
+            scene->wallpaper_captures[mid] = now;
+            damage_monitor_entire(mid);
+            if (fading)
+                start_wallpaper_fade_capture(mid);
             return;
         }
+        if (!dirty_wallpapers.contains(mid))
+            return;
         if (show_desktop::is_opened() || drag::dragging() || screenshot_tool::is_open())
             return;
         hypriso->screenshot_wallpaper(mid);

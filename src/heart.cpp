@@ -1347,6 +1347,8 @@ static bool is_snapped(int id) {
 // written to ~/.cache/mylar/wallpaper so the next start can skip decoding the
 // full sized source.
 
+static constexpr long wall_transition_ms = 700;
+
 struct WallSlot {
     TextureInfo source;      // the image file as loaded
     bool source_loading = false;
@@ -1525,7 +1527,7 @@ static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved re
             wall_slot_clear(wall_slot(c, *wall1_active));
         }
         damage_all();
-        overview::on_wallpaper_changed(id);
+        overview::on_wallpaper_changed(id, fade ? wall_transition_ms : 0);
         return;
     }
 
@@ -1587,7 +1589,7 @@ static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved re
                 *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
             }
             damage_all();
-            overview::on_wallpaper_changed(id);
+            overview::on_wallpaper_changed(id, fade ? wall_transition_ms : 0);
         });
         if (disk_copy) {
             wall_write_disk_cache(m.name, key, disk_copy);
@@ -1783,7 +1785,7 @@ static void paint_wallpaper(int current_monitor, Container *m) {
     static std::vector<float> curve = { 0.000, 0.139, 0.228, 0.298, 0.355, 0.404, 0.448, 0.486, 0.521, 0.553, 0.582, 0.609, 0.634, 0.657, 0.678, 0.698, 0.717, 0.735, 0.752, 0.767, 0.782, 0.796, 0.810, 0.822, 0.834, 0.845, 0.856, 0.866, 0.875, 0.884, 0.893, 0.901, 0.909, 0.916, 0.923, 0.929, 0.935, 0.941, 0.946, 0.951, 0.956, 0.961, 0.965, 0.969, 0.972, 0.976, 0.979, 0.982, 0.984, 0.987, 0.989, 0.991, 0.993, 0.994, 0.996, 0.997, 0.998, 0.999, 0.999, 1.000, 1.000 };
     auto scalar = pull(curve, initial_fade_in_scalar);
     const double zoom = hypriso->capturing_wallpaper() ? 1.0 : 1 + .4 * (1.0 - scalar);
-    float trans = 700.0f;
+    float trans = static_cast<float>(wall_transition_ms);
 
     if (delta < trans && !(hypriso->capturing_wallpaper() && !overview::is_showing())) {
         draw_wall_slot(current_monitor, m, !wall1_active, false, zoom, 1.0); // old base
