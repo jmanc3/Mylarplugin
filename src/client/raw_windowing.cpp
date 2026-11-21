@@ -259,6 +259,8 @@ struct wl_context {
     // A close request may come from a thread other than the Wayland loop.
     // Keep it from returning while libwayland is invoking client callbacks.
     std::recursive_mutex dispatch_mut;
+    std::mutex display_shutdown_mut;
+    int display_fd = -1;
   
     // close_app() may be called from a thread other than the Wayland event loop.
     // Keep the stop request synchronized with the loop that owns `display`.
@@ -396,6 +398,7 @@ struct wl_window {
     int popup_fallback_anchor_y = 0;
 };
 
+std::mutex apps_mutex;
 std::vector<wl_context *> apps;
 std::vector<wl_window *> windows;
 
@@ -2367,6 +2370,7 @@ struct wl_context *wl_context_create(void) {
         free(ctx);
         return NULL;
     }
+    ctx->display_fd = wl_display_get_fd(ctx->display);
 
     ctx->registry = wl_display_get_registry(ctx->display);
     wl_registry_add_listener(ctx->registry, &registry_listener, ctx);
@@ -2438,6 +2442,10 @@ void wl_context_destroy(struct wl_context *ctx) {
     if (ctx->xkb_ctx) xkb_context_unref(ctx->xkb_ctx);
 
     wl_registry_destroy(ctx->registry);
+    {
+        std::lock_guard<std::mutex> shutdown_lock(ctx->display_shutdown_mut);
+        ctx->display_fd = -1;
+    }
     wl_display_disconnect(ctx->display);
 
     for (const auto &pf : ctx->polled_fds)
@@ -2446,9 +2454,17 @@ void wl_context_destroy(struct wl_context *ctx) {
     close(ctx->wake_pipe[0]);
     close(ctx->wake_pipe[1]);
 
-    for (int i = apps.size() - 1; i >= 0; i--)
-        if (apps[i] == ctx)
-            apps.erase(apps.begin() + i);
+    {
+        std::lock_guard<std::mutex> apps_lock(apps_mutex);
+        for (int i = apps.size() - 1; i >= 0; i--)
+            if (apps[i] == ctx)
+                apps.erase(apps.begin() + i);
+    }
+
+    // Wait for any in-flight close_app() that looked up ctx before we erased it.
+    {
+        std::lock_guard<std::mutex> shutdown_lock(ctx->display_shutdown_mut);
+    }
 
     delete ctx;
 }
@@ -2689,7 +2705,10 @@ RawApp *windowing::open_app() {
     
     pipe2(ctx->wake_pipe, O_CLOEXEC | O_NONBLOCK);
 
-    apps.push_back(ctx);
+    {
+        std::lock_guard<std::mutex> apps_lock(apps_mutex);
+        apps.push_back(ctx);
+    }
     
     while (still_need_work(ctx))
         wl_display_dispatch(ctx->display); 
@@ -2700,6 +2719,7 @@ RawApp *windowing::open_app() {
 static wl_context *find_context(RawApp *app) {
     if (!app)
         return nullptr;
+    std::lock_guard<std::mutex> apps_lock(apps_mutex);
     for (auto c : apps)
         if (c->id == app->id)
             return c;
@@ -2982,7 +3002,8 @@ void windowing::wake_up(RawWindow *window) {
 void windowing::redraw_now(RawWindow *window) {
     for (auto win : windows) {
         if (win->rw == window) {
-            if (!win->marked_for_closing && win->on_render) win->on_render(win);
+            if (!win->marked_for_closing && win->ctx && win->ctx->running && win->on_render)
+                win->on_render(win);
             return;
         }
     }
@@ -3347,27 +3368,28 @@ void windowing::close_app(RawApp *app) {
     if (!app)
         return;
     wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
-    if (!ctx)
-        return;
-
-    // This can be called from another thread.  Set the stop flag *before*
-    // touching any windows: otherwise the event thread can wake between
-    // close_window() calls and dispatch a queued Wayland callback for an
-    // object that is in the middle of being torn down.  main_loop() owns the
-    // actual Wayland destruction after it observes this flag.
+    std::unique_lock<std::mutex> shutdown_lock;
     {
-        std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
-        ctx->running = false;
+        std::lock_guard<std::mutex> apps_lock(apps_mutex);
+        for (auto c : apps)
+            if (c->id == app->id)
+                ctx = c;
+        if (!ctx)
+            return;
+        shutdown_lock = std::unique_lock<std::mutex>(ctx->display_shutdown_mut);
     }
-    // Unblock an in-process client thread waiting on the Wayland socket (e.g.
-    // inside Mesa's eglSwapBuffers / eglMakeCurrent) while the compositor main
-    // thread is joining it during plugin unload.
-    if (ctx->display)
-        shutdown(wl_display_get_fd(ctx->display), SHUT_RDWR);
+
+    // This can be called from another thread.  Set the stop flag and shut down
+    // the Wayland socket *before* taking dispatch_mut: the client thread can be
+    // holding dispatch_mut inside wl_display_dispatch_pending -> on_render ->
+    // Mesa EGL waiting on the compositor main thread, which would deadlock if
+    // we waited on dispatch_mut first.  main_loop() owns the actual Wayland
+    // destruction after it observes this flag.
+    ctx->running = false;
+    if (ctx->display_fd >= 0)
+        shutdown(ctx->display_fd, SHUT_RDWR);
     write(ctx->wake_pipe[1], "x", 1);
+    std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
 }
 
 void RawApp::update_monitor_information() {

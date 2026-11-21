@@ -13270,6 +13270,13 @@ void actual_start() {
 
     windowing::main_loop(settings_app);
 
+    settings_wifi_release();
+    settings_bluetooth_release();
+    settings_audio_release();
+    sshortcut_stop_editing();
+    trial_dialog_close();
+    dropdown_popup = nullptr;
+    popups.clear();
     page_slide_finish();
     nav_indicator = NavIndicator();
     focus_main = FocusState();

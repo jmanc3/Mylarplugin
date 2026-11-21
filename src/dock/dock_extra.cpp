@@ -590,6 +590,8 @@ static void extra_fetch_targets(ExtraMenu *menu) {
     auto dock = menu->dock;
     std::string ours = menu->ours;
     main_thread([dock, menu, ours]() {
+        if (finished || dock->closing)
+            return;
         std::vector<ProjectionTarget> targets;
         for (auto &m : hypriso->all_monitors())
             if (m.from != ours)
@@ -932,16 +934,18 @@ static void tray_clicked(Container *root, Container *c, int button) {
             l.cell,
             l.cell);
         main_thread([dock, extra, key = item.key, anchor_rect]() {
+            if (finished || dock->closing)
+                return;
             systray::fetch_menu(key, [dock, extra, key, anchor_rect](std::vector<TrayMenuItem> menu) {
+                if (finished || dock->closing)
+                    return;
                 if (menu.empty()) {
                     // No usable dbusmenu: let the app show its own.
-                    if (!finished && !dock->closing) {
-                        windowing::run_on_app(dock->app, [dock, extra]() {
-                            std::lock_guard<std::mutex> lock(dock->app->mutex);
-                            if (!finished && !dock->closing && dock->extra == extra && windowing::has_window(extra->raw_window))
-                                close_extra(dock);
-                        });
-                    }
+                    windowing::run_on_app(dock->app, [dock, extra]() {
+                        std::lock_guard<std::mutex> lock(dock->app->mutex);
+                        if (!finished && !dock->closing && dock->extra == extra && windowing::has_window(extra->raw_window))
+                            close_extra(dock);
+                    });
                     systray::click(key, 3);
                     return;
                 }

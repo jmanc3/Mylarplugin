@@ -643,7 +643,12 @@ void fill_battery_container(Dock *dock) {
 }
 
 void battery_stop() {
+    std::thread worker;
+    {
+        std::lock_guard<std::mutex> lock(battery_mutex);
+        worker = std::move(battery_thread);
+    }
     battery_wakeup.notify_all();
-    if (battery_thread.joinable())
-        battery_thread.join();
+    if (worker.joinable())
+        worker.join();
 }

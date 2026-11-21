@@ -4110,6 +4110,7 @@ void run_on_every_dock(std::function<void(Dock *)> func) {
 
 void total_update() {
     main_thread([]() {
+        if (finished) return;
         auto clients = snapshot_audio_clients();
         for (auto client : clients) {
             if (client.is_master_volume()) {

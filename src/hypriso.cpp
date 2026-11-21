@@ -6183,6 +6183,8 @@ void HyprIso::end() {
     ZoneScoped;
 #endif
     stop_png_writers();
+    if (g_pSeatManager && g_pSeatManager->m_seatGrab)
+        g_pSeatManager->setGrab(nullptr);
     eventListeners.clear();
     closingWindowZIndices.clear();
     while (!pending_desktop_drops.empty())
