@@ -200,6 +200,7 @@ struct Pin : UserData {
     std::string full_icon;
 
     cairo_surface_t* icon_surf = nullptr;
+    cairo_surface_t* icon_shadow_surf = nullptr;
     bool attempted_load = false;
     bool scale_change = false;
     // The icon is the generic fallback; swap it for the window's own icon
@@ -254,6 +255,8 @@ struct Pin : UserData {
     ~Pin() {
         if (icon_surf)
             cairo_surface_destroy(icon_surf);
+        if (icon_shadow_surf)
+            cairo_surface_destroy(icon_shadow_surf);
         if (bubbly_surf)
             cairo_surface_destroy(bubbly_surf);
     }
@@ -462,6 +465,114 @@ static void pin_track_window_count(Pin *pin, long now) {
             pin->bloom_start = now;
     }
     pin->last_frame_window_count = count;
+}
+
+static cairo_surface_t *generate_dropshadow_surface(cairo_surface_t *source, float size, float darken = 0.55f) {
+    if (!source || cairo_surface_get_type(source) != CAIRO_SURFACE_TYPE_IMAGE || !std::isfinite(size) || size < 0)
+        return nullptr;
+
+    cairo_surface_flush(source);
+    const int source_w = cairo_image_surface_get_width(source);
+    const int source_h = cairo_image_surface_get_height(source);
+    const int source_stride = cairo_image_surface_get_stride(source);
+    const cairo_format_t format = cairo_image_surface_get_format(source);
+    const unsigned char *source_data = cairo_image_surface_get_data(source);
+    if (!source_data || source_w <= 0 || source_h <= 0)
+        return nullptr;
+    if (format != CAIRO_FORMAT_ARGB32 && format != CAIRO_FORMAT_RGB24 && format != CAIRO_FORMAT_A8)
+        return nullptr;
+
+    const int radius = static_cast<int>(std::ceil(size));
+    const int w = source_w + 2 * radius;
+    const int h = source_h + 2 * radius;
+
+    cairo_surface_t *shadow = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    if (cairo_surface_status(shadow) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(shadow);
+        return nullptr;
+    }
+
+    unsigned char *dst_data = cairo_image_surface_get_data(shadow);
+    const int dst_stride = cairo_image_surface_get_stride(shadow);
+
+    // Copy source alpha into a padded buffer; all non-transparent pixels become
+    // black (RGB = 0) while preserving their original coverage alpha.
+    std::vector<uint8_t> alpha_buf(static_cast<size_t>(w) * h, 0);
+    for (int y = 0; y < source_h; ++y) {
+        const unsigned char *src_row = source_data + static_cast<size_t>(y) * source_stride;
+        uint8_t *dst_row = alpha_buf.data() + static_cast<size_t>(y + radius) * w + radius;
+        if (format == CAIRO_FORMAT_ARGB32) {
+            const auto *pixels = reinterpret_cast<const uint32_t *>(src_row);
+            for (int x = 0; x < source_w; ++x)
+                dst_row[x] = static_cast<uint8_t>((pixels[x] >> 24) & 0xFF);
+        } else if (format == CAIRO_FORMAT_RGB24) {
+            std::fill(dst_row, dst_row + source_w, static_cast<uint8_t>(255));
+        } else {
+            std::copy(src_row, src_row + source_w, dst_row);
+        }
+    }
+
+    if (radius > 0) {
+        // Truncate the Gaussian at three standard deviations, within the padding.
+        const double sigma = static_cast<double>(size) / 3.0;
+        std::vector<float> kernel(2 * radius + 1);
+        float total = 0;
+        for (int i = -radius; i <= radius; ++i) {
+            const double distance = i / sigma;
+            const float weight = static_cast<float>(std::exp(-0.5 * distance * distance));
+            kernel[i + radius] = weight;
+            total += weight;
+        }
+        for (auto &weight : kernel)
+            weight /= total;
+
+        std::vector<float> horizontal(static_cast<size_t>(w) * h, 0.0f);
+        for (int y = radius; y < radius + source_h; ++y) {
+            const uint8_t *src_row = alpha_buf.data() + static_cast<size_t>(y) * w;
+            float *h_row = horizontal.data() + static_cast<size_t>(y) * w;
+            for (int x = 0; x < w; ++x) {
+                float alpha = 0.0f;
+                const int i_min = std::max(-radius, -x);
+                const int i_max = std::min(radius, w - 1 - x);
+                for (int i = i_min; i <= i_max; ++i)
+                    alpha += src_row[x + i] * kernel[i + radius];
+                h_row[x] = alpha;
+            }
+        }
+        for (int y = 0; y < h; ++y) {
+            auto *out_row = reinterpret_cast<uint32_t *>(dst_data + static_cast<size_t>(y) * dst_stride);
+            const int i_min = std::max(-radius, -y);
+            const int i_max = std::min(radius, h - 1 - y);
+            for (int x = 0; x < w; ++x) {
+                float alpha = 0.0f;
+                for (int i = i_min; i <= i_max; ++i)
+                    alpha += horizontal[static_cast<size_t>(y + i) * w + x] * kernel[i + radius];
+                const uint32_t a = static_cast<uint32_t>(std::clamp(std::lround(alpha * darken), 0L, 255L));
+                out_row[x] = a << 24;
+            }
+        }
+    } else {
+        for (int y = 0; y < h; ++y) {
+            auto *out_row = reinterpret_cast<uint32_t *>(dst_data + static_cast<size_t>(y) * dst_stride);
+            const uint8_t *src_row = alpha_buf.data() + static_cast<size_t>(y) * w;
+            for (int x = 0; x < w; ++x) {
+                const uint32_t a = static_cast<uint32_t>(std::clamp(std::lround(src_row[x] * darken), 0L, 255L));
+                out_row[x] = a << 24;
+            }
+        }
+    }
+
+    cairo_surface_mark_dirty(shadow);
+    return shadow;
+}
+
+static void rebuild_pin_icon_shadow(Pin *pin, float dpi) {
+    if (pin->icon_shadow_surf) {
+        cairo_surface_destroy(pin->icon_shadow_surf);
+        pin->icon_shadow_surf = nullptr;
+    }
+    if (pin->icon_surf)
+        pin->icon_shadow_surf = generate_dropshadow_surface(pin->icon_surf, 6.0f * dpi, 0.55f);
 }
 
 static void bubbly_average_color(Pin *pin) {
@@ -1512,6 +1623,17 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 double iy = std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
                 iy += pin_bounce_offset(pin, mylar->raw_window->dpi);
                 const double scale = pin_icon_scale(pin, get_current_time_in_ms());
+                auto shadow_surf = pin->icon_shadow_surf;
+                auto paint_icon = [&]() {
+                    if (shadow_surf) {
+                        const double pad_x = (cairo_image_surface_get_width(shadow_surf) - w) * .5;
+                        const double pad_y = (cairo_image_surface_get_height(shadow_surf) - h) * .5;
+                        cr->set_source_surface(shadow_surf, ix - pad_x, iy - pad_y + std::round(2.0 * mylar->raw_window->dpi));
+                        cr->paint_source();
+                    }
+                    cr->set_source_surface(ico_surf, ix, iy);
+                    cr->paint_source();
+                };
                 if (scale != 1.0) {
                     // Shrink toward the icon's own center.
                     const double cx = ix + w * .5;
@@ -1520,12 +1642,10 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                     cr->translate(cx, cy);
                     cr->scale(scale, scale);
                     cr->translate(-cx, -cy);
-                    cr->set_source_surface(ico_surf, ix, iy);
-                    cr->paint_source();
+                    paint_icon();
                     cr->restore();
                 } else {
-                    cr->set_source_surface(ico_surf, ix, iy);
-                    cr->paint_source();
+                    paint_icon();
                 }
                 auto wi = cairo_image_surface_get_height(ico_surf);
                 offx = wi;
@@ -1830,6 +1950,10 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                     cairo_surface_destroy(pin->icon_surf);
                     pin->icon_surf = nullptr;
                 }
+                if (pin->icon_shadow_surf) {
+                    cairo_surface_destroy(pin->icon_shadow_surf);
+                    pin->icon_shadow_surf = nullptr;
+                }
                 auto full = one_shot_icon(size, {pin->icon, to_lower(pin->icon), c3ic_fix_wm_class(pin->icon), to_lower(pin->icon)});
                 if (!full.empty()) {
                     pin->full_icon = full;
@@ -1844,11 +1968,13 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                         pin->fallback_window_count = pin->windows.size();
                     }
                 }
+                rebuild_pin_icon_shadow(pin, mylar->raw_window->dpi);
             } else if (pin->using_fallback_icon && pin->windows.size() != pin->fallback_window_count) {
                 pin->fallback_window_count = pin->windows.size();
                 if (take_window_icon()) {
                     pin->using_fallback_icon = false;
                     pin->full_icon.clear();
+                    rebuild_pin_icon_shadow(pin, mylar->raw_window->dpi);
                 }
             }
         }

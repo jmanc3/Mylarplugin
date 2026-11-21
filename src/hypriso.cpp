@@ -10976,7 +10976,10 @@ void HyprIso::all_lose_focus() {
     ZoneScoped;
 #endif
     prev = Desktop::focusState()->window();
-    g_pSeatManager->setPointerFocus(nullptr, {});
+    // Only drop pointer focus if it belongs to a window; layer surfaces like
+    // the dock keep pointer focus so clicking a dock icon can immediately toggle again.
+    if (surface_owned_by_window(g_pSeatManager->m_state.pointerFocus.lock()))
+        g_pSeatManager->setPointerFocus(nullptr, {});
     Desktop::focusState()->fullWindowFocus(nullptr, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
     if (on_activated)
         on_activated(-1);
