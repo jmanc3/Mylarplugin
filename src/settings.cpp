@@ -2682,6 +2682,7 @@ struct MonitorOption {
     int transform = 0;
 
     MylarMonitor             config;
+    bool                     custom_scale_mode = false;
 };
 
 static void commit_monitor_configs(std::vector<MylarMonitor> configs);
@@ -3252,6 +3253,43 @@ static void apply_hdr_defaults(MylarMonitor &config, bool on) {
     }
 }
 
+static const std::vector<std::string> display_scale_presets = {"1.0", "1.25", "1.5", "1.75", "2.0"};
+
+static std::string display_format_scale(float s) {
+    if (!std::isfinite(s) || s <= 0)
+        s = 1.0f;
+    s = std::clamp(s, 0.3f, 6.0f);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.2f", s);
+    std::string out = buf;
+    if (out.size() >= 4 && out.back() == '0' && out[out.size() - 3] == '.')
+        out.pop_back();
+    return out;
+}
+
+static std::string display_scale_matching_preset(const std::string &scale) {
+    float parsed = 0;
+    if (!monitor_float_from_text(trim(scale), parsed) || !std::isfinite(parsed))
+        return "";
+    for (const auto &p : display_scale_presets) {
+        float preset_val = 0;
+        if (monitor_float_from_text(p, preset_val) && std::abs(parsed - preset_val) < 1e-4f)
+            return p;
+    }
+    return "";
+}
+
+static std::string display_scale_dropdown_label(const MonitorOption *m) {
+    if (m->custom_scale_mode)
+        return "Custom";
+    const std::string s = trim(m->config.scale);
+    if (s.empty() || s == "auto")
+        return "Auto";
+    if (auto preset = display_scale_matching_preset(s); !preset.empty())
+        return preset;
+    return "Custom";
+}
+
 static void change_display_options(MonitorOption *m) {
     auto right = container_by_name("settings_right", settings_mylar->root);
     if (!right)
@@ -3310,20 +3348,48 @@ static void change_display_options(MonitorOption *m) {
     });
 
 
-    make_reset_textfield(padded_right, "Scale", "Scale factor, or \"auto\"", "\uE740", false, m->config.scale, "auto", [m, commit](std::string value) {
-        value           = trim(value);
-        if (value.empty() || value == "auto") {
-            m->config.scale = "auto";
+    const std::vector<std::string> scale_options = {"Auto", "1.0", "1.25", "1.5", "1.75", "2.0", "Custom"};
+    make_dropdown_option(padded_right, "Scale", "Scale factor, or \"auto\"", "\uE740", display_scale_dropdown_label(m), scale_options, [m, commit](std::string selected) {
+        if (selected == "Auto") {
+            m->custom_scale_mode = false;
+            m->config.scale      = "auto";
+            commit();
+        } else if (selected == "Custom") {
+            m->custom_scale_mode = true;
         } else {
+            m->custom_scale_mode = false;
+            m->config.scale      = selected;
+            commit();
+        }
+        display_options_stale = m;
+        if (settings_mylar)
+            windowing::redraw(settings_mylar->raw_window);
+    });
+
+    const std::string trimmed_scale     = trim(m->config.scale);
+    const bool        show_custom_scale = m->custom_scale_mode || (!trimmed_scale.empty() && trimmed_scale != "auto" && display_scale_matching_preset(trimmed_scale).empty());
+    if (show_custom_scale) {
+        const std::string initial_scale = (trimmed_scale.empty() || trimmed_scale == "auto") ? display_format_scale(m->scale) : trimmed_scale;
+        make_reset_textfield(padded_right, "Custom scale", "Scale factor from 0.3 to 6 (e.g. 1.25)", "\uE740", false, initial_scale, "1.0", [m, commit](std::string value) {
+            value = trim(value);
+            if (value.empty() || value == "auto") {
+                m->custom_scale_mode = false;
+                m->config.scale      = "auto";
+                commit();
+                display_options_stale = m;
+                if (settings_mylar)
+                    windowing::redraw(settings_mylar->raw_window);
+                return;
+            }
             float scale = 0;
             if (!monitor_float_from_text(value, scale) || !std::isfinite(scale) || scale < 0.3f) {
                 notify("Scale must be auto or a number from 0.3 to 6");
                 return;
             }
             m->config.scale = fz("{}", std::min(scale, 6.0f));
-        }
-        commit();
-    }, nullptr, "Decimal number from 0.3 to 6, or \"auto\"\nA multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
+            commit();
+        }, nullptr, "Decimal number from 0.3 to 6, or \"auto\"\nA multiplier, not a percentage: 1 is 100%, 1.5 is 150%");
+    }
 
 
     const std::vector<std::string> transforms = {"Normal (0°)", "Rotate 90°", "Rotate 180°", "Rotate 270°", "Flipped", "Flipped + 90°", "Flipped + 180°", "Flipped + 270°"};
