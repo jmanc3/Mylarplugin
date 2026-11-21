@@ -953,12 +953,13 @@ class AnyPass : public IPassElement {
 public:
     struct AnyData {
         std::function<void(AnyPass*, Render::CRenderContext&)> draw = nullptr;
+        bool liveBlur = false;
+        std::optional<CBox> box = std::nullopt;
     };
     AnyData* m_data = nullptr;
 
     AnyPass(const AnyData& data) {
-        m_data       = new AnyData;
-        m_data->draw = data.draw;
+        m_data = new AnyData(data);
     }
     virtual ~AnyPass() {
         delete m_data;
@@ -972,10 +973,15 @@ public:
     }
 
     bool needsLiveBlur(Render::CRenderContext& ctx) override {
-        return false;
+        return m_data->liveBlur;
     }
     bool needsPrecomputeBlur(Render::CRenderContext& ctx) override {
         return false;
+    }
+    std::optional<CBox> boundingBox(Render::CRenderContext& ctx) override {
+        if (!m_data->box || !ctx.m_data.pMonitor)
+            return std::nullopt;
+        return m_data->box->copy().scale(1.F / ctx.m_data.pMonitor->m_scale).round();
     }
 
     ePassElementType type() override {
@@ -6268,14 +6274,15 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
     }
     if (cornermask == 16)
         round = 0;
-    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, blur, blurA, clip, clipbox](AnyPass* pass, Render::CRenderContext& ctx) {
+    const bool liveBlur = blur && color.a < 1.0f;
+    AnyPass::AnyData anydata([box, color, cornermask, round, roundingPower, liveBlur, blurA, clip, clipbox](AnyPass* pass, Render::CRenderContext& ctx) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
 
         Render::GL::CHyprOpenGLImpl::SRectRenderData rectdata;
         rectdata.damage        = nullptr;
-        rectdata.blur          = blur;
+        rectdata.blur          = liveBlur;
         rectdata.blurA         = blurA;
         rectdata.round         = std::round(round);
         rectdata.roundingPower = roundingPower;
@@ -6290,6 +6297,13 @@ void rect(Bounds box, RGBA color, int cornermask, float round, float roundingPow
         if (clip)
             g_pHyprRenderer->context().m_data.clipBox = CBox();
     });
+    if (liveBlur) {
+        anydata.liveBlur = true;
+        CBox bb = tocbox(box);
+        if (clip)
+            bb = bb.intersection(tocbox(clipbox));
+        anydata.box = bb;
+    }
     Render::IHyprRenderer::addPassElement(g_pHyprRenderer->context(), makeUnique<AnyPass>(std::move(anydata)));
 }
 
@@ -8575,8 +8589,11 @@ bool HyprIso::damage_intersects(int monitor, Bounds render_box) {
     auto& ctx = g_pHyprRenderer->context();
     if (!ctx.active())
         return true;
+    CRegion dmg = ctx.m_data.damage.copy();
+    g_pHyprRenderer->expandBlurDamage(dmg);
+    g_pHyprRenderer->expandBlurDamage(dmg, 1.5F);
     CRegion boxReg(tocbox(render_box));
-    return !ctx.m_data.damage.copy().intersect(boxReg).empty();
+    return !dmg.intersect(boxReg).empty();
 }
 
 bool HyprIso::damage_contained_in(int monitor, Bounds render_box) {
@@ -8585,8 +8602,11 @@ bool HyprIso::damage_contained_in(int monitor, Bounds render_box) {
     auto& ctx = g_pHyprRenderer->context();
     if (!ctx.active() || ctx.m_data.damage.empty())
         return false;
+    CRegion dmg = ctx.m_data.damage.copy();
+    g_pHyprRenderer->expandBlurDamage(dmg);
+    g_pHyprRenderer->expandBlurDamage(dmg, 1.5F);
     CRegion boxReg(tocbox(render_box));
-    return ctx.m_data.damage.copy().subtract(boxReg).empty();
+    return dmg.subtract(boxReg).empty();
 }
 
 double HyprIso::last_render_ms(int monitor) {
