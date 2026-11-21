@@ -11,6 +11,23 @@ constexpr int kNotifLogicalWidth = 356;
 constexpr int kNotifEdgeMargin = 12;
 constexpr int kNotifStackGap = 12;
 
+// Winbar notification palette (always dark, matching ~/Projects/winbar/src/config.h).
+const RGBA kNotifBg                 = RGBA("#1f1f1fff");
+const RGBA kNotifBorder             = RGBA("#383838ff");
+const RGBA kNotifTitleBg            = RGBA("#191919ff");
+const RGBA kNotifContentText        = RGBA("#ffffffff");
+const RGBA kNotifSubtitleText       = RGBA("#b8b8b8ff");
+const RGBA kNotifTitleText          = RGBA("#ffffffff");
+const RGBA kNotifButtonDefault      = RGBA("#545454ff");
+const RGBA kNotifButtonHovered      = RGBA("#616161ff");
+const RGBA kNotifButtonPressed      = RGBA("#474747ff");
+const RGBA kNotifButtonTextDefault  = RGBA("#ffffffff");
+const RGBA kNotifButtonTextHovered  = RGBA("#ffffffff");
+const RGBA kNotifButtonTextPressed  = RGBA("#ffffffff");
+const RGBA kNotifCloseDefault       = RGBA("#9c9c9cff");
+const RGBA kNotifCloseHovered       = RGBA("#ccccccff");
+const RGBA kNotifClosePressed       = RGBA("#888888ff");
+
 struct NotifRootData : UserData {
     DockNotification *notif = nullptr;
 };
@@ -89,6 +106,11 @@ static void draw_wrapped_text(drawing::Context *cr, const Bounds &bounds, const 
     pango_layout_set_ellipsize(layout, initial_ellipse);
 }
 
+static std::string to_lower_copy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    return s;
+}
+
 static std::string resolve_notification_icon_path(const NotificationInfo &info, int icon_size) {
     auto exists_file = [](const std::string &path) {
         if (path.empty())
@@ -97,40 +119,61 @@ static std::string resolve_notification_icon_path(const NotificationInfo &info, 
         return std::filesystem::is_regular_file(path, ec);
     };
 
-    if (exists_file(info.icon_path))
-        return info.icon_path;
+    auto strip_file_scheme = [](std::string s) {
+        if (starts_with(s, "file://"))
+            return s.substr(7);
+        return s;
+    };
 
-    std::string raw_icon = info.app_icon;
-    if (starts_with(raw_icon, "file://"))
-        raw_icon = raw_icon.substr(7);
+    std::string hint_icon = strip_file_scheme(info.icon_path);
+    if (exists_file(hint_icon))
+        return hint_icon;
+
+    std::string raw_icon = strip_file_scheme(info.app_icon);
     if (exists_file(raw_icon))
         return raw_icon;
 
-    if (!icons_loaded)
+    std::vector<std::string> candidate_names;
+    auto push_name = [&](const std::string &name) {
+        if (name.empty())
+            return;
+        candidate_names.push_back(name);
+        std::string lower = to_lower_copy(name);
+        if (lower != name)
+            candidate_names.push_back(lower);
+        std::string fixed = c3ic_fix_wm_class(name);
+        if (!fixed.empty() && fixed != name && fixed != lower)
+            candidate_names.push_back(fixed);
+    };
+
+    push_name(raw_icon);
+    push_name(hint_icon);
+    push_name(info.desktop_entry);
+    push_name(info.app_name);
+
+    if (candidate_names.empty())
         return "";
 
-    std::vector<IconTarget> targets;
-    if (!raw_icon.empty())
-        targets.emplace_back(raw_icon);
-    if (!info.desktop_entry.empty())
-        targets.emplace_back(info.desktop_entry);
-    if (!info.app_name.empty())
-        targets.emplace_back(info.app_name);
+    if (icons_loaded) {
+        std::string found = one_shot_icon(icon_size, candidate_names);
+        if (exists_file(found))
+            return found;
 
-    if (targets.empty())
-        return "";
-
-    search_icons(targets);
-    pick_best(targets, icon_size, IconContext::Statuses);
-    for (const auto &t : targets) {
-        if (exists_file(t.best_full_path))
-            return t.best_full_path;
+        std::vector<IconTarget> targets;
+        for (const auto &n : candidate_names)
+            targets.emplace_back(n);
+        search_icons(targets);
+        pick_best(targets, icon_size, IconContext::Statuses);
+        for (const auto &t : targets) {
+            if (exists_file(t.best_full_path))
+                return t.best_full_path;
+        }
     }
 
-    pick_best(targets, icon_size);
-    for (const auto &t : targets) {
-        if (exists_file(t.best_full_path))
-            return t.best_full_path;
+    for (const auto &n : candidate_names) {
+        std::string live = single_shot_icon_live(n, icon_size);
+        if (exists_file(live))
+            return live;
     }
 
     return "";
@@ -226,7 +269,7 @@ static void paint_notif_root(Container *root, Container *c) {
         return;
     auto *rw = data->notif->window->raw_window;
     auto *cr = rw->drawing_context;
-    paint_popup_background(cr, c->real_bounds, rw->dpi);
+    paint_popup_background(cr, c->real_bounds, rw->dpi, kNotifBg, kNotifBorder);
 }
 
 static void clicked_notif_root(Container *root, Container *c) {
@@ -263,10 +306,10 @@ static void paint_interaction_header(Container *root, Container *c) {
 
     cr->save();
     clip_to_popup_background(cr, root->real_bounds, dpi);
-    set_argb(cr, {0, 0, 0, .05});
+    set_argb(cr, kNotifTitleBg);
     set_rect(cr, c->real_bounds);
     cr->fill();
-    set_argb(cr, {0, 0, 0, .08});
+    set_argb(cr, kNotifBorder);
     cr->rectangle(c->real_bounds.x, c->real_bounds.y + c->real_bounds.h - std::max(1.0, (double) dpi),
                   c->real_bounds.w, std::max(1.0, (double) dpi));
     cr->fill();
@@ -274,11 +317,11 @@ static void paint_interaction_header(Container *root, Container *c) {
 
     std::string text = "Interaction Required";
     int font_size = (int) std::round(10 * dpi);
-    auto b = draw_text(cr, 0, 0, text, font_size, false, set->font, -1, -1, {0, 0, 0, 1}, true);
+    auto b = draw_text(cr, 0, 0, text, font_size, false, set->font, -1, -1, kNotifTitleText, true);
     draw_text(cr,
               (int) std::round(c->real_bounds.x + (c->real_bounds.w - b.w) * 0.5),
               (int) std::round(c->real_bounds.y + (c->real_bounds.h - b.h) * 0.5),
-              text, font_size, true, set->font, -1, -1, {0.15, 0.15, 0.15, 1}, true);
+              text, font_size, true, set->font, -1, -1, kNotifTitleText, true);
 }
 
 static void paint_notif_icon(Container *root, Container *c) {
@@ -320,13 +363,13 @@ static void paint_notif_close(Container *root, Container *c) {
 
     if (c->state.mouse_pressing || c->state.mouse_hovering) {
         drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 6 * dpi, 1.0);
-        set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .14) : RGBA(0, 0, 0, .07));
+        set_argb(cr, c->state.mouse_pressing ? RGBA(1, 1, 1, .14) : RGBA(1, 1, 1, .08));
         cr->fill();
     }
 
-    RGBA icon_color = c->state.mouse_pressing ? RGBA(0, 0, 0, 0.95)
-                    : c->state.mouse_hovering ? RGBA(0, 0, 0, 0.85)
-                                              : RGBA(0, 0, 0, 0.45);
+    RGBA icon_color = c->state.mouse_pressing ? kNotifClosePressed
+                    : c->state.mouse_hovering ? kNotifCloseHovered
+                                              : kNotifCloseDefault;
     int font_size = (int) std::round(9 * dpi);
     auto b = draw_text(cr, 0, 0, "\uE8BB", font_size, false, icon_font, -1, -1, icon_color, false);
     draw_text(cr,
@@ -353,18 +396,21 @@ static void paint_notif_action(Container *root, Container *c) {
     auto *cr = rw->drawing_context;
     float dpi = rw->dpi;
 
-    RGBA bg = {0, 0, 0, .06};
-    if (c->state.mouse_pressing)
-        bg = {0, 0, 0, .16};
-    else if (c->state.mouse_hovering)
-        bg = {0, 0, 0, .11};
+    RGBA bg = kNotifButtonDefault;
+    RGBA fg = kNotifButtonTextDefault;
+    if (c->state.mouse_pressing) {
+        bg = kNotifButtonPressed;
+        fg = kNotifButtonTextPressed;
+    } else if (c->state.mouse_hovering) {
+        bg = kNotifButtonHovered;
+        fg = kNotifButtonTextHovered;
+    }
 
     drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 6 * dpi, 1.0);
     set_argb(cr, bg);
     cr->fill();
 
     int font_size = (int) std::round(10.5 * dpi);
-    RGBA fg = {0.1, 0.1, 0.1, 1.0};
     auto b = draw_text(cr, 0, 0, data->action.label, font_size, false, set->font, -1, -1, fg, false);
     draw_text(cr,
               (int) std::round(c->real_bounds.x + (c->real_bounds.w - b.w) * 0.5),
@@ -599,7 +645,7 @@ void show_notification_on_dock(Dock *dock, const NotificationInfo &info) {
         ld->text = title_text;
         ld->size = 11;
         ld->bold = true;
-        ld->color = {0.0, 0.0, 0.0, 1.0};
+        ld->color = kNotifContentText;
         lbl->user_data = ld;
         lbl->when_paint = paint_notif_label;
     }
@@ -612,7 +658,7 @@ void show_notification_on_dock(Dock *dock, const NotificationInfo &info) {
         ld->text = body_text;
         ld->size = 11;
         ld->bold = false;
-        ld->color = {0.18, 0.18, 0.18, 1.0};
+        ld->color = kNotifContentText;
         lbl->user_data = ld;
         lbl->when_paint = paint_notif_label;
     }
@@ -625,7 +671,7 @@ void show_notification_on_dock(Dock *dock, const NotificationInfo &info) {
         ld->text = subtitle_text;
         ld->size = 9;
         ld->bold = false;
-        ld->color = {0.45, 0.45, 0.45, 1.0};
+        ld->color = kNotifSubtitleText;
         lbl->user_data = ld;
         lbl->when_paint = paint_notif_label;
     }
@@ -674,4 +720,396 @@ void show_notification_on_dock(Dock *dock, const NotificationInfo &info) {
             notif->info.on_ignore(&notif->info);
         dismiss_notification(notif, NotificationReasonClosed::EXPIRED, true);
     }, nullptr);
+}
+
+namespace {
+
+struct SavedNotification {
+    uint64_t uid = 0;
+    NotificationInfo info;
+};
+
+static std::mutex saved_notifications_mutex;
+static std::vector<SavedNotification> saved_notifications;
+static uint64_t next_saved_uid = 1;
+constexpr size_t kMaxSavedNotifications = 50;
+
+static std::string current_time_string() {
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm_now{};
+    localtime_r(&in_time_t, &tm_now);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%I:%M %p", &tm_now);
+    return buf;
+}
+
+static std::vector<SavedNotification> snapshot_saved_notifications() {
+    std::lock_guard<std::mutex> lock(saved_notifications_mutex);
+    return saved_notifications;
+}
+
+static void notify_all_docks_saved_changed() {
+    main_thread([]() {
+        if (finished)
+            return;
+        run_on_every_dock([](Dock *d) {
+            refresh_date_notifications_panel(d);
+        });
+    });
+}
+
+struct SavedCardData : UserData {
+    uint64_t uid = 0;
+    std::string title;
+    std::string body;
+    std::string meta;
+    std::string icon_path;
+    cairo_surface_t *icon_surface = nullptr;
+    int title_h = 0;
+    int body_h = 0;
+    int meta_h = 0;
+
+    ~SavedCardData() override {
+        if (icon_surface) {
+            cairo_surface_destroy(icon_surface);
+            icon_surface = nullptr;
+        }
+    }
+};
+
+} // namespace
+
+void save_notification(const NotificationInfo &info) {
+    if (info.summary.empty() && info.body.empty() && info.app_name.empty())
+        return;
+
+    NotificationInfo copy = info;
+    if (copy.time_started.empty())
+        copy.time_started = current_time_string();
+
+    std::lock_guard<std::mutex> lock(saved_notifications_mutex);
+    if (copy.replaces_id != 0) {
+        for (auto it = saved_notifications.begin(); it != saved_notifications.end(); ++it) {
+            if (it->info.id == copy.replaces_id) {
+                uint64_t uid = it->uid;
+                saved_notifications.erase(it);
+                saved_notifications.insert(saved_notifications.begin(), {uid, std::move(copy)});
+                return;
+            }
+        }
+    }
+    saved_notifications.insert(saved_notifications.begin(), {next_saved_uid++, std::move(copy)});
+    if (saved_notifications.size() > kMaxSavedNotifications)
+        saved_notifications.resize(kMaxSavedNotifications);
+}
+
+void clear_saved_notifications() {
+    {
+        std::lock_guard<std::mutex> lock(saved_notifications_mutex);
+        if (saved_notifications.empty())
+            return;
+        saved_notifications.clear();
+    }
+    notify_all_docks_saved_changed();
+}
+
+void remove_saved_notification(uint64_t uid) {
+    bool removed = false;
+    {
+        std::lock_guard<std::mutex> lock(saved_notifications_mutex);
+        for (auto it = saved_notifications.begin(); it != saved_notifications.end(); ++it) {
+            if (it->uid == uid) {
+                saved_notifications.erase(it);
+                removed = true;
+                break;
+            }
+        }
+    }
+    if (removed)
+        notify_all_docks_saved_changed();
+}
+
+void fill_date_notifications_panel(Dock *dock, Container *panel) {
+    if (!dock || !dock->date_menu || !dock->date_menu->raw_window || !panel)
+        return;
+
+    for (auto *ch : panel->children)
+        delete ch;
+    panel->children.clear();
+
+    const float dpi = dock->date_menu->raw_window->dpi > 0.0f ? dock->date_menu->raw_window->dpi : 1.0f;
+    panel->type = ::vbox;
+    panel->when_paint = [](Container *root, Container *c) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        paint_popup_background(d->date_menu->raw_window->drawing_context, c->real_bounds,
+                               d->date_menu->raw_window->dpi);
+    };
+
+    auto saved = snapshot_saved_notifications();
+    if (saved.empty()) {
+        auto *empty_box = panel->child(FILL_SPACE, FILL_SPACE);
+        empty_box->when_paint = [](Container *root, Container *c) {
+            auto *d = static_cast<Dock *>(root->user_data);
+            if (!d || !d->date_menu || !d->date_menu->raw_window)
+                return;
+            auto *cr = d->date_menu->raw_window->drawing_context;
+            const float s = d->date_menu->raw_window->dpi;
+            const std::string text = "Notifications will appear here";
+            int font_size = (int) std::round(11 * s);
+            auto b = draw_text(cr, 0, 0, text, font_size, false, set->font, -1, -1, {.43, .48, .55, 1}, false);
+            draw_text(cr,
+                      (int) std::round(c->real_bounds.x + (c->real_bounds.w - b.w) * 0.5),
+                      (int) std::round(c->real_bounds.y + (c->real_bounds.h - b.h) * 0.5),
+                      text, font_size, true, set->font, -1, -1, {.43, .48, .55, 1}, false);
+        };
+        return;
+    }
+
+    auto *header = panel->child(::hbox, FILL_SPACE, 38 * dpi);
+    header->wanted_pad = Bounds(16 * dpi, 8 * dpi, 12 * dpi, 4 * dpi);
+    header->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        float s = d->date_menu->raw_window->dpi;
+        c->wanted_bounds.h = 38 * s;
+        c->wanted_pad = Bounds(16 * s, 8 * s, 12 * s, 4 * s);
+    };
+
+    auto *header_title = header->child(FILL_SPACE, FILL_SPACE);
+    header_title->when_paint = [](Container *root, Container *c) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        auto *cr = d->date_menu->raw_window->drawing_context;
+        float s = d->date_menu->raw_window->dpi;
+        int font_size = (int) std::round(11 * s);
+        auto b = draw_text(cr, 0, 0, "Notifications", font_size, false, set->font, -1, -1, {.14, .18, .24, 1}, true);
+        draw_text(cr,
+                  (int) std::round(c->real_bounds.x),
+                  (int) std::round(c->real_bounds.y + (c->real_bounds.h - b.h) * 0.5),
+                  "Notifications", font_size, true, set->font, -1, -1, {.14, .18, .24, 1}, true);
+    };
+
+    auto *clear_btn = header->child(72 * dpi, FILL_SPACE);
+    clear_btn->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        float s = d->date_menu->raw_window->dpi;
+        c->wanted_bounds.w = 72 * s;
+    };
+    clear_btn->when_paint = [](Container *root, Container *c) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        auto *cr = d->date_menu->raw_window->drawing_context;
+        float s = d->date_menu->raw_window->dpi;
+        if (c->state.mouse_hovering || c->state.mouse_pressing) {
+            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 6 * s, 1.0);
+            set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .14) : RGBA(0, 0, 0, .07));
+            cr->fill();
+        }
+        int font_size = (int) std::round(9.5 * s);
+        RGBA color = c->state.mouse_hovering ? accent : RGBA(.35, .40, .48, 1);
+        auto b = draw_text(cr, 0, 0, "Clear all", font_size, false, set->font, -1, -1, color, false);
+        draw_text(cr,
+                  (int) std::round(c->real_bounds.x + (c->real_bounds.w - b.w) * 0.5),
+                  (int) std::round(c->real_bounds.y + (c->real_bounds.h - b.h) * 0.5),
+                  "Clear all", font_size, true, set->font, -1, -1, color, false);
+    };
+    clear_btn->when_clicked = [](Container *, Container *) {
+        clear_saved_notifications();
+    };
+
+    auto *list_wrap = panel->child(::vbox, FILL_SPACE, FILL_SPACE);
+    list_wrap->wanted_pad = Bounds(12 * dpi, 0, 12 * dpi, 12 * dpi);
+    list_wrap->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        float s = d->date_menu->raw_window->dpi;
+        c->wanted_pad = Bounds(12 * s, 0, 12 * s, 12 * s);
+    };
+
+    ScrollPaneSettings sp_settings(dpi);
+    sp_settings.bottom_show_amount = SNever;
+    auto *scroll = make_newscrollpane_as_child(list_wrap, sp_settings, [](Container *root) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        DrawContext ctx;
+        if (d && d->date_menu && d->date_menu->raw_window) {
+            auto *rw = d->date_menu->raw_window;
+            ctx.cr = rw->drawing_context;
+            ctx.dpi = rw->dpi;
+            ctx.on_needs_frame = [rw]() { windowing::redraw(rw); };
+        }
+        return ctx;
+    });
+    scroll->when_paint = [](Container *root, Container *c) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        auto *cr = d->date_menu->raw_window->drawing_context;
+        cr->save();
+        cr->rectangle(c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h);
+        cr->clip_path();
+    };
+    scroll->after_paint = [](Container *root, Container *) {
+        auto *d = static_cast<Dock *>(root->user_data);
+        if (!d || !d->date_menu || !d->date_menu->raw_window)
+            return;
+        d->date_menu->raw_window->drawing_context->restore();
+    };
+    scroll->content->type = ::vbox;
+    scroll->content->spacing = 8 * dpi;
+
+    const int card_w = (int) std::round((360 - 24 - 12) * dpi);
+    const int icon_size = (int) std::round(32 * dpi);
+    const int pad = (int) std::round(10 * dpi);
+    const int close_size = (int) std::round(20 * dpi);
+
+    for (const auto &entry : saved) {
+        std::string title_text = entry.info.summary;
+        std::string body_text = entry.info.body;
+        std::string sub_text = entry.info.app_name;
+        if (title_text.empty() && !sub_text.empty()) {
+            title_text = sub_text;
+            sub_text.clear();
+        }
+        if (title_text.empty() && sub_text.empty() && !body_text.empty()) {
+            title_text = body_text;
+            body_text.clear();
+        }
+
+        std::string meta = sub_text;
+        if (!entry.info.time_started.empty()) {
+            if (!meta.empty())
+                meta += " · ";
+            meta += entry.info.time_started;
+        }
+
+        auto *cd = new SavedCardData;
+        cd->uid = entry.uid;
+        cd->title = title_text;
+        cd->body = body_text;
+        cd->meta = meta;
+        cd->icon_path = resolve_notification_icon_path(entry.info, icon_size);
+        if (!cd->icon_path.empty())
+            load_icon_full_path(&cd->icon_surface, cd->icon_path, icon_size);
+
+        bool has_icon = cd->icon_surface != nullptr;
+        int text_w = std::max(60, card_w - pad * 2 - close_size - (int) std::round(6 * dpi) -
+                                  (has_icon ? (icon_size + (int) std::round(10 * dpi)) : 0));
+
+        cd->title_h = measure_wrapped_text_height(cd->title, true, (int) std::round(10 * dpi), text_w);
+        cd->body_h = std::min(measure_wrapped_text_height(cd->body, false, (int) std::round(9.5 * dpi), text_w),
+                              (int) std::round(60 * dpi));
+        cd->meta_h = measure_wrapped_text_height(cd->meta, false, (int) std::round(8.5 * dpi), text_w);
+
+        int inner_h = cd->title_h + cd->body_h + cd->meta_h;
+        if (!cd->title.empty() && !cd->body.empty()) inner_h += (int) std::round(2 * dpi);
+        if (!cd->meta.empty() && (!cd->title.empty() || !cd->body.empty())) inner_h += (int) std::round(3 * dpi);
+        if (has_icon) inner_h = std::max(inner_h, icon_size);
+        int card_h = inner_h + pad * 2;
+
+        auto *card = scroll->content->child(::hbox, FILL_SPACE, card_h);
+        card->user_data = cd;
+        card->wanted_pad = Bounds(pad, pad, pad, pad);
+        card->when_paint = [](Container *root, Container *c) {
+            auto *d = static_cast<Dock *>(root->user_data);
+            if (!d || !d->date_menu || !d->date_menu->raw_window)
+                return;
+            auto *cr = d->date_menu->raw_window->drawing_context;
+            float s = d->date_menu->raw_window->dpi;
+            auto *cd = static_cast<SavedCardData *>(c->user_data);
+
+            drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 8 * s, 1.0);
+            set_argb(cr, {0, 0, 0, .045});
+            cr->fill_preserve();
+            set_argb(cr, {0, 0, 0, .10});
+            cr->set_line_width(std::max(1.0, (double) s));
+            cr->stroke();
+
+            double x = c->real_bounds.x + 10 * s;
+            double right_limit = c->real_bounds.right() - 10 * s - 24 * s;
+            if (cd->icon_surface) {
+                double sw = cairo_image_surface_get_width(cd->icon_surface);
+                double sh = cairo_image_surface_get_height(cd->icon_surface);
+                double iy = std::round(c->real_bounds.y + (c->real_bounds.h - sh) * 0.5);
+                cr->set_source_surface(cd->icon_surface, std::round(x), iy);
+                cr->paint_source();
+                x += sw + 10 * s;
+            }
+
+            double tw = std::max(20.0, right_limit - x);
+            double y = c->real_bounds.y + 10 * s;
+            if (!cd->title.empty()) {
+                draw_wrapped_text(cr, Bounds(x, y, tw, cd->title_h + 2), cd->title, true,
+                                  (int) std::round(10 * s), {.14, .18, .24, 1});
+                y += cd->title_h + (cd->body.empty() ? 0 : 2 * s);
+            }
+            if (!cd->body.empty()) {
+                draw_wrapped_text(cr, Bounds(x, y, tw, cd->body_h + 2), cd->body, false,
+                                  (int) std::round(9.5 * s), {.25, .29, .36, 1});
+                y += cd->body_h;
+            }
+            if (!cd->meta.empty()) {
+                if (!cd->title.empty() || !cd->body.empty())
+                    y += 3 * s;
+                draw_wrapped_text(cr, Bounds(x, y, tw, cd->meta_h + 2), cd->meta, false,
+                                  (int) std::round(8.5 * s), {.43, .48, .55, 1});
+            }
+        };
+
+        card->child(FILL_SPACE, FILL_SPACE);
+
+        auto *rm_col = card->child(::vbox, close_size, FILL_SPACE);
+        auto *rm_btn = rm_col->child(close_size, close_size);
+        uint64_t uid = entry.uid;
+        rm_btn->when_paint = [](Container *root, Container *c) {
+            auto *d = static_cast<Dock *>(root->user_data);
+            if (!d || !d->date_menu || !d->date_menu->raw_window)
+                return;
+            auto *cr = d->date_menu->raw_window->drawing_context;
+            float s = d->date_menu->raw_window->dpi;
+            auto *card = c->parent ? c->parent->parent : nullptr;
+            bool card_hovered = card && bounds_contains(card->real_bounds, root->mouse_current_x, root->mouse_current_y);
+            if (!card_hovered && !c->state.mouse_hovering && !c->state.mouse_pressing)
+                return;
+
+            if (c->state.mouse_hovering || c->state.mouse_pressing) {
+                drawRoundedRect(cr, c->real_bounds.x, c->real_bounds.y, c->real_bounds.w, c->real_bounds.h, 5 * s, 1.0);
+                set_argb(cr, c->state.mouse_pressing ? RGBA(0, 0, 0, .14) : RGBA(0, 0, 0, .07));
+                cr->fill();
+            }
+            RGBA col = c->state.mouse_pressing ? RGBA(.10, .12, .16, 1)
+                     : c->state.mouse_hovering ? RGBA(.14, .18, .24, 1)
+                                               : RGBA(.43, .48, .55, 1);
+            int fs = (int) std::round(8 * s);
+            auto b = draw_text(cr, 0, 0, "\uE8BB", fs, false, icon_font, -1, -1, col, false);
+            draw_text(cr,
+                      (int) std::round(c->real_bounds.x + (c->real_bounds.w - b.w) * 0.5),
+                      (int) std::round(c->real_bounds.y + (c->real_bounds.h - b.h) * 0.5),
+                      "\uE8BB", fs, true, icon_font, -1, -1, col, false);
+        };
+        rm_btn->when_clicked = [uid](Container *, Container *) {
+            remove_saved_notification(uid);
+        };
+    }
+}
+
+void refresh_date_notifications_panel(Dock *dock) {
+    if (!dock || !dock->app || dock->closing || finished)
+        return;
+    std::lock_guard<std::mutex> lock(dock->app->mutex);
+    if (!dock->date_menu || !dock->date_menu->root || !dock->date_menu->raw_window)
+        return;
+    auto *panel = container_by_name("date_notifications_panel", dock->date_menu->root);
+    if (!panel)
+        return;
+    fill_date_notifications_panel(dock, panel);
+    windowing::redraw(dock->date_menu->raw_window);
 }

@@ -1264,6 +1264,8 @@ DBusHandlerResult handle_message_cb(DBusConnection *connection, DBusMessage *mes
                                 notification_info->x_kde_display_appname = hint_value;
                             } else if (strcmp("desktop-entry", hint_name) == 0) {
                                 notification_info->desktop_entry = hint_value;
+                            } else if (strcmp("image-path", hint_name) == 0 || strcmp("image_path", hint_name) == 0) {
+                                notification_info->icon_path = hint_value;
                             } else if (strcmp("x-kde-eventId", hint_name) == 0) {
                                 notification_info->x_kde_eventId = hint_value;
                             } else if (strcmp("x-kde-reply-placeholder-text", hint_name) == 0) {

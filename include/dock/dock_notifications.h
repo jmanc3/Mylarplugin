@@ -28,6 +28,16 @@ struct DockNotification {
 
 std::string strip_html(const std::string &text);
 
+// Thread-safe saved notification history shown in the menu above the date menu.
+void save_notification(const NotificationInfo &info);
+void clear_saved_notifications();
+void remove_saved_notification(uint64_t uid);
+
+// Populates or rebuilds the notifications panel above the date menu.
+// Must be called on the dock's own Wayland app thread.
+void fill_date_notifications_panel(Dock *dock, Container *panel);
+void refresh_date_notifications_panel(Dock *dock);
+
 // Must be called on the dock's own Wayland app thread.
 void show_notification_on_dock(Dock *dock, const NotificationInfo &info);
 

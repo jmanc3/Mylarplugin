@@ -2367,15 +2367,32 @@ static void update_dock_calendar(Dock *dock) {
     windowing::redraw(dock->date_menu->raw_window);
 }
 
-static void fill_date_menu(Dock *dock) {
+static void fill_date_menu(Dock *dock, int notif_panel_h) {
     auto root = dock->date_menu->root;
     const auto dpi = dock->date_menu->raw_window->dpi;
     root->type = ::vbox;
-    root->when_paint = [](Container *root, Container *c) {
+    root->spacing = 10 * dpi;
+    root->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        auto dock = static_cast<Dock *>(root->user_data);
+        if (dock && dock->date_menu)
+            c->spacing = 10 * dock->date_menu->raw_window->dpi;
+    };
+
+    auto notif_panel = root->child(::vbox, FILL_SPACE, notif_panel_h * dpi);
+    notif_panel->name = "date_notifications_panel";
+    notif_panel->pre_layout = [notif_panel_h](Container *root, Container *c, const Bounds &) {
+        auto dock = static_cast<Dock *>(root->user_data);
+        if (dock && dock->date_menu)
+            c->wanted_bounds.h = notif_panel_h * dock->date_menu->raw_window->dpi;
+    };
+    fill_date_notifications_panel(dock, notif_panel);
+
+    auto calendar_card = root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    calendar_card->when_paint = [](Container *root, Container *c) {
         auto dock = static_cast<Dock *>(root->user_data);
         paint_popup_background(dock->date_menu->raw_window->drawing_context, c->real_bounds, dock->date_menu->raw_window->dpi);
     };
-    auto content = root->child(::vbox, FILL_SPACE, FILL_SPACE);
+    auto content = calendar_card->child(::vbox, FILL_SPACE, FILL_SPACE);
     content->pre_layout = [](Container *root, Container *c, const Bounds &) {
         auto dock = static_cast<Dock *>(root->user_data);
         const auto dpi = dock->date_menu->raw_window->dpi;
@@ -3133,7 +3150,10 @@ static void fill_root(Container *root) {
             if (dock->date_menu)
                 return;
             const auto dpi = dock->window->raw_window->dpi;
-            auto settings = make_icon_anchored_popup_settings(c, dpi, 360, 470);
+            const int dock_logical_w = (int) std::round(dock->window->root->real_bounds.w / std::max(dpi, 0.5f));
+            const int notif_panel_h = dock_logical_w <= 1366 ? 180 : 280;
+            const int total_h = notif_panel_h + 10 + 470;
+            auto settings = make_icon_anchored_popup_settings(c, dpi, 360, total_h);
             dock->date_menu = open_mylar_popup(dock->window, settings);
             if (!dock->date_menu)
                 return;
@@ -3155,7 +3175,7 @@ static void fill_root(Container *root) {
                 delete window->root;
                 delete window;
             };
-            fill_date_menu(dock);
+            fill_date_menu(dock, notif_panel_h);
             windowing::redraw(dock->date_menu->raw_window);
         };
     }
@@ -4109,9 +4129,17 @@ void dock::open_applications() {
 }
 
 void dock::show_notification(const NotificationInfo &ni) {
+    save_notification(ni);
     main_thread([ni]() {
         if (finished)
             return;
+        for (auto d : docks) {
+            if (!d || d->closing)
+                continue;
+            windowing::run_on_app(d->app, [d]() {
+                refresh_date_notifications_panel(d);
+            });
+        }
         std::string monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
         Dock *target = nullptr;
         for (auto d : docks) {

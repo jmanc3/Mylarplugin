@@ -2632,13 +2632,16 @@ void windowing::main_loop(RawApp *app) {
         if (!ctx->running)
             break;
 
-        // should technically be atomic<bool> but should be fine?
-        if (ctx->have_functions_to_execute) { 
-            std::lock_guard<std::mutex> lock(ctx->functions_mut);
-            for (auto &func : ctx->functions_to_call) {
+        if (ctx->have_functions_to_execute) {
+            std::vector<std::function<void()>> to_call;
+            {
+                std::lock_guard<std::mutex> lock(ctx->functions_mut);
+                to_call.swap(ctx->functions_to_call);
+                ctx->have_functions_to_execute = false;
+            }
+            for (auto &func : to_call) {
                 func();
             }
-            ctx->functions_to_call.clear();
         }
 
         // ---- Application-level window cleanup ----
