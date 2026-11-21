@@ -485,6 +485,8 @@ struct HyprIso {
     std::function<void()> on_tiled_drag_motion = nullptr;
     std::function<void(int id, bool dropped)> on_tiled_drag_ended = nullptr;
     std::function<void()> on_drag_or_resize_cancel_requested = nullptr;
+    std::function<bool()> can_accept_desktop_drop = nullptr;
+    std::function<void(const std::vector<std::string>& paths, float x, float y)> on_desktop_files_dropped = nullptr;
 
     std::function<void()> on_config_reload = nullptr;
     void reload();
@@ -575,18 +577,27 @@ struct HyprIso {
 
     void damage_entire(int monitor);
     void damage_box(Bounds b);
+    bool damage_intersects(int monitor, Bounds render_box);
+    bool damage_contained_in(int monitor, Bounds render_box);
+    double last_render_ms(int monitor);
 
     void screenshot_all();
     void screenshot(int id);
+    bool has_thumbnail(int id);
+    bool is_thumb_dirty(int id);
     bool screenshot_deco(int id);
+    bool has_deco_thumbnail(int id);
+    bool is_deco_dirty(int id);
     bool rendering_snapshot();
     // True while a window is rendered with its decorations into a snapshot
     // framebuffer at its resting position (no workspace/floating offsets).
     bool capturing_decos();
+    bool capturing_wallpaper();
     void set_animate_to_dock(int id, bool state);
     void screenshot_min(int id);
     void screenshot_space(int mon, int id);
     void screenshot_wallpaper(int mon);
+    bool has_wallpaper_thumbnail(int mon);
     
     void screenshot_monitor(int mon);
     // The PNG is written on a worker thread; on_saved (if any) runs on that thread once it is on disk.
@@ -596,6 +607,7 @@ struct HyprIso {
     void save_window_to_png(int cid, bool decorations, std::string output_path);
 
     Bounds thumbnail_size(int id);
+    Bounds deco_thumbnail_desktop_bounds(int id, const Bounds &fallback);
     Bounds thumbnail_size_deco(int id);
 
     void draw_thumbnail(int id, Bounds b, int rounding = 0, float roundingPower = 2.0f, int cornermask = 0, float alpha = 1.0);

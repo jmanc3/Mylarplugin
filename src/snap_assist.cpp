@@ -9,7 +9,9 @@
 #include "overview.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
+#include <map>
 
 static bool skip_close = false;
 static unsigned int lifecycle = 0;
@@ -202,6 +204,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
 
     {
         auto order = get_window_stacking_order();
+        std::erase_if(order, [](int id) { return !hypriso->can_maximize(id); });
         std::reverse(order.begin(), order.end());
         std::stable_sort(order.begin(), order.end(),
             [monitor](int a, int b) {
@@ -262,6 +265,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             thumb->when_clicked = paint {
                 auto parent_data = (HelperData *) c->parent->user_data;
                 auto data = (SnapThumb *) c->user_data;
+                if (!hypriso->can_maximize(data->cid))
+                    return;
                 hypriso->set_hidden(data->cid, false);
                 auto close_cid = data->cid;
                 auto b = c->real_bounds;
@@ -771,7 +776,7 @@ void actual_open(int monitor, int cid) {
     auto cdata = (ClientInfo *) c->user_data;
     std::vector<int> others;
     for (auto o : get_window_stacking_order()) {
-        if (hypriso->alt_tabbable(o) && o != cid) {
+        if (hypriso->alt_tabbable(o) && hypriso->can_maximize(o) && o != cid) {
             bool skip = false;
             for (auto grouped : cdata->grouped_with) {
                 if (grouped == o)
@@ -931,6 +936,128 @@ void actual_open(int monitor, int cid) {
         hypriso->render_whitelist.push_back(i);
 }
 
+static constexpr long snap_fast_capture_ms = 42;
+static constexpr long snap_max_fast_capture_ms = 250;
+static constexpr long snap_slow_capture_ms = 400;
+static constexpr long snap_max_slow_capture_ms = 2000;
+static std::map<int, long> snap_window_captures;
+static double snap_smoothed_capture_ms = 0.0;
+static size_t snap_capture_cursor = 0;
+
+static long snap_capture_thumbnails(int monitor, bool initial) {
+    const auto tick_start = std::chrono::steady_clock::now();
+    const auto now = get_current_time_in_ms();
+
+    const double render_ms = hypriso->last_render_ms(monitor);
+    const double fps = std::max(1.0, (double) hypriso->fps(monitor));
+    const double frame_budget_ms = 1000.0 / fps;
+    const double load_ratio = (render_ms + snap_smoothed_capture_ms) / std::max(1.0, frame_budget_ms);
+    const double load_scale = load_ratio <= 0.35 ? 1.0 : 1.0 + (load_ratio - 0.35) * 4.0;
+
+    const long effective_fast_ms = std::clamp<long>(std::lround(snap_fast_capture_ms * load_scale), snap_fast_capture_ms, snap_max_fast_capture_ms);
+    const long effective_slow_ms = std::clamp<long>(std::lround(snap_slow_capture_ms * load_scale), snap_slow_capture_ms, snap_max_slow_capture_ms);
+    const double tick_budget_ms = initial
+        ? 6.0
+        : std::clamp(frame_budget_ms * 0.35 - render_ms * 0.5, 1.5, 6.0);
+
+    // Focused window and the one directly below it on the active workspace.
+    const int active_ws = hypriso->get_active_workspace_id(monitor);
+    std::vector<int> priority_windows;
+    const auto stacking = get_window_stacking_order();
+    for (auto it = stacking.rbegin(); it != stacking.rend(); ++it) {
+        if (priority_windows.size() >= 2)
+            break;
+        if (get_monitor(*it) != monitor || is_slept(*it) || !get_cid_container(*it))
+            continue;
+        if (hypriso->get_active_workspace_id_client(*it) != active_ws)
+            continue;
+        priority_windows.push_back(*it);
+    }
+
+    struct CaptureCandidate {
+        int cid;
+        int tier;
+        Bounds bounds;
+    };
+    std::vector<CaptureCandidate> candidates;
+    std::map<int, size_t> seen;
+    for (auto child : actual_root->children) {
+        if (child->custom_type != (int) TYPE::SNAP_HELPER)
+            continue;
+        auto helper_data = (HelperData *) child->user_data;
+        if (!helper_data || !helper_data->showing)
+            continue;
+        for (auto thumb : child->children) {
+            auto data = (SnapThumb *) thumb->user_data;
+            if (!data)
+                continue;
+            const int cid = data->cid;
+            if (seen.contains(cid))
+                continue;
+            const bool hovered = thumb->state.mouse_hovering ||
+                (!thumb->children.empty() && thumb->children[0]->state.mouse_hovering);
+            const bool missing = !hypriso->has_thumbnail(cid);
+            const bool fast = hovered || std::find(priority_windows.begin(), priority_windows.end(), cid) != priority_windows.end();
+            const bool dirty = hypriso->is_thumb_dirty(cid);
+            auto prev = snap_window_captures.find(cid);
+            const long last_cap = prev != snap_window_captures.end() ? prev->second : 0;
+            const long elapsed = last_cap == 0 ? effective_slow_ms * 4 : now - last_cap;
+            if (!missing) {
+                const long min_interval = fast ? effective_fast_ms : effective_slow_ms;
+                if (elapsed < min_interval)
+                    continue;
+                if (!fast && !dirty && elapsed < effective_slow_ms * 3)
+                    continue;
+            }
+            const int tier = missing ? 0 : (hovered ? 1 : (fast ? 2 : 3));
+            seen[cid] = candidates.size();
+            candidates.push_back({cid, tier, thumb->real_bounds});
+        }
+    }
+
+    if (!candidates.empty()) {
+        std::stable_sort(candidates.begin(), candidates.end(), [](const CaptureCandidate &a, const CaptureCandidate &b) {
+            return a.tier < b.tier;
+        });
+        size_t rot_start = 0;
+        while (rot_start < candidates.size() && candidates[rot_start].tier <= 1)
+            rot_start++;
+        if (candidates.size() - rot_start > 1) {
+            const size_t span = candidates.size() - rot_start;
+            const size_t shift = snap_capture_cursor % span;
+            std::rotate(candidates.begin() + rot_start, candidates.begin() + rot_start + shift, candidates.end());
+        }
+    }
+
+    bool budget_exceeded = false;
+    size_t captured_count = 0;
+    for (const auto &cand : candidates) {
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+        if (cand.tier > 0 && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
+            budget_exceeded = true;
+            break;
+        }
+        hypriso->screenshot(cand.cid);
+        snap_window_captures[cand.cid] = get_current_time_in_ms();
+        captured_count++;
+        if (!initial && cand.bounds.w > 0 && cand.bounds.h > 0) {
+            Bounds dmg = cand.bounds;
+            dmg.grow(4.0);
+            hypriso->damage_box(dmg);
+        }
+    }
+    if (captured_count > 0)
+        snap_capture_cursor += captured_count;
+    std::erase_if(snap_window_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
+
+    const double total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+    if (!initial)
+        snap_smoothed_capture_ms = snap_smoothed_capture_ms * 0.75 + total_ms * 0.25;
+    if (budget_exceeded)
+        return std::min(effective_fast_ms, 50L);
+    return effective_fast_ms;
+}
+
 void snap_assist::open(int monitor, int cid) {
     if (overview::is_showing())
         return;
@@ -942,14 +1069,19 @@ void snap_assist::open(int monitor, int cid) {
     if (is_showing())
         instant_close();
 
+    snap_window_captures.clear();
+    snap_smoothed_capture_ms = 0.0;
+    snap_capture_cursor = 0;
+
     const auto generation = lifecycle;
     later_immediate([monitor, cid, generation](Timer *) {
         if (generation != lifecycle || overview::is_showing())
             return;
-        hypriso->screenshot_all(); 
         actual_open(monitor, cid);
+        heart::layout_containers();
+        snap_capture_thumbnails(monitor, true);
     });
-    later(1000.0f / (hypriso->fps(monitor) * .33), [generation](Timer *t) {
+    later(snap_fast_capture_ms, [monitor, generation](Timer *t) {
         t->keep_running = generation == lifecycle && !overview::is_showing();
         if (!t->keep_running)
             return;
@@ -961,9 +1093,11 @@ void snap_assist::open(int monitor, int cid) {
                found = true;
            }
         }
-        if (!found)
+        if (!found) {
             t->keep_running = false;
-        hypriso->screenshot_all();
+            return;
+        }
+        t->delay = static_cast<float>(snap_capture_thumbnails(monitor, false));
     });
 }
 

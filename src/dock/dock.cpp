@@ -226,9 +226,12 @@ struct Pin : UserData {
     // Ported from winbar's attempting_to_launch_first_window.
     long launch_attempt_time = 0;
 
-    // Icon punches in and springs back when the app is launched (same as
-    // desktop icons when opened). 0 while not punching.
-    long punch_start = 0;
+    // The press zoom and the first-window pulse can run at the same time.
+    long zoom_start = 0;
+    long zoom_duration = 100;
+    double zoom_from = 0;
+    bool zoom_pressed = false;
+    bool pulse_on_launch = false;
 
     // winbar's minimize / restore bounce. 0 while not bouncing.
     long bounce_start = 0;
@@ -1042,7 +1045,7 @@ static void icons_right_click(int startoff, int cw, std::string uuid, float dpi,
     });
 }
 
-static void launch_pin(Pin *pin);
+static void launch_pin(Pin *pin, bool pulse = true);
 
 static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, Pin *pin, float dpi, float yoff, std::string full_icon_path) {
     main_thread([cid, startoff, cw, uuid, pin, dpi, yoff, full_icon_path] {
@@ -1266,7 +1269,6 @@ static std::vector<int> pin_window_ids(Pin *pin) {
 }
 
 static constexpr long kLaunchPretendMs = 10000;
-static constexpr long kLaunchFadeMs = 250;
 
 // How strongly the pretend "window exists" indicator should show, 0 when the
 // pin isn't launching. Clears the launch once a real window has arrived.
@@ -1282,58 +1284,53 @@ static double pin_launch_amount(Pin *pin) {
         pin->launch_attempt_time = 0;
         return 0;
     }
-    // Breathe from the start so it's clear the app is opening: dip to 30%
-    // once a second, like winbar. The bubbly styles hold steady instead.
-    double amount = 1.0;
-    if (!dock_is_bubbly()) {
-        const double period = 1000;
-        double phase = std::fmod((double) elapsed, period) / period;
-        double scalar = std::abs(phase * 2.0 - 1.0);
-        amount = 1.0 - (1.0 - scalar) * .7;
-    }
-    const long remaining = kLaunchPretendMs - elapsed;
-    if (remaining < kLaunchFadeMs)
-        amount *= (double) remaining / kLaunchFadeMs;
-    return amount;
+    if (dock_is_bubbly() || elapsed <= 2000)
+        return 1.0;
+    const double phase = std::abs((elapsed % 1000) - 500L) / 500.0;
+    return 0.3 + 0.7 * phase;
 }
 
-static void start_launch_pretend(Pin *pin) {
-    if (pin->windows.empty())
-        pin->launch_attempt_time = get_current_time_in_ms();
+static double pin_press_amount(const Pin *pin, long now) {
+    if (!pin->zoom_start)
+        return 0;
+    const double t = std::clamp((now - pin->zoom_start) / (double) pin->zoom_duration, 0.0, 1.0);
+    if (pin->zoom_pressed)
+        return 1.0 - (1.0 - pin->zoom_from) * (1.0 - t) * (1.0 - t);
+    return pin->zoom_from * (1.0 - t);
 }
 
-// Desktop icons' open punch (see punch_scale in desktop_icons.cpp): 1.0 ->
-// 0.5 -> 1.0 over 500ms with Qt's OutInCirc easing.
-static constexpr float kPunchMs = 500.f;
-// How much the icon shrinks at the deepest point of the punch (0.2 = 20%).
-static constexpr float kPunchShrink = 0.25f;
-static constexpr float kPunchDepth = 1.f - kPunchShrink;
-
-static float dock_punch_scale(float t) {
-    t = std::clamp(t, 0.f, 1.f);
-    const float u = 2.f * t - 1.f;
-    const float root = std::sqrt(std::max(0.f, 1.f - u * u));
-    const float e = t < .5f ? root * .5f : (1.f - root) * .5f + .5f;
-    if (e < .5f)
-        return 1.f + (kPunchDepth - 1.f) * (e / .5f);
-    return kPunchDepth + (1.f - kPunchDepth) * ((e - .5f) / .5f);
+static void press_pin(Pin *pin) {
+    const long now = get_current_time_in_ms();
+    pin->zoom_from = pin_press_amount(pin, now);
+    pin->zoom_start = now;
+    pin->zoom_duration = 100;
+    pin->zoom_pressed = true;
 }
 
-// Current icon scale, 1 when not punching. Ends the punch once it's done.
-static float pin_punch_scale(Pin *pin) {
-    if (pin->punch_start == 0)
-        return 1.f;
-    const long elapsed = get_current_time_in_ms() - pin->punch_start;
-    if (elapsed >= kPunchMs) {
-        pin->punch_start = 0;
-        return 1.f;
-    }
-    return dock_punch_scale(elapsed / kPunchMs);
+static void release_pin(Pin *pin, long duration) {
+    if (!pin->zoom_pressed)
+        return;
+    const long now = get_current_time_in_ms();
+    pin->zoom_from = pin_press_amount(pin, now);
+    // Winbar freezes the current press depth for the remaining press time
+    // plus 100 ms before starting the linear release.
+    pin->zoom_start = std::max(now, pin->zoom_start + pin->zoom_duration) + 100;
+    pin->zoom_duration = duration;
+    pin->zoom_pressed = false;
+}
+
+static double pin_icon_scale(const Pin *pin, long now) {
+    const double scale = 1.0 - 0.19 * pin_press_amount(pin, now);
+    if (!pin->launch_attempt_time || !pin->pulse_on_launch)
+        return scale;
+    const long elapsed = now - pin->launch_attempt_time;
+    const double phase = std::abs((elapsed % 500) - 250L) / 250.0;
+    return (scale + 0.61 + 0.22 * phase) * 0.5;
 }
 
 // winbar's bounce_slam_animation: a quick dip (or hop) and a slower return,
 // played over the first quarter of kBounceMs.
-static constexpr float kBounceMs = 2000.f;
+static constexpr float kBounceMs = 2000.2f;
 // How far the icon moves, in logical pixels.
 static constexpr float kBounceDistance = 2.f;
 static std::vector<float> bounce_curve = { 0, 0, 0, 0, 0.121, 0.256, 0.40800000000000003, 0.579, 0.779, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.952, 0.847, 0.732, 0.605, 0.469, 0.32199999999999995, 0.16600000000000004, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -1351,9 +1348,11 @@ static double pin_bounce_offset(Pin *pin, double dpi) {
     return pin->bounce_up ? -offset : offset;
 }
 
-static void launch_pin(Pin *pin) {
-    start_launch_pretend(pin);
-    pin->punch_start = get_current_time_in_ms();
+static void launch_pin(Pin *pin, bool pulse) {
+    if (pin->windows.empty()) {
+        pin->pulse_on_launch = pulse || (pin->launch_attempt_time && pin->pulse_on_launch);
+        pin->launch_attempt_time = get_current_time_in_ms();
+    }
     launch_command(pin->command);
 }
 
@@ -1509,14 +1508,14 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 double ix = std::round(centered_x + (labeled_x - centered_x) * label_eased);
                 double iy = std::round(c->real_bounds.y + c->real_bounds.h * .5 - h * .5);
                 iy += pin_bounce_offset(pin, mylar->raw_window->dpi);
-                const float punch = pin_punch_scale(pin);
-                if (punch != 1.f) {
+                const double scale = pin_icon_scale(pin, get_current_time_in_ms());
+                if (scale != 1.0) {
                     // Shrink toward the icon's own center.
                     const double cx = ix + w * .5;
                     const double cy = iy + h * .5;
                     cr->save();
                     cr->translate(cx, cy);
-                    cr->scale(punch, punch);
+                    cr->scale(scale, scale);
                     cr->translate(-cx, -cy);
                     cr->set_source_surface(ico_surf, ix, iy);
                     cr->paint_source();
@@ -1704,11 +1703,17 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
         pin->suppress_hover_preview = false;
         main_thread([]() { dock_thumbnails::close(); });
     };
+    ch->when_mouse_down = paint {
+        press_pin((Pin *) c->user_data);
+        windowing::redraw(((Dock *) root->user_data)->window->raw_window);
+    };
     ch->when_clicked = paint {
         Pin* pin = (Pin*)c->user_data;
         auto dock = (Dock*)root->user_data;
         auto mylar = dock->window;
 
+        release_pin(pin, 85);
+        windowing::redraw(mylar->raw_window);
         const auto windows_count = pin->windows.size();
         if (c->state.mouse_button_pressed == BTN_LEFT) {
             cancel_hover_timer(dock, pin);
@@ -1734,7 +1739,6 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             if (pin_launch_amount(pin) > 0)
                 return;
             launch_pin(pin);
-            windowing::redraw(mylar->raw_window);
             return;
         }
 
@@ -1782,8 +1786,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 }
             });
         } else if (c->state.mouse_button_pressed == BTN_MIDDLE) {
-            launch_pin(pin);
-            windowing::redraw(mylar->raw_window);
+            launch_pin(pin, false);
         } else if (c->state.mouse_button_pressed == BTN_RIGHT) {
             int startoff = (root->mouse_current_x - c->real_bounds.x) / mylar->raw_window->dpi;
             int cw = c->real_bounds.w / mylar->raw_window->dpi;
@@ -1849,6 +1852,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
     };
     ch->when_drag_start = paint {
         auto data = (Pin *) c->user_data;
+        release_pin(data, 55);
         data->initial_mouse_click_before_drag_offset_x = c->real_bounds.x - root->mouse_initial_x;
         c->z_index = 1;
 
@@ -2307,7 +2311,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         if (!data->windows.empty())
             data->launch_attempt_time = 0;
         const double label_target = (!data->windows.empty() && labels && !merge_windows.load()) ? 1.0 : 0.0;
-        if (data->animating || std::abs(data->label_amount - label_target) > 0.001 || data->launch_attempt_time != 0 || data->punch_start != 0 || data->bounce_start != 0 || pin_bubbly_animating(data, current) || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
+        if (data->animating || std::abs(data->label_amount - label_target) > 0.001 || data->launch_attempt_time != 0 || current < data->zoom_start + data->zoom_duration || data->bounce_start != 0 || pin_bubbly_animating(data, current) || std::abs(data->hover_amount - (c->state.mouse_hovering ? 1.0 : 0.0)) > 0.001 ||
             std::abs(data->active_amount - ([&] {
                 for (const auto &window : data->windows)
                     if (window.cid == active_cid)

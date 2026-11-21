@@ -16,6 +16,7 @@
 static bool switcher_showing = false;
 static bool switcher_closing = false;
 static bool hold_open = false;
+static bool layout_dirty = false;
 static bool workspace_thumbnails_ready = false;
 static unsigned int switcher_generation = 0;
 static unsigned int close_generation = 0;
@@ -24,6 +25,33 @@ static constexpr float inactive_thumbnail_refresh_ms = 500.0f;
 static std::unordered_map<int, double> saved_scroll_offsets;
 
 int target_monitor();
+
+static Bounds thumbnail_clip_bounds(Container *c);
+
+static void damage_bounds(Bounds b) {
+    if (b.w <= 0 || b.h <= 0)
+        return;
+    b.grow(2); // Cover rounding at fractional scales.
+    hypriso->damage_box(b);
+}
+
+static bool same_bounds(const Bounds &a, const Bounds &b) {
+    return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
+static void capture_switcher_workspace(int monitor, int workspace) {
+    hypriso->screenshot_space(monitor, workspace);
+    if (monitor != target_monitor())
+        return;
+    for (auto panel : actual_root->children) {
+        if (panel->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
+            continue;
+        for (auto card : panel->children) {
+            if (*datum<int>(card, "workspace") == workspace)
+                damage_bounds(thumbnail_clip_bounds(card).intersection(bounds_monitor(monitor)));
+        }
+    }
+}
 
 static void capture_workspace_thumbnails() {
     if (workspace_thumbnails_ready || !switcher_showing)
@@ -35,9 +63,8 @@ static void capture_workspace_thumbnails() {
 
     workspace_thumbnails_ready = true;
     for (auto id : hypriso->get_workspace_ids(monitor))
-        hypriso->screenshot_space(monitor, id);
+        capture_switcher_workspace(monitor, id);
     hypriso->screenshot_wallpaper(monitor);
-    damage_all();
 }
 
 static constexpr double drag_transition_ms = 120.0;
@@ -48,6 +75,7 @@ static struct {
     bool from_overview = false;
     bool ready = false;
     Bounds source;
+    Bounds last_preview;
     float alpha = 1.0f;
     float amount = 0.0f;
     float from = 0.0f;
@@ -68,6 +96,7 @@ static struct {
     int monitor = -1;
     int source_workspace = -1;
     Bounds from;
+    Bounds current;
     float alpha = 1.0f;
     long started = 0;
     bool snapshot_released = false;
@@ -116,10 +145,11 @@ static Bounds switcher_render_bounds(Bounds b, int monitor) {
 }
 
 static void finish_landing(bool run_pending_close);
+static Bounds dragged_bounds();
 
 void drag_workspace_switcher::begin_drag(int cid, bool from_overview) {
     finish_landing(false);
-    dragged_preview = {};
+    end_drag(dragged_preview.cid);
     dragged_preview.cid = cid;
     dragged_preview.from_overview = from_overview;
     dragged_preview.ready = from_overview;
@@ -135,22 +165,24 @@ void drag_workspace_switcher::begin_drag(int cid, bool from_overview) {
                 end_drag(dragged_preview.cid);
                 return;
             }
-            if (!dragged_preview.ready || dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f)
+            if (!dragged_preview.ready || dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f) {
                 dragged_preview.ready = hypriso->screenshot_deco(dragged_preview.cid);
+                damage_bounds(dragged_preview.last_preview);
+            }
             t->delay = 16;
             t->keep_running = true;
-            damage_all();
         });
     }
-    damage_all();
 }
 
 void drag_workspace_switcher::end_drag(int cid) {
-    if (dragged_preview.cid != cid)
+    if (cid == -1 || dragged_preview.cid != cid)
         return;
     ++drag_generation;
+    damage_bounds(dragged_preview.last_preview);
+    if (!dragged_preview.last_preview.empty())
+        damage_bounds(dragged_preview.source);
     dragged_preview = {};
-    damage_all();
 }
 
 void drag_workspace_switcher::update_drag() {
@@ -169,6 +201,7 @@ void drag_workspace_switcher::update_drag() {
         p.source.w += extents.left + extents.right;
         p.source.h += extents.top + extents.bottom;
     }
+    const float previous_amount = p.amount;
     const auto now = get_current_time_in_ms();
     const auto elapsed = std::clamp((now - p.started) / drag_transition_ms, 0.0, 1.0);
     const auto eased = elapsed * elapsed * (3.0 - 2.0 * elapsed);
@@ -202,8 +235,14 @@ void drag_workspace_switcher::update_drag() {
         p.target = target;
         p.started = now;
     }
-    if (waiting || p.amount != p.target || p.amount > 0.0f)
-        damage_all();
+    const Bounds preview = p.ready && p.amount > 0.0f ? dragged_bounds() : Bounds{};
+    if (!same_bounds(preview, p.last_preview) || previous_amount != p.amount) {
+        damage_bounds(p.last_preview);
+        damage_bounds(preview);
+        if (preview.empty() || p.last_preview.empty())
+            damage_bounds(p.source);
+        p.last_preview = preview;
+    }
 }
 
 static Bounds dragged_bounds() {
@@ -288,11 +327,14 @@ static Bounds window_bounds_with_extents(int cid) {
     return b;
 }
 
-// Where the window ends up on the screen right now. It follows the window's
-// own placement (including retiling) on its destination workspace.
+// Where the window ends up on the screen right now. In overview it follows the
+// window's final overview slot on its destination workspace; in regular view it
+// follows the window's live desktop placement (including retiling).
 static bool landing_target(Bounds &out) {
     if (!hypriso->is_mapped(landing.cid))
         return false;
+    if (overview::is_showing() && overview::thumbnail_target_bounds(landing.cid, out))
+        return true;
     out = window_bounds_with_extents(landing.cid);
     return out.w > 0 && out.h > 0;
 }
@@ -303,8 +345,11 @@ static void finish_landing(bool run_pending_close) {
     ++landing_generation;
     const bool close_pending = landing.close_pending;
     hold_open = landing.previous_hold_open;
+    damage_bounds(landing.current);
+    Bounds target;
+    if (landing_target(target))
+        damage_bounds(target);
     landing = {};
-    damage_all();
     if (run_pending_close && close_pending)
         drag_workspace_switcher::close_visually();
 }
@@ -322,6 +367,8 @@ static void start_landing(int cid, Container *target) {
     landing.monitor = target_monitor();
     landing.source_workspace = source_workspace;
     landing.from = dragged_bounds();
+    landing.current = landing.from;
+    damage_bounds(landing.current);
     landing.alpha = p.alpha;
     landing.started = get_current_time_in_ms();
     landing.previous_hold_open = hold_open;
@@ -344,29 +391,31 @@ static void start_landing(int cid, Container *target) {
             // destination thumbnail, so that thumbnail can show the window as
             // soon as it has moved there.
             landing.snapshot_released = true;
-            hypriso->screenshot_space(landing.monitor, workspace);
+            if (overview::is_showing())
+                overview::fake_paint(workspace);
+            capture_switcher_workspace(landing.monitor, workspace);
+            if (overview::is_showing())
+                overview::fake_paint(-1);
         }
         if (t_norm >= 1.0) {
             finish_landing(true);
             return;
         }
+        Bounds target;
+        if (landing_target(target)) {
+            damage_bounds(landing.current);
+            landing.current = lerp(landing.from, target, pull(slidetopos2, t_norm));
+            damage_bounds(landing.current);
+        }
         t->keep_running = true;
-        damage_all();
     });
-    damage_all();
 }
 
 static void paint_landing(int monitor) {
     if (landing.cid == -1 || monitor != landing.monitor || hypriso->rendering_snapshot())
         return;
-    const auto t = std::clamp((get_current_time_in_ms() - landing.started) / landing_ms, 0.0, 1.0);
-    Bounds target;
-    if (!landing_target(target))
-        return;
-    const auto b = lerp(landing.from, target, pull(slidetopos2, t));
-    // No fade: the copy stays opaque until it hands over to the real window.
+    const auto &b = landing.current;
     const float alpha = landing.alpha;
-    damage_all();
     if (alpha <= 0.0f)
         return;
     const auto old_clip = hypriso->clip;
@@ -379,6 +428,10 @@ static void paint_landing(int monitor) {
 
 void drag_workspace_switcher::land(int cid, Container *target) {
     start_landing(cid, target);
+}
+
+bool drag_workspace_switcher::is_landing(int cid) {
+    return cid != -1 && landing.cid == cid;
 }
 
 void layout_spaces(Container *actual_root, Container *parent, int monitor) {
@@ -434,6 +487,16 @@ void layout_spaces(Container *actual_root, Container *parent, int monitor) {
     }
 }
 
+static void animate_switcher(float *value, float target, float duration, std::shared_ptr<bool> lifetime,
+                             std::function<void(bool)> completion, std::function<float(float)> ease) {
+    animate(value, target, duration, lifetime, completion, [ease](float progress) {
+        layout_dirty = true;
+        return ease(progress);
+    });
+}
+
+static void update_switcher_damage(Container *c);
+
 static void scroll_switcher(Container *c, double elapsed) {
     if (switcher_closing || *datum<float>(c, "openess") < .94)
         return;
@@ -459,7 +522,104 @@ static void scroll_switcher(Container *c, double elapsed) {
     // Refresh the hovered thumbnail even when the pointer has not moved.
     Event event(m.x, m.y);
     move_event(c, event);
-    damage_all();
+    update_switcher_damage(c);
+}
+
+struct SwitcherCardVisual {
+    int workspace;
+    Bounds bounds;
+    Bounds visible;
+    float hover;
+    float press;
+};
+
+struct SwitcherVisual {
+    Bounds panel;
+    Bounds glow;
+    double mouse_x = 0, mouse_y = 0;
+    float openness = 0;
+    float peek = 0;
+    std::vector<SwitcherCardVisual> cards;
+};
+
+static void update_switcher_damage(Container *c) {
+    const int monitor = target_monitor();
+    if (monitor == -1)
+        return;
+    const auto screen = bounds_monitor(monitor);
+    const auto panel = switcher_bounds(c).intersection(screen);
+    const auto openness = *datum<float>(c, "openess");
+    const auto peek = *datum<float>(c, "peaking_amount");
+    auto &last = *datum<SwitcherVisual>(c, "switcher_visual");
+    const bool panel_changed = !same_bounds(panel, last.panel) || openness != last.openness || peek != last.peek;
+    if (panel_changed) {
+        damage_bounds(last.panel);
+        damage_bounds(panel);
+    }
+
+    // The three pointer highlights fit inside the largest gradient texture.
+    const auto m = mouse();
+    const double size = datum<TextureInfo>(actual_root, "drag_gradient")->w / scale(monitor);
+    const auto glow = Bounds(m.x - size * .5, m.y - size * .5, size, size).intersection(panel);
+    if (!panel_changed && (last.mouse_x != m.x || last.mouse_y != m.y || !same_bounds(glow, last.glow))) {
+        damage_bounds(last.glow);
+        damage_bounds(glow);
+    }
+    last.mouse_x = m.x;
+    last.mouse_y = m.y;
+    last.glow = glow;
+    last.panel = panel;
+    last.openness = openness;
+    last.peek = peek;
+
+    size_t index = 0;
+    for (auto card : c->children) {
+        auto active = datum<float>(card, "active_amount");
+        const bool hovered = card->state.mouse_hovering || card->state.mouse_pressing;
+        auto was_active = datum<bool>(card, "was_active");
+        if (hovered != *was_active) {
+            *was_active = hovered;
+            animate_switcher(active, hovered ? 1.0 : 0.0, 130, card->lifetime, nullptr, [hovered](float a) {
+                return hovered ? pull(slidetopos2, a) : a;
+            });
+            damage_bounds(glow);
+        }
+        SwitcherCardVisual now{*datum<int>(card, "workspace"), card->real_bounds, thumbnail_clip_bounds(card).intersection(panel),
+                               *active, *datum<float>(card, "pressed_amount")};
+        if (index == last.cards.size()) {
+            if (!panel_changed)
+                damage_bounds(now.visible);
+            last.cards.push_back(now);
+        } else {
+            auto &old = last.cards[index];
+            if (!panel_changed && (now.workspace != old.workspace || !same_bounds(now.bounds, old.bounds) ||
+                !same_bounds(now.visible, old.visible) || now.hover != old.hover || now.press != old.press)) {
+                damage_bounds(old.visible);
+                damage_bounds(now.visible);
+            }
+            old = now;
+        }
+        ++index;
+    }
+    while (last.cards.size() > index) {
+        if (!panel_changed)
+            damage_bounds(last.cards.back().visible);
+        last.cards.pop_back();
+    }
+}
+
+static void update_panel_hover(Container *c) {
+    // A pointer left over the switcher must not reverse its exit animation.
+    if (switcher_closing)
+        return;
+    const bool expand = c->state.mouse_hovering || hold_open;
+    auto openness = datum<float>(c, "openess");
+    const float target = expand ? 1.0f : 0.0f;
+    if (*openness != target && !is_being_animating_to(openness, target)) {
+        animate_switcher(openness, target, expand ? 180.0 : 200.0, c->lifetime, nullptr, [expand](float a) {
+            return pull(expand ? slidetopos2 : snapback, a);
+        });
+    }
 }
 
 void drag_switcher_actual_open() {
@@ -467,7 +627,7 @@ void drag_switcher_actual_open() {
     *datum<float>(c, "openess") = 0.0;
     auto peaking_amount = datum<float>(c, "peaking_amount");
     *peaking_amount = 0.0;
-    animate(peaking_amount, 1.0, 200.0, c->lifetime, nullptr, [](float a) {
+    animate_switcher(peaking_amount, 1.0, 200.0, c->lifetime, nullptr, [](float a) {
         return pull(snapback, a);
     });
     c->custom_type = (int) TYPE::WORKSPACE_SWITCHER;
@@ -526,33 +686,19 @@ void drag_switcher_actual_open() {
             auto openess = *datum<float>(parent, "openess");
             if (openess == 1.0) {
                 *slide_in_amount = 0.0;
-                animate(slide_in_amount, 1.0, 200, c->lifetime,  nullptr, [](float a) {
+                animate_switcher(slide_in_amount, 1.0, 200, c->lifetime,  nullptr, [](float a) {
                     return pull(slidetopos2, a);
                 });
             }
-            c->when_paint = [monitor](Container *actual_root, Container *c) {
+            c->when_paint = [](Container *actual_root, Container *c) {
+                const int monitor = target_monitor();
                 auto root = get_rendering_root();
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
                 if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
                     return;
 
-                float active_amount = 0.0;
-                {
-                    bool *was_active = datum<bool>(c, "was_active");
-                    float *active = datum<float>(c, "active_amount");
-                    bool is_active = c->state.mouse_hovering || c->state.mouse_pressing;
-                    if (is_active != *was_active) {
-                        *was_active = is_active;
-                        if (is_active) {
-                            animate(active, 1.0, 130, c->lifetime, nullptr, [](float a) { return pull(slidetopos2, a); } ); 
-                        } else {
-                            animate(active, 0.0, 130, c->lifetime, nullptr, [](float a) { return a; } ); 
-                        }
-                    }
-                    active_amount = *active;
-                }
-
+                const auto active_amount = *datum<float>(c, "active_amount");
                 auto clip_bounds = switcher_render_bounds(thumbnail_clip_bounds(c), monitor);
                 if (hypriso->clip)
                     clip_bounds = clip_bounds.intersection(hypriso->clipbox);
@@ -656,6 +802,8 @@ void drag_switcher_actual_open() {
         c->real_bounds = c->wanted_bounds;
 
         layout_spaces(actual_root, c, monitor);
+        if (!hypriso->rendering_snapshot())
+            update_switcher_damage(c);
     };
     c->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
@@ -673,7 +821,6 @@ void drag_switcher_actual_open() {
             c->real_bounds.shrink(new_h); 
         }
         renderfix;
-        damage_all();    
         auto clip_bounds = c->real_bounds;
         if (hypriso->clip)
             clip_bounds = clip_bounds.intersection(hypriso->clipbox);
@@ -706,25 +853,7 @@ void drag_switcher_actual_open() {
                 peaking_amount * text_alpha);
         }
 
-        // A pointer left over the switcher must not reverse its exit animation.
-        if (switcher_closing)
-            return;
-        if (c->state.mouse_hovering || hold_open) {
-            auto openess = datum<float>(c, "openess");
-            if (*openess != 1.0 && !is_being_animating_to(openess, 1.0)) {
-                animate(openess, 1.0, 180.0, c->lifetime, 
-                nullptr, [](float a) {
-                    return pull(slidetopos2, a);
-                });
-            }
-        } else {
-            auto openess = datum<float>(c, "openess");
-            if (*openess != 0.0 && !is_being_animating_to(openess, 0.0)) {
-                animate(openess, 0.0, 200.0, c->lifetime, nullptr, [](float a) {
-                    return pull(snapback, a);
-                });
-            }
-        }
+
     };
     c->receive_events_even_if_obstructed_by_one = true;
     c->after_paint = [](Container *actual_root, Container *c) {
@@ -819,11 +948,9 @@ void drag_switcher_actual_open() {
     };
     c->when_mouse_enters_container = [](Container *root, Container *c) {
         capture_workspace_thumbnails();
-        request_damage(root, c);
     };
     c->when_mouse_motion = [](Container *root, Container *c) {
         capture_workspace_thumbnails();
-        request_damage(root, c);
     };
     c->when_fine_scrolled = [](Container *root, Container *c, double scroll_x, double scroll_y, bool came_from_touchpad) {
         consume_event(root, c);
@@ -833,9 +960,9 @@ void drag_switcher_actual_open() {
             return;
         c->scroll_h_real = offset;
         layout_spaces(actual_root, c, target_monitor());
-        damage_all();
+        update_switcher_damage(c);
     };
-    damage_all();
+    c->pre_layout(actual_root, c, actual_root->real_bounds);
 }
 
 // TODO: technically we have to open one per monitor
@@ -847,11 +974,10 @@ void drag_workspace_switcher::open() {
             for (auto c : actual_root->children) {
                 if (c->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
                     continue;
-                animate(datum<float>(c, "peaking_amount"), 1.0, 200.0, c->lifetime, nullptr, [](float a) {
+                animate_switcher(datum<float>(c, "peaking_amount"), 1.0, 200.0, c->lifetime, nullptr, [](float a) {
                     return pull(snapback, a);
                 });
             }
-            damage_all();
         }
         return;
     }
@@ -885,7 +1011,13 @@ void drag_workspace_switcher::open() {
         for (auto c : actual_root->children) {
             if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER) {
                 t->keep_running = true;
+                update_panel_hover(c);
+                if (layout_dirty) {
+                    layout_dirty = false;
+                    c->pre_layout(actual_root, c, actual_root->real_bounds);
+                }
                 scroll_switcher(c, elapsed);
+                drag_workspace_switcher::update_drag();
             }
         }
     });
@@ -919,7 +1051,7 @@ void drag_workspace_switcher::open() {
             // workspace, and restore its screenshot immediately after release.
             if (s == active_id || s == dragged_workspace || s == previous_dragged_workspace) {
                 overview::fake_paint(s);
-                hypriso->screenshot_space(monitor, s);
+                capture_switcher_workspace(monitor, s);
             }
         }
         previous_dragged_workspace = dragged_workspace;
@@ -951,7 +1083,7 @@ void drag_workspace_switcher::open() {
         for (auto s : spaces) {
             if (s != active_id) {
                 overview::fake_paint(s);
-                hypriso->screenshot_space(monitor, s);
+                capture_switcher_workspace(monitor, s);
             }
         }
         overview::fake_paint(-1);
@@ -975,11 +1107,12 @@ static void actual_drag_workspace_switcher_close() {
                 auto info = *datum<TextureInfo>(actual_root, "drag_gradient_inner_rect");
                 free_text_texture(info.id);
             }
+            damage_bounds(datum<SwitcherVisual>(c, "switcher_visual")->panel);
+            damage_bounds(switcher_bounds(c).intersection(bounds_monitor(target_monitor())));
             delete c;
             actual_root->children.erase(actual_root->children.begin() + i);
         }
     }
-    damage_all();    
 }
 
 void drag_workspace_switcher::close_visually() {
@@ -1000,11 +1133,11 @@ void drag_workspace_switcher::close_visually() {
             found = true;
             auto peaking_amount = datum<float>(c, "peaking_amount");
             auto openess = datum<float>(c, "openess");
-            animate(openess, 0.0, 200.0, c->lifetime,
+            animate_switcher(openess, 0.0, 200.0, c->lifetime,
                 nullptr, [](float a) {
                     return pull(snapback, a);
                 });
-            animate(peaking_amount, 0.0, 200.0, c->lifetime, [generation](bool completed) {
+            animate_switcher(peaking_amount, 0.0, 200.0, c->lifetime, [generation](bool completed) {
                 if (!completed)
                     return;
                 // Defer deletion until animation callbacks have finished, and
@@ -1067,8 +1200,8 @@ bool drag_workspace_switcher::drop_window(int cid) {
                 const auto before = hypriso->get_active_workspace_id(monitor);
                 hypriso->move_to_workspace(cid, destination, false);
                 hypriso->bring_to_front(cid);
-                hypriso->screenshot_space(monitor, before);
-                hypriso->screenshot_space(monitor, hypriso->get_client_workspace_id(cid));
+                capture_switcher_workspace(monitor, before);
+                capture_switcher_workspace(monitor, hypriso->get_client_workspace_id(cid));
             });
             start_landing(cid, ch);
             return true;
@@ -1090,6 +1223,7 @@ void drag_workspace_switcher::on_mouse_move(int x, int y) {
             }
             Event event(x, y);
             move_event(c, event);
+            update_switcher_damage(c);
         }
     }
     update_drag();
@@ -1109,7 +1243,7 @@ void press_to(std::string uuid, float value, float time) {
             for (auto ch : c->children) {
                 if (ch->uuid == uuid) {
                     float *pressed = datum<float>(ch, "pressed_amount");
-                    animate(pressed, value, time, ch->lifetime, nullptr, [](float a) { return pull(snapback, a); } ); 
+                    animate_switcher(pressed, value, time, ch->lifetime, nullptr, [](float a) { return pull(snapback, a); });
                 }
             }
         }

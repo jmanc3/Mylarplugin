@@ -174,7 +174,6 @@
 #include <hyprland/src/render/pass/RendererHintsPassElement.hpp>
 //#include <hyprland/src/desktop/LayerSurface.hpp>
 #include <hyprland/src/desktop/view/LayerSurface.hpp>
-#include <hyprland/src/protocols/core/DataDevice.hpp>
 #include <hyprland/src/protocols/PointerConstraints.hpp>
 #include <hyprland/src/protocols/RelativePointer.hpp>
 #include <hyprland/src/protocols/SessionLock.hpp>
@@ -184,6 +183,7 @@
 #include <hyprland/src/config/supplementary/jeremy/Jeremy.hpp>
 
 #define private public
+#include <hyprland/src/protocols/core/DataDevice.hpp>
 #include <hyprland/src/protocols/ColorManagement.hpp>
 #include <hyprland/src/managers/XWaylandManager.hpp>
 #include <hyprland/src/Compositor.hpp>
@@ -618,6 +618,7 @@ std::vector<SleptWindow> slept_windows;
 static int deco_offset_x = 0;
 static int deco_offset_y = 0;
 static bool capturing_window_decos = false;
+static bool capturing_wallpaper_background = false;
 
 void* pRenderWindow = nullptr;
 void* pRenderLayer = nullptr;
@@ -843,6 +844,8 @@ struct HyprWindow {
     PHLWINDOW w;
 
     SurfacePassInfo pass_info;
+    Vector2D snap_configure_goal;
+    double snap_configure_error = INFINITY;
     
 
     bool was_workspace_visible = false;
@@ -856,8 +859,13 @@ struct HyprWindow {
     Bounds w_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
 
     SP<Render::IFramebuffer> deco_fb = nullptr;
+    Bounds captured_body; // Main surface within the decorated snapshot, in logical coordinates.
     Bounds w_deco_raw; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
     Bounds w_decos_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
+    bool deco_dirty = true;
+    bool thumb_dirty = true;
+    Hyprutils::Signal::CHyprSignalListener commit_listener;
+    Hyprutils::Signal::CHyprSignalListener resize_listener;
 
     // CFramebuffer *min_fb = nullptr;
     SP<Render::IFramebuffer> min_fb = nullptr;
@@ -881,6 +889,7 @@ struct HyprWindow {
 static std::vector<HyprWindow *> hyprwindows;
 static const SX11Info& x11_info(HyprWindow* hw);
 void hook_x11_read_prop();
+static void hook_snap_geometry();
 
 struct HyprMonitor {
     int id;  
@@ -896,6 +905,7 @@ struct HyprMonitor {
     // CFramebuffer *monfb = nullptr;
     SP<Render::IFramebuffer> monfb = nullptr;
     Bounds mon_size; // 0 -> 1, percentage of fb taken up by the actual window used for drawing
+    double smoothed_render_ms = 0.0;
 };
 
 static std::vector<HyprMonitor *> hyprmonitors;
@@ -1221,6 +1231,18 @@ void on_open_window(PHLWINDOW w) {
     auto hw = new HyprWindow;
     hw->id = unique_id++;
     hw->w = w;
+    if (w) {
+        if (w->wlSurface() && w->wlSurface()->resource()) {
+            hw->commit_listener = w->wlSurface()->resource()->m_events.commit.listen([hw] {
+                hw->deco_dirty = true;
+                hw->thumb_dirty = true;
+            });
+        }
+        hw->resize_listener = w->m_events.resize.listen([hw] {
+            hw->deco_dirty = true;
+            hw->thumb_dirty = true;
+        });
+    }
     hyprwindows.push_back(hw);
     hypriso->on_window_open(hw->id);
 }
@@ -2534,12 +2556,13 @@ void HyprIso::create_callbacks() {
             on_close_window(w);
     }));
     eventListeners.emplace_back(Event::bus()->m_events.window.title.listen([this](PHLWINDOW w) {
-        if (hypriso->on_title_change) {
-            for (auto hw : hyprwindows) {
-                if (hw->w == w) {
+        for (auto hw : hyprwindows) {
+            if (hw->w == w) {
+                hw->deco_dirty = true;
+                hw->thumb_dirty = true;
+                if (hypriso->on_title_change)
                     hypriso->on_title_change(hw->id);
-                    break;
-                }
+                break;
             }
         }
     }));
@@ -2596,7 +2619,7 @@ void HyprIso::create_callbacks() {
             consume    = hypriso->on_mouse_move(0, mouse.x * m->m_scale, mouse.y * m->m_scale);
         }
         // A titlebar or resize edge can start a native interaction in this callback.
-        info.cancelled = consume && !g_layoutManager->dragController()->target();
+        info.cancelled = consume && !hypriso->dnd_active() && !g_layoutManager->dragController()->target();
     }));
 
     eventListeners.emplace_back(Event::bus()->m_events.input.mouse.button.listen([this](IPointer::SButtonEvent e, Event::SCallbackInfo &info) {
@@ -2610,7 +2633,7 @@ void HyprIso::create_callbacks() {
             consume    = hypriso->on_mouse_press(e.mouse, e.button, e.state, mouse.x * s, mouse.y * s);
         }
         // Still release Mylar's pressed containers, but let Hyprland finish its drag.
-        info.cancelled = consume && !native_drag && !g_layoutManager->dragController()->target();
+        info.cancelled = consume && !hypriso->dnd_active() && !native_drag && !g_layoutManager->dragController()->target();
     }));
 
     eventListeners.emplace_back(Event::bus()->m_events.input.mouse.axis.listen([this](IPointer::SAxisEvent axisevent, Event::SCallbackInfo &info) {
@@ -2743,13 +2766,22 @@ void HyprIso::create_callbacks() {
     }));
 
     eventListeners.emplace_back(Event::bus()->m_events.window.active.listen([this](PHLWINDOW p, Desktop::eFocusReason reason) {
-        if (hypriso->on_activated) {
-            for (auto h : hyprwindows) {
-                if (h->w == p) {
+        static int last_active_id = -1;
+        int next_active_id = -1;
+        for (auto h : hyprwindows) {
+            if (h->id == last_active_id) {
+                h->deco_dirty = true;
+                h->thumb_dirty = true;
+            }
+            if (h->w == p) {
+                h->deco_dirty = true;
+                h->thumb_dirty = true;
+                next_active_id = h->id;
+                if (hypriso->on_activated)
                     hypriso->on_activated(h->id);
-                }
             }
         }
+        last_active_id = next_active_id;
     }));
     main_thread([]() {
         hypriso->apply_workspace_settings();
@@ -5205,6 +5237,250 @@ static void hook_native_drag_begin() {
     notify("Couldn't hook native tiled dragging; the drag workspace switcher will be unavailable for tiled windows");
 }
 
+struct PendingDesktopDrop {
+    int read_fd = -1;
+    wl_event_source* fd_source = nullptr;
+    wl_event_source* timeout_source = nullptr;
+    WP<IDataSource> source;
+    std::string buffer;
+    float x = 0;
+    float y = 0;
+};
+
+static CFunctionHook* dnd_pointer_focus_hook = nullptr;
+static CFunctionHook* dnd_drop_drag_hook = nullptr;
+static WP<IDataSource> desktop_dnd_source;
+static std::vector<PendingDesktopDrop*> pending_desktop_drops;
+
+static void cleanup_pending_desktop_drop(PendingDesktopDrop* drop, bool cancel_source) {
+    if (!drop)
+        return;
+    std::erase(pending_desktop_drops, drop);
+    if (drop->fd_source) {
+        wl_event_source_remove(drop->fd_source);
+        drop->fd_source = nullptr;
+    }
+    if (drop->timeout_source) {
+        wl_event_source_remove(drop->timeout_source);
+        drop->timeout_source = nullptr;
+    }
+    if (drop->read_fd != -1) {
+        close(drop->read_fd);
+        drop->read_fd = -1;
+    }
+    if (cancel_source) {
+        if (auto src = drop->source.lock())
+            src->cancelled();
+    }
+    delete drop;
+}
+
+static bool dnd_source_has_uri_list(const SP<IDataSource>& source) {
+    if (!source)
+        return false;
+    const auto mimes = source->mimes();
+    return std::ranges::find(mimes, "text/uri-list") != mimes.end();
+}
+
+static bool desktop_drop_target_available() {
+    if (!hypriso || !hypriso->on_desktop_files_dropped)
+        return false;
+    if (hypriso->can_accept_desktop_drop && !hypriso->can_accept_desktop_drop())
+        return false;
+    if (overview::is_showing() || hypriso->whitelist_on || g_pSessionLockManager->isSessionLocked())
+        return false;
+    if (!g_pSeatManager || !g_pSeatManager->m_state.dndPointerFocus.expired())
+        return false;
+    return true;
+}
+
+static std::vector<std::string> parse_uri_list_to_paths(const std::string& raw) {
+    std::vector<std::string> paths;
+    std::unordered_set<std::string> seen;
+    std::istringstream stream(raw);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty() || line[0] == '#')
+            continue;
+        gchar* filename = g_filename_from_uri(line.c_str(), nullptr, nullptr);
+        if (!filename)
+            continue;
+        std::string path(filename);
+        g_free(filename);
+        if (!path.empty() && seen.insert(path).second)
+            paths.push_back(std::move(path));
+    }
+    return paths;
+}
+
+static void on_dnd_pointer_focus(CSeatManager* seat, SP<CWLSurfaceResource> surface, const Vector2D& local) {
+    auto src = PROTO::data ? PROTO::data->m_dnd.currentSource.lock() : nullptr;
+    if (surface && src && desktop_dnd_source == src) {
+        desktop_dnd_source.reset();
+        src->accepted("");
+        src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE);
+    }
+
+    // Drag startup clears ordinary pointer focus while retaining the origin.
+    // A later null-to-null focus request is a hit on the bare desktop.
+    const bool bare_desktop = src && !surface && !seat->m_state.pointerFocus;
+    using Original = void (*)(CSeatManager*, SP<CWLSurfaceResource>, const Vector2D&);
+    rc<Original>(dnd_pointer_focus_hook->m_original)(seat, surface, local);
+    if (!bare_desktop || desktop_dnd_source == src || !dnd_source_has_uri_list(src))
+        return;
+
+    if (seat->m_state.dndPointerFocus) {
+        seat->m_state.dndPointerFocus.reset();
+        seat->m_events.dndPointerFocusChange.emit();
+        PROTO::data->m_dnd.focusedDevice.reset();
+    }
+    if (!desktop_drop_target_available())
+        return;
+
+    src->accepted("text/uri-list");
+    const uint32_t actions = src->actions();
+    if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK)
+        src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK);
+    else if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY)
+        src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+    else if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE)
+        src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE);
+    desktop_dnd_source = src;
+}
+
+static void on_dnd_drop_drag(CWLDataDeviceProtocol* thisptr) {
+    desktop_dnd_source.reset();
+
+    if (thisptr && thisptr == PROTO::data.get() && thisptr->dndActive() && desktop_drop_target_available()) {
+        auto src = thisptr->m_dnd.currentSource.lock();
+        if (dnd_source_has_uri_list(src)) {
+            int fds[2] = {-1, -1};
+            if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) == 0) {
+                const auto pos = g_pInputManager->getMouseCoordsInternal();
+                src->accepted("text/uri-list");
+                const uint32_t actions = src->actions();
+                if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY)
+                    src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+                else if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK)
+                    src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK);
+                else if (actions & WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE)
+                    src->sendDndAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE);
+
+                src->sendDndDropPerformed();
+                src->send("text/uri-list", Hyprutils::OS::CFileDescriptor{fds[1]});
+
+                if (thisptr->m_dnd.overriddenCursor)
+                    Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_DND);
+                thisptr->m_dnd.overriddenCursor = false;
+                thisptr->cleanupDndState(true, true, true);
+
+                auto* drop = new PendingDesktopDrop();
+                drop->read_fd = fds[0];
+                drop->source = src;
+                drop->x = static_cast<float>(pos.x);
+                drop->y = static_cast<float>(pos.y);
+                pending_desktop_drops.push_back(drop);
+
+                drop->timeout_source = wl_event_loop_add_timer(
+                    g_pCompositor->m_wlEventLoop,
+                    [](void* data) -> int {
+                        cleanup_pending_desktop_drop(static_cast<PendingDesktopDrop*>(data), true);
+                        return 0;
+                    },
+                    drop);
+                if (drop->timeout_source)
+                    wl_event_source_timer_update(drop->timeout_source, 2000);
+
+                drop->fd_source = wl_event_loop_add_fd(
+                    g_pCompositor->m_wlEventLoop,
+                    drop->read_fd,
+                    WL_EVENT_READABLE | WL_EVENT_HANGUP | WL_EVENT_ERROR,
+                    [](int fd, uint32_t mask, void* data) -> int {
+                        auto* drop = static_cast<PendingDesktopDrop*>(data);
+                        static constexpr size_t kMaxUriListBytes = 4 * 1024 * 1024;
+                        char buf[4096];
+                        while (true) {
+                            const ssize_t n = read(fd, buf, sizeof(buf));
+                            if (n > 0) {
+                                if (drop->buffer.size() + static_cast<size_t>(n) > kMaxUriListBytes) {
+                                    cleanup_pending_desktop_drop(drop, true);
+                                    return 0;
+                                }
+                                drop->buffer.append(buf, static_cast<size_t>(n));
+                                continue;
+                            }
+                            if (n == 0) {
+                                auto raw = std::move(drop->buffer);
+                                auto weak_src = drop->source;
+                                const float x = drop->x;
+                                const float y = drop->y;
+                                cleanup_pending_desktop_drop(drop, false);
+                                if (auto s = weak_src.lock())
+                                    s->sendDndFinished();
+                                auto paths = parse_uri_list_to_paths(raw);
+                                if (!paths.empty() && hypriso && hypriso->on_desktop_files_dropped)
+                                    hypriso->on_desktop_files_dropped(paths, x, y);
+                                return 0;
+                            }
+                            if (errno == EINTR)
+                                continue;
+                            if (errno == EAGAIN || errno == EWOULDBLOCK)
+                                break;
+                            cleanup_pending_desktop_drop(drop, true);
+                            return 0;
+                        }
+                        if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
+                            auto raw = std::move(drop->buffer);
+                            auto weak_src = drop->source;
+                            const float x = drop->x;
+                            const float y = drop->y;
+                            cleanup_pending_desktop_drop(drop, false);
+                            if (auto s = weak_src.lock())
+                                s->sendDndFinished();
+                            auto paths = parse_uri_list_to_paths(raw);
+                            if (!paths.empty() && hypriso && hypriso->on_desktop_files_dropped)
+                                hypriso->on_desktop_files_dropped(paths, x, y);
+                        }
+                        return 0;
+                    },
+                    drop);
+
+                if (!drop->fd_source)
+                    cleanup_pending_desktop_drop(drop, true);
+                return;
+            }
+        }
+    }
+
+    using Original = void (*)(CWLDataDeviceProtocol*);
+    rc<Original>(dnd_drop_drag_hook->m_original)(thisptr);
+}
+
+static void hook_desktop_dnd() {
+    for (const auto& method : HyprlandAPI::findFunctionsByName(globals->api, "setPointerFocus")) {
+        if (!method.demangled.starts_with("CSeatManager::setPointerFocus("))
+            continue;
+        dnd_pointer_focus_hook = HyprlandAPI::createFunctionHook(globals->api, method.address, rc<void*>(&on_dnd_pointer_focus));
+        if (dnd_pointer_focus_hook && dnd_pointer_focus_hook->hook())
+            break;
+        if (dnd_pointer_focus_hook)
+            HyprlandAPI::removeFunctionHook(globals->api, dnd_pointer_focus_hook);
+        dnd_pointer_focus_hook = nullptr;
+    }
+    for (const auto& method : HyprlandAPI::findFunctionsByName(globals->api, "dropDrag")) {
+        if (method.demangled != "CWLDataDeviceProtocol::dropDrag()")
+            continue;
+        dnd_drop_drag_hook = HyprlandAPI::createFunctionHook(globals->api, method.address, rc<void*>(&on_dnd_drop_drag));
+        if (dnd_drop_drag_hook && dnd_drop_drag_hook->hook())
+            break;
+        if (dnd_drop_drag_hook)
+            HyprlandAPI::removeFunctionHook(globals->api, dnd_drop_drag_hook);
+        dnd_drop_drag_hook = nullptr;
+    }
+}
+
 static CFunctionHook* g_pAddNotificationHook = nullptr;
 
 static bool is_suppressed_startup_notification(const std::string& text) {
@@ -5263,6 +5539,7 @@ void HyprIso::create_hooks() {
     fix_window_corner_rendering();
     hook_default_monitor_scale();
     hook_x11_read_prop();
+    hook_snap_geometry();
     hook_shadow_decorations();
     //disable_default_alt_tab_behaviour();
     detect_x11_move_resize_requests();    
@@ -5286,6 +5563,7 @@ void HyprIso::create_hooks() {
     hook_floating_position_restore();
     hook_native_drag_end();
     hook_native_drag_begin();
+    hook_desktop_dnd();
     suppress_startup_notifications();
 
     if (g_pXWayland->m_wm) {
@@ -5525,10 +5803,12 @@ static void x11_setup_decor_and_functions(SX11Info& info) {
         info.decorations = (info.mwm.decorations & OB_MWM_DECOR_BORDER) ? OB_FRAME_DECOR_BORDER : 0;
 
     // Motif may only take away resize and move; like Openbox, never let it kill buttons or close.
-    if ((info.mwm.flags & OB_MWM_FLAG_FUNCTIONS) && !(info.mwm.functions & OB_MWM_FUNC_ALL)) {
-        if (!(info.mwm.functions & OB_MWM_FUNC_RESIZE))
+    if (info.mwm.flags & OB_MWM_FLAG_FUNCTIONS) {
+        // With ALL set, the listed functions are exclusions.
+        const auto allowed = (info.mwm.functions & OB_MWM_FUNC_ALL) ? ~info.mwm.functions : info.mwm.functions;
+        if (!(allowed & OB_MWM_FUNC_RESIZE))
             info.functions &= ~OB_CLIENT_FUNC_RESIZE;
-        if (!(info.mwm.functions & OB_MWM_FUNC_MOVE))
+        if (!(allowed & OB_MWM_FUNC_MOVE))
             info.functions &= ~OB_CLIENT_FUNC_MOVE;
     }
 
@@ -5624,12 +5904,32 @@ bool HyprIso::alt_tabbable(int id) {
     return false;
 }
 
+static bool wayland_fixed_size(HyprWindow* hw) {
+    const auto surface = mw_wayland_resource(hw->w);
+    const auto toplevel = surface ? surface->m_toplevel.lock() : nullptr;
+    if (!toplevel)
+        return false;
+    const auto& hints = toplevel->m_current;
+    return hints.maxSize.x > 0 && hints.maxSize.y > 0 &&
+        hints.minSize.x >= hints.maxSize.x && hints.minSize.y >= hints.maxSize.y;
+}
+
 bool HyprIso::resizable(int id) {
-    return x11_info(hyprwindow_for(id)).functions & OB_CLIENT_FUNC_RESIZE;
+    const auto hw = hyprwindow_for(id);
+    if (!hw || !hw->w)
+        return false;
+    if (!mw_is_x11(hw->w))
+        return !wayland_fixed_size(hw);
+    return x11_info(hw).functions & OB_CLIENT_FUNC_RESIZE;
 }
 
 bool HyprIso::can_maximize(int id) {
-    return x11_info(hyprwindow_for(id)).functions & OB_CLIENT_FUNC_MAXIMIZE;
+    const auto hw = hyprwindow_for(id);
+    if (!hw || !hw->w)
+        return false;
+    if (!mw_is_x11(hw->w))
+        return !wayland_fixed_size(hw);
+    return x11_info(hw).functions & OB_CLIENT_FUNC_MAXIMIZE;
 }
 
 inline CFunctionHook* g_pOnReadProp = nullptr;
@@ -5692,6 +5992,73 @@ void hook_OnReadProp(void* thisptr, SP<CXWaylandSurface> XSURF, uint32_t atom, x
     }
 }
 
+static CFunctionHook* x11_snap_configure_hook = nullptr;
+static CFunctionHook* snap_clamp_hook = nullptr;
+
+static HyprWindow* snapped_window(Desktop::View::CWindow* window) {
+    if (!window->m_isMapped || !hypriso->is_snapped || !window->layoutTarget()->floating())
+        return nullptr;
+    for (auto hw : hyprwindows) {
+        if (hw->w.get() == window)
+            return hypriso->is_snapped(hw->id) ? hw : nullptr;
+    }
+    return nullptr;
+}
+
+static void on_x11_snap_configure(Desktop::View::CWindow* window, const CBox& box) {
+    // A floating X11 client can request its hinted size again after receiving the snap geometry.
+    if (window->backend().isX11() && snapped_window(window)) {
+        window->sendWindowSize(true);
+        return;
+    }
+    using Original = void (*)(Desktop::View::CWindow*, const CBox&);
+    rc<Original>(x11_snap_configure_hook->m_original)(window, box);
+}
+
+static bool on_snap_clamp(Desktop::View::CWindow* window, std::optional<Vector2D> minSize, std::optional<Vector2D> maxSize) {
+    // Hyprland reapplies native Wayland size hints on every floating window commit.
+    if (auto hw = snapped_window(window)) {
+        if (auto xdg = mw_wayland_resource(hw->w)) {
+            const auto goal = window->size(Desktop::View::IGeometric::GEOMETRIC_GOAL);
+            const auto actual = xdg->m_current.geometry.size();
+            // GTK can lower its minimum after each allocation (e.g. Lutris resizes its search entry).
+            // Retry only after the client acknowledged this goal and its geometry can get closer.
+            const auto possible = goal.clamp(minSize.value_or(Vector2D{1, 1}), maxSize.value_or(Vector2D{INFINITY, INFINITY}));
+            const auto error = actual.distance(goal);
+            if (hw->snap_configure_goal != goal || actual == goal) {
+                hw->snap_configure_goal = goal;
+                hw->snap_configure_error = INFINITY;
+            }
+            if (window->backend().reportedSize() == goal && possible.distance(goal) < error && error < hw->snap_configure_error) {
+                hw->snap_configure_error = error;
+                window->sendWindowSize(true);
+            }
+        }
+        return false;
+    }
+    using Original = bool (*)(Desktop::View::CWindow*, std::optional<Vector2D>, std::optional<Vector2D>);
+    return rc<Original>(snap_clamp_hook->m_original)(window, minSize, maxSize);
+}
+
+static void hook_snap_geometry() {
+    auto hook_window_method = [](const std::string& name, void* replacement, CFunctionHook*& hook) {
+        for (const auto& method : HyprlandAPI::findFunctionsByName(globals->api, name)) {
+            if (!method.demangled.contains("CWindow::" + name + "("))
+                continue;
+            hook = HyprlandAPI::createFunctionHook(globals->api, method.address, replacement);
+            if (hook && hook->hook())
+                return;
+            if (hook)
+                HyprlandAPI::removeFunctionHook(globals->api, hook);
+            hook = nullptr;
+            break;
+        }
+        notify("Couldn't hook CWindow::" + name + " for snapped windows");
+    };
+    hook_window_method("onConfigureRequest", rc<void*>(&on_x11_snap_configure), x11_snap_configure_hook);
+    hook_window_method("clampWindowSize", rc<void*>(&on_snap_clamp), snap_clamp_hook);
+}
+
 void hook_x11_read_prop() {
     static const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "readProp");
     for (auto m : METHODS) {
@@ -5740,6 +6107,17 @@ void HyprIso::end() {
 #endif
     eventListeners.clear();
     closingWindowZIndices.clear();
+    while (!pending_desktop_drops.empty())
+        cleanup_pending_desktop_drop(pending_desktop_drops.back(), true);
+    desktop_dnd_source.reset();
+    if (dnd_pointer_focus_hook) {
+        HyprlandAPI::removeFunctionHook(globals->api, dnd_pointer_focus_hook);
+        dnd_pointer_focus_hook = nullptr;
+    }
+    if (dnd_drop_drag_hook) {
+        HyprlandAPI::removeFunctionHook(globals->api, dnd_drop_drag_hook);
+        dnd_drop_drag_hook = nullptr;
+    }
     // Without Mylar windows float freely, which stock Hyprland can't manage
     // well, so they go back to tiling. heart::end() has already saved their
     // positions and our listeners are gone, so the tiled geometry isn't saved.
@@ -6628,6 +7006,7 @@ void HyprIso::move_resize(int id, int x, int y, int w, int h, bool instant, bool
             const auto target = c->w->layoutTarget();
             if (!target || !target->space())
                 return;
+            c->snap_configure_error = INFINITY;
             const CBox previous_full = notify_effects ? c->w->getFullWindowBoundingBox() : CBox{};
 
             {
@@ -8160,6 +8539,34 @@ void HyprIso::damage_box(Bounds b) {
     g_pHyprRenderer->damageBox(b.x, b.y, b.w, b.h);
 }
 
+bool HyprIso::damage_intersects(int monitor, Bounds render_box) {
+    if (rendering_snapshot() || render_box.w <= 0 || render_box.h <= 0)
+        return true;
+    auto& ctx = g_pHyprRenderer->context();
+    if (!ctx.active())
+        return true;
+    CRegion boxReg(tocbox(render_box));
+    return !ctx.m_data.damage.copy().intersect(boxReg).empty();
+}
+
+bool HyprIso::damage_contained_in(int monitor, Bounds render_box) {
+    if (rendering_snapshot() || render_box.w <= 0 || render_box.h <= 0)
+        return false;
+    auto& ctx = g_pHyprRenderer->context();
+    if (!ctx.active() || ctx.m_data.damage.empty())
+        return false;
+    CRegion boxReg(tocbox(render_box));
+    return ctx.m_data.damage.copy().subtract(boxReg).empty();
+}
+
+double HyprIso::last_render_ms(int monitor) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id == monitor)
+            return hm->smoothed_render_ms;
+    }
+    return 0.0;
+}
+
 int later_action(void* user_data) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -8329,6 +8736,12 @@ void actual_screenshot_wallpaper(SP<Render::IFramebuffer> buffer, PHLMONITOR m) 
         return;
     if (!m || !m->m_output || m->m_pixelSize.x <= 0 || m->m_pixelSize.y <= 0)
         return;
+    const auto previousMonitor = rendering_monitor;
+    rendering_monitor = m;
+    defer(rendering_monitor = previousMonitor);
+    const auto previousCapture = capturing_wallpaper_background;
+    capturing_wallpaper_background = true;
+    defer(capturing_wallpaper_background = previousCapture);
     CRegion fakeDamage{0, 0, INT16_MAX, INT16_MAX};
     Render::GL::g_pHyprOpenGL->makeEGLCurrent();
     buffer->alloc(m->m_pixelSize.x, m->m_pixelSize.y, DRM_FORMAT_ABGR8888);
@@ -8905,6 +9318,15 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
     // auto before_animated = w->m_workspace->m_renderOffset->isBeingAnimated();
     // w->m_workspace->m_renderOffset->m_bIsBeingAnimated = true;
 
+    // The shadow renderer computes extents from its cached box and the current
+    // window position. Keep both in the same coordinate space across the capture.
+    auto updateShadowBox = [&] {
+        for (const auto& decoration : MYLAR_WINDOW_DECORATIONS(w)) {
+            if (decoration->getDecorationType() == DECORATION_SHADOW)
+                decoration->updateWindow(w);
+        }
+    };
+
     {
         // The framebuffer begins at the outer edge of the window snapshot. Move
         // the main surface inward by its top-left extents so shadows and all other
@@ -8912,11 +9334,7 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
         AnimVarOverride positionOverride(*w->m_realPosition, snapshotPosition);
 
         mw_refresh_values(w);
-        // onWindowUpdate skips position-only changes unless a recalculation was requested.
-        // The snapshot moves the window without changing its size, so force new
-        // positioning replies before drawing its decorations in the framebuffer.
-        // g_pDecorationPositioner->forceRecalcFor(w);
-        // g_pDecorationPositioner->onWindowUpdate(w);
+        updateShadowBox();
 
         // The snapshot places the window at its resting position at the framebuffer
         // origin, and the titlebar is positioned from that same resting position via
@@ -8954,9 +9372,7 @@ SBoxExtents screenshot_window_with_decos(SP<Render::IFramebuffer> buffer, PHLWIN
         g_pHyprRenderer->endRender();
     }
 
-    // g_pDecorationPositioner->forceRecalcFor(w);
-    // g_pDecorationPositioner->onWindowUpdate(w);
-
+    updateShadowBox();
     mw_set_pinned(w, beforePinned);
     // w->m_workspace->m_renderOffset->m_bIsBeingAnimated = before_animated;
 
@@ -8989,13 +9405,18 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
         w->m_hidden = false;
         const auto snapshotExtents = screenshot_window_with_decos(hw->deco_fb, w);
         auto       snapshotBounds  = w->getWindowMainSurfaceBox();
+        hw->captured_body = {snapshotExtents.topLeft.x, snapshotExtents.topLeft.y, snapshotBounds.w, snapshotBounds.h};
         snapshotBounds.addExtents(snapshotExtents);
         hw->w_deco_raw   = tobounds(snapshotBounds);
         hw->w_decos_size = {0, 0, snapshotBounds.w * m->m_scale, snapshotBounds.h * m->m_scale};
         auto tex = hw->deco_fb->getTexture();
-        glActiveTexture(GL_TEXTURE0);
-        tex->bind();
-        glGenerateMipmap(GL_TEXTURE_2D);
+        if (tex) {
+            glActiveTexture(GL_TEXTURE0);
+            tex->bind();
+            glGenerateMipmap(GL_TEXTURE_2D);
+            tex->unbind();
+        }
+        hw->deco_dirty = false;
         w->m_hidden = h;
         return;
     }
@@ -9023,10 +9444,13 @@ void screenshot_window(HyprWindow *hw, PHLWINDOW w, bool include_decorations) {
     hw->w_size = Bounds(0, 0, (w->sizeAnimation()->value().x * m->m_scale), (w->sizeAnimation()->value().y * m->m_scale));
     hw->w_bounds_raw = Bounds(0, 0, (w->sizeAnimation()->value().x), (w->sizeAnimation()->value().y));
     auto tex = hw->fb->getTexture();
-    glActiveTexture(GL_TEXTURE0);
-    tex->bind();
-    glGenerateMipmap(GL_TEXTURE_2D);
-    tex->unbind();
+    if (tex) {
+        glActiveTexture(GL_TEXTURE0);
+        tex->bind();
+        glGenerateMipmap(GL_TEXTURE_2D);
+        tex->unbind();
+    }
+    hw->thumb_dirty = false;
 }
 
 void HyprIso::screenshot_all() {
@@ -9050,17 +9474,30 @@ void HyprIso::screenshot(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto w : Desktop::windowState()->windows()) {
-        if (true) {
-            for (auto hw : hyprwindows) {
-                if (hw->w == w && hw->id == id) {
-                    if (!hw->fb)
-                        hw->fb = g_pHyprRenderer->createFB();
-                    screenshot_window(hw, w, false);
-                }
-            }
+    for (auto hw : hyprwindows) {
+        if (hw->id == id && hw->w) {
+            if (!hw->fb)
+                hw->fb = g_pHyprRenderer->createFB();
+            screenshot_window(hw, hw->w, false);
+            return;
         }
     }
+}
+
+bool HyprIso::has_thumbnail(int id) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id)
+            return hw->fb && hw->fb->isAllocated() && hw->fb->getTexture();
+    }
+    return false;
+}
+
+bool HyprIso::is_thumb_dirty(int id) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id)
+            return hw->thumb_dirty || !hw->fb || !hw->fb->isAllocated() || !hw->fb->getTexture();
+    }
+    return false;
 }
 
 void HyprIso::draw_workspace(int mon, int id, Bounds b, int rounding, float alpha) {
@@ -9192,6 +9629,14 @@ void HyprIso::screenshot_wallpaper(int mon) {
    }
 }
 
+bool HyprIso::has_wallpaper_thumbnail(int mon) {
+    for (auto hm : hyprmonitors) {
+        if (hm->id == mon)
+            return hm->wallfb && hm->wallfb->isAllocated() && hm->wallfb->getTexture();
+    }
+    return false;
+}
+
 void HyprIso::screenshot_space(int mon, int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -9221,6 +9666,10 @@ void HyprIso::screenshot_space(int mon, int id) {
     }
 }
 
+bool HyprIso::capturing_wallpaper() {
+    return capturing_wallpaper_background;
+}
+
 bool HyprIso::capturing_decos() {
     return capturing_window_decos;
 }
@@ -9233,23 +9682,49 @@ bool HyprIso::screenshot_deco(int id) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    for (auto w : Desktop::windowState()->windows()) {
-        for (auto hw : hyprwindows) {
-            if (hw->w == w && hw->id == id) {
-                if (!hw->deco_fb)
-                    hw->deco_fb = g_pHyprRenderer->createFB();
-                screenshot_window(hw, w, true);
-                auto tex = hw->deco_fb->getTexture();
-                if (tex) {
-                    glActiveTexture(GL_TEXTURE0);
-                    tex->bind();
-                    glGenerateMipmap(GL_TEXTURE_2D);
-                    return true;
-                }
-            }
+    for (auto hw : hyprwindows) {
+        if (hw->id == id && hw->w) {
+            if (!hw->deco_fb)
+                hw->deco_fb = g_pHyprRenderer->createFB();
+            screenshot_window(hw, hw->w, true);
+            return hw->deco_fb->getTexture() != nullptr;
         }
     }
     return false;
+}
+
+bool HyprIso::has_deco_thumbnail(int id) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id)
+            return hw->deco_fb && hw->deco_fb->isAllocated() && hw->deco_fb->getTexture();
+    }
+    return false;
+}
+
+bool HyprIso::is_deco_dirty(int id) {
+    for (auto hw : hyprwindows) {
+        if (hw->id == id)
+            return hw->deco_dirty || !hw->deco_fb || !hw->deco_fb->isAllocated() || !hw->deco_fb->getTexture();
+    }
+    return false;
+}
+
+Bounds HyprIso::deco_thumbnail_desktop_bounds(int id, const Bounds &fallback) {
+    for (auto hw : hyprwindows) {
+        if (hw->id != id || !hw->w)
+            continue;
+        const auto &body = hw->captured_body;
+        if (body.w <= 0 || body.h <= 0)
+            break;
+        // Focus changes the shadow extents. Align the body inside this particular
+        // capture with the live surface, even while a newer capture is pending.
+        const auto live = hw->w->getWindowMainSurfaceBox();
+        const double sx = live.w / body.w;
+        const double sy = live.h / body.h;
+        return {live.x - body.x * sx, live.y - body.y * sy,
+                hw->w_deco_raw.w * sx, hw->w_deco_raw.h * sy};
+    }
+    return fallback;
 }
 
 Bounds HyprIso::thumbnail_size_deco(int id) {
@@ -9355,8 +9830,19 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                     dest.x = std::round(dest.x);
                     dest.y = std::round(dest.y);
 
-                    const double cropW = std::min(std::round(hw->w_decos_size.w), tex->m_size.x);
-                    const double cropH = std::min(std::round(hw->w_decos_size.h), tex->m_size.y);
+                    const double rawW = std::round(hw->w_decos_size.w);
+                    const double rawH = std::round(hw->w_decos_size.h);
+                    const double cropW = std::min(rawW, tex->m_size.x);
+                    const double cropH = std::min(rawH, tex->m_size.y);
+
+                    // If the window + decoration extents exceeded the monitor-sized
+                    // snapshot framebuffer, only the top-left [0, crop] portion was
+                    // captured. Shrink dest proportionally so the captured portion
+                    // renders at 1:1 scale instead of stretching across the clipped area.
+                    if (rawW > 0.0 && cropW < rawW)
+                        dest.w *= cropW / rawW;
+                    if (rawH > 0.0 && cropH < rawH)
+                        dest.h *= cropH / rawH;
 
                     // At native size the crop and destination must be exactly
                     // equal, otherwise even a sub-pixel size mismatch turns
@@ -9367,7 +9853,7 @@ void HyprIso::draw_deco_thumbnail(int id, Bounds b, int rounding, float rounding
                         dest.h = cropH;
 
                     tex->minFilter = GL_LINEAR_MIPMAP_LINEAR;
-                    if (std::abs(cropW - dest.w) < 50)
+                    if (std::abs(cropW - dest.w) <= 1.0 && std::abs(cropH - dest.h) <= 1.0)
                         tex->minFilter = GL_NEAREST;
                     
                     auto box = tocbox(dest);
@@ -10887,6 +11373,16 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
 
         Render::GL::g_pHyprOpenGL->scissor(g_pHyprRenderer->context(), static_cast<const pixman_box32*>(nullptr));
 
+        CRegion saveDamage = g_pHyprRenderer->context().m_data.damage;
+
+        g_pHyprRenderer->context().m_data.damage = allBox;
+        g_pHyprRenderer->context().m_data.damage.subtract(fullBox.copy().expand(-ROUNDING)).intersect(saveDamage);
+        g_pHyprRenderer->context().m_data.renderModif.applyToRegion(g_pHyprRenderer->context().m_data.damage);
+        if (g_pHyprRenderer->context().m_data.damage.empty()) {
+            g_pHyprRenderer->context().m_data.damage = saveDamage;
+            return;
+        }
+
         // we'll take the liberty of using this as it should not be used rn
         static auto alphaFB = g_pHyprRenderer->createFB();
         static auto alphaSwapFB = g_pHyprRenderer->createFB();
@@ -10895,12 +11391,6 @@ void drawDropShadow(PHLMONITOR pMonitor, float const& a, CHyprColor b, float ROU
         // auto alphaFB = g_pHyprRenderer->context().m_data.pMonitor->mirrorFB();
         // auto alphaSwapFB = g_pHyprRenderer->context().m_data.pMonitor->mirrorSwapFB();
         auto LASTFB = g_pHyprRenderer->context().m_data.currentFB;
-
-        CRegion saveDamage = g_pHyprRenderer->context().m_data.damage;
-
-        g_pHyprRenderer->context().m_data.damage = allBox;
-        g_pHyprRenderer->context().m_data.damage.subtract(fullBox.copy().expand(-ROUNDING)).intersect(saveDamage);
-        g_pHyprRenderer->context().m_data.renderModif.applyToRegion(g_pHyprRenderer->context().m_data.damage);
 
         alphaFB->bind();
 
@@ -12065,6 +12555,7 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
         LOG(Log::ERR, "renderer: couldn't beginRender()!");
         return;
     }
+    const auto frameRenderStart = std::chrono::steady_clock::now();
     bool              finishing = false;
     const Hyprutils::Utils::CScopeGuard cleanup([&] {
         if (!finishing)
@@ -12161,6 +12652,17 @@ void ourRenderMonitor(PHLMONITOR pMonitor, bool commit) {
 
     finishing               = true;
     const auto renderResult = tis->endRender();
+    {
+        const double frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameRenderStart).count();
+        for (auto hm : hyprmonitors) {
+            if (hm->m == pMonitor) {
+                hm->smoothed_render_ms = hm->smoothed_render_ms <= 0.0
+                    ? frameMs
+                    : hm->smoothed_render_ms * 0.75 + frameMs * 0.25;
+                break;
+            }
+        }
+    }
 
     TRACY_GPU_COLLECT;
 

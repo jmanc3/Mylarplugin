@@ -298,7 +298,7 @@ Container *create_menu_panel(float height, int x, int y, int mid, int cid,
         if (stage == paint_stage(c)) {
             renderfix
             auto b = c->real_bounds;
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .036f}, 7 * s, 2.0f, b, std::round(16 * s));
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .0108f}, 7 * s, 2.0f, b, std::round(16 * s));
             rect(b, {1, 1, 1, .75}, 0, 7 * s, 2.0, true);
         }
     };
@@ -320,7 +320,7 @@ Container *create_menu_panel(float height, int x, int y, int mid, int cid,
     return p;
 }
 
-void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_icon = 40) {
+void add_option_row(Container *p, const PopOption& pop_option) {
     auto option = p->child(FILL_SPACE, OPTION_HEIGHT);
     option->when_mouse_enters_container = [](Container *root, Container *c) {
         consume_event(root, c);
@@ -328,7 +328,7 @@ void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_i
     };
     if (pop_option.seperator) {
         option->wanted_bounds.h = SEPERATOR_SIZE;
-        option->when_paint = [text_x_no_icon](Container *actual_root, Container *c) {
+        option->when_paint = [](Container *actual_root, Container *c) {
             auto root = get_rendering_root();
             if (!root)
                 return;
@@ -350,7 +350,7 @@ void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_i
     auto popdata = new PopOptionData;
     popdata->p = pop_option;
     option->user_data = popdata;
-    option->when_paint = [text_x_no_icon](Container *actual_root, Container *c) {
+    option->when_paint = [](Container *actual_root, Container *c) {
         auto root = get_rendering_root();
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
@@ -417,8 +417,7 @@ void add_option_row(Container *p, const PopOption& pop_option, float text_x_no_i
                 }
             }
 
-            const bool has_icon = pop_option.checked || pop_option.is_text_icon || !pop_option.icon_path.empty();
-            const float text_x = has_icon ? 40.0f : text_x_no_icon;
+            constexpr float text_x = 40.0f;
             const float right_pad = pop_option.submenu.empty() ? 16.0f : 32.0f;
             const float label_max_w = c->real_bounds.w - (text_x + right_pad) * s;
             const float label_max_h = c->real_bounds.h;
@@ -513,7 +512,7 @@ Container *build_tasks_menu(const std::string& tasks_title,
             }
         };
         for (const auto& task : tasks)
-            add_option_row(p, task, TASKS_LEFT_PAD);
+            add_option_row(p, task);
         if (!options.empty()) {
             auto gap = p->child(FILL_SPACE, TASKS_SECTION_GAP);
             gap->when_mouse_enters_container = paint {

@@ -15,16 +15,17 @@
 #include "snap_assist.h"
 #include "spring.h"
 
+#include <chrono>
 #include <linux/input-event-codes.h>
 #include <map>
 #include <memory>
+#include <utility>
 
 bool running = false;
 float openess = 0.0f;
-float overview_open_time_ms = 700;
+float overview_open_time_ms = 350;
 static constexpr double overview_close_response = 0.2;
 static bool initialized = false;
-static bool capturing_overview = false;
 static unsigned int lifecycle = 0;
 static unsigned int animation_generation = 0;
 static bool animating = false;
@@ -35,9 +36,21 @@ static int snapshot_workspace = -1;
 static constexpr int teaser_workspace = -1;
 static constexpr double thumbnail_fade_ms = 200.0;
 static constexpr double departure_ms = 300.0;
-// Timers use whole milliseconds: rounding up keeps captures below 60 FPS.
-static constexpr long fast_capture_ms = 17;
+// Timers use whole milliseconds: 42ms ~= 24 FPS for focused/below/hovered windows.
+static constexpr long fast_capture_ms = 42;
+static constexpr long max_fast_capture_ms = 250;
 static constexpr long slow_capture_ms = 400;
+static constexpr long max_slow_capture_ms = 2000;
+static constexpr long wallpaper_capture_ms = 1000;
+static constexpr long max_wallpaper_capture_ms = 4000;
+static constexpr long idle_scene_update_ms = 50;
+static constexpr long preload_interval_ms = 750;
+static constexpr long preload_refresh_ms = 2000;
+static constexpr double initial_capture_budget_ms = 6.0;
+static constexpr double damage_pad_px = 4.0;
+static bool preloader_started = false;
+static std::map<int, long> preloaded_captures;
+static size_t preload_cursor = 0;
 
 // All geometry below is in global logical coordinates. Only painting converts
 // to monitor-local pixels; hit testing and dragging use the same logical bounds.
@@ -91,6 +104,10 @@ struct OverviewThumbnail {
     long fade_start = 0;
     float opacity = 1.0f;
     unsigned long long elevated_order = 0;
+    Bounds last_drawn;
+    bool has_last_drawn = false;
+    float last_opacity = -1.0f;
+    unsigned long long last_elevated_order = 0;
 };
 
 struct OverviewWorkspace {
@@ -109,6 +126,8 @@ struct OverviewDeparture {
     int cid;
     Bounds from;
     long start;
+    Bounds last_drawn;
+    bool has_last_drawn = false;
 };
 
 struct WindowOption {
@@ -128,6 +147,8 @@ struct OverviewMonitor {
     std::vector<WindowOption> window_options;
     std::vector<WorkspaceOption> workspace_options;
     std::vector<OverviewDeparture> departures;
+    std::map<int, double> last_workspace_positions;
+    bool needs_full_damage = true;
     int active = -1;
     int pending_workspace = 0;
     int dragged = -1;
@@ -148,12 +169,107 @@ struct OverviewScene {
     std::map<int, long> wallpaper_captures;
     long last_update = 0;
     unsigned long long drag_order = 0;
+    float last_openess = -1.0f;
+    float last_desktop_origin_weight = -1.0f;
+    double smoothed_capture_ms = 0.0;
+    double smoothed_window_capture_ms = 1.5;
+    size_t capture_cursor = 0;
 };
 
 static std::unique_ptr<OverviewScene> scene;
 
 static bool same_bounds(const Bounds &a, const Bounds &b) {
     return a.x == b.x && a.y == b.y && a.w == b.w && a.h == b.h;
+}
+
+static bool approx_same_bounds(const Bounds &a, const Bounds &b, double eps = 0.25) {
+    return std::abs(a.x - b.x) <= eps && std::abs(a.y - b.y) <= eps &&
+           std::abs(a.w - b.w) <= eps && std::abs(a.h - b.h) <= eps;
+}
+
+static void damage_logical_box(const Bounds &b, double pad = damage_pad_px) {
+    if (b.w <= 0 || b.h <= 0)
+        return;
+    Bounds expanded = b;
+    expanded.grow(pad);
+    hypriso->damage_box(expanded);
+}
+
+static void damage_monitor_entire(int monitor_id) {
+    hypriso->damage_entire(monitor_id);
+}
+
+static void damage_all_monitors() {
+    for (auto m : actual_monitors)
+        hypriso->damage_entire(*datum<int>(m, "cid"));
+}
+
+static double max_monitor_render_ms() {
+    double worst = 0.0;
+    for (auto m : actual_monitors)
+        worst = std::max(worst, hypriso->last_render_ms(*datum<int>(m, "cid")));
+    return worst;
+}
+
+static double min_monitor_frame_budget_ms() {
+    double best_fps = 60.0;
+    for (auto m : actual_monitors) {
+        const double fps = hypriso->fps(*datum<int>(m, "cid"));
+        if (fps > 0.0)
+            best_fps = std::max(best_fps, fps);
+    }
+    return 1000.0 / best_fps;
+}
+
+static Bounds workspace_card_bounds(const Bounds &mb, double position, float progress, double pitch) {
+    auto wallpaper = mb;
+    wallpaper.scale_from_center(1.0 - .2 * progress);
+    wallpaper.x += position * pitch;
+    return wallpaper;
+}
+
+static Bounds compute_thumbnail_bounds(int monitor_id, const Bounds &mb, const OverviewThumbnail &thumbnail,
+                                       double translation, float progress, bool snapshot, float &alpha_out, int cid) {
+    auto natural = thumbnail.natural;
+    if (!snapshot && progress < 1.0f)
+        natural = hypriso->deco_thumbnail_desktop_bounds(cid, natural);
+    const auto origin = scene->desktop_origins.find(cid);
+    if (origin != scene->desktop_origins.end()) {
+        natural = lerp(natural, origin->second, scene->desktop_origin_weight);
+    } else if (hypriso->is_hidden(cid)) {
+        auto dock_bounds = dock::get_location(hypriso->monitor_name(monitor_id), cid);
+        dock_bounds.y += mb.h;
+        natural = lerp(dock_bounds, natural, progress);
+    }
+    auto b = snapshot
+        ? Bounds(thumbnail.slot.x.target, thumbnail.slot.y.target, thumbnail.slot.w.target, thumbnail.slot.h.target)
+        : lerp(natural, thumbnail.slot.bounds(), progress);
+    b.x += translation + (snapshot ? 0 : thumbnail.drag_x.value);
+    b.y += snapshot ? 0 : thumbnail.drag_y.value;
+    alpha_out = snapshot ? 1.0f : thumbnail.opacity;
+    if (!snapshot)
+        drag_workspace_switcher::transform_thumbnail(cid, b, alpha_out);
+    return b;
+}
+
+static Bounds compute_departure_bounds(int monitor_id, const Bounds &mb, const OverviewDeparture &departure, long now, double &t_out) {
+    auto target = dock::get_item_location(hypriso->monitor_name(monitor_id), "sleep_button");
+    target.x += mb.x;
+    target.y = mb.bottom();
+    t_out = std::clamp((now - departure.start) / departure_ms, 0.0, 1.0);
+    const double eased = 1.0 - (1.0 - t_out) * (1.0 - t_out) * (1.0 - t_out);
+    auto end = target;
+    const auto aspect = departure.from.w / std::max(1.0, departure.from.h);
+    if (aspect > end.w / std::max(1.0, end.h)) {
+        const auto height = end.w / aspect;
+        end.y += (end.h - height) * .5;
+        end.h = height;
+    } else {
+        const auto width = end.h * aspect;
+        end.x += (end.w - width) * .5;
+        end.w = width;
+    }
+    return lerp(departure.from, end, eased);
 }
 
 static std::vector<int> visible_workspace_order(const OverviewMonitor &monitor) {
@@ -242,12 +358,34 @@ static void layout_workspace(OverviewWorkspace &workspace, const Bounds &area) {
 
 void create_overview_for_monitor(int monitor);
 
-static void update_scene() {
+static bool update_scene() {
     if (!scene)
-        return;
+        return false;
     const auto now = get_current_time_in_ms();
     const double dt = scene->last_update == 0 ? 0 : std::max(0.0, (now - scene->last_update) / 1000.0);
     scene->last_update = now;
+    const float progress = std::clamp(openess, 0.0f, 1.0f);
+    const bool global_visual_changed =
+        scene->last_openess != openess || scene->last_desktop_origin_weight != scene->desktop_origin_weight;
+    scene->last_openess = openess;
+    scene->last_desktop_origin_weight = scene->desktop_origin_weight;
+
+    // Group active clients by (monitor, workspace) in true compositor stacking
+    // order (bottom to top) so overview z-order matches live desktop stacking
+    // with no pop when overview closes.
+    std::map<std::pair<int, int>, std::vector<int>> clients_by_space;
+    std::map<int, int> client_workspace_cache;
+    for (int cid : get_window_stacking_order()) {
+        if (!get_cid_container(cid))
+            continue;
+        const int wid = hypriso->get_active_workspace_id_client(cid);
+        client_workspace_cache[cid] = wid;
+        if (is_slept(cid))
+            continue;
+        const int mid = get_monitor(cid);
+        clients_by_space[{mid, wid}].push_back(cid);
+    }
+
     // Keep a copy before reconciling membership so a moved window carries its
     // springs to its new workspace, regardless of which workspace updates first.
     struct PreviousThumbnail {
@@ -258,7 +396,7 @@ static void update_scene() {
     };
     std::map<int, PreviousThumbnail> previous_thumbnails;
     for (const auto &[mid, monitor] : scene->monitors) {
-        const double pitch = bounds_monitor(mid).w * (1.0 - .16 * std::clamp(openess, 0.0f, 1.0f));
+        const double pitch = bounds_monitor(mid).w * (1.0 - .16 * progress);
         for (const auto &[wid, workspace] : monitor.workspaces) {
             for (const auto &[cid, thumbnail] : workspace.thumbnails)
                 previous_thumbnails.emplace(cid, PreviousThumbnail{thumbnail, mid, wid, workspace.position.value * pitch});
@@ -271,8 +409,12 @@ static void update_scene() {
         monitor_ids.push_back(mid);
         auto [entry, added] = scene->monitors.try_emplace(mid);
         auto &monitor = entry->second;
-        if (added)
+        if (added) {
             create_overview_for_monitor(mid);
+            monitor.needs_full_damage = true;
+        }
+        if (global_visual_changed)
+            monitor.needs_full_damage = true;
         const int previous_active = monitor.active;
         auto previous_order = monitor.order;
         monitor.active = hypriso->get_active_workspace_id(mid);
@@ -319,12 +461,9 @@ static void update_scene() {
         });
         if (previous_last != previous_order.rend() &&
             std::find(monitor.order.begin(), monitor.order.end(), *previous_last) == monitor.order.end()) {
-            // Its thumbnails are only reconciled while it is in the order, so
-            // they still hold windows that just left it. Ask the compositor
-            // instead whether any window still lives on that desktop.
             const int removed = *previous_last;
-            const bool removed_is_empty = std::none_of(actual_root->children.begin(), actual_root->children.end(), [removed](Container *c) {
-                return c->custom_type == (int) TYPE::CLIENT && hypriso->get_active_workspace_id_client(*datum<int>(c, "cid")) == removed;
+            const bool removed_is_empty = std::none_of(client_workspace_cache.begin(), client_workspace_cache.end(), [removed](const auto &kv) {
+                return kv.second == removed;
             });
             auto last = monitor.workspaces.find(removed);
             if (last != monitor.workspaces.end() && removed_is_empty) {
@@ -336,63 +475,67 @@ static void update_scene() {
                 monitor.workspaces.insert(std::move(teaser));
             }
         }
-        auto area = bounds_monitor(mid);
+        const auto mb = bounds_monitor(mid);
+        const double pitch = mb.w * (1.0 - .16 * progress);
+        auto area = mb;
         area.scale_from_center(.8);
         area = area.intersection(bounds_reserved_monitor(mid));
         area.shrink(std::min(20.0, std::min(area.w, area.h) * .05));
 
+        std::vector<Bounds> removed_damage;
         for (size_t index = 0; index < monitor.order.size(); index++) {
             const int wid = monitor.order[index];
             auto [space_entry, new_space] = monitor.workspaces.try_emplace(wid);
             auto &workspace = space_entry->second;
             const double position = double(index) - active_index;
-            if (new_space)
+            if (new_space) {
                 workspace.position.reset(position + workspace_shift);
+                monitor.needs_full_damage = true;
+            }
             workspace.retiring = false;
             workspace.position.target = position;
             if (!monitor.workspace_gesture)
                 moving = workspace.position.advance(dt) || moving;
             bool dirty = !workspace.initialized || !same_bounds(workspace.area, area) || workspace.layout_type != set->overview_layout_type;
             workspace.stacking.clear();
-            for (int i = (int) actual_root->children.size() - 1; i >= 0; i--) {
-                auto c = actual_root->children[i];
-                if (c->custom_type != (int) TYPE::CLIENT)
-                    continue;
-                const int cid = *datum<int>(c, "cid");
-                if (wid == teaser_workspace || is_slept(cid) || get_monitor(cid) != mid || hypriso->get_active_workspace_id_client(cid) != wid)
-                    continue;
-                workspace.stacking.push_back(cid);
-                auto [thumb_entry, new_thumbnail] = workspace.thumbnails.try_emplace(cid);
-                auto &thumbnail = thumb_entry->second;
-                if (new_thumbnail) {
-                    auto previous = previous_thumbnails.find(cid);
-                    if (previous != previous_thumbnails.end() && (previous->second.monitor != mid || previous->second.workspace != wid)) {
-                        thumbnail = previous->second.thumbnail;
-                        const double pitch = bounds_monitor(mid).w * (1.0 - .16 * std::clamp(openess, 0.0f, 1.0f));
-                        thumbnail.slot.x.value += previous->second.translation - workspace.position.value * pitch;
-                    } else if (initialized) {
-                        thumbnail.fade_start = now;
-                        thumbnail.opacity = 0.0f;
+            if (wid != teaser_workspace) {
+                auto list_it = clients_by_space.find({mid, wid});
+                if (list_it != clients_by_space.end()) {
+                    for (int cid : list_it->second) {
+                        workspace.stacking.push_back(cid);
+                        auto [thumb_entry, new_thumbnail] = workspace.thumbnails.try_emplace(cid);
+                        auto &thumbnail = thumb_entry->second;
+                        if (new_thumbnail) {
+                            auto previous = previous_thumbnails.find(cid);
+                            if (previous != previous_thumbnails.end() && (previous->second.monitor != mid || previous->second.workspace != wid)) {
+                                thumbnail = previous->second.thumbnail;
+                                thumbnail.slot.x.value += previous->second.translation - workspace.position.value * pitch;
+                            } else if (initialized) {
+                                thumbnail.fade_start = now;
+                                thumbnail.opacity = 0.0f;
+                            }
+                        }
+                        auto natural = bounds_client_final(cid);
+                        const auto extents = extents_client(cid);
+                        natural.x -= extents.left;
+                        natural.y -= extents.top;
+                        natural.w += extents.left + extents.right;
+                        natural.h += extents.top + extents.bottom;
+                        dirty = dirty || new_thumbnail || !same_bounds(thumbnail.natural, natural);
+                        thumbnail.natural = natural;
                     }
                 }
-                auto natural = bounds_client_final(cid);
-                const auto extents = extents_client(cid);
-                natural.x -= extents.left;
-                natural.y -= extents.top;
-                natural.w += extents.left + extents.right;
-                natural.h += extents.top + extents.bottom;
-                dirty = dirty || new_thumbnail || !same_bounds(thumbnail.natural, natural);
-                thumbnail.natural = natural;
             }
             for (auto it = workspace.thumbnails.begin(); it != workspace.thumbnails.end();) {
                 if (std::find(workspace.stacking.begin(), workspace.stacking.end(), it->first) == workspace.stacking.end()) {
+                    if (it->second.has_last_drawn)
+                        removed_damage.push_back(it->second.last_drawn);
                     if (is_slept(it->first) && get_cid_container(it->first)) {
                         const auto &thumbnail = it->second;
-                        const double pitch = bounds_monitor(mid).w * (1.0 - .16 * std::clamp(openess, 0.0f, 1.0f));
-                        auto from = lerp(thumbnail.natural, thumbnail.slot.bounds(), std::clamp(openess, 0.0f, 1.0f));
+                        auto from = lerp(thumbnail.natural, thumbnail.slot.bounds(), progress);
                         from.x += workspace.position.value * pitch + thumbnail.drag_x.value;
                         from.y += thumbnail.drag_y.value;
-                        monitor.departures.push_back({it->first, from, now});
+                        monitor.departures.push_back({it->first, from, now, from, true});
                     }
                     it = workspace.thumbnails.erase(it);
                     dirty = true;
@@ -403,10 +546,17 @@ static void update_scene() {
             if (dirty)
                 layout_workspace(workspace, area);
             for (auto &[cid, thumbnail] : workspace.thumbnails) {
+                if (drag_workspace_switcher::is_landing(cid)) {
+                    thumbnail.slot.reset({thumbnail.slot.x.target, thumbnail.slot.y.target,
+                                          thumbnail.slot.w.target, thumbnail.slot.h.target});
+                    thumbnail.drag_x.reset(0);
+                    thumbnail.drag_y.reset(0);
+                    thumbnail.elevated_order = 0;
+                }
                 if (thumbnail.fade_start != 0) {
-                    const double progress = std::clamp((now - thumbnail.fade_start) / thumbnail_fade_ms, 0.0, 1.0);
-                    thumbnail.opacity = progress * progress * (3.0 - 2.0 * progress);
-                    if (progress == 1.0)
+                    const double fade_progress = std::clamp((now - thumbnail.fade_start) / thumbnail_fade_ms, 0.0, 1.0);
+                    thumbnail.opacity = fade_progress * fade_progress * (3.0 - 2.0 * fade_progress);
+                    if (fade_progress == 1.0)
                         thumbnail.fade_start = 0;
                     else
                         moving = true;
@@ -421,9 +571,15 @@ static void update_scene() {
                 }
             }
         }
-        std::erase_if(monitor.departures, [now](const OverviewDeparture &departure) {
-            return now - departure.start >= departure_ms || !get_cid_container(departure.cid);
-        });
+        for (auto it = monitor.departures.begin(); it != monitor.departures.end();) {
+            if (now - it->start >= departure_ms || !get_cid_container(it->cid)) {
+                if (it->has_last_drawn)
+                    removed_damage.push_back(it->last_drawn);
+                it = monitor.departures.erase(it);
+            } else {
+                ++it;
+            }
+        }
         if (!monitor.departures.empty())
             moving = true;
         // Enforce the visibility limit during spring settling too, translating
@@ -457,9 +613,11 @@ static void update_scene() {
                 workspace.position.target = direction < 0 ? -1.25 : 1.25;
                 workspace.thumbnails.clear();
                 workspace.stacking.clear();
+                monitor.needs_full_damage = true;
             }
             moving = workspace.position.advance(dt) || moving;
             if (std::abs(workspace.position.value) >= 1.2) {
+                monitor.needs_full_damage = true;
                 it = monitor.workspaces.erase(it);
             } else {
                 ++it;
@@ -473,6 +631,70 @@ static void update_scene() {
                 monitor.dragged_workspace = -1;
             }
         }
+
+        // Check if any workspace card shifted or membership changed on this monitor.
+        std::map<int, double> current_positions;
+        for (const auto &[wid, workspace] : monitor.workspaces)
+            current_positions[wid] = workspace.position.value;
+        if (current_positions.size() != monitor.last_workspace_positions.size()) {
+            monitor.needs_full_damage = true;
+        } else {
+            for (const auto &[wid, pos] : current_positions) {
+                auto prev = monitor.last_workspace_positions.find(wid);
+                if (prev == monitor.last_workspace_positions.end() || std::abs(prev->second - pos) > 1e-4) {
+                    monitor.needs_full_damage = true;
+                    break;
+                }
+            }
+        }
+        monitor.last_workspace_positions = std::move(current_positions);
+
+        const bool full_damage = monitor.needs_full_damage;
+        monitor.needs_full_damage = false;
+        if (full_damage) {
+            damage_monitor_entire(mid);
+        } else {
+            for (const auto &b : removed_damage)
+                damage_logical_box(b);
+        }
+
+        // Track exact drawn bounds per thumbnail and departure so only moved or
+        // changed elements damage the monitor.
+        for (auto &[wid, workspace] : monitor.workspaces) {
+            const double translation = workspace.position.value * pitch;
+            const auto card = workspace_card_bounds(mb, workspace.position.value, progress, pitch);
+            const auto visible = card.intersection(mb);
+            for (auto &[cid, thumbnail] : workspace.thumbnails) {
+                float alpha = 1.0f;
+                const auto b = compute_thumbnail_bounds(mid, mb, thumbnail, translation, progress, false, alpha, cid);
+                const bool unclipped = cid == monitor.dragged || thumbnail.elevated_order != 0 || wid == monitor.active;
+                const auto drawn = b.intersection(unclipped ? mb : visible);
+                const bool changed = !thumbnail.has_last_drawn ||
+                    !approx_same_bounds(thumbnail.last_drawn, drawn) ||
+                    std::abs(thumbnail.last_opacity - alpha) > 1e-3f ||
+                    thumbnail.last_elevated_order != thumbnail.elevated_order;
+                if (!full_damage && changed) {
+                    if (thumbnail.has_last_drawn)
+                        damage_logical_box(thumbnail.last_drawn);
+                    damage_logical_box(drawn);
+                }
+                thumbnail.last_drawn = drawn;
+                thumbnail.has_last_drawn = true;
+                thumbnail.last_opacity = alpha;
+                thumbnail.last_elevated_order = thumbnail.elevated_order;
+            }
+        }
+        for (auto &departure : monitor.departures) {
+            double t = 0.0;
+            const auto drawn = compute_departure_bounds(mid, mb, departure, now, t).intersection(mb);
+            if (!full_damage) {
+                if (departure.has_last_drawn)
+                    damage_logical_box(departure.last_drawn);
+                damage_logical_box(drawn);
+            }
+            departure.last_drawn = drawn;
+            departure.has_last_drawn = true;
+        }
     }
     std::erase_if(scene->monitors, [&monitor_ids](const auto &entry) {
         return std::find(monitor_ids.begin(), monitor_ids.end(), entry.first) == monitor_ids.end();
@@ -484,8 +706,7 @@ static void update_scene() {
             actual_root->children.erase(actual_root->children.begin() + i);
         }
     }
-    if (moving)
-        request_refresh();
+    return moving;
 }
 
 static void paint_monitor(int monitor_id) {
@@ -508,38 +729,10 @@ static void paint_monitor(int monitor_id) {
     defer(hypriso->clip = old_clip; hypriso->clipbox = old_clipbox);
     hypriso->clip = true;
     hypriso->clipbox = render_bounds(mb, monitor_id);
-    rect(hypriso->clipbox, {0, 0, 0, .7f}, 0, 0, 2.0, true);
 
     // At full openness, a card occupies 80% of the monitor and the pitch is
     // 84%, leaving a gap and a visible slice of each neighboring workspace.
     const double pitch = mb.w * (1.0 - .16 * progress);
-    auto paint_thumbnail = [&](int wid, int cid, double translation, const Bounds &clip) {
-        if (snapshot && drag_workspace_switcher::omit_from_workspace_snapshot(cid))
-            return;
-        auto &thumbnail = monitor.workspaces.at(wid).thumbnails.at(cid);
-        auto natural = thumbnail.natural;
-        const auto origin = scene->desktop_origins.find(cid);
-        if (origin != scene->desktop_origins.end()) {
-            natural = lerp(natural, origin->second, scene->desktop_origin_weight);
-        } else if (hypriso->is_hidden(cid)) {
-            auto dock_bounds = dock::get_location(hypriso->monitor_name(monitor_id), cid);
-            dock_bounds.y += mb.h;
-            natural = lerp(dock_bounds, natural, progress);
-        }
-        auto b = snapshot
-            ? Bounds(thumbnail.slot.x.target, thumbnail.slot.y.target, thumbnail.slot.w.target, thumbnail.slot.h.target)
-            : lerp(natural, thumbnail.slot.bounds(), progress);
-        b.x += translation + (snapshot ? 0 : thumbnail.drag_x.value);
-        b.y += snapshot ? 0 : thumbnail.drag_y.value;
-        float alpha = snapshot ? 1.0f : thumbnail.opacity;
-        if (!snapshot)
-            drag_workspace_switcher::transform_thumbnail(cid, b, alpha);
-        hypriso->clipbox = render_bounds(clip, monitor_id);
-        hypriso->draw_deco_thumbnail(cid, render_bounds(b, monitor_id), 0, 2.0f, 0, alpha);
-        const auto hit = b.intersection(clip);
-        if (!snapshot && !hit.empty())
-            monitor.window_options.push_back({cid, wid, hit});
-    };
     auto paint_order = snapshot ? std::vector<int>{rendering_workspace} : visible_workspace_order(monitor);
     if (!snapshot) {
         for (const auto &[wid, workspace] : monitor.workspaces) {
@@ -547,32 +740,83 @@ static void paint_monitor(int monitor_id) {
                 paint_order.insert(paint_order.begin(), wid);
         }
     }
+
+    // If the damaged region is completely covered by an opaque wallpaper card's
+    // interior, skip the blurred backdrop pass entirely.
+    bool backdrop_occluded = false;
+    if (!snapshot) {
+        const double corner_inset = std::ceil(14.0 * s * progress) + 2.0;
+        for (auto wid : paint_order) {
+            auto ws_it = monitor.workspaces.find(wid);
+            if (ws_it == monitor.workspaces.end())
+                continue;
+            const auto wallpaper = workspace_card_bounds(mb, ws_it->second.position.value, progress, pitch);
+            const auto visible = wallpaper.intersection(mb);
+            if (visible.empty())
+                continue;
+            auto b = render_bounds(wallpaper, monitor_id);
+            Bounds opaque_inner(b.x + corner_inset, b.y + corner_inset,
+                                b.w - 2.0 * corner_inset, b.h - 2.0 * corner_inset);
+            if (opaque_inner.w > 0 && opaque_inner.h > 0 && hypriso->damage_contained_in(monitor_id, opaque_inner)) {
+                backdrop_occluded = true;
+                break;
+            }
+        }
+    }
+    if (!backdrop_occluded)
+        rect(hypriso->clipbox, {0, 0, 0, .7f}, 0, 0, 2.0, true);
+
+    auto paint_thumbnail = [&](int wid, int cid, double translation, const Bounds &clip) {
+        if (snapshot && drag_workspace_switcher::omit_from_workspace_snapshot(cid))
+            return;
+        auto &thumbnail = monitor.workspaces.at(wid).thumbnails.at(cid);
+        float alpha = 1.0f;
+        const auto b = compute_thumbnail_bounds(monitor_id, mb, thumbnail, translation, progress, snapshot, alpha, cid);
+        const auto hit = b.intersection(clip);
+        if (!snapshot && !hit.empty())
+            monitor.window_options.push_back({cid, wid, hit});
+        if (hit.empty())
+            return;
+        if (!snapshot && !hypriso->damage_intersects(monitor_id, render_bounds(hit, monitor_id)))
+            return;
+        hypriso->clipbox = render_bounds(clip, monitor_id);
+        hypriso->draw_deco_thumbnail(cid, render_bounds(b, monitor_id), 0, 2.0f, 0, alpha);
+    };
+    const double shadow_size = std::round(32 * s);
     for (auto wid : paint_order) {
         if (!monitor.workspaces.contains(wid))
             continue;
         auto &workspace = monitor.workspaces.at(wid);
         const double translation = snapshot ? 0 : workspace.position.value * pitch;
-        auto wallpaper = mb;
-        wallpaper.scale_from_center(1.0 - .2 * progress);
-        wallpaper.x += translation;
+        const auto wallpaper = workspace_card_bounds(mb, snapshot ? 0.0 : workspace.position.value, progress, pitch);
         const auto visible = wallpaper.intersection(mb);
         if (visible.empty())
             continue;
-        hypriso->clipbox = render_bounds(mb, monitor_id);
-        auto b = render_bounds(wallpaper, monitor_id);
-        render_drop_shadow(monitor_id, 1, {0, 0, 0, .18f * progress}, 14 * s * progress, 2.0, b, std::round(32 * s));
-        hypriso->draw_wallpaper(monitor_id, b, 14 * s * progress);
-        // Fade the live icon layer every frame instead of baking its opacity
-        // into the wallpaper capture, which refreshes much less frequently.
-        if (!snapshot) {
-            hypriso->clipbox = render_bounds(visible, monitor_id);
-            desktop_icons::paint_overview(monitor_id, b, 1.0f - progress);
-            hypriso->clipbox = render_bounds(mb, monitor_id);
-        }
-        b.shrink(2);
-        border(b, {1, 1, 1, .05}, 1, 0, 14 * s * progress);
         if (!snapshot && !workspace.retiring)
             monitor.workspace_options.push_back({wid, visible});
+        auto b = render_bounds(wallpaper, monitor_id);
+        Bounds shadow_bounds = b;
+        shadow_bounds.grow(shadow_size);
+        // During the fade the card and its icons move together. Submit both
+        // and let the compositor clip them to the final repaint region.
+        const bool card_damaged = snapshot || progress < 1.0f || hypriso->damage_intersects(monitor_id, b);
+        const bool shadow_damaged = snapshot || hypriso->damage_intersects(monitor_id, shadow_bounds);
+        hypriso->clipbox = render_bounds(mb, monitor_id);
+        if (shadow_damaged)
+            render_drop_shadow(monitor_id, 1, {0, 0, 0, .05f * progress}, 14 * s * progress, 2.0, b, shadow_size);
+        if (card_damaged) {
+            hypriso->draw_wallpaper(monitor_id, b, 14 * s * progress);
+            // Fade the live icon layer every frame instead of baking its opacity
+            // into the wallpaper capture, which refreshes much less frequently.
+            if (!snapshot && progress < 1.0f) {
+                hypriso->clipbox = render_bounds(visible, monitor_id);
+                desktop_icons::paint_overview(monitor_id, b, 1.0f - progress);
+                hypriso->clipbox = render_bounds(mb, monitor_id);
+            }
+            auto border_box = b;
+            border_box.shrink(2);
+            border(border_box, {1, 1, 1, .05f * progress}, 1, 0, 14 * s * progress);
+        }
         for (auto cid : workspace.stacking) {
             if (!snapshot && (cid == monitor.dragged || workspace.thumbnails.at(cid).elevated_order != 0))
                 continue;
@@ -602,28 +846,14 @@ static void paint_monitor(int monitor_id) {
     for (const auto &item : elevated)
         paint_thumbnail(item.workspace, item.cid, monitor.workspaces.at(item.workspace).position.value * pitch, mb);
     if (!monitor.departures.empty()) {
-        auto target = dock::get_item_location(hypriso->monitor_name(monitor_id), "sleep_button");
-        target.x += mb.x;
-        target.y = mb.bottom();
         const auto now = get_current_time_in_ms();
         hypriso->clipbox = render_bounds(mb, monitor_id);
         for (const auto &departure : monitor.departures) {
-            const double t = std::clamp((now - departure.start) / departure_ms, 0.0, 1.0);
-            const double eased = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-            // Shrink toward the button while keeping the window's aspect ratio.
-            auto end = target;
-            const auto aspect = departure.from.w / std::max(1.0, departure.from.h);
-            if (aspect > end.w / std::max(1.0, end.h)) {
-                const auto height = end.w / aspect;
-                end.y += (end.h - height) * .5;
-                end.h = height;
-            } else {
-                const auto width = end.h * aspect;
-                end.x += (end.w - width) * .5;
-                end.w = width;
-            }
-            const auto b = lerp(departure.from, end, eased);
-            hypriso->draw_deco_thumbnail(departure.cid, render_bounds(b, monitor_id), 0, 2.0f, 0, 1.0f - t);
+            double t = 0.0;
+            const auto b = compute_departure_bounds(monitor_id, mb, departure, now, t);
+            const auto rb = render_bounds(b, monitor_id);
+            if (hypriso->damage_intersects(monitor_id, rb))
+                hypriso->draw_deco_thumbnail(departure.cid, rb, 0, 2.0f, 0, 1.0f - t);
         }
     }
     if (monitor.dragged != -1 && monitor.workspaces.contains(monitor.dragged_workspace)) {
@@ -656,7 +886,6 @@ static void queue_workspace_drop(int cid, int raw_workspace) {
             return;
         hypriso->move_to_workspace(cid, raw_workspace, false);
         update_scene();
-        request_refresh();
     });
 }
 
@@ -766,7 +995,8 @@ void overview::update_workspace_gesture(int monitor, double delta_x) {
         if (!workspace.retiring)
             workspace.position.value += offset;
     }
-    request_refresh();
+    state->needs_full_damage = true;
+    damage_monitor_entire(monitor);
 }
 
 void overview::end_workspace_gesture(int monitor) {
@@ -799,8 +1029,8 @@ void overview::end_workspace_gesture(int monitor) {
         hypriso->move_to_workspace(reserve_teaser_workspace(monitor), false);
     else if (selected != state->active)
         hypriso->move_to_workspace_id(selected);
+    state->needs_full_damage = true;
     update_scene();
-    request_refresh();
 }
 
 static OverviewThumbnail *dragged_thumbnail(OverviewMonitor &monitor) {
@@ -821,8 +1051,7 @@ void create_overview_for_monitor(int monitor) {
         c->real_bounds = c->wanted_bounds;
     };
     over->when_paint = [monitor](Container *root, Container *c) {
-        auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-        if (rid == monitor && stage == (int) STAGE::RENDER_POST_WINDOWS)
+        if (current_rendering_monitor() == monitor && *datum<int>(root, "stage") == (int) STAGE::RENDER_POST_WINDOWS)
             paint_monitor(monitor);
     };
     over->when_drag_start = [monitor](Container *root, Container *c) {
@@ -853,9 +1082,20 @@ void create_overview_for_monitor(int monitor) {
         if (!state)
             return;
         if (auto thumbnail = dragged_thumbnail(*state)) {
+            if (thumbnail->has_last_drawn)
+                damage_logical_box(thumbnail->last_drawn);
             thumbnail->drag_x.value = root->mouse_current_x - state->drag_start_x;
             thumbnail->drag_y.value = root->mouse_current_y - state->drag_start_y;
-            request_refresh();
+            const auto mb = bounds_monitor(monitor);
+            const float progress = std::clamp(openess, 0.0f, 1.0f);
+            const double pitch = mb.w * (1.0 - .16 * progress);
+            const double translation = state->workspaces.at(state->dragged_workspace).position.value * pitch;
+            float alpha = 1.0f;
+            const auto drawn = compute_thumbnail_bounds(monitor, mb, *thumbnail, translation, progress, false, alpha, state->dragged).intersection(mb);
+            damage_logical_box(drawn);
+            thumbnail->last_drawn = drawn;
+            thumbnail->has_last_drawn = true;
+            thumbnail->last_opacity = alpha;
         }
     };
     over->when_drag_end = [monitor](Container *root, Container *c) {
@@ -865,12 +1105,14 @@ void create_overview_for_monitor(int monitor) {
         if (auto thumbnail = dragged_thumbnail(*state)) {
             thumbnail->drag_x.target = 0;
             thumbnail->drag_y.target = 0;
+            if (thumbnail->has_last_drawn)
+                damage_logical_box(thumbnail->last_drawn);
             drop_on_workspace(state->dragged, root->mouse_current_x, root->mouse_current_y);
         }
         drag_workspace_switcher::end_drag(state->dragged);
         state->dragged = -1;
         state->dragged_workspace = -1;
-        request_refresh();
+        update_scene();
     };
     over->when_clicked = [monitor](Container *root, Container *c) {
         auto state = monitor_state(monitor);
@@ -894,7 +1136,6 @@ void create_overview_for_monitor(int monitor) {
                     else
                         hypriso->move_to_workspace_id(workspace);
                     update_scene();
-                    request_refresh();
                 });
             }
             return;
@@ -922,13 +1163,91 @@ void create_overview_for_monitor(int monitor) {
     };
 }
 
-static void screenshots() {
+static bool any_monitor_workspace_gesture() {
+    if (!scene)
+        return false;
+    for (const auto &[mid, monitor] : scene->monitors) {
+        if (monitor.workspace_gesture)
+            return true;
+    }
+    return false;
+}
+
+static bool any_monitor_fullscreen() {
+    for (auto m : actual_monitors) {
+        const int mid = *datum<int>(m, "cid");
+        const int active_ws = hypriso->get_active_workspace_id(mid);
+        for (auto c : actual_root->children) {
+            if (c->custom_type != (int) TYPE::CLIENT)
+                continue;
+            const int cid = *datum<int>(c, "cid");
+            if (get_monitor(cid) == mid &&
+                hypriso->get_active_workspace_id_client(cid) == active_ws &&
+                hypriso->is_mapped(cid) && !hypriso->is_hidden(cid) &&
+                hypriso->is_fullscreen(cid))
+                return true;
+        }
+    }
+    return false;
+}
+
+static void damage_window_thumbnail(int cid) {
     if (!scene)
         return;
-    const bool previous_capture = capturing_overview;
-    capturing_overview = true;
-    defer(capturing_overview = previous_capture);
+    for (const auto &[mid, monitor] : scene->monitors) {
+        for (const auto &[wid, workspace] : monitor.workspaces) {
+            auto it = workspace.thumbnails.find(cid);
+            if (it != workspace.thumbnails.end()) {
+                if (it->second.has_last_drawn && !it->second.last_drawn.empty())
+                    damage_logical_box(it->second.last_drawn);
+                return;
+            }
+        }
+    }
+}
+
+static void damage_monitor_wallpapers(int mid) {
+    if (!scene)
+        return;
+    auto it = scene->monitors.find(mid);
+    if (it == scene->monitors.end())
+        return;
+    const auto mb = bounds_monitor(mid);
+    const float progress = std::clamp(openess, 0.0f, 1.0f);
+    const double pitch = mb.w * (1.0 - .16 * progress);
+    for (auto wid : visible_workspace_order(it->second)) {
+        auto ws = it->second.workspaces.find(wid);
+        if (ws == it->second.workspaces.end())
+            continue;
+        const auto visible = workspace_card_bounds(mb, ws->second.position.value, progress, pitch).intersection(mb);
+        if (!visible.empty())
+            damage_logical_box(visible, 2.0);
+    }
+}
+
+static long screenshots(bool initial = false) {
+    if (!scene)
+        return fast_capture_ms;
+    const auto tick_start = std::chrono::steady_clock::now();
     const auto now = get_current_time_in_ms();
+
+    const double render_ms = max_monitor_render_ms();
+    const double frame_budget_ms = min_monitor_frame_budget_ms();
+    const bool busy_motion = animating || any_monitor_workspace_gesture();
+    const double load_ratio = (render_ms + scene->smoothed_capture_ms) / std::max(1.0, frame_budget_ms);
+    const double load_scale = load_ratio <= 0.35 ? 1.0 : 1.0 + (load_ratio - 0.35) * 4.0;
+
+    long effective_fast_ms = std::clamp<long>(std::lround(fast_capture_ms * load_scale), fast_capture_ms, max_fast_capture_ms);
+    long effective_slow_ms = std::clamp<long>(std::lround(slow_capture_ms * load_scale), slow_capture_ms, max_slow_capture_ms);
+    long effective_wall_ms = std::clamp<long>(std::lround(wallpaper_capture_ms * load_scale), wallpaper_capture_ms, max_wallpaper_capture_ms);
+    if (busy_motion && !initial) {
+        effective_fast_ms = std::max(effective_fast_ms, 120L);
+        effective_slow_ms = std::max(effective_slow_ms, 800L);
+    }
+    const double tick_budget_ms = initial
+        ? initial_capture_budget_ms
+        : std::clamp(frame_budget_ms * 0.35 - render_ms * 0.5, 1.5, 6.0);
+
     std::map<int, int> active_workspaces;
     std::map<int, int> priority_counts;
     std::vector<int> priority_windows;
@@ -936,12 +1255,12 @@ static void screenshots() {
         const int mid = *datum<int>(m, "cid");
         active_workspaces[mid] = hypriso->get_active_workspace_id(mid);
     }
-    // The compositor stack runs from bottom to top. Limit the fast group to
-    // the top four clients on each monitor's active workspace.
+    // The compositor stack runs from bottom to top. Capture the focused window
+    // and the one directly below it on each monitor's active workspace at 24 FPS.
     const auto stacking = get_window_stacking_order();
     for (auto it = stacking.rbegin(); it != stacking.rend(); ++it) {
         const int mid = get_monitor(*it);
-        if (!active_workspaces.contains(mid) || priority_counts[mid] >= 4 || !get_cid_container(*it))
+        if (!active_workspaces.contains(mid) || priority_counts[mid] >= 2 || is_slept(*it) || !get_cid_container(*it))
             continue;
         if (hypriso->get_active_workspace_id_client(*it) != active_workspaces.at(mid))
             continue;
@@ -951,9 +1270,9 @@ static void screenshots() {
     // Use the rendered hit boxes, including peek and returning thumbnails,
     // rather than the original desktop window bounds.
     int hovered = -1;
-    const auto monitor = scene->monitors.find(hypriso->monitor_from_cursor());
-    if (monitor != scene->monitors.end()) {
-        const auto &options = monitor->second.window_options;
+    const auto cursor_monitor = scene->monitors.find(hypriso->monitor_from_cursor());
+    if (cursor_monitor != scene->monitors.end()) {
+        const auto &options = cursor_monitor->second.window_options;
         for (auto it = options.rbegin(); it != options.rend(); ++it) {
             if (bounds_contains(it->b, actual_root->mouse_current_x, actual_root->mouse_current_y)) {
                 hovered = it->cid;
@@ -961,34 +1280,135 @@ static void screenshots() {
             }
         }
     }
-    bool captured = false;
+
+    // Track which (monitor, workspace) pairs are currently visible on screen.
+    const float progress = std::clamp(openess, 0.0f, 1.0f);
+    std::map<std::pair<int, int>, bool> visible_spaces;
+    for (const auto &[mid, mon] : scene->monitors) {
+        const auto mb = bounds_monitor(mid);
+        const double pitch = mb.w * (1.0 - .16 * progress);
+        for (auto wid : visible_workspace_order(mon)) {
+            auto ws_it = mon.workspaces.find(wid);
+            if (ws_it == mon.workspaces.end())
+                continue;
+            if (!workspace_card_bounds(mb, ws_it->second.position.value, progress, pitch).intersection(mb).empty())
+                visible_spaces[{mid, wid}] = true;
+        }
+    }
+
+    struct CaptureCandidate {
+        int cid;
+        int tier; // 0 = missing thumbnail, 1 = hovered, 2 = priority, 3 = visible dirty/fallback
+    };
+    std::vector<CaptureCandidate> candidates;
     for (int i = (int) actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type != (int) TYPE::CLIENT)
             continue;
         const int cid = *datum<int>(c, "cid");
-        const bool fast = cid == hovered || std::find(priority_windows.begin(), priority_windows.end(), cid) != priority_windows.end();
-        const auto previous = scene->window_captures.find(cid);
-        if (previous != scene->window_captures.end() && now - previous->second < (fast ? fast_capture_ms : slow_capture_ms))
+        if (is_slept(cid))
             continue;
-        // New windows are captured immediately, regardless of their tier.
-        hypriso->screenshot_deco(cid);
-        scene->window_captures[cid] = get_current_time_in_ms();
-        captured = true;
+        const int mid = get_monitor(cid);
+        const int wid = hypriso->get_active_workspace_id_client(cid);
+        const bool missing = !hypriso->has_deco_thumbnail(cid);
+        const bool visible = visible_spaces.contains({mid, wid}) ||
+            (scene->monitors.contains(mid) && scene->monitors.at(mid).dragged == cid);
+        if (!visible && !missing)
+            continue;
+        if (initial && !missing && (!active_workspaces.contains(mid) || wid != active_workspaces.at(mid)))
+            continue;
+
+        const bool fast = cid == hovered || std::find(priority_windows.begin(), priority_windows.end(), cid) != priority_windows.end();
+        const bool dirty = hypriso->is_deco_dirty(cid);
+        const auto previous = scene->window_captures.find(cid);
+        long last_cap = previous != scene->window_captures.end() ? previous->second : 0;
+        if (last_cap == 0) {
+            auto pre = preloaded_captures.find(cid);
+            if (pre != preloaded_captures.end())
+                last_cap = pre->second;
+        }
+        const long elapsed = last_cap == 0 ? effective_slow_ms * 4 : now - last_cap;
+        if (!missing) {
+            const long min_interval = fast ? effective_fast_ms : effective_slow_ms;
+            if (elapsed < min_interval)
+                continue;
+            // Focused, one-below, and hovered windows always refresh at the fast
+            // 24 FPS rate so they appear real-time (including video subsurfaces).
+            // Background windows skip re-capture unless dirty or due for fallback.
+            if (!fast && !dirty) {
+                const bool on_active = active_workspaces.contains(mid) && wid == active_workspaces.at(mid);
+                if (initial || !on_active || elapsed < effective_slow_ms * 3)
+                    continue;
+            }
+        }
+        const int tier = missing ? 0 : (cid == hovered ? 1 : (fast ? 2 : 3));
+        candidates.push_back({cid, tier});
     }
+
+    if (!candidates.empty()) {
+        std::stable_sort(candidates.begin(), candidates.end(), [](const CaptureCandidate &a, const CaptureCandidate &b) {
+            return a.tier < b.tier;
+        });
+        // Rotate equal-priority non-missing candidates so budgeted ticks never starve a window.
+        size_t rot_start = 0;
+        while (rot_start < candidates.size() && candidates[rot_start].tier <= 1)
+            rot_start++;
+        if (candidates.size() - rot_start > 1) {
+            const size_t span = candidates.size() - rot_start;
+            const size_t shift = scene->capture_cursor % span;
+            std::rotate(candidates.begin() + rot_start, candidates.begin() + rot_start + shift, candidates.end());
+        }
+    }
+
+    bool budget_exceeded = false;
+    size_t captured_count = 0;
+    for (const auto &cand : candidates) {
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+        if (cand.tier > 0 && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
+            budget_exceeded = true;
+            break;
+        }
+        const auto single_start = std::chrono::steady_clock::now();
+        hypriso->screenshot_deco(cand.cid);
+        const double single_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - single_start).count();
+        scene->smoothed_window_capture_ms = scene->smoothed_window_capture_ms * 0.75 + single_ms * 0.25;
+        const long cap_time = get_current_time_in_ms();
+        scene->window_captures[cand.cid] = cap_time;
+        preloaded_captures[cand.cid] = cap_time;
+        captured_count++;
+        if (!initial)
+            damage_window_thumbnail(cand.cid);
+    }
+    if (captured_count > 0)
+        scene->capture_cursor += captured_count;
     std::erase_if(scene->window_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
+
     for (auto m : actual_monitors) {
         const int mid = *datum<int>(m, "cid");
-        const auto previous = scene->wallpaper_captures.find(mid);
-        if (previous != scene->wallpaper_captures.end() && now - previous->second < slow_capture_ms)
+        const bool missing_wall = !hypriso->has_wallpaper_thumbnail(mid);
+        if (!missing_wall && (initial || busy_motion))
             continue;
+        const auto previous = scene->wallpaper_captures.find(mid);
+        if (!missing_wall && previous != scene->wallpaper_captures.end() && now - previous->second < effective_wall_ms)
+            continue;
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+        if (!missing_wall && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
+            budget_exceeded = true;
+            break;
+        }
         hypriso->screenshot_wallpaper(mid);
         scene->wallpaper_captures[mid] = get_current_time_in_ms();
-        captured = true;
+        if (!initial)
+            damage_monitor_wallpapers(mid);
     }
     std::erase_if(scene->wallpaper_captures, [&active_workspaces](const auto &entry) { return !active_workspaces.contains(entry.first); });
-    if (captured)
-        damage_all();
+
+    const double total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+    if (!initial)
+        scene->smoothed_capture_ms = scene->smoothed_capture_ms * 0.75 + total_ms * 0.25;
+    if (budget_exceeded)
+        return std::min(effective_fast_ms, 50L);
+    return effective_fast_ms;
 }
 
 static void set_input_bypass(bool bypass) {
@@ -1032,8 +1452,8 @@ static bool initialize_overview(int monitor) {
             hypriso->whitelist_on = true;
             scene->taking_desktop = false;
         }
-        screenshots();
         update_scene();
+        screenshots(true);
         if (taking_desktop) {
             for (const auto &[mid, state] : scene->monitors) {
                 const auto mb = bounds_monitor(mid);
@@ -1071,18 +1491,35 @@ static bool initialize_overview(int monitor) {
         // No window is focused in overview, even a fullscreen game hiding its cursor.
         set_input_takeover("overview", true);
         hold_overview_open();
-        request_refresh();
+        damage_all_monitors();
     });
 
     later(1000.0f / hypriso->fps(monitor), [monitor, generation](Timer *t) {
         t->keep_running = running && generation == lifecycle;
-        if (t->keep_running && initialized)
-            update_scene();
+        if (!t->keep_running || !initialized)
+            return;
+        const bool moving = update_scene();
+        bool active_interaction = moving || animating;
+        if (!active_interaction && scene) {
+            for (const auto &[mid, state] : scene->monitors) {
+                if (state.dragged != -1 || state.workspace_gesture) {
+                    active_interaction = true;
+                    break;
+                }
+            }
+        }
+        const float base_ms = 1000.0f / std::max(1.0f, hypriso->fps(monitor));
+        if (active_interaction) {
+            const double render_ms = max_monitor_render_ms();
+            t->delay = std::max<float>(base_ms, static_cast<float>(render_ms * 0.85));
+        } else {
+            t->delay = static_cast<float>(idle_scene_update_ms);
+        }
     });
     later(fast_capture_ms, [generation](Timer *t) {
         t->keep_running = running && generation == lifecycle;
         if (t->keep_running && initialized)
-            screenshots();
+            t->delay = static_cast<float>(screenshots(false));
     });
     return true;
 }
@@ -1205,10 +1642,14 @@ static void animate_overview(float target, float velocity, SpringParams params, 
         if (finished && (target != 0.0f || workspace_positions_settled())) {
             animating = false;
             t->keep_running = false;
-            if (target == 0.0f)
+            if (target == 0.0f) {
                 overview_actual_close();
+                return;
+            }
         }
-        request_refresh();
+        const float base_delay = (1000.0f / std::max(1.0f, hypriso->fps(overview_monitor))) * .8f;
+        t->delay = std::max(base_delay, static_cast<float>(max_monitor_render_ms() * 0.85));
+        damage_all_monitors();
     });
 }
 
@@ -1267,7 +1708,7 @@ void overview::begin_gesture(int monitor) {
     animation_generation++;
     animating = false;
     openess = std::clamp(openess, 0.0f, 1.0f);
-    request_refresh();
+    damage_all_monitors();
 }
 
 void overview::end_gesture(long start, long end, float y_offset) {
@@ -1304,12 +1745,86 @@ void overview::overwrite_openess(float a) {
         return;
     animation_generation++;
     animating = false;
-    openess = std::clamp(a, 0.0f, 1.0f);
+    const float next = std::clamp(a, 0.0f, 1.0f);
+    const bool changed = next != openess;
+    openess = next;
     if (openess == 1.0f)
         scene->desktop_origins.clear();
     if (initialized)
         set_input_bypass(false);
-    request_refresh();
+    if (changed)
+        damage_all_monitors();
+}
+
+void overview::on_window_open(int cid) {
+    later(250, [cid](Timer *) {
+        if (running || show_desktop::is_opened() || !get_cid_container(cid))
+            return;
+        if (is_slept(cid) || !hypriso->is_mapped(cid) || hypriso->has_deco_thumbnail(cid))
+            return;
+        if (hypriso->screenshot_deco(cid))
+            preloaded_captures[cid] = get_current_time_in_ms();
+    });
+}
+
+void overview::on_monitor_open(int mid) {
+    later(250, [mid](Timer *) {
+        if (running || hypriso->has_wallpaper_thumbnail(mid))
+            return;
+        hypriso->screenshot_wallpaper(mid);
+    });
+}
+
+void overview::start_preloader() {
+    if (preloader_started)
+        return;
+    preloader_started = true;
+    later(preload_interval_ms, [](Timer *t) {
+        t->keep_running = true;
+        if (running || show_desktop::is_opened() || drag::dragging() || screenshot_tool::is_open())
+            return;
+
+        std::erase_if(preloaded_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
+
+        // Preload at most one missing monitor wallpaper per tick.
+        for (auto m : actual_monitors) {
+            const int mid = *datum<int>(m, "cid");
+            if (!hypriso->has_wallpaper_thumbnail(mid)) {
+                hypriso->screenshot_wallpaper(mid);
+                break;
+            }
+        }
+
+        // Preload at most one window thumbnail per tick: missing thumbnails first,
+        // otherwise keep one dirty window warm if no fullscreen app is active.
+        std::vector<int> missing;
+        std::vector<int> dirty;
+        const long now = get_current_time_in_ms();
+        const bool fullscreen = any_monitor_fullscreen();
+        for (auto c : actual_root->children) {
+            if (c->custom_type != (int) TYPE::CLIENT)
+                continue;
+            const int cid = *datum<int>(c, "cid");
+            if (is_slept(cid) || !hypriso->is_mapped(cid))
+                continue;
+            if (!hypriso->has_deco_thumbnail(cid)) {
+                missing.push_back(cid);
+            } else if (!fullscreen && hypriso->is_deco_dirty(cid)) {
+                auto it = preloaded_captures.find(cid);
+                if (it == preloaded_captures.end() || now - it->second >= preload_refresh_ms)
+                    dirty.push_back(cid);
+            }
+        }
+        int target_cid = -1;
+        if (!missing.empty()) {
+            target_cid = missing.front();
+        } else if (!dirty.empty()) {
+            target_cid = dirty[preload_cursor % dirty.size()];
+            preload_cursor++;
+        }
+        if (target_cid != -1 && hypriso->screenshot_deco(target_cid))
+            preloaded_captures[target_cid] = get_current_time_in_ms();
+    });
 }
 
 void overview::fake_paint(int id) {
@@ -1331,11 +1846,33 @@ bool overview::is_showing() {
 bool overview::suppresses_desktop_icons() {
     // Keep the live desktop visible until deferred overview setup completes.
     // Captures must still exclude icons so the cards can fade them separately.
-    return running && (initialized || capturing_overview);
+    return initialized || hypriso->capturing_wallpaper();
 }
 
 bool overview::is_closing() {
     return running && animating && animation_target == 0.0f;
+}
+
+bool overview::thumbnail_target_bounds(int cid, Bounds &out) {
+    if (!running || !scene)
+        return false;
+    const float progress = std::clamp(openess, 0.0f, 1.0f);
+    for (const auto &[mid, monitor] : scene->monitors) {
+        const auto mb = bounds_monitor(mid);
+        const double pitch = mb.w * (1.0 - .16 * progress);
+        for (const auto &[wid, workspace] : monitor.workspaces) {
+            auto it = workspace.thumbnails.find(cid);
+            if (it == workspace.thumbnails.end())
+                continue;
+            const auto &thumbnail = it->second;
+            Bounds slot_target(thumbnail.slot.x.target, thumbnail.slot.y.target,
+                               thumbnail.slot.w.target, thumbnail.slot.h.target);
+            out = lerp(thumbnail.natural, slot_target, progress);
+            out.x += workspace.position.value * pitch;
+            return out.w > 0 && out.h > 0;
+        }
+    }
+    return false;
 }
 
 float overview::get_openess() {

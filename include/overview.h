@@ -1,7 +1,13 @@
 #ifndef overview_h_INCLUDED
 #define overview_h_INCLUDED
 
+struct Bounds;
+
 namespace overview {
+    void start_preloader();
+    void on_window_open(int cid);
+    void on_monitor_open(int mid);
+
     void open(int monitor);
     void close(bool focus = true);
     void instant_close();
@@ -25,6 +31,7 @@ namespace overview {
     bool is_showing();
     bool suppresses_desktop_icons();
     bool is_closing();
+    bool thumbnail_target_bounds(int cid, Bounds &out);
 
     float get_openess();
 };

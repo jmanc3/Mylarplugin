@@ -223,6 +223,8 @@ void snap_preview::on_drag(int cid, int x, int y) {
 }
 
 void snap_preview::on_drag_end(int cid, int x, int y, int snap_type) {
+    if (preview->cid != cid)
+        return;
     preview->show = false;
     preview->keep_showing_until = get_current_time_in_ms() + fade_time;
     preview->end_drag_time = get_current_time_in_ms();
@@ -305,7 +307,7 @@ void snap_preview::draw(Container* actual_root, Container* c) {
 
     if (!(active_id == cid && stage == (int)STAGE::RENDER_PRE_WINDOW))
         return;
-    if (cid != preview->cid)
+    if (cid != preview->cid || !hypriso->can_maximize(cid))
         return;
     renderfix
     

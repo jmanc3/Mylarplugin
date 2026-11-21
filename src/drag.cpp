@@ -28,7 +28,8 @@ void drag::begin(int cid) {
     data->cid = cid;
     data->mouse_start = mouse();
     clear_snap_groups(cid); 
-    snap_preview::on_drag_start(cid, data->mouse_start.x, data->mouse_start.y);
+    if (hypriso->can_maximize(cid))
+        snap_preview::on_drag_start(cid, data->mouse_start.x, data->mouse_start.y);
     auto c = get_cid_container(cid);
     if (*datum<bool>(c, "drag_from_titlebar")) {
         data->mouse_start = *datum<Bounds>(c, "initial_click_position");

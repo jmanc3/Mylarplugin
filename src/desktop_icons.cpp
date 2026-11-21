@@ -953,7 +953,10 @@ static void delete_selected_desktop_icons(Container *desktop) {
             continue;
 
         std::error_code ec;
-        std::filesystem::remove_all(item->full_filepath, ec);
+        if (std::filesystem::is_symlink(item->full_filepath, ec))
+            std::filesystem::remove(item->full_filepath, ec);
+        else
+            std::filesystem::remove_all(item->full_filepath, ec);
     }
 
     for (auto *icon : selected) {
@@ -1473,6 +1476,261 @@ static void create_root_popup(int monitor) {
     popup::open(root, m.x - 1, m.y + 1);
 }
 
+enum class DesktopDropAction {
+    Shortcut,
+    Copy,
+    Move,
+};
+
+static std::filesystem::path unique_destination_path(const std::filesystem::path& dest_dir,
+                                                     const std::filesystem::path& src_path) {
+    const auto filename = src_path.filename();
+    auto candidate = dest_dir / filename;
+    std::error_code ec;
+    auto entry_exists = [&ec](const std::filesystem::path& p) {
+        ec.clear();
+        const auto status = std::filesystem::symlink_status(p, ec);
+        return !ec && std::filesystem::exists(status);
+    };
+    if (!entry_exists(candidate))
+        return candidate;
+
+    ec.clear();
+    const bool is_dir = std::filesystem::is_directory(src_path, ec);
+    const std::string stem = is_dir ? filename.string() : filename.stem().string();
+    const std::string ext = is_dir ? std::string{} : filename.extension().string();
+    const std::string base = stem.empty() ? filename.string() : stem;
+    const std::string suffix = stem.empty() ? std::string{} : ext;
+
+    for (int i = 2; i < 10000; ++i) {
+        candidate = dest_dir / (base + " (" + std::to_string(i) + ")" + suffix);
+        if (!entry_exists(candidate))
+            return candidate;
+    }
+    return dest_dir / filename;
+}
+
+static void place_new_desktop_entries_near(const std::vector<std::filesystem::path>& created_paths,
+                                           float drop_x,
+                                           float drop_y) {
+    if (created_paths.empty())
+        return;
+
+    Container* target_desktop = nullptr;
+    for (auto* child : actual_root->children) {
+        if (child->custom_type != (int)TYPE::DESKTOP_ICONS)
+            continue;
+        if (bounds_contains(child->real_bounds, drop_x, drop_y)) {
+            target_desktop = child;
+            break;
+        }
+        if (!target_desktop)
+            target_desktop = child;
+    }
+
+    if (target_desktop) {
+        const auto section = current_desktop_section_key();
+        if (!section.empty()) {
+            const int monitor = *datum<int>(target_desktop, "monitor");
+            const auto m = icon_grid_metrics(target_desktop, scale(monitor));
+            auto sections = read_icon_position_sections();
+            auto& saved = sections[section];
+
+            std::unordered_set<std::string> created_names;
+            for (const auto& created : created_paths)
+                created_names.insert(created.filename().string());
+
+            std::unordered_set<long long> occupied;
+            occupied.reserve(target_desktop->children.size() + created_paths.size());
+            for (auto* child : target_desktop->children) {
+                auto* ico = (IcoContainerData*)child->user_data;
+                if (ico->x_pos < 0 || ico->y_pos < 0)
+                    continue;
+                DesktopItem* item = *datum<DesktopItem*>(child, "DesktopItem");
+                if (item && created_names.contains(icon_entry_name(item)))
+                    continue;
+                occupied.insert(grid_key(ico->x_pos, ico->y_pos));
+            }
+
+            const int prefer_x = std::max(0, static_cast<int>(std::lround((drop_x - m.width * 0.5f - m.start_x) / (m.width + m.hpad))));
+            const int prefer_y = std::max(0, static_cast<int>(std::lround((drop_y - m.height * 0.5f - m.start_y) / (m.height + m.vpad))));
+
+            for (const auto& created : created_paths) {
+                const auto [nx, ny] = nearest_free_slot(occupied, prefer_x, prefer_y);
+                occupied.insert(grid_key(nx, ny));
+                const auto name = created.filename().string();
+                saved[name] = {nx, ny};
+                for (auto* child : target_desktop->children) {
+                    DesktopItem* item = *datum<DesktopItem*>(child, "DesktopItem");
+                    if (!item || icon_entry_name(item) != name)
+                        continue;
+                    auto* ico = (IcoContainerData*)child->user_data;
+                    ico->x_pos = nx;
+                    ico->y_pos = ny;
+                    begin_icon_settle(child);
+                    break;
+                }
+            }
+            write_icon_position_sections(sections);
+        }
+    }
+
+    on_change_in_desktop_folder();
+    damage_all();
+    request_refresh();
+}
+
+static void perform_desktop_drop(std::vector<std::string> source_paths,
+                                 DesktopDropAction action,
+                                 float drop_x,
+                                 float drop_y) {
+    auto folder = Hyprutils::Path::resolvePath(conf_desktop_folder());
+    if (!folder.has_value()) {
+        notify("Desktop folder is not configured.");
+        return;
+    }
+
+    const std::filesystem::path dest_dir(folder.value());
+    std::error_code dir_ec;
+    if (!std::filesystem::is_directory(dest_dir, dir_ec)) {
+        notify("Desktop folder does not exist.");
+        return;
+    }
+
+    std::thread([source_paths = std::move(source_paths), dest_dir, action, drop_x, drop_y]() {
+        std::vector<std::filesystem::path> created;
+        std::vector<std::string> errors;
+
+        for (const auto& raw_path : source_paths) {
+            std::filesystem::path src(raw_path);
+            std::error_code ec;
+            const auto status = std::filesystem::symlink_status(src, ec);
+            if (ec || !std::filesystem::exists(status))
+                continue;
+
+            if (action == DesktopDropAction::Move) {
+                std::error_code eq_ec;
+                if (std::filesystem::equivalent(src.parent_path(), dest_dir, eq_ec) && !eq_ec)
+                    continue;
+            }
+
+            const auto dest = unique_destination_path(dest_dir, src);
+
+            if (action == DesktopDropAction::Shortcut) {
+                std::error_code abs_ec;
+                auto target = std::filesystem::absolute(src, abs_ec);
+                if (abs_ec)
+                    target = src;
+                std::error_code is_dir_ec;
+                const bool is_dir = std::filesystem::is_directory(src, is_dir_ec);
+                if (is_dir)
+                    std::filesystem::create_directory_symlink(target, dest, ec);
+                else
+                    std::filesystem::create_symlink(target, dest, ec);
+                if (ec) {
+                    errors.push_back(fz("Shortcut {}: {}", src.filename().string(), ec.message()));
+                    continue;
+                }
+                created.push_back(dest);
+            } else if (action == DesktopDropAction::Copy) {
+                std::filesystem::copy(
+                    src,
+                    dest,
+                    std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks,
+                    ec);
+                if (ec) {
+                    errors.push_back(fz("Copy {}: {}", src.filename().string(), ec.message()));
+                    continue;
+                }
+                created.push_back(dest);
+            } else if (action == DesktopDropAction::Move) {
+                std::filesystem::rename(src, dest, ec);
+                if (ec == std::errc::cross_device_link) {
+                    ec.clear();
+                    std::filesystem::copy(
+                        src,
+                        dest,
+                        std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks,
+                        ec);
+                    if (!ec) {
+                        std::error_code rm_ec;
+                        if (std::filesystem::is_symlink(src, rm_ec))
+                            std::filesystem::remove(src, rm_ec);
+                        else
+                            std::filesystem::remove_all(src, rm_ec);
+                        if (rm_ec)
+                            errors.push_back(fz("Remove original {}: {}", src.filename().string(), rm_ec.message()));
+                    }
+                }
+                if (ec) {
+                    errors.push_back(fz("Move {}: {}", src.filename().string(), ec.message()));
+                    continue;
+                }
+                created.push_back(dest);
+            }
+        }
+
+        main_thread([created = std::move(created), errors = std::move(errors), drop_x, drop_y]() {
+            if (!created.empty())
+                place_new_desktop_entries_near(created, drop_x, drop_y);
+            if (!errors.empty())
+                notify(errors.front());
+        });
+    }).detach();
+}
+
+static void open_drop_context_menu(const std::vector<std::string>& paths, float drop_x, float drop_y) {
+    std::vector<std::string> valid_paths;
+    valid_paths.reserve(paths.size());
+    for (const auto& p : paths) {
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(p, ec);
+        if (!ec && std::filesystem::exists(status))
+            valid_paths.push_back(p);
+    }
+    if (valid_paths.empty())
+        return;
+
+    std::vector<PopOption> options;
+    {
+        PopOption shortcut;
+        shortcut.text = valid_paths.size() == 1 ? "Create Shortcut Here" : "Create Shortcuts Here";
+        shortcut.on_clicked = [valid_paths, drop_x, drop_y]() {
+            perform_desktop_drop(valid_paths, DesktopDropAction::Shortcut, drop_x, drop_y);
+        };
+        options.push_back(shortcut);
+    }
+    {
+        PopOption copy;
+        copy.text = "Copy Here";
+        copy.on_clicked = [valid_paths, drop_x, drop_y]() {
+            perform_desktop_drop(valid_paths, DesktopDropAction::Copy, drop_x, drop_y);
+        };
+        options.push_back(copy);
+    }
+    {
+        PopOption move;
+        move.text = "Move Here";
+        move.on_clicked = [valid_paths, drop_x, drop_y]() {
+            perform_desktop_drop(valid_paths, DesktopDropAction::Move, drop_x, drop_y);
+        };
+        options.push_back(move);
+    }
+    {
+        PopOption sep;
+        sep.seperator = true;
+        options.push_back(sep);
+    }
+    {
+        PopOption cancel;
+        cancel.text = "Cancel";
+        options.push_back(cancel);
+    }
+
+    popup::open(options, static_cast<int>(std::lround(drop_x)) - 1, static_cast<int>(std::lround(drop_y)) + 1);
+    damage_all();
+}
+
 void desktop_icons::start() {
     auto in = gen_text_texture(set->font, "W\n", conf_font_size(), RGBA(1, 1, 1, 1));
     two_line_height = in.h;
@@ -1643,12 +1901,27 @@ void desktop_icons::start() {
         }
     };
 
+    hypriso->can_accept_desktop_drop = []() {
+        if (!set->desktop_icons)
+            return false;
+        auto folder = Hyprutils::Path::resolvePath(conf_desktop_folder());
+        if (!folder.has_value())
+            return false;
+        std::error_code ec;
+        return std::filesystem::is_directory(folder.value(), ec);
+    };
+    hypriso->on_desktop_files_dropped = [](const std::vector<std::string>& paths, float x, float y) {
+        open_drop_context_menu(paths, x, y);
+    };
+
     on_change_in_desktop_folder();
 
     watch_desktop_folder();
 }
 
 void desktop_icons::stop() {
+    hypriso->can_accept_desktop_drop = nullptr;
+    hypriso->on_desktop_files_dropped = nullptr;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::DESKTOP_ICONS) {

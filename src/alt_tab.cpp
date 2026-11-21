@@ -1,7 +1,9 @@
 
 #include "alt_tab.h"
 
+#include <chrono>
 #include <climits>
+#include <map>
 
 #include "heart.h"
 #include "drag.h"
@@ -511,6 +513,118 @@ void fill_root(Container *root, Container *alt_tab_parent) {
 }
 
 static bool is_showing = false;
+static unsigned int alt_tab_generation = 0;
+static constexpr long alt_tab_fast_capture_ms = 42;
+static constexpr long alt_tab_max_fast_capture_ms = 250;
+static constexpr long alt_tab_slow_capture_ms = 400;
+static constexpr long alt_tab_max_slow_capture_ms = 2000;
+static std::map<int, long> alt_tab_window_captures;
+static double alt_tab_smoothed_capture_ms = 0.0;
+static size_t alt_tab_capture_cursor = 0;
+
+static long alt_tab_capture_thumbnails(Container *c, bool initial) {
+    if (!c || c->children.empty())
+        return alt_tab_fast_capture_ms;
+
+    const auto tick_start = std::chrono::steady_clock::now();
+    const auto now = get_current_time_in_ms();
+    const int monitor = *datum<int>(c, "creation_monitor");
+
+    const double render_ms = hypriso->last_render_ms(monitor);
+    const double fps = std::max(1.0, (double) hypriso->fps(monitor));
+    const double frame_budget_ms = 1000.0 / fps;
+    const double load_ratio = (render_ms + alt_tab_smoothed_capture_ms) / std::max(1.0, frame_budget_ms);
+    const double load_scale = load_ratio <= 0.35 ? 1.0 : 1.0 + (load_ratio - 0.35) * 4.0;
+
+    const long effective_fast_ms = std::clamp<long>(std::lround(alt_tab_fast_capture_ms * load_scale), alt_tab_fast_capture_ms, alt_tab_max_fast_capture_ms);
+    const long effective_slow_ms = std::clamp<long>(std::lround(alt_tab_slow_capture_ms * load_scale), alt_tab_slow_capture_ms, alt_tab_max_slow_capture_ms);
+    const double tick_budget_ms = initial
+        ? 6.0
+        : std::clamp(frame_budget_ms * 0.35 - render_ms * 0.5, 1.5, 6.0);
+
+    // Focused window and the one directly below it on the active workspace.
+    const int active_ws = hypriso->get_active_workspace_id(monitor);
+    std::vector<int> priority_windows;
+    const auto stacking = get_window_stacking_order();
+    for (auto it = stacking.rbegin(); it != stacking.rend(); ++it) {
+        if (priority_windows.size() >= 2)
+            break;
+        if (get_monitor(*it) != monitor || is_slept(*it) || !get_cid_container(*it))
+            continue;
+        if (hypriso->get_active_workspace_id_client(*it) != active_ws)
+            continue;
+        priority_windows.push_back(*it);
+    }
+
+    struct CaptureCandidate {
+        int cid;
+        int tier;
+        Bounds bounds;
+    };
+    std::vector<CaptureCandidate> candidates;
+    for (auto ch : c->children) {
+        const int cid = *datum<int>(ch, "cid");
+        const bool hovered = ch->state.mouse_hovering ||
+            std::any_of(ch->children.begin(), ch->children.end(), [](Container *sub) { return sub->state.mouse_hovering; });
+        const bool missing = !hypriso->has_thumbnail(cid);
+        const bool fast = hovered || std::find(priority_windows.begin(), priority_windows.end(), cid) != priority_windows.end();
+        const bool dirty = hypriso->is_thumb_dirty(cid);
+        auto prev = alt_tab_window_captures.find(cid);
+        const long last_cap = prev != alt_tab_window_captures.end() ? prev->second : 0;
+        const long elapsed = last_cap == 0 ? effective_slow_ms * 4 : now - last_cap;
+        if (!missing) {
+            const long min_interval = fast ? effective_fast_ms : effective_slow_ms;
+            if (elapsed < min_interval)
+                continue;
+            if (!fast && !dirty && elapsed < effective_slow_ms * 3)
+                continue;
+        }
+        const int tier = missing ? 0 : (hovered ? 1 : (fast ? 2 : 3));
+        candidates.push_back({cid, tier, ch->real_bounds});
+    }
+
+    if (!candidates.empty()) {
+        std::stable_sort(candidates.begin(), candidates.end(), [](const CaptureCandidate &a, const CaptureCandidate &b) {
+            return a.tier < b.tier;
+        });
+        size_t rot_start = 0;
+        while (rot_start < candidates.size() && candidates[rot_start].tier <= 1)
+            rot_start++;
+        if (candidates.size() - rot_start > 1) {
+            const size_t span = candidates.size() - rot_start;
+            const size_t shift = alt_tab_capture_cursor % span;
+            std::rotate(candidates.begin() + rot_start, candidates.begin() + rot_start + shift, candidates.end());
+        }
+    }
+
+    bool budget_exceeded = false;
+    size_t captured_count = 0;
+    for (const auto &cand : candidates) {
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+        if (cand.tier > 0 && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
+            budget_exceeded = true;
+            break;
+        }
+        hypriso->screenshot(cand.cid);
+        alt_tab_window_captures[cand.cid] = get_current_time_in_ms();
+        captured_count++;
+        if (!initial && cand.bounds.w > 0 && cand.bounds.h > 0) {
+            Bounds dmg = cand.bounds;
+            dmg.grow(4.0);
+            hypriso->damage_box(dmg);
+        }
+    }
+    if (captured_count > 0)
+        alt_tab_capture_cursor += captured_count;
+    std::erase_if(alt_tab_window_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
+
+    const double total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
+    if (!initial)
+        alt_tab_smoothed_capture_ms = alt_tab_smoothed_capture_ms * 0.75 + total_ms * 0.25;
+    if (budget_exceeded)
+        return std::min(effective_fast_ms, 50L);
+    return effective_fast_ms;
+}
 
 void alt_tab::show() {
     //return;
@@ -522,16 +636,33 @@ void alt_tab::show() {
     show_time = get_current_time_in_ms();
     active_index = 0;
     is_showing = true;
+    const auto generation = ++alt_tab_generation;
+    alt_tab_window_captures.clear();
+    alt_tab_smoothed_capture_ms = 0.0;
+    alt_tab_capture_cursor = 0;
     set_input_takeover("alt_tab", true);
-    later_immediate([](Timer *) {
-        hypriso->screenshot_all(); 
+    {
+        auto m = actual_root;
+        auto alt_tab_parent = m->child(FILL_SPACE, FILL_SPACE);
+        fill_root(m, alt_tab_parent);
+    }
+    later_immediate([generation](Timer *) {
+        if (!is_showing || generation != alt_tab_generation)
+            return;
+        heart::layout_containers();
+        auto altTab = std::find_if(
+            actual_root->children.begin(),
+            actual_root->children.end(),
+            [](auto c) { return c->custom_type == (int)TYPE::ALT_TAB; }
+        );
+        if (altTab != actual_root->children.end())
+            alt_tab_capture_thumbnails(*altTab, true);
     });
-    static int off = 0;
-    off = 0;
-    later(1000.0f / 120.0f, [](Timer *t) {
-        t->keep_running = true;
+    later(alt_tab_fast_capture_ms, [generation](Timer *t) {
+        t->keep_running = is_showing && generation == alt_tab_generation;
+        if (!t->keep_running)
+            return;
 
-        // Find ALT_TAB container
         auto altTab = std::find_if(
             actual_root->children.begin(),
             actual_root->children.end(),
@@ -543,41 +674,8 @@ void alt_tab::show() {
             return;
         }
 
-        auto c = *altTab;
-
-        if (c->children.empty()) {
-            return;
-        }
-
-        const size_t count = c->children.size();
-        if (count == 0)
-            return;
-
-        // --- Always capture first three ---
-        const size_t firstCount = std::min<size_t>(3, count);
-        for (size_t i = 0; i < firstCount; ++i) {
-            auto ch = c->children[i];
-            int cid = *datum<int>(ch, "cid");
-            hypriso->screenshot(cid);
-        }
-
-        // --- Capture wrapped offset index ---
-        size_t wrapped = off % count;
-
-        // Avoid duplicate capture if wrapped is already in first 3
-        if (wrapped >= firstCount) {
-            auto ch = c->children[wrapped];
-            int cid = *datum<int>(ch, "cid");
-            hypriso->screenshot(cid);
-        }
-
-        off++;
+        t->delay = static_cast<float>(alt_tab_capture_thumbnails(*altTab, false));
     });
-    {
-        auto m = actual_root;
-        auto alt_tab_parent = m->child(FILL_SPACE, FILL_SPACE);
-        fill_root(m, alt_tab_parent);
-    }
     damage_all();
 }
 

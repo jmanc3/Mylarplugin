@@ -810,6 +810,7 @@ static void on_window_open(int id) {
     titlebar::on_window_open(id);
     alt_tab::on_window_open(id);
     resizing::on_window_open(id);
+    overview::on_window_open(id);
     heart::layout_containers();
     dock::add_window(id);
 
@@ -1209,6 +1210,7 @@ static void on_monitor_open(int id) {
     *datum<bool>(c, "bg_wall1_active") = true;
     publish_wall_monitors();
     wall_slot_load(id, wall_slot(c, true));
+    overview::on_monitor_open(id);
 
     later(10, [](Timer *) {
         damage_all();
@@ -2691,7 +2693,7 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
             const auto alpha = alpha_popup(*datum<int>(c, "cid"));
             if (alpha <= 0.0f)
                 return;
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .036f * alpha}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
+            render_drop_shadow(rid, 1.0, {0, 0, 0, .0108f * alpha}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
         };
         *datum<int>(c, "cid") = id; 
         *datum<float>(c, "shadow_alpha") = 0.0f;
@@ -2856,6 +2858,7 @@ void heart::begin() {
             create_default_config();
             
             watch_wallpaper_change();
+            overview::start_preloader();
             // Decode wallpapers into memory once startup settles, for the Display page.
             later(3000, [](Timer *) { settings::preload_wallpapers(); });
 

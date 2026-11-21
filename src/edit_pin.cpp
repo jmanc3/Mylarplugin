@@ -62,6 +62,7 @@ struct PinData : UserData {
     MylarWindow *window = nullptr;
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);
     std::string original_stacking_rule;
+    bool has_desktop_file = false;
     
     std::string stacking_rule;
     std::string icon;
@@ -347,30 +348,45 @@ static void button(Container *root, std::function<std::string()> get_text, std::
     };
 };
 
-bool desktop_file_exists(std::string wm_class) {
+static std::filesystem::path desktop_file_path(const std::string &rule) {
     const char *home = getenv("HOME");
-    if (!home)
-        return false;
-    std::string desktop_path(home);
-    desktop_path += "/Desktop/" + wm_class + ".desktop";
-    return std::filesystem::exists(desktop_path);
+    if (!home || rule.empty() || rule.find('/') != std::string::npos)
+        return {};
+    return std::filesystem::path(home) / "Desktop" / (rule + ".desktop");
 }
 
-static void clicked_create_destroy_desktop_file(std::string wm_class, std::string icon, std::string command) {
-    const char *home = getenv("HOME");
-    if (!home)
-        return;
-    std::string desktop_path(home);
-    desktop_path += "/Desktop/" + wm_class + ".desktop";
+static void update_desktop_file_target(PinData *data, const std::string &rule) {
+    data->stacking_rule = rule;
+    std::error_code error;
+    data->has_desktop_file = std::filesystem::is_regular_file(desktop_file_path(rule), error);
+}
 
+static std::string desktop_entry_name(const std::filesystem::path &path) {
+    std::ifstream in(path);
+    bool desktop_entry = false;
+    for (std::string line; std::getline(in, line);) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.starts_with("["))
+            desktop_entry = line == "[Desktop Entry]";
+        else if (desktop_entry && line.starts_with("Name="))
+            return line.substr(5);
+    }
+    return {};
+}
+
+static void clicked_create_destroy_desktop_file(const std::string &wm_class, const std::string &icon,
+                                                const std::string &command, const std::string &name) {
+    const auto desktop_path = desktop_file_path(wm_class);
+    if (desktop_path.empty())
+        return;
     try {
         if (std::filesystem::exists(desktop_path)) {
-            if (std::filesystem::exists(desktop_path)) {
+            if (std::filesystem::is_regular_file(desktop_path)) {
                 std::filesystem::remove(desktop_path);
             }
         } else {
-            std::filesystem::path path(desktop_path);
-            std::filesystem::create_directories(path.parent_path());
+            std::filesystem::create_directories(desktop_path.parent_path());
             
             std::ofstream outFile(desktop_path);
             if (!outFile) {
@@ -381,7 +397,7 @@ static void clicked_create_destroy_desktop_file(std::string wm_class, std::strin
             outFile << "Icon=" << icon << "\n";
             outFile << "Exec=" << command << "\n";
             outFile << "StartupWMClass=" << wm_class << "\n";
-            outFile << "Name=" << wm_class << "\n";
+            outFile << "Name=" << (name.find_first_not_of(" \t\r\n") == std::string::npos ? wm_class : name) << "\n";
             outFile.close();
         }
     } catch (const std::exception &e) {
@@ -1171,7 +1187,8 @@ static void fill_root(Container *window_root) {
             c->spacing = 8 * dpi;
         };
         auto label_parent = row->child(FILL_SPACE, FILL_SPACE);
-        auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; });
+        auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; },
+            [window_root](std::string rule) { update_desktop_file_target((PinData *) window_root->user_data, rule); });
         label->name = "stacking_rule_container";
         button(row, []() { return "Click window"; }, [](Container *root, Container *c) {
             auto data = static_cast<PinData *>(root->user_data);
@@ -1197,7 +1214,7 @@ static void fill_root(Container *window_root) {
                             std::lock_guard<std::mutex> lock(data->app->mutex);
                             if (auto field = container_by_name("stacking_rule_container", root))
                                 reset_text_editor(field, rule);
-                            data->stacking_rule = rule;
+                            update_desktop_file_target(data, rule);
                         }
                         windowing::redraw(data->window->raw_window);
                     });
@@ -1207,7 +1224,36 @@ static void fill_root(Container *window_root) {
     }
 
     root->child(FILL_SPACE, FILL_SPACE);
-    
+    {
+        auto caption = root->child(FILL_SPACE, FILL_SPACE);
+        setup_label(window_root, caption, true, false, [](Container *, Container *) { return "Desktop file name"; });
+        auto row = root->child(FILL_SPACE, FILL_SPACE);
+        auto field = setup_label(window_root, row, false, true, [](Container *root, Container *) {
+            auto *data = static_cast<PinData *>(root->user_data);
+            return desktop_entry_name(desktop_file_path(data->stacking_rule));
+        });
+        field->name = "desktop_name_container";
+        field->when_paint = [](Container *root, Container *c) {
+            auto *editor = static_cast<STextEditorData *>(c->user_data);
+            if (editor->text.empty()) {
+                auto *data = static_cast<PinData *>(root->user_data);
+                auto window = data->window->raw_window;
+                auto cr = window->drawing_context;
+                cr->save();
+                set_rect(cr, c->real_bounds);
+                cr->clip_path();
+                draw_text(cr, c->real_bounds.x, c->real_bounds.y, data->stacking_rule,
+                          editor->options.font_size * window->dpi, true, set->font, -1, -1, {0, 0, 0, .3});
+                cr->restore();
+            }
+            paint_text_editor(root, c, RGBA(0, 0, 0, 1), RGBA(.2, .5, .8, 1));
+        };
+    }
+
+    auto button_gap = root->child(FILL_SPACE, 10);
+    button_gap->pre_layout = [](Container *root, Container *c, const Bounds &) {
+        c->wanted_bounds.h = 10 * pin_window(root)->dpi;
+    };
     {
         auto parent = root->child(::hbox, FILL_SPACE, 32);
         parent->pre_layout = [](Container* root, Container* c, const Bounds& b) {
@@ -1216,10 +1262,9 @@ static void fill_root(Container *window_root) {
             c->wanted_bounds.h = 32 * dpi;
             c->spacing = 10 * dpi;
         };
-        //parent->alignment = ALIGN_RIGHT;
-        static bool has_desktop_file = false;
-        has_desktop_file = desktop_file_exists(((PinData *) window_root->user_data)->stacking_rule);
-        button(parent, []() { return has_desktop_file ? "Remove desktop file" : "Create desktop file"; }, [](Container *root, Container *c) {
+        auto data = static_cast<PinData *>(window_root->user_data);
+        update_desktop_file_target(data, data->stacking_rule);
+        button(parent, [data]() { return data->has_desktop_file ? "Remove desktop file" : "Create desktop file"; }, [](Container *root, Container *c) {
             auto stacking_rule_container = container_by_name("stacking_rule_container", root);
             auto stacking_rule_data = (LabelData*)stacking_rule_container->user_data;
             auto command_container = container_by_name("command_container", root);
@@ -1227,8 +1272,10 @@ static void fill_root(Container *window_root) {
             auto icon_container = container_by_name("icon_container", root);
             auto icon_data = (LabelData*)icon_container->user_data;
  
-            clicked_create_destroy_desktop_file(stacking_rule_data->text, icon_data->text, command_data->text);
-            has_desktop_file = desktop_file_exists(((PinData *) root->user_data)->stacking_rule);
+            auto name_field = container_by_name("desktop_name_container", root);
+            auto name_data = static_cast<STextEditorData *>(name_field->user_data);
+            clicked_create_destroy_desktop_file(stacking_rule_data->text, icon_data->text, command_data->text, name_data->text);
+            update_desktop_file_target(static_cast<PinData *>(root->user_data), stacking_rule_data->text);
         });
         parent->child(FILL_SPACE, FILL_SPACE);
         
