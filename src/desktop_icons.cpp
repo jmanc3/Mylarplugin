@@ -6,6 +6,7 @@
 #include "overview.h"
 #include "popup.h"
 #include "settings.h"
+#include "wallpaper_layout.h"
 
 #include <gio/gio.h>
 #include <algorithm>
@@ -1679,6 +1680,44 @@ static void perform_desktop_drop(std::vector<std::string> source_paths,
     }).detach();
 }
 
+static bool is_image_file(const std::string& path) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec) || ec)
+        return false;
+    auto *file = g_file_new_for_path(path.c_str());
+    auto *info = g_file_query_info(file,
+        G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE,
+        G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
+    bool is_image = false;
+    if (info) {
+        if (const auto *type = g_file_info_get_content_type(info)) {
+            if (g_content_type_is_a(type, "image/*")) {
+                is_image = true;
+            } else if (auto *mime = g_content_type_get_mime_type(type)) {
+                is_image = std::string_view(mime).starts_with("image/");
+                g_free(mime);
+            }
+        }
+        g_object_unref(info);
+    }
+    g_object_unref(file);
+    return is_image;
+}
+
+static std::string wallpaper_target_for_drop(float drop_x, float drop_y) {
+    auto overrides = wallpaper_parse_overrides(set->wallpaper_monitors);
+    if (overrides.empty())
+        return "";
+    for (const auto& m : wallpaper_monitors_copy()) {
+        if (drop_x >= m.x && drop_x < m.x + m.w && drop_y >= m.y && drop_y < m.y + m.h) {
+            if (wallpaper_find_override(overrides, m.name))
+                return m.name;
+            break;
+        }
+    }
+    return "";
+}
+
 static void open_drop_context_menu(const std::vector<std::string>& paths, float drop_x, float drop_y) {
     std::vector<std::string> valid_paths;
     valid_paths.reserve(paths.size());
@@ -1715,6 +1754,22 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
             perform_desktop_drop(valid_paths, DesktopDropAction::Move, drop_x, drop_y);
         };
         options.push_back(move);
+    }
+    if (valid_paths.size() == 1 && is_image_file(valid_paths[0])) {
+        PopOption wallpaper;
+        wallpaper.text = "Set as wallpaper";
+        const std::string image_path = valid_paths[0];
+        wallpaper.on_clicked = [image_path, drop_x, drop_y]() {
+            const std::string target = wallpaper_target_for_drop(drop_x, drop_y);
+            std::thread([image_path, target]() {
+                if (!settings::set_wallpaper_from_file(image_path, target)) {
+                    main_thread([]() {
+                        notify("Unable to set wallpaper.");
+                    });
+                }
+            }).detach();
+        };
+        options.push_back(wallpaper);
     }
     {
         PopOption sep;

@@ -1,15 +1,20 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <map>
 
 struct Bounds;
+struct NotificationInfo;
 
 namespace dock {
     inline constexpr double popup_corner_radius = 10.0;
 
     void start(std::string monitor_name = "");
     void stop(std::string monitor_name = "");
+
+    void show_notification(const NotificationInfo &ni);
+    void close_notification(uint32_t id);
 
     void redraw();
     void update_workspaces();

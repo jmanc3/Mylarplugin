@@ -1104,7 +1104,9 @@ static const struct zwlr_layer_surface_v1_listener layer_shell_listener = {
 struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int height,
                                          zwlr_layer_shell_v1_layer layer, const char *title,
                                          int alignment,
-                                         std::string monitor_name, bool exclusive_zone, RawWindow *rw)
+                                         std::string monitor_name, bool exclusive_zone, RawWindow *rw,
+                                         const RawWindowSettings::LayerMargins *margins = nullptr,
+                                         bool bottom_right_anchor = false)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -1133,7 +1135,11 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
             ctx->layer_shell, win->surface, NULL, layer, title);
     }
 
-    if (alignment == 1) {
+    if (bottom_right_anchor) {
+        zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+    } else if (alignment == 1) {
         zwlr_layer_surface_v1_set_anchor(win->layer_surface,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
             ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
@@ -1159,12 +1165,18 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     zwlr_layer_surface_v1_set_keyboard_interactivity(win->layer_surface,
         ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 
+    if (margins) {
+        zwlr_layer_surface_v1_set_margin(win->layer_surface, margins->top, margins->right, margins->bottom, margins->left);
+    }
+
     if (exclusive_zone) {
         if (alignment == 1 || alignment == 3 || alignment == 0) {
             zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, height);
         } else {
             zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, width);
         }
+    } else {
+        zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, 0);
     }
 
     zwlr_layer_surface_v1_add_listener(win->layer_surface, &layer_shell_listener, win);
@@ -2834,6 +2846,17 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
             window->on_render(window);
         windows.push_back(window);        
     }
+    if (type == WindowType::NOTIFICATION) {
+        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, settings.name.c_str(), settings.alignment, settings.monitor_name, false, rw, &settings.layer_margins, true);
+        rw->drawing_context = window->cr;
+        window->id = rw->id;
+        if (settings.scale_hint > 0 && !rw->fractional_scale_set_once)
+            apply_scale_hint(window, settings.scale_hint);
+        window->on_render = on_window_render;
+        if (window->on_render)
+            window->on_render(window);
+        windows.push_back(window);
+    }
     return rw;
 }
 
@@ -3159,6 +3182,33 @@ void windowing::set_size(RawWindow *window, int width, int height) {
     ctx->have_functions_to_execute = true;
     write(ctx->wake_pipe[1], "x", 1);
 };
+
+void windowing::set_layer_margin(RawWindow *window, int top, int right, int bottom, int left) {
+    if (!window || !window->creator)
+        return;
+    wl_context *ctx = nullptr;
+    for (auto c : apps)
+        if (c->id == window->creator->id)
+            ctx = c;
+    if (!ctx)
+        return;
+    wl_window *win = nullptr;
+    for (auto w : windows)
+        if (w->id == window->id)
+            win = w;
+    if (!win || !win->layer_surface)
+        return;
+
+    std::lock_guard<std::mutex> lock(ctx->functions_mut);
+    ctx->functions_to_call.push_back([win, top, right, bottom, left]() {
+        if (win->marked_for_closing || !win->layer_surface)
+            return;
+        zwlr_layer_surface_v1_set_margin(win->layer_surface, top, right, bottom, left);
+        wl_surface_commit(win->surface);
+    });
+    ctx->have_functions_to_execute = true;
+    write(ctx->wake_pipe[1], "x", 1);
+}
 
 static void set_popup_size_impl(
     RawWindow *window,

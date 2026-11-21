@@ -254,7 +254,7 @@ void battery_display_device_state_changed() {
 }
 
 void close_notification(int result) {
-
+    dock::close_notification((uint32_t) result);
 }
 
 void meta_pressed(int) {
@@ -266,7 +266,9 @@ void start_run_window() {
 }
 
 void show_notification(NotificationInfo *n) {
-    notify(std::format("{} {} {}", n->app_name, n->body, n->summary));
+    if (!n)
+        return;
+    dock::show_notification(*n);
 }
 
 void (*on_bluetooth_request)(BluetoothRequest *) = nullptr;
@@ -410,7 +412,7 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
         if (std::string(name) == "org.freedesktop.UPower")
             upower_service_started();
     
-        if (std::string(name) == "org.freedesktop.Notifications") {
+        if (std::string(name) == "org.freedesktop.Notifications" && !registered_object_path) {
             static const DBusObjectPathVTable vtable = {
                     .message_function = handle_message_cb,
             };
@@ -434,10 +436,12 @@ static DBusHandlerResult signal_handler(DBusConnection *dbus_connection,
             return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
         }
         
-        if (!dbus_connection_unregister_object_path(dbus_connection, "/org/freedesktop/Notifications")) {
-            fprintf(stdout, "%s\n", "Error unregistering object path /org/freedesktop/Notifications after losing name");
-        } else {
-            registered_object_path = false;
+        if (std::string(name) == "org.freedesktop.Notifications" && registered_object_path) {
+            if (!dbus_connection_unregister_object_path(dbus_connection, "/org/freedesktop/Notifications")) {
+                fprintf(stdout, "%s\n", "Error unregistering object path /org/freedesktop/Notifications after losing name");
+            } else {
+                registered_object_path = false;
+            }
         }
         
         return DBUS_HANDLER_RESULT_HANDLED;
@@ -1071,6 +1075,31 @@ static const char *introspection_xml =
         "</node>";
 
 static bool
+dbus_string_array_reply(DBusConnection *connection, DBusMessage *msg, const std::vector<std::string> &array) {
+    DBusMessage *reply = dbus_message_new_method_return(msg);
+    defer(dbus_message_unref(reply));
+
+    bool success = true;
+    DBusMessageIter args, sub;
+    dbus_message_iter_init_append(reply, &args);
+    if (!dbus_message_iter_open_container(&args, DBUS_TYPE_ARRAY, "s", &sub))
+        return false;
+    for (const auto &i : array) {
+        const char *str = i.c_str();
+        if (!dbus_message_iter_append_basic(&sub, DBUS_TYPE_STRING, &str))
+            success = false;
+    }
+    if (!dbus_message_iter_close_container(&args, &sub))
+        success = false;
+
+    if (success) {
+        success = dbus_connection_send(connection, reply, NULL);
+        dbus_connection_flush(connection);
+    }
+    return success;
+}
+
+static bool
 dbus_array_reply(DBusConnection *connection, DBusMessage *msg, std::vector<std::string> array) {
     DBusMessage *reply = dbus_message_new_method_return(msg);
     defer(dbus_message_unref(reply));
@@ -1079,12 +1108,15 @@ dbus_array_reply(DBusConnection *connection, DBusMessage *msg, std::vector<std::
     DBusMessageIter args;
     dbus_message_iter_init_append(reply, &args);
     for (auto &i: array) {
-        if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &i))
+        const char *str = i.c_str();
+        if (!dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &str))
             success = false;
     }
     
-    if (success)
+    if (success) {
         success = dbus_connection_send(connection, reply, NULL);
+        dbus_connection_flush(connection);
+    }
     return success;
 }
 
@@ -1096,25 +1128,31 @@ DBusHandlerResult handle_message_cb(DBusConnection *connection, DBusMessage *mes
         
         dbus_message_append_args(reply, DBUS_TYPE_STRING, &introspection_xml, DBUS_TYPE_INVALID);
         dbus_connection_send(connection, reply, NULL);
+        dbus_connection_flush(connection);
         
         return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(message, "org.freedesktop.Notifications", "GetCapabilities")) {
         std::vector<std::string> strings = {"actions", "body", "body-hyperlinks", "body-markup", "body-images",
-                                            "icon-static", "inline-reply", "x-kde-urls", "persistence",
-                                            "x-kde-origin-name", "x-kde-display-appname", "inhibitions"};
+                                            "icon-static", "persistence"};
     
-        if (dbus_array_reply(connection, message, strings))
+        if (dbus_string_array_reply(connection, message, strings))
             return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(message, "org.freedesktop.Notifications", "GetServerInformation")) {
-        std::vector<std::string> strings = {"winbar", "winbar", "0.1", "1.2"};
+        std::vector<std::string> strings = {"mylardesktop", "mylardesktop", "0.1", "1.2"};
         
         if (dbus_array_reply(connection, message, strings))
             return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(message, "org.freedesktop.Notifications", "CloseNotification")) {
-        int result = 0;
+        dbus_uint32_t result = 0;
         DBusError error = DBUS_ERROR_INIT;
         if (dbus_message_get_args(message, &error, DBUS_TYPE_UINT32, &result, DBUS_TYPE_INVALID)) {
-            close_notification(result);
+            close_notification((int) result);
+            DBusMessage *reply = dbus_message_new_method_return(message);
+            if (reply) {
+                dbus_connection_send(connection, reply, NULL);
+                dbus_connection_flush(connection);
+                dbus_message_unref(reply);
+            }
             return DBUS_HANDLER_RESULT_HANDLED;
         } else if (dbus_error_is_set(&error)) {
             fprintf(stderr, "CloseNotification called but couldn't parse arg. Error message: (%s)\n",
@@ -1122,11 +1160,11 @@ DBusHandlerResult handle_message_cb(DBusConnection *connection, DBusMessage *mes
             dbus_error_free(&error);
         }
     } else if (dbus_message_is_method_call(message, "org.freedesktop.Notifications", "Notify")) {
-        static int id = 1; // id can't be zero due to specification (notice [static])
+        static dbus_uint32_t id = 1; // id can't be zero due to specification (notice [static])
         
         DBusMessageIter args;
         const char *app_name = nullptr;
-        dbus_uint32_t replaces_id = -1;
+        dbus_uint32_t replaces_id = 0;
         const char *app_icon = nullptr;
         const char *summary = nullptr;
         const char *body = nullptr;
@@ -1143,7 +1181,7 @@ DBusHandlerResult handle_message_cb(DBusConnection *connection, DBusMessage *mes
         dbus_message_iter_next(&args);
         dbus_message_iter_get_basic(&args, &body);
         dbus_message_iter_next(&args);
-        std::string summary_str = std::string(summary);
+        std::string summary_str = summary ? std::string(summary) : std::string();
         if (summary_str == "winbaractivate" || summary_str == "winbarrun" || summary_str == "winbaraudio") {
             DBusMessage *reply = dbus_message_new_method_return(message);
             defer(dbus_message_unref(reply));
@@ -1257,28 +1295,22 @@ DBusHandlerResult handle_message_cb(DBusConnection *connection, DBusMessage *mes
             dbus_message_iter_next(&args);  // hints of type DICT
         }
     
-        if (strcmp(summary, "Widget Removed") == 0) {
-            NotificationAction notification_action;
-            notification_action.id = std::to_string(1);
-            notification_action.label = "Undo";
-            notification_info->actions.push_back(notification_action);
-        }
-    
         dbus_message_iter_get_basic(&args, &expire_timeout_in_milliseconds);
         
-        // TODO: handle replacing
-        notification_info->id = id++;
-        notification_info->app_name = app_name;
-        notification_info->app_icon = app_icon;
-        notification_info->summary = summary;
-        notification_info->body = body;
+        notification_info->replaces_id = replaces_id;
+        notification_info->id = replaces_id != 0 ? replaces_id : id++;
+        notification_info->app_name = app_name ? app_name : "";
+        notification_info->app_icon = app_icon ? app_icon : "";
+        notification_info->summary = summary ? summary : "";
+        notification_info->body = body ? body : "";
         notification_info->expire_timeout_in_milliseconds = expire_timeout_in_milliseconds;
         auto now = std::chrono::system_clock::now();
         auto in_time_t = std::chrono::system_clock::to_time_t(now);
         std::stringstream ss;
         ss << std::put_time(std::localtime(&in_time_t), "%I:%M %p");
         notification_info->time_started = ss.str();
-        notification_info->calling_dbus_client = dbus_message_get_sender(message);
+        const char *sender = dbus_message_get_sender(message);
+        notification_info->calling_dbus_client = sender ? sender : "";
     
         notifications.push_back(notification_info);
         show_notification(notification_info);
@@ -1292,71 +1324,74 @@ DBusHandlerResult handle_message_cb(DBusConnection *connection, DBusMessage *mes
             !dbus_connection_send(connection, reply, NULL)) {
             return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
         }
+        dbus_connection_flush(connection);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
     
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
-void notification_closed_signal(App *app, NotificationInfo *ni, NotificationReasonClosed reason) {
-    if (!dbus_connection_session || !ni)
+void notification_closed_signal(uint32_t id, const std::string &calling_dbus_client, NotificationReasonClosed reason) {
+    if (id == 0 || calling_dbus_client.empty())
         return;
-    
-    DBusMessage *dmsg = dbus_message_new_signal("/org/freedesktop/Notifications",
-                                                "org.freedesktop.Notifications",
-                                                "NotificationClosed");
-    defer(dbus_message_unref(dmsg));
-    
-    DBusMessageIter args;
-    dbus_message_iter_init_append(dmsg, &args);
-    int id = ni->id;
-    dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &id);
-    dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &reason);
-    
-    dbus_message_set_destination(dmsg, NULL);
-    
-    dbus_connection_send(dbus_connection_session, dmsg, NULL);
-    
-    bool action_center_icon_needs_change = true;
-    for (auto n: notifications) {
-        if (n->sent_to_action_center) {
-            action_center_icon_needs_change = false;
-        }
-    }
+    main_thread([id, reason]() {
+        if (!dbus_connection_session)
+            return;
+        DBusMessage *dmsg = dbus_message_new_signal("/org/freedesktop/Notifications",
+                                                    "org.freedesktop.Notifications",
+                                                    "NotificationClosed");
+        if (!dmsg)
+            return;
+        defer(dbus_message_unref(dmsg));
+
+        DBusMessageIter args;
+        dbus_message_iter_init_append(dmsg, &args);
+        dbus_uint32_t uid = id;
+        dbus_uint32_t ureason = (dbus_uint32_t) reason;
+        dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &uid);
+        dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &ureason);
+        dbus_message_set_destination(dmsg, NULL);
+        dbus_connection_send(dbus_connection_session, dmsg, NULL);
+        dbus_connection_flush(dbus_connection_session);
+    });
+}
+
+void notification_action_invoked_signal(uint32_t id, const std::string &calling_dbus_client, const std::string &action_id) {
+    if (id == 0 || calling_dbus_client.empty())
+        return;
+    main_thread([id, calling_dbus_client, action_id]() {
+        if (!dbus_connection_session)
+            return;
+        DBusMessage *dmsg = dbus_message_new_signal("/org/freedesktop/Notifications",
+                                                    "org.freedesktop.Notifications",
+                                                    "ActionInvoked");
+        if (!dmsg)
+            return;
+        defer(dbus_message_unref(dmsg));
+
+        DBusMessageIter args;
+        dbus_message_iter_init_append(dmsg, &args);
+        dbus_uint32_t uid = id;
+        dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &uid);
+        const char *text_id = action_id.c_str();
+        dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &text_id);
+        dbus_message_set_destination(dmsg, calling_dbus_client.c_str());
+        dbus_connection_send(dbus_connection_session, dmsg, NULL);
+        dbus_connection_flush(dbus_connection_session);
+    });
+}
+
+void notification_closed_signal(App *app, NotificationInfo *ni, NotificationReasonClosed reason) {
+    if (!ni)
+        return;
+    notification_closed_signal(ni->id, ni->calling_dbus_client, reason);
     ni->sent_to_action_center = true;
-    if (action_center_icon_needs_change) {
-        /*
-        if (auto c = client_by_name(app, "taskbar")) {
-            if (auto co = container_by_name("action", c->root)) {
-                auto data = (ActionCenterButtonData *) co->user_data;
-                data->some_unseen = true;
-                client_create_animation(app, c, &data->slide_anim, data->lifetime, 0, 140, nullptr, 1);
-                request_refresh(app, c);
-            }
-        }
-        */
-    }
 }
 
 void notification_action_invoked_signal(App *app, NotificationInfo *ni, NotificationAction action) {
-    if (!dbus_connection_session || !ni)
+    if (!ni)
         return;
-    
-    DBusMessage *dmsg = dbus_message_new_signal("/org/freedesktop/Notifications",
-                                                "org.freedesktop.Notifications",
-                                                "ActionInvoked");
-    defer(dbus_message_unref(dmsg));
-    
-    DBusMessageIter args;
-    dbus_message_iter_init_append(dmsg, &args);
-    int id = ni->id;
-    dbus_message_iter_append_basic(&args, DBUS_TYPE_UINT32, &id);
-    const char *text_id = action.id.c_str();
-    dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, &text_id);
-    
-    dbus_message_set_destination(dmsg, ni->calling_dbus_client.c_str());
-    
-    dbus_connection_send(dbus_connection_session, dmsg, NULL);
+    notification_action_invoked_signal(ni->id, ni->calling_dbus_client, action.id);
 }
 
 /*************************************************
@@ -1636,14 +1671,25 @@ void dbus_start(DBusBusType dbusType) {
         if (dbusType == DBUS_BUS_SESSION) {
             // Try to become the owner of the org.freedesktop.Notification name
             //
-            dbus_bus_request_name(dbus_connection, "org.freedesktop.Notifications",
-                                   DBUS_NAME_FLAG_REPLACE_EXISTING, &error);
+            int req_ret = dbus_bus_request_name(dbus_connection, "org.freedesktop.Notifications",
+                                                DBUS_NAME_FLAG_REPLACE_EXISTING, &error);
     
             if (dbus_error_is_set(&error)) {
                 fprintf(stderr, "Ran into error when trying to become the sessions notification manager (%s)\n",
                         error.message);
                 dbus_error_free(&error);
                 return;
+            }
+            if ((req_ret == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER ||
+                 req_ret == DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER) &&
+                !registered_object_path) {
+                static const DBusObjectPathVTable vtable = {
+                        .message_function = handle_message_cb,
+                };
+                if (dbus_connection_register_object_path(dbus_connection, "/org/freedesktop/Notifications", &vtable,
+                                                         nullptr)) {
+                    registered_object_path = true;
+                }
             }
     
             // create_status_notifier_watcher();

@@ -852,17 +852,21 @@ static void on_layer_open(int id) {
     auto m = actual_root; 
     auto c = m->child(FILL_SPACE, FILL_SPACE);
     c->custom_type = (int) TYPE::LAYER;
+    *datum<bool>(c, "notification_layer") = is_notification_layer(id);
     c->when_paint = [](Container *actual_root, Container *c) {
-        return;
+        if (!*datum<bool>(c, "notification_layer") || c->real_bounds.w <= 0 || c->real_bounds.h <= 0)
+            return;
         auto root = get_rendering_root();
         if (!root)
             return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
+        if (stage != (int) STAGE::RENDER_POST_WINDOWS)
+            return;
 
-        if (stage == (int)STAGE::RENDER_POST_WINDOW) {
-            renderfix 
-            rect(c->real_bounds, {1, 0, 1, 1});
-        }
+        renderfix
+        const auto radius = std::min(std::round(dock::popup_corner_radius * s),
+                                     std::floor(std::min(c->real_bounds.w, c->real_bounds.h) * .5));
+        render_drop_shadow(rid, 1.0, {0, 0, 0, .0108f}, radius, 2.0, c->real_bounds, std::round(30.0f * s));
     };
     *datum<int>(c, "cid") = id;
     log(fz("open layer {}", id));

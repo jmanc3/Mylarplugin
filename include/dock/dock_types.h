@@ -10,6 +10,7 @@
 
 struct MylarWindow;
 struct Windows;
+struct DockNotification;
 
 // Set when the dock is shutting down. Worker threads poll this instead of
 // owning a reference to the dock app.
@@ -65,6 +66,8 @@ struct Dock : UserData {
     STilingMenuState tiling_settings;
 
     MylarWindow *tray_menu = nullptr;
+
+    std::vector<DockNotification *> notifications;
 
     Windows *collection = nullptr;
     bool first_fill = true;

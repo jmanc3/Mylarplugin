@@ -35,4 +35,7 @@ namespace settings {
     void open_search_result(const SearchResult &result);
     // Decodes the wallpaper files into memory ahead of the Display page.
     void preload_wallpapers();
+    // Copies an image to the shared wallpaper (or target monitor's override)
+    // and reloads it. Blocking (runs `file`), so call off the UI/main thread.
+    bool set_wallpaper_from_file(const std::string &file, const std::string &target = "");
 };

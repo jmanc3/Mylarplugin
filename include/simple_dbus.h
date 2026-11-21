@@ -34,6 +34,7 @@ enum NotificationReasonClosed {
 
 struct NotificationInfo {
     dbus_uint32_t id = 0;
+    dbus_uint32_t replaces_id = 0;
     std::string time_started;
     std::string icon_path;
     std::string calling_dbus_client;
@@ -239,6 +240,10 @@ bool dbus_kde_show_desktop_grid();
 void notification_closed_signal(App *app, NotificationInfo *ni, NotificationReasonClosed reason);
 
 void notification_action_invoked_signal(App *app, NotificationInfo *ni, NotificationAction action);
+
+void notification_closed_signal(uint32_t id, const std::string &calling_dbus_client, NotificationReasonClosed reason);
+
+void notification_action_invoked_signal(uint32_t id, const std::string &calling_dbus_client, const std::string &action_id);
 
 double dbus_get_kde_max_brightness();
 

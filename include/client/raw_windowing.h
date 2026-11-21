@@ -116,11 +116,19 @@ struct RawWindowSettings {
         uint32_t parent_configure_serial = 0;
     };
 
+    struct LayerMargins {
+        int top = 0;
+        int right = 0;
+        int bottom = 0;
+        int left = 0;
+    };
+
     std::string name;
     std::string app_id;
     std::string monitor_name;
     PositioningInfo pos;
     int alignment = 0; // 0 none, 1 top, clockwise + 1
+    LayerMargins layer_margins;
     PopupPositioner popup;
     bool keyboard_focus_on_click = false;
     // Popups: no grab and an empty input region, so it never takes focus or clicks
@@ -190,6 +198,7 @@ enum struct WindowType {
     NONE,
     NORMAL,
     DOCK,
+    NOTIFICATION,
 };
 
 namespace windowing {
@@ -202,6 +211,7 @@ namespace windowing {
 
     void wake_up(RawWindow *window);
     void set_size(RawWindow *window, int width, int height);
+    void set_layer_margin(RawWindow *window, int top, int right, int bottom, int left);
     void set_popup_size(RawWindow *window, int width, int height);
     void set_popup_size(RawWindow *window, int width, int height, const RawWindowSettings &settings);
     // Coalesced per window and paced by the compositor's surface frame callback.

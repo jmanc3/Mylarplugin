@@ -8,6 +8,7 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "dock/dock.h"
+#include "simple_dbus.h"
 #include "stb_image.h"
 
 #include <any>
@@ -5493,6 +5494,27 @@ static bool is_suppressed_startup_notification(const std::string& text) {
            text == engine->localize(I18n::TXT_KEY_NOTIF_NO_WATCHDOG);
 }
 
+static std::string hypr_icon_name(eIcons icon) {
+    switch (icon) {
+        case ICON_WARNING:  return "dialog-warning";
+        case ICON_INFO:     return "dialog-information";
+        case ICON_HINT:     return "dialog-information";
+        case ICON_ERROR:    return "dialog-error";
+        case ICON_CONFUSED: return "dialog-question";
+        case ICON_OK:       return "emblem-default";
+        default:            return "";
+    }
+}
+
+static void forward_hyprland_notification(const std::string& text, float timeMs, eIcons icon) {
+    NotificationInfo ni;
+    ni.summary = text;
+    ni.app_name = "Hyprland";
+    ni.app_icon = hypr_icon_name(icon);
+    ni.expire_timeout_in_milliseconds = timeMs > 0.f ? (dbus_int32_t) std::round(timeMs) : 5000;
+    dock::show_notification(ni);
+}
+
 static SP<Notification::CNotification> hook_addNotification(
     Notification::CNotificationOverlay* thisptr,
     const std::string& text,
@@ -5502,16 +5524,18 @@ static SP<Notification::CNotification> hook_addNotification(
     const float fontSize) {
     if (is_suppressed_startup_notification(text))
         return nullptr;
-    using OrigFn = SP<Notification::CNotification> (*)(
-        Notification::CNotificationOverlay*, const std::string&, const CHyprColor&, float, eIcons, float);
-    return rc<OrigFn>(g_pAddNotificationHook->m_original)(thisptr, text, color, timeMs, icon, fontSize);
+    forward_hyprland_notification(text, timeMs, icon);
+    return makeShared<Notification::CNotification>(std::string{text}, timeMs, color, icon, fontSize);
 }
 
 static void suppress_startup_notifications() {
     if (auto& overlay = Notification::overlay()) {
         for (const auto& notif : overlay->getNotifications()) {
-            if (notif && is_suppressed_startup_notification(notif->text()))
-                overlay->dismissNotification(notif);
+            if (!notif)
+                continue;
+            if (!is_suppressed_startup_notification(notif->text()))
+                forward_hyprland_notification(notif->text(), notif->timeMs(), notif->icon());
+            overlay->dismissNotification(notif);
         }
     }
 
@@ -6119,6 +6143,10 @@ void HyprIso::end() {
     if (dnd_drop_drag_hook) {
         HyprlandAPI::removeFunctionHook(globals->api, dnd_drop_drag_hook);
         dnd_drop_drag_hook = nullptr;
+    }
+    if (g_pAddNotificationHook) {
+        HyprlandAPI::removeFunctionHook(globals->api, g_pAddNotificationHook);
+        g_pAddNotificationHook = nullptr;
     }
     // Without Mylar windows float freely, which stock Hyprland can't manage
     // well, so they go back to tiling. heart::end() has already saved their
@@ -11035,6 +11063,16 @@ bool is_dock_layer(int id) {
         if (hl->id == id) {
             if (auto layer = hl->l.get())
                 return layer->m_namespace == "Dock" && layer->getPID() == getpid();
+        }
+    }
+    return false;
+}
+
+bool is_notification_layer(int id) {
+    for (auto hl : hyprlayers) {
+        if (hl->id == id) {
+            if (auto layer = hl->l.get())
+                return layer->m_namespace == "Notification" && layer->getPID() == getpid();
         }
     }
     return false;

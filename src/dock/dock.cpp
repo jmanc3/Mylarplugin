@@ -5,6 +5,7 @@
 #include "dock/dock_bluetooth.h"
 #include "dock/dock_brightness.h"
 #include "dock/dock_extra.h"
+#include "dock/dock_notifications.h"
 #include "dock/dock_tiling.h"
 #include "dock/dock_ui.h"
 #include "dock/dock_volume.h"
@@ -280,6 +281,8 @@ struct Windows {
 };
 
 static std::vector<Dock *> docks;
+static std::mutex pending_notifications_mutex;
+static std::vector<NotificationInfo> pending_notifications;
 
 // Read compositor state on the main thread, before the dock thread groups windows.
 static bool window_on_dock_workspace(Dock *dock, int cid) {
@@ -3465,11 +3468,24 @@ void dock_start(std::string monitor_name) {
         load_saved_pins_from_file(icons);
     dock->window->root->alignment = ALIGN_RIGHT;
     docks.push_back(dock);
+    {
+        std::vector<NotificationInfo> queued;
+        {
+            std::lock_guard<std::mutex> qlock(pending_notifications_mutex);
+            queued.swap(pending_notifications);
+        }
+        for (const auto &ni : queued) {
+            windowing::run_on_app(dock->app, [dock, ni]() {
+                show_notification_on_dock(dock, ni);
+            });
+        }
+    }
     bluetooth_watch_dock(dock);
     wifi_watch_dock(dock);
     total_update();
     schedule_startup_audio_update(dock);
     windowing::main_loop(dock->app);
+    cleanup_dock_notifications(dock);
     if (docks.size() == 1) {
         finished = true;
         battery_stop();
@@ -4090,4 +4106,48 @@ void dock::open_applications() {
             }
         }
     }
+}
+
+void dock::show_notification(const NotificationInfo &ni) {
+    main_thread([ni]() {
+        if (finished)
+            return;
+        std::string monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
+        Dock *target = nullptr;
+        for (auto d : docks) {
+            if (!d || d->closing)
+                continue;
+            if (!target)
+                target = d;
+            if (d->creation_settings.monitor_name == monitor_name) {
+                target = d;
+                break;
+            }
+        }
+        if (!target) {
+            std::lock_guard<std::mutex> qlock(pending_notifications_mutex);
+            if (pending_notifications.size() < 16)
+                pending_notifications.push_back(ni);
+            return;
+        }
+        windowing::run_on_app(target->app, [target, ni]() {
+            show_notification_on_dock(target, ni);
+        });
+    });
+}
+
+void dock::close_notification(uint32_t id) {
+    if (id == 0)
+        return;
+    main_thread([id]() {
+        if (finished)
+            return;
+        for (auto d : docks) {
+            if (!d || d->closing)
+                continue;
+            windowing::run_on_app(d->app, [d, id]() {
+                close_notification_on_dock(d, id, true);
+            });
+        }
+    });
 }

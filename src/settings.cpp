@@ -3982,8 +3982,9 @@ static void wall_use_shared(const std::string &target) {
 // Copies an image to the target's wallpaper file (~/.config/mylar/wall.png,
 // or wall-<monitor>.png). Non-images are ignored. Blocking (runs `file`), so
 // call it off the UI thread.
-static bool set_wallpaper_from_file(const std::string &file, const std::string &target) {
-    if (file.empty() || !std::filesystem::is_regular_file(file))
+bool settings::set_wallpaper_from_file(const std::string &file, const std::string &target) {
+    std::error_code ec;
+    if (file.empty() || !std::filesystem::is_regular_file(file, ec) || ec)
         return false;
     std::string quoted = "'";
     for (char ch : file) {
@@ -3997,11 +3998,14 @@ static bool set_wallpaper_from_file(const std::string &file, const std::string &
     if (!mime.starts_with("image/"))
         return false;
     std::filesystem::path filepath = target.empty() ? wallpaper_shared_path() : wallpaper_monitor_path(target);
-    std::error_code ec;
     std::filesystem::create_directories(filepath.parent_path(), ec);
-    std::filesystem::copy_file(file, filepath, std::filesystem::copy_options::overwrite_existing, ec);
-    if (ec)
-        return false;
+    ec.clear();
+    if (!std::filesystem::equivalent(file, filepath, ec) || ec) {
+        ec.clear();
+        std::filesystem::copy_file(file, filepath, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec)
+            return false;
+    }
     if (!target.empty() && !wall_target_is_separate(target))
         wall_set_target_params(target, wall_target_params(target));
     wall_commit();
@@ -4449,7 +4453,7 @@ static void wallpaper_file_dropped(std::string uri_list) {
     std::string target = wall_target;
     std::thread t([uri_list, target]() {
         for (const auto &path : paths_from_uri_list(uri_list))
-            if (set_wallpaper_from_file(path, target))
+            if (settings::set_wallpaper_from_file(path, target))
                 break;
     });
     t.detach();
@@ -4513,7 +4517,7 @@ static void make_wallpaper_row(Container *padded_right) {
 
         std::string target = wall_target;
         std::thread t([target]() {
-            set_wallpaper_from_file(trim_newline(choose_file()), target);
+            settings::set_wallpaper_from_file(trim_newline(choose_file()), target);
             chooser_open = false;
         });
 
