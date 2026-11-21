@@ -1509,6 +1509,107 @@ static void wall_write_disk_cache(const std::string &monitor_name, const std::st
         std::filesystem::remove(tmp, ec);
 }
 
+static long wall_spinner_start_ms = -1;
+static long wall_spinner_end_ms = -1;
+static constexpr long wall_spinner_duration_ms = 1000;
+static TextureInfo wall_spinner_tex;
+static TextureInfo wall_spinner_shadow_tex;
+static int wall_spinner_tex_size = 0;
+static Bounds wall_spinner_last_damage;
+static bool wall_spinner_has_last_damage = false;
+
+static void clear_wallpaper_cursor_spinner_textures() {
+    if (wall_spinner_tex.id != -1) {
+        free_text_texture(wall_spinner_tex.id);
+        wall_spinner_tex = {};
+    }
+    if (wall_spinner_shadow_tex.id != -1) {
+        free_text_texture(wall_spinner_shadow_tex.id);
+        wall_spinner_shadow_tex = {};
+    }
+    wall_spinner_tex_size = 0;
+}
+
+static void ensure_wallpaper_cursor_spinner_textures(int size) {
+    if (size <= 0)
+        return;
+    if (wall_spinner_tex_size == size && wall_spinner_tex.id != -1)
+        return;
+    clear_wallpaper_cursor_spinner_textures();
+    const char *path = "/usr/share/mylardesktop/icons/process-working-symbolic.svg";
+    RGBA fg_dye{0.93f, 0.93f, 0.93f, 1.0f};
+    RGBA shadow_dye{0.0f, 0.0f, 0.0f, 1.0f};
+    wall_spinner_tex = gen_texture(path, static_cast<float>(size), &fg_dye);
+    wall_spinner_shadow_tex = gen_texture(path, static_cast<float>(size), &shadow_dye);
+    wall_spinner_tex_size = size;
+}
+
+void wallpaper_working_indicator_start() {
+    const long now = get_current_time_in_ms();
+    if (wall_spinner_start_ms == -1 || now >= wall_spinner_end_ms) {
+        wall_spinner_start_ms = now;
+        wall_spinner_end_ms = now + wall_spinner_duration_ms;
+    } else if (now - wall_spinner_start_ms >= 250) {
+        wall_spinner_end_ms = std::max(wall_spinner_end_ms, now + wall_spinner_duration_ms);
+    }
+    const auto m = mouse();
+    hypriso->damage_box(Bounds(m.x + 2.0, m.y + 2.0, 44.0, 44.0));
+    request_refresh();
+}
+
+static void paint_wallpaper_cursor_spinner(int current_monitor) {
+    if (wall_spinner_start_ms == -1 || hypriso->rendering_snapshot())
+        return;
+
+    const long now = get_current_time_in_ms();
+    if (now >= wall_spinner_end_ms) {
+        wall_spinner_start_ms = -1;
+        wall_spinner_end_ms = -1;
+        if (wall_spinner_has_last_damage) {
+            hypriso->damage_box(wall_spinner_last_damage);
+            wall_spinner_has_last_damage = false;
+        }
+        return;
+    }
+
+    if (current_monitor != hypriso->monitor_from_cursor())
+        return;
+
+    const float s = scale(current_monitor);
+    const int size = std::max(1, static_cast<int>(std::lround(18.0f * s)));
+    ensure_wallpaper_cursor_spinner_textures(size);
+    if (wall_spinner_tex.id == -1)
+        return;
+
+    const auto mb = bounds_monitor(current_monitor);
+    const auto m = mouse();
+    const float cx = static_cast<float>((m.x - mb.x) * s);
+    const float cy = static_cast<float>((m.y - mb.y) * s);
+    const Bounds box(std::round(cx + 14.0f * s), std::round(cy + 14.0f * s), static_cast<double>(size), static_cast<double>(size));
+
+    const float elapsed = static_cast<float>(now - wall_spinner_start_ms);
+    const float remaining = static_cast<float>(wall_spinner_end_ms - now);
+    const float fade_in = std::clamp(elapsed / 120.0f, 0.0f, 1.0f);
+    const float fade_out = std::clamp(remaining / 200.0f, 0.0f, 1.0f);
+    const float alpha = std::min(fade_in, fade_out);
+    const float rot = (elapsed / static_cast<float>(wall_spinner_duration_ms)) * (2.0f * static_cast<float>(M_PI));
+
+    if (wall_spinner_shadow_tex.id != -1) {
+        Bounds shadow_box = box;
+        shadow_box.y += std::max(1.0f, std::round(1.0f * s));
+        draw_texture(wall_spinner_shadow_tex, shadow_box, alpha * 0.55f, 0.0f, rot);
+    }
+    draw_texture(wall_spinner_tex, box, alpha, 0.0f, rot);
+
+    const Bounds dmg(m.x + 2.0, m.y + 2.0, 44.0, 44.0);
+    if (wall_spinner_has_last_damage)
+        hypriso->damage_box(wall_spinner_last_damage);
+    hypriso->damage_box(dmg);
+    wall_spinner_last_damage = dmg;
+    wall_spinner_has_last_damage = true;
+    request_refresh();
+}
+
 // Decodes and renders a monitor's wallpaper on a worker thread, then uploads
 // the monitor-sized surface on the main thread so setting a wallpaper never
 // stalls the compositor.
@@ -1764,6 +1865,7 @@ static void wall_refresh_monitor(Container *c) {
     }
     if (!load->path.empty() && load->path == res.path && load->stamp == stamp)
         return;
+    wallpaper_working_indicator_start();
     wall_start_load(c, id, m, res, stamp, true);
 }
 
@@ -1899,6 +2001,9 @@ static void on_render(int id, int stage) {
     }
     if (stage == (int) STAGE::RENDER_PRE_CURSOR) {
         drag_workspace_switcher::paint_drag(current_monitor, true);
+    }
+    if (stage == (int) STAGE::RENDER_POST_CURSOR) {
+        paint_wallpaper_cursor_spinner(current_monitor);
     }
     
     if (stage == (int) STAGE::RENDER_POST_WINDOWS) {
@@ -2892,6 +2997,7 @@ void watch_wallpaper_change() {
     static Timer *t = nullptr;
     
     latest_file_watch = watch_file(filepath.string(), [](FileWatchUpdate update, int fd) {
+        wallpaper_working_indicator_start();
         if (update == FileWatchUpdate::REMOVED) {
             later(500, [](Timer *) {
                 watch_wallpaper_change();
@@ -3058,6 +3164,10 @@ void heart::end() {
     ZoneScoped;
 #endif
     set_cursor_hidden_for_desktop_fade(false);
+    clear_wallpaper_cursor_spinner_textures();
+    wall_spinner_start_ms = -1;
+    wall_spinner_end_ms = -1;
+    wall_spinner_has_last_damage = false;
     hypriso->on_config_reload = nullptr;
     hypriso->on_monitor_layout_change = nullptr;
     hypriso->on_resize_ended = nullptr;

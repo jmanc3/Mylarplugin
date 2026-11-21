@@ -3997,6 +3997,7 @@ bool settings::set_wallpaper_from_file(const std::string &file, const std::strin
     auto mime = trim_newline(execAndGet(std::string("file --mime-type -b " + quoted).c_str()));
     if (!mime.starts_with("image/"))
         return false;
+    main_thread([]() { wallpaper_working_indicator_start(); });
     std::filesystem::path filepath = target.empty() ? wallpaper_shared_path() : wallpaper_monitor_path(target);
     std::filesystem::create_directories(filepath.parent_path(), ec);
     ec.clear();

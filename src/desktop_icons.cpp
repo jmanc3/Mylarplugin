@@ -1760,6 +1760,7 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
         wallpaper.text = "Set as wallpaper";
         const std::string image_path = valid_paths[0];
         wallpaper.on_clicked = [image_path, drop_x, drop_y]() {
+            wallpaper_working_indicator_start();
             const std::string target = wallpaper_target_for_drop(drop_x, drop_y);
             std::thread([image_path, target]() {
                 if (!settings::set_wallpaper_from_file(image_path, target)) {

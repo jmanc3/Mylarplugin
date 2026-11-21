@@ -7976,7 +7976,7 @@ TextureInfo gen_text_texture(std::string font, std::string text, float h, RGBA c
     return {};
 }
 
-void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
+void draw_texture(TextureInfo info, Bounds b, float a, float clip_w, float rot) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -8000,14 +8000,16 @@ void draw_texture(TextureInfo info, Bounds b, float a, float clip_w) {
     for (auto t : hyprtextures) {
         if (t->info.id == info.id && t->texture) {
             auto tex = t->texture;
-            AnyPass::AnyData anydata([tex, b, a, clip_w, clip, clipbox, cb](AnyPass* pass, Render::CRenderContext& ctx) {
+            AnyPass::AnyData anydata([tex, b, a, clip_w, rot, clip, clipbox, cb](AnyPass* pass, Render::CRenderContext& ctx) {
                 //g_pHyprOpenGL->renderTexturePrimitive(t->texture, tocbox(b));
                 Render::GL::CHyprOpenGLImpl::STextureRenderData data;
                 data.a = a;
                 if (clip)
                     g_pHyprRenderer->context().m_data.clipBox = clip_box_for_current_pass(cb.intersection(clipbox));
                     //g_pHyprOpenGL->context().m_data.clipBox = clipbox.intersection(cb);
-                Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), tex, tocbox(b), data);
+                CBox box = tocbox(b);
+                box.rot = rot;
+                Render::GL::g_pHyprOpenGL->renderTexture(g_pHyprRenderer->context(), tex, box, data);
                 if (clip)
                     g_pHyprRenderer->context().m_data.clipBox = CBox();
             });

@@ -781,7 +781,7 @@ TextureInfo gen_texture(cairo_surface_t* surface);
 TextureInfo gen_texture_png(std::string path);
 
 void draw_texture(TextureInfo info, int x, int y, float a = 1.0, float clip_w = 0.0);
-void draw_texture(TextureInfo info, Bounds b, float a = 1.0, float clip_w = 0.0);
+void draw_texture(TextureInfo info, Bounds b, float a = 1.0, float clip_w = 0.0, float rot = 0.0f);
 
 void setCursorImageUntilUnset(std::string cursor);
 void unsetCursorImage(bool force = false);

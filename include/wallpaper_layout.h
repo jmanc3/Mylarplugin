@@ -65,6 +65,7 @@ inline std::vector<WallMonitor> wallpaper_monitors_copy() {
 // Implemented by the compositor (heart.cpp): reloads wallpapers whose file or
 // settings changed. Call on the compositor's main thread.
 void wallpaper_settings_changed();
+void wallpaper_working_indicator_start();
 
 // ---- Settings <-> overrides --------------------------------------------------
 
