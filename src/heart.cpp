@@ -36,7 +36,9 @@
 #include "desktop_icons.h"
 #include "polling_thread.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <unordered_set>
 #include <ctime>
 #include <dbus/dbus-shared.h>
@@ -1038,7 +1040,7 @@ static void update_xrdb_dpi() {
 static void publish_wall_monitors();
 struct WallSlot;
 static WallSlot *wall_slot(Container *m, bool first);
-static void wall_slot_load(int id, WallSlot *slot);
+static void wall_slot_load_initial(Container *c, int id);
 static void wall_slot_clear(WallSlot *slot);
 
 static void on_monitor_layout_change() {
@@ -1209,7 +1211,7 @@ static void on_monitor_open(int id) {
     *datum<long>(c, "bg_wall_change_time_ms") = 0;
     *datum<bool>(c, "bg_wall1_active") = true;
     publish_wall_monitors();
-    wall_slot_load(id, wall_slot(c, true));
+    wall_slot_load_initial(c, id);
     overview::on_monitor_open(id);
 
     later(10, [](Timer *) {
@@ -1343,12 +1345,19 @@ static bool is_snapped(int id) {
 
 struct WallSlot {
     TextureInfo source;      // the image file as loaded
+    bool source_loading = false;
     bool source_failed = false;
     TextureInfo cache;       // final image for cache_key
     std::string cache_key;
     std::string path;        // image this slot holds
     std::string stamp;       // wallpaper_file_stamp(path) when loaded
     std::string pending_key; // a cached image for this key is scheduled or being made
+};
+
+struct WallLoadState {
+    uint64_t gen = 0;
+    std::string path;
+    std::string stamp;
 };
 
 static WallSlot *wall_slot(Container *m, bool first) {
@@ -1417,28 +1426,212 @@ static void wall_slot_clear(WallSlot *slot) {
     *slot = WallSlot();
 }
 
-// Fills a slot with the image the monitor should show now: the cached image
-// from disk when it matches, the source image otherwise.
-static void wall_slot_load(int id, WallSlot *slot) {
-    wall_slot_clear(slot);
+static cairo_surface_t *wall_render_cache_surface(cairo_surface_t *src, const WallResolved &res, const WallMonitor &m) {
+    if (!src)
+        return nullptr;
+    const int ow = std::max(1, (int) std::round(m.w * m.scale));
+    const int oh = std::max(1, (int) std::round(m.h * m.scale));
+    const double iw = cairo_image_surface_get_width(src);
+    const double ih = cairo_image_surface_get_height(src);
+    cairo_surface_t *out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ow, oh);
+    if (cairo_surface_status(out) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(out);
+        return nullptr;
+    }
+    auto cr = cairo_create(out);
+    cairo_set_source_rgb(cr, 0, 0, 0);
+    cairo_paint(cr);
+    for (auto &r : wallpaper_monitor_rects(res, iw, ih, m)) {
+        cairo_save(cr);
+        cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+        cairo_clip(cr);
+        cairo_translate(cr, r.x, r.y);
+        cairo_scale(cr, r.w / iw, r.h / ih);
+        cairo_set_source_surface(cr, src, 0, 0);
+        auto pattern = cairo_get_source(cr);
+        cairo_pattern_set_filter(pattern, CAIRO_FILTER_GOOD);
+        cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
+        cairo_paint(cr);
+        cairo_restore(cr);
+    }
+    cairo_destroy(cr);
+    cairo_surface_flush(out);
+    return out;
+}
+
+static cairo_surface_t *wall_copy_surface(cairo_surface_t *src) {
+    if (!src || cairo_surface_status(src) != CAIRO_STATUS_SUCCESS)
+        return nullptr;
+    const int w = cairo_image_surface_get_width(src);
+    const int h = cairo_image_surface_get_height(src);
+    const auto fmt = cairo_image_surface_get_format(src);
+    cairo_surface_t *copy = cairo_image_surface_create(fmt, w, h);
+    if (cairo_surface_status(copy) != CAIRO_STATUS_SUCCESS) {
+        cairo_surface_destroy(copy);
+        return nullptr;
+    }
+    const int src_stride = cairo_image_surface_get_stride(src);
+    const int dst_stride = cairo_image_surface_get_stride(copy);
+    const unsigned char *s = cairo_image_surface_get_data(src);
+    unsigned char *d = cairo_image_surface_get_data(copy);
+    const int row_bytes = std::min(src_stride, dst_stride);
+    for (int y = 0; y < h; ++y)
+        std::memcpy(d + y * dst_stride, s + y * src_stride, row_bytes);
+    cairo_surface_mark_dirty(copy);
+    return copy;
+}
+
+static void wall_write_disk_cache(const std::string &monitor_name, const std::string &key, cairo_surface_t *out) {
+    if (!out)
+        return;
+    // Keep one cached image per monitor on disk.
+    std::error_code ec;
+    auto dir = wall_disk_cache_dir();
+    std::filesystem::create_directories(dir, ec);
+    auto file = wall_disk_cache_file(monitor_name, key);
+    auto prefix = wallpaper_safe_name(monitor_name) + "-";
+    for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+        auto name = entry.path().filename().string();
+        if (name.starts_with(prefix) && entry.path() != file)
+            std::filesystem::remove(entry.path(), ec);
+    }
+    auto tmp = file;
+    tmp += ".tmp" + std::to_string(std::hash<std::string>{}(key + std::to_string(get_current_time_in_ms())));
+    if (cairo_surface_write_to_png(out, tmp.c_str()) == CAIRO_STATUS_SUCCESS)
+        std::filesystem::rename(tmp, file, ec);
+    else
+        std::filesystem::remove(tmp, ec);
+}
+
+// Decodes and renders a monitor's wallpaper on a worker thread, then uploads
+// the monitor-sized surface on the main thread so setting a wallpaper never
+// stalls the compositor.
+static void wall_start_load(Container *c, int id, WallMonitor m, WallResolved res, std::string stamp, bool fade) {
+    auto load = datum<WallLoadState>(c, "wall_load_state");
+    const uint64_t gen = ++load->gen;
+    if (stamp.empty()) {
+        load->path.clear();
+        load->stamp.clear();
+        auto wall1_active = datum<bool>(c, "bg_wall1_active");
+        if (fade) {
+            wall_slot_clear(wall_slot(c, !*wall1_active));
+            *wall1_active = !*wall1_active;
+            *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
+        } else {
+            wall_slot_clear(wall_slot(c, *wall1_active));
+        }
+        damage_all();
+        return;
+    }
+
+    load->path = res.path;
+    load->stamp = stamp;
+    auto key = wallpaper_cache_key(res, m, stamp);
+    std::thread([id, gen, fade, key, res, m, stamp]() {
+        cairo_surface_t *out = nullptr;
+        cairo_surface_t *disk_copy = nullptr;
+        std::error_code ec;
+        auto cached = wall_disk_cache_file(m.name, key);
+        if (std::filesystem::exists(cached, ec))
+            load_icon_full_path(&out, cached.string());
+        if (!out) {
+            cairo_surface_t *src = nullptr;
+            load_icon_full_path(&src, res.path);
+            if (src) {
+                out = wall_render_cache_surface(src, res, m);
+                cairo_surface_destroy(src);
+                if (out)
+                    disk_copy = wall_copy_surface(out);
+            }
+        }
+        main_thread([id, gen, fade, key, path = res.path, stamp, out]() {
+            auto c = wall_monitor_container(id);
+            if (!c) {
+                if (out)
+                    cairo_surface_destroy(out);
+                return;
+            }
+            auto load = datum<WallLoadState>(c, "wall_load_state");
+            if (load->gen != gen) {
+                if (out)
+                    cairo_surface_destroy(out);
+                return;
+            }
+            load->path.clear();
+            load->stamp.clear();
+            auto wall1_active = datum<bool>(c, "bg_wall1_active");
+            const bool target_first = fade ? !*wall1_active : *wall1_active;
+            auto slot = wall_slot(c, target_first);
+            wall_slot_clear(slot);
+            slot->path = path;
+            slot->stamp = stamp;
+            if (out) {
+                auto info = gen_texture(out);
+                cairo_surface_destroy(out);
+                if (info.id != -1) {
+                    slot->cache = info;
+                    slot->cache_key = key;
+                } else {
+                    slot->source_failed = true;
+                }
+            } else {
+                slot->source_failed = true;
+            }
+            if (fade) {
+                *wall1_active = target_first;
+                *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
+            }
+            damage_all();
+        });
+        if (disk_copy) {
+            wall_write_disk_cache(m.name, key, disk_copy);
+            cairo_surface_destroy(disk_copy);
+        }
+    }).detach();
+}
+
+static void wall_slot_load_initial(Container *c, int id) {
     auto m = wall_monitor(id);
     auto res = wall_resolve(id, m);
-    slot->path = res.path;
-    slot->stamp = wallpaper_file_stamp(res.path);
-    if (slot->stamp.empty())
+    wall_start_load(c, id, m, res, wallpaper_file_stamp(res.path), false);
+}
+
+// Decodes a slot's full source image off the main thread for live GPU scaling
+// (e.g. while dragging the crop preview).
+static void wall_load_source(int id, bool first_slot, WallSlot *slot) {
+    if (slot->source_loading)
         return;
-    auto key = wallpaper_cache_key(res, m, slot->stamp);
-    std::error_code ec;
-    auto cached = wall_disk_cache_file(m.name, key);
-    if (std::filesystem::exists(cached, ec)) {
-        slot->cache = gen_texture_png(cached.string());
-        if (slot->cache.id != -1) {
-            slot->cache_key = key;
-            return;
-        }
-    }
-    slot->source = gen_texture_png(res.path);
-    slot->source_failed = slot->source.id == -1;
+    slot->source_loading = true;
+    std::string path = slot->path;
+    std::string stamp = slot->stamp;
+    std::thread([id, first_slot, path, stamp]() {
+        cairo_surface_t *src = nullptr;
+        load_icon_full_path(&src, path);
+        main_thread([id, first_slot, path, stamp, src]() {
+            auto c = wall_monitor_container(id);
+            auto slot = c ? wall_slot(c, first_slot) : nullptr;
+            if (!slot || slot->path != path || slot->stamp != stamp) {
+                if (src)
+                    cairo_surface_destroy(src);
+                return;
+            }
+            slot->source_loading = false;
+            if (!src) {
+                slot->source_failed = true;
+                return;
+            }
+            auto info = gen_texture(src);
+            cairo_surface_destroy(src);
+            if (info.id == -1) {
+                slot->source_failed = true;
+                return;
+            }
+            if (slot->source.id != -1)
+                free_text_texture(slot->source.id);
+            slot->source = info;
+            damage_all();
+        });
+    }).detach();
 }
 
 // Renders the final image on a worker thread, then swaps it in.
@@ -1446,50 +1639,13 @@ static void wall_make_cache(int id, bool first_slot, std::string key, WallResolv
     std::thread([id, first_slot, key, res, m, stamp]() {
         cairo_surface_t *src = nullptr;
         load_icon_full_path(&src, res.path);
-        const int ow = std::max(1, (int) std::round(m.w * m.scale));
-        const int oh = std::max(1, (int) std::round(m.h * m.scale));
         cairo_surface_t *out = nullptr;
+        cairo_surface_t *disk_copy = nullptr;
         if (src) {
-            const double iw = cairo_image_surface_get_width(src);
-            const double ih = cairo_image_surface_get_height(src);
-            out = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, ow, oh);
-            auto cr = cairo_create(out);
-            cairo_set_source_rgb(cr, 0, 0, 0);
-            cairo_paint(cr);
-            for (auto &r : wallpaper_monitor_rects(res, iw, ih, m)) {
-                cairo_save(cr);
-                cairo_rectangle(cr, r.x, r.y, r.w, r.h);
-                cairo_clip(cr);
-                cairo_translate(cr, r.x, r.y);
-                cairo_scale(cr, r.w / iw, r.h / ih);
-                cairo_set_source_surface(cr, src, 0, 0);
-                auto pattern = cairo_get_source(cr);
-                cairo_pattern_set_filter(pattern, CAIRO_FILTER_GOOD);
-                cairo_pattern_set_extend(pattern, CAIRO_EXTEND_PAD);
-                cairo_paint(cr);
-                cairo_restore(cr);
-            }
-            cairo_destroy(cr);
-            cairo_surface_flush(out);
+            out = wall_render_cache_surface(src, res, m);
             cairo_surface_destroy(src);
-
-            // Keep one cached image per monitor on disk.
-            std::error_code ec;
-            auto dir = wall_disk_cache_dir();
-            std::filesystem::create_directories(dir, ec);
-            auto file = wall_disk_cache_file(m.name, key);
-            auto prefix = wallpaper_safe_name(m.name) + "-";
-            for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
-                auto name = entry.path().filename().string();
-                if (name.starts_with(prefix) && entry.path() != file)
-                    std::filesystem::remove(entry.path(), ec);
-            }
-            auto tmp = file;
-            tmp += ".tmp" + std::to_string(std::hash<std::string>{}(key + std::to_string(get_current_time_in_ms())));
-            if (cairo_surface_write_to_png(out, tmp.c_str()) == CAIRO_STATUS_SUCCESS)
-                std::filesystem::rename(tmp, file, ec);
-            else
-                std::filesystem::remove(tmp, ec);
+            if (out)
+                disk_copy = wall_copy_surface(out);
         }
         main_thread([id, first_slot, key, stamp, out]() {
             auto c = wall_monitor_container(id);
@@ -1513,6 +1669,10 @@ static void wall_make_cache(int id, bool first_slot, std::string key, WallResolv
             slot->cache_key = key;
             damage_all();
         });
+        if (disk_copy) {
+            wall_write_disk_cache(m.name, key, disk_copy);
+            cairo_surface_destroy(disk_copy);
+        }
     }).detach();
 }
 
@@ -1554,9 +1714,9 @@ static void draw_wall_slot(int id, Container *c, bool first_slot, bool active, d
     const auto key = wallpaper_cache_key(res, m, slot->stamp);
     const bool cache_ok = slot->cache.id != -1 && slot->cache_key == key;
     if (active && same_image && !cache_ok && !slot->stamp.empty()) {
-        if (slot->source.id == -1 && !slot->source_failed && wallpaper_file_stamp(slot->path) == slot->stamp) {
-            slot->source = gen_texture_png(slot->path);
-            slot->source_failed = slot->source.id == -1;
+        if (slot->source.id == -1 && !slot->source_failed && !slot->source_loading &&
+            wallpaper_file_stamp(slot->path) == slot->stamp) {
+            wall_load_source(id, first_slot, slot);
         }
         wall_request_cache(id, first_slot, slot, key);
     }
@@ -1580,13 +1740,21 @@ static void wall_refresh_monitor(Container *c) {
     const int id = *datum<int>(c, "cid");
     auto wall1_active = datum<bool>(c, "bg_wall1_active");
     auto active = wall_slot(c, *wall1_active);
-    auto res = wall_resolve(id, wall_monitor(id));
-    if (res.path == active->path && wallpaper_file_stamp(res.path) == active->stamp)
+    auto m = wall_monitor(id);
+    auto res = wall_resolve(id, m);
+    auto stamp = wallpaper_file_stamp(res.path);
+    auto load = datum<WallLoadState>(c, "wall_load_state");
+    if (res.path == active->path && stamp == active->stamp) {
+        if (!load->path.empty()) {
+            load->gen++;
+            load->path.clear();
+            load->stamp.clear();
+        }
         return;
-    auto next = wall_slot(c, !*wall1_active);
-    wall_slot_load(id, next);
-    *wall1_active = !*wall1_active;
-    *datum<long>(c, "bg_wall_change_time_ms") = get_current_time_in_ms();
+    }
+    if (!load->path.empty() && load->path == res.path && load->stamp == stamp)
+        return;
+    wall_start_load(c, id, m, res, stamp, true);
 }
 
 void wallpaper_settings_changed() {
