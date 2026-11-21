@@ -47,6 +47,7 @@
 #include "shortcuts.h"
 #include "settings.h"
 #include "overview.h"
+#include "screenshot.h"
 #include "show_desktop.h"
 #include "drag_workspace_switcher.h"
 //#include "heart.h"
@@ -5296,7 +5297,8 @@ static bool desktop_drop_target_available() {
         return false;
     if (hypriso->can_accept_desktop_drop && !hypriso->can_accept_desktop_drop())
         return false;
-    if (overview::is_showing() || hypriso->whitelist_on || g_pSessionLockManager->isSessionLocked())
+    const bool showing_desktop = show_desktop::is_opened() && !show_desktop::is_closing();
+    if (overview::is_showing() || screenshot_tool::is_open() || (hypriso->whitelist_on && !showing_desktop) || g_pSessionLockManager->isSessionLocked())
         return false;
     if (!g_pSeatManager || !g_pSeatManager->m_state.dndPointerFocus.expired())
         return false;
