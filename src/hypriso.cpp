@@ -213,6 +213,7 @@
 #undef private
 
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#include <hyprland/src/i18n/Engine.hpp>
 
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/event/EventBus.hpp>
@@ -5204,6 +5205,55 @@ static void hook_native_drag_begin() {
     notify("Couldn't hook native tiled dragging; the drag workspace switcher will be unavailable for tiled windows");
 }
 
+static CFunctionHook* g_pAddNotificationHook = nullptr;
+
+static bool is_suppressed_startup_notification(const std::string& text) {
+    const auto engine = I18n::i18nEngine();
+    if (!engine)
+        return false;
+    return text == engine->localize(I18n::TXT_KEY_NOTIF_NO_GUIUTILS) ||
+           text == engine->localize(I18n::TXT_KEY_NOTIF_NO_WATCHDOG);
+}
+
+static SP<Notification::CNotification> hook_addNotification(
+    Notification::CNotificationOverlay* thisptr,
+    const std::string& text,
+    const CHyprColor& color,
+    const float timeMs,
+    const eIcons icon,
+    const float fontSize) {
+    if (is_suppressed_startup_notification(text))
+        return nullptr;
+    using OrigFn = SP<Notification::CNotification> (*)(
+        Notification::CNotificationOverlay*, const std::string&, const CHyprColor&, float, eIcons, float);
+    return rc<OrigFn>(g_pAddNotificationHook->m_original)(thisptr, text, color, timeMs, icon, fontSize);
+}
+
+static void suppress_startup_notifications() {
+    if (auto& overlay = Notification::overlay()) {
+        for (const auto& notif : overlay->getNotifications()) {
+            if (notif && is_suppressed_startup_notification(notif->text()))
+                overlay->dismissNotification(notif);
+        }
+    }
+
+    const auto METHODS = HyprlandAPI::findFunctionsByName(globals->api, "addNotification");
+    for (const auto& m : METHODS) {
+        if (m.demangled.find("CNotificationOverlay::addNotification(") == std::string::npos)
+            continue;
+
+        g_pAddNotificationHook = HyprlandAPI::createFunctionHook(globals->api, m.address, rc<void*>(&hook_addNotification));
+        if (g_pAddNotificationHook && g_pAddNotificationHook->hook())
+            return;
+
+        if (g_pAddNotificationHook) {
+            HyprlandAPI::removeFunctionHook(globals->api, g_pAddNotificationHook);
+            g_pAddNotificationHook = nullptr;
+        }
+        break;
+    }
+}
+
 void HyprIso::create_hooks() {
 #ifdef TRACY_ENABLE
   ZoneScoped;
@@ -5236,6 +5286,7 @@ void HyprIso::create_hooks() {
     hook_floating_position_restore();
     hook_native_drag_end();
     hook_native_drag_begin();
+    suppress_startup_notifications();
 
     if (g_pXWayland->m_wm) {
         auto connection = g_pXWayland->m_wm->getConnection();

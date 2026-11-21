@@ -911,34 +911,45 @@ static cairo_surface_t *tray_icon_surface(TrayAreaData *data, const TrayItemView
     return cache.surface;
 }
 
-static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem> items);
+static void open_tray_menu(Dock *dock, MylarWindow *parent, std::string key, std::vector<TrayMenuItem> items, Bounds anchor_rect);
 
 static void tray_clicked(Container *root, Container *c, int button) {
     auto dock = (Dock *) root->user_data;
     auto data = (TrayAreaData *) c->user_data;
-    auto dpi = extra_window(dock)->raw_window->dpi;
+    auto extra = extra_window(dock);
+    auto dpi = extra->raw_window->dpi;
     int index = tray_item_at(root, c, data, dpi);
     if (index == -1)
         return;
     auto item = data->items[index];
     bool show_menu = !item.xembed && item.has_menu && (button == 3 || (button == 1 && item.item_is_menu));
 
-    windowing::close_window(extra_window(dock)->raw_window);
-    if (dock->window->popup_window == extra_window(dock))
-        dock->window->popup_window = nullptr;
-
     if (show_menu) {
-        main_thread([dock, key = item.key]() {
-            systray::fetch_menu(key, [dock, key](std::vector<TrayMenuItem> menu) {
+        auto l = tray_layout(c->real_bounds, data->items.size(), dpi);
+        Bounds anchor_rect(
+            l.x + (index % l.per_row) * l.cell,
+            l.y + (index / l.per_row) * l.cell,
+            l.cell,
+            l.cell);
+        main_thread([dock, extra, key = item.key, anchor_rect]() {
+            systray::fetch_menu(key, [dock, extra, key, anchor_rect](std::vector<TrayMenuItem> menu) {
                 if (menu.empty()) {
                     // No usable dbusmenu: let the app show its own.
+                    if (!finished && !dock->closing) {
+                        windowing::run_on_app(dock->app, [dock, extra]() {
+                            std::lock_guard<std::mutex> lock(dock->app->mutex);
+                            if (!finished && !dock->closing && dock->extra == extra && windowing::has_window(extra->raw_window))
+                                close_extra(dock);
+                        });
+                    }
                     systray::click(key, 3);
                     return;
                 }
-                open_tray_menu(dock, key, std::move(menu));
+                open_tray_menu(dock, extra, key, std::move(menu), anchor_rect);
             });
         });
     } else {
+        close_extra(dock);
         main_thread([key = item.key, button]() {
             systray::click(key, button);
         });
@@ -1117,38 +1128,55 @@ static std::vector<std::pair<int, Bounds>> tray_menu_rows(TrayMenuData *data, Bo
     return rows;
 }
 
-static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem> items) {
+static void open_tray_menu(Dock *dock, MylarWindow *parent, std::string key, std::vector<TrayMenuItem> items, Bounds anchor_rect) {
     struct Request {
         Dock *dock;
+        MylarWindow *parent;
         std::string key;
         std::vector<TrayMenuItem> items;
+        Bounds anchor_rect;
     };
-    auto request = new Request{dock, std::move(key), std::move(items)};
-    // Called on the main thread: hop to the dock's thread, where its timers live.
+    auto request = std::make_shared<Request>(Request{dock, parent, std::move(key), std::move(items), anchor_rect});
+    // Called on the main thread: hop to the dock's thread, where its windows live.
     windowing::run_on_app(dock->app, [request]() {
-    windowing::timer(request->dock->app, 40, [](void *raw) {
-        auto request = std::unique_ptr<Request>(static_cast<Request *>(raw));
         auto dock = request->dock;
         std::lock_guard<std::mutex> lock(dock->app->mutex);
-        auto mylar = dock->window;
-        if (finished || dock->closing || mylar->popup_window || !windowing::has_window(mylar->raw_window))
+        auto extra = request->parent;
+        if (finished || dock->closing || dock->extra != extra || extra->popup_window ||
+            !windowing::has_window(extra->raw_window))
             return;
-        auto dpi = mylar->raw_window->dpi;
-        auto anchor = container_by_name("extra", mylar->root);
-        if (!anchor)
-            return;
+        auto dpi = extra->raw_window->dpi;
         int h = std::min(640, tray_menu_height(request->items, false) + 12);
-        RawWindowSettings settings = make_icon_anchored_popup_settings(anchor, dpi, tray_menu_w, h);
-        dock->tray_menu = open_mylar_popup(mylar, settings);
-        if (!dock->tray_menu)
+        RawWindowSettings settings;
+        settings.pos.w = tray_menu_w;
+        settings.pos.h = h;
+        settings.name = "Popup";
+        settings.popup.use_explicit_anchor_rect = true;
+        settings.popup.anchor_rect_x = (int) std::round(request->anchor_rect.x / dpi);
+        settings.popup.anchor_rect_y = (int) std::round(request->anchor_rect.y / dpi);
+        settings.popup.anchor_rect_w = std::max(1, (int) std::round(request->anchor_rect.w / dpi));
+        settings.popup.anchor_rect_h = std::max(1, (int) std::round(request->anchor_rect.h / dpi));
+        settings.popup.anchor = RawWindowSettings::PopupAnchor::TOP;
+        settings.popup.gravity = RawWindowSettings::PopupGravity::TOP;
+        settings.popup.use_offset = true;
+        settings.popup.offset_y = -6;
+        settings.popup.constraint_adjustment =
+            RawWindowSettings::POPUP_CONSTRAINT_SLIDE_X |
+            RawWindowSettings::POPUP_CONSTRAINT_SLIDE_Y |
+            RawWindowSettings::POPUP_CONSTRAINT_FLIP_X |
+            RawWindowSettings::POPUP_CONSTRAINT_FLIP_Y;
+        auto menu = open_mylar_popup(extra, settings);
+        if (!menu)
             return;
-        auto root = dock->tray_menu->root;
+        dock->tray_menu = menu;
+        auto root = menu->root;
         root->user_data = dock;
         root->wanted_bounds.w = FILL_SPACE;
         root->wanted_bounds.h = FILL_SPACE;
-        root->on_closed = [](Container *root) {
+        root->on_closed = [menu](Container *root) {
             auto dock = (Dock *) root->user_data;
-            dock->tray_menu = nullptr;
+            if (dock->tray_menu == menu)
+                dock->tray_menu = nullptr;
         };
         root->when_paint = [](Container *root, Container *c) {
             auto dock = (Dock *) root->user_data;
@@ -1235,8 +1263,8 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
                             systray::menu_clicked(key, id);
                         });
                         windowing::close_window(window);
-                        if (dock->window->popup_window == dock->tray_menu)
-                            dock->window->popup_window = nullptr;
+                        if (auto extra = extra_window(dock); extra && extra->popup_window == dock->tray_menu)
+                            extra->popup_window = nullptr;
                         return;
                     }
                 }
@@ -1245,7 +1273,6 @@ static void open_tray_menu(Dock *dock, std::string key, std::vector<TrayMenuItem
             }
         };
         windowing::redraw(dock->tray_menu->raw_window);
-    }, request);
     });
 }
 
@@ -1278,8 +1305,11 @@ void fill_extra_container(Container *root, std::string page, bool via_keyboard) 
     pages->when_paint = extra_pages_paint_before;
     pages->after_paint = extra_pages_paint_after;
 
-    root->on_closed = [menu](Container *) {
+    root->on_closed = [menu](Container *root) {
         menu->closed = true;
+        auto dock = (Dock *) root->user_data;
+        if (dock && dock->extra && dock->extra->root == root)
+            dock->extra = nullptr;
     };
     root->when_key_event = [menu](Container *root, Container *, int, bool pressed, xkb_keysym_t sym, int, bool, std::string) {
         if (pressed)
