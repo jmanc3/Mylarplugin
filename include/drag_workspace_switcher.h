@@ -26,6 +26,7 @@ namespace drag_workspace_switcher {
     void update_drag();
     // Overview supplies logical bounds; native drags use the live window bounds.
     void transform_thumbnail(int cid, Bounds &bounds, float &alpha);
+    bool defer_released_thumbnail(int monitor, int cid, Bounds bounds, Bounds clip, float alpha);
     bool replaces_window(int cid);
     bool omit_from_workspace_snapshot(int cid);
     // Paint the native replacement at its old stacking position, or the raised

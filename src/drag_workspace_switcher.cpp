@@ -74,6 +74,30 @@ static void capture_workspace_thumbnails() {
 static constexpr double drag_transition_ms = 120.0;
 static constexpr long drag_hover_delay_ms = 150;
 static unsigned int drag_generation = 0;
+static int released_window = -1;
+static struct {
+    int monitor = -1;
+    Bounds bounds;
+    Bounds clip;
+    float alpha = 1.0f;
+} released_thumbnail;
+
+static void set_released_window(int cid) {
+    if (released_window == cid)
+        return;
+    released_window = cid;
+    released_thumbnail = {};
+    for (auto c : actual_root->children)
+        if (c->custom_type == (int) TYPE::WORKSPACE_SWITCHER)
+            damage_bounds(c->real_bounds);
+}
+
+static bool paint_switcher_at(int stage) {
+    if (hypriso->rendering_snapshot())
+        return false;
+    const bool behind_windows = released_window != -1 && !overview::is_showing();
+    return stage == (int)(behind_windows ? STAGE::RENDER_POST_WALLPAPER : STAGE::RENDER_PRE_CURSOR);
+}
 static struct {
     int cid = -1;
     bool from_overview = false;
@@ -154,6 +178,7 @@ static Bounds dragged_bounds();
 void drag_workspace_switcher::begin_drag(int cid, bool from_overview) {
     finish_landing(false);
     end_drag(dragged_preview.cid);
+    set_released_window(-1);
     dragged_preview.cid = cid;
     dragged_preview.from_overview = from_overview;
     dragged_preview.ready = from_overview;
@@ -182,6 +207,7 @@ void drag_workspace_switcher::begin_drag(int cid, bool from_overview) {
 void drag_workspace_switcher::end_drag(int cid) {
     if (cid == -1 || dragged_preview.cid != cid)
         return;
+    set_released_window(cid);
     ++drag_generation;
     damage_bounds(dragged_preview.last_preview);
     if (!dragged_preview.last_preview.empty())
@@ -298,11 +324,37 @@ bool drag_workspace_switcher::omit_from_workspace_snapshot(int cid) {
         dragged_preview.ready && (dragged_preview.target > 0.0f || dragged_preview.amount > 0.0f);
 }
 
+bool drag_workspace_switcher::defer_released_thumbnail(int monitor, int cid, Bounds bounds, Bounds clip, float alpha) {
+    if (cid != released_window || monitor != target_monitor() || hypriso->rendering_snapshot())
+        return false;
+    // Keep the normal overview stacking everywhere the panel is out of reach.
+    for (auto panel : actual_root->children) {
+        if (panel->custom_type != (int) TYPE::WORKSPACE_SWITCHER)
+            continue;
+        const auto panel_bounds = switcher_render_bounds(switcher_bounds(panel), monitor);
+        if (panel_bounds.intersection(bounds).intersection(clip).empty())
+            return false;
+        released_thumbnail = {monitor, bounds, clip, alpha};
+        return true;
+    }
+    return false;
+}
+
 static void paint_landing(int monitor);
 
 void drag_workspace_switcher::paint_drag(int monitor, bool above_switcher) {
-    if (above_switcher)
+    if (above_switcher && !hypriso->rendering_snapshot()) {
+        if (released_thumbnail.monitor == monitor) {
+            const auto old_clip = hypriso->clip;
+            const auto old_clipbox = hypriso->clipbox;
+            defer(hypriso->clip = old_clip; hypriso->clipbox = old_clipbox);
+            hypriso->clip = true;
+            hypriso->clipbox = released_thumbnail.clip;
+            hypriso->draw_deco_thumbnail(released_window, released_thumbnail.bounds, 0, 2.0f, 0, released_thumbnail.alpha);
+            released_thumbnail = {};
+        }
         paint_landing(monitor);
+    }
     const auto &p = dragged_preview;
     if (p.cid == -1 || hypriso->get_client_workspace_id(p.cid) < 0 || !p.ready || p.amount <= 0.0f || hypriso->rendering_snapshot())
         return;
@@ -735,7 +787,7 @@ void drag_switcher_actual_open() {
                 auto root = get_rendering_root();
                 if (!root) return;
                 auto [rid, s, stage, active_id] = roots_info(actual_root, root);
-                if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
+                if (rid != monitor || !paint_switcher_at(stage))
                     return;
 
                 const auto active_amount = *datum<float>(c, "active_amount");
@@ -750,10 +802,7 @@ void drag_switcher_actual_open() {
                 auto space = *datum<int>(c, "workspace");
                 float pressed_amount = *datum<float>(c, "pressed_amount");
 
-                auto openess = *datum<float>(c->parent, "openess");
-                //render_drop_shadow(monitor, 1.0, {0, 0, 0, .1f * openess}, 8 * s, 2.0, c->real_bounds);
                 if (space != -1) {
-                    //hypriso->draw_wallpaper(monitor, c->real_bounds, 8 * s, openess);
                     hypriso->draw_workspace(monitor, space, c->real_bounds, 8 * s);
 
                     {
@@ -776,30 +825,21 @@ void drag_switcher_actual_open() {
                 }
                 
                 auto b = c->real_bounds;
-                if (c->state.mouse_pressing) {
-                    //rect(b, {0, 0, 0, .1f * openess}, 0, 8 * s, 2.0, false);
-                } else if (c->state.mouse_hovering) {
-                    //border(b, {1, 1, 1, .2f * openess}, 1.0, 0, 8 * s, 2.0, false);
-                    //rect(b, {1, 1, 1, .1f * openess}, 0, 8 * s, 2.0, false);
-                } else {
-
-                }
                 if (active_amount >= 0.0)
                     rect(b, {1, 1, 1, .05f * active_amount}, 0, 8 * s, 2.0, false);
 
                 b.shrink(2.0);
                 b.round();
-                border(b, {1, 1, 1, .1f * openess}, 1.0, 0, 8 * s, 2.0, false); 
+                border(b, {1, 1, 1, .1f}, 1.0, 0, 8 * s, 2.0, false);
                 
                 if (space == -1) {
                     //auto info = get_cached_texture(root, c, "plus", icon_font, "\uF8AA", {1, 1, 1, .8}, 20);
                     auto info = get_cached_texture(root, c, "plus", icon_font, "\uE710", {1, 1, 1, .8}, 20);
-                    //draw_texture(*info, center_x(c, info->w), center_y(c, info->h), 1.0 * openess);
                     Bounds tb = {center_x(c, info->w), center_y(c, info->h), (float) info->w, (float) info->h};
                     tb.scale_from_center(1.0f + (.08f * active_amount));
                     
                     tb.scale_from_center(1.0f - (.15f * pressed_amount));
-                    draw_texture(*info, tb, 1.0 * openess);
+                    draw_texture(*info, tb, 1.0);
                 }
             };
             c->when_clicked = [monitor](Container *root, Container *c) {
@@ -850,10 +890,9 @@ void drag_switcher_actual_open() {
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         auto monitor = target_monitor();
-        if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
+        if (rid != monitor || !paint_switcher_at(stage))
             return;
         auto openess = *datum<float>(c, "openess");
-        auto peaking_amount = *datum<float>(c, "peaking_amount");
         auto backup = c->real_bounds;
         defer(c->real_bounds = backup);
         auto new_h = 30;
@@ -868,29 +907,26 @@ void drag_switcher_actual_open() {
             return;
         clip(clip_bounds, 1.0);
 
-        RGBA col = {.18, .18, .18, .9f * peaking_amount - .1f * openess};
+        RGBA col = {.18, .18, .18, 1.0f};
         auto b = c->real_bounds;
-        //render_drop_shadow(monitor, 1.0, {0, 0, 0, .37f * peaking_amount}, 8 * s, 2.0, b);
         const auto corner_mask = openess == 0.0 ? 3 : 0;
         const auto rounding = std::round(8 * s * (openess == 0.0 ? 1.0f : openess));
         rect(b, col, corner_mask, rounding, 2.0, true, 1.0);
         // The border expands its input bounds by its monitor-scaled thickness.
         b.shrink(std::round(s));
-        border(b, {.3, .3, .3, 1 * peaking_amount}, 1.0f, corner_mask, rounding, 2.0, false);
+        border(b, {.3, .3, .3, 1.0f}, 1.0f, corner_mask, rounding, 2.0, false);
 
         {
-            float text_alpha = openess;
-            if (overview::is_showing()) {
-                text_alpha = 1.0;
-            }
+            const float slide = overview::is_showing() ? std::clamp(overview::get_openess(), 0.0f, 1.0f) : openess;
+            const float hint_alpha = slide * *datum<float>(c, "peaking_amount");
             auto icon = get_cached_texture(root, c, "drag_text_icon", icon_font, "\uf407", {.8, .8, .8, 1}, 13);
-            draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, peaking_amount * text_alpha);
+            draw_texture(*icon, c->real_bounds.x + 14 * s, c->real_bounds.y + c->real_bounds.h - icon->h * 1.60, hint_alpha);
             auto t = get_cached_texture(root, c, "drag_text", set->font, "Drag a window here to move it to another workspace.",
                 {.8, .8, .8, 1}, 13);
             draw_texture(*t, 
                 c->real_bounds.x + 14 * s + 10 * s + icon->w, 
                 c->real_bounds.y + c->real_bounds.h - t->h * 1.30, 
-                peaking_amount * text_alpha);
+                hint_alpha);
         }
 
 
@@ -901,7 +937,7 @@ void drag_switcher_actual_open() {
         if (!root) return;
         auto [rid, s, stage, active_id] = roots_info(actual_root, root);
         auto monitor = target_monitor();
-        if (rid != monitor || stage != (int) STAGE::RENDER_PRE_CURSOR)
+        if (rid != monitor || !paint_switcher_at(stage))
             return;
         auto openess = *datum<float>(c, "openess");
         auto backup = c->real_bounds;
@@ -1203,6 +1239,7 @@ void drag_workspace_switcher::close() {
     close_generation++;
     switcher_closing = false;
     hold_open = false;
+    set_released_window(-1);
     actual_drag_workspace_switcher_close();
     return;
 }

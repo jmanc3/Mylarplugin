@@ -789,8 +789,12 @@ static void paint_monitor(int monitor_id) {
             return;
         if (!snapshot && !hypriso->damage_intersects(monitor_id, render_bounds(hit, monitor_id)))
             return;
-        hypriso->clipbox = render_bounds(clip, monitor_id);
-        hypriso->draw_deco_thumbnail(cid, render_bounds(b, monitor_id), 0, 2.0f, 0, alpha);
+        const auto render_box = render_bounds(b, monitor_id);
+        const auto render_clip = render_bounds(clip, monitor_id);
+        if (!snapshot && drag_workspace_switcher::defer_released_thumbnail(monitor_id, cid, render_box, render_clip, alpha))
+            return;
+        hypriso->clipbox = render_clip;
+        hypriso->draw_deco_thumbnail(cid, render_box, 0, 2.0f, 0, alpha);
     };
     const double shadow_size = std::round(32 * s);
     for (auto wid : paint_order) {
