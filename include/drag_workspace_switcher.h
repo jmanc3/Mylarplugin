@@ -34,6 +34,8 @@ namespace drag_workspace_switcher {
     // Fly the released preview into its place inside the target thumbnail.
     // Call before end_drag, while the preview still has its drop bounds.
     void land(int cid, Container *target);
+    bool landing_on_monitor(int monitor);
+    void advance_landing(int monitor);
     bool is_landing(int cid);
 };
 

@@ -365,6 +365,9 @@ void create_overview_for_monitor(int monitor);
 static bool update_scene() {
     if (!scene)
         return false;
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Overview scene update");
+#endif
     const auto now = get_current_time_in_ms();
     const double dt = scene->last_update == 0 ? 0 : std::max(0.0, (now - scene->last_update) / 1000.0);
     scene->last_update = now;
@@ -716,6 +719,9 @@ static bool update_scene() {
 static void paint_monitor(int monitor_id) {
     if (!scene || !scene->monitors.contains(monitor_id))
         return;
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Overview monitor paint");
+#endif
     auto &monitor = scene->monitors.at(monitor_id);
     // screenshot_workspace temporarily replaces the compositor's active
     // workspace. Its preview must render that workspace, not our live selection.
@@ -1279,6 +1285,9 @@ static void start_wallpaper_fade_capture(int mid) {
 static long screenshots(bool initial = false) {
     if (!scene)
         return fast_capture_ms;
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Overview screenshot batch");
+#endif
     const auto tick_start = std::chrono::steady_clock::now();
     const auto now = get_current_time_in_ms();
 

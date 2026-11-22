@@ -9,6 +9,7 @@
 #include "drag.h"
 
 #include <algorithm>
+#include <chrono>
 #include <unordered_map>
 #include <fcntl.h>
 #include <unistd.h>
@@ -40,6 +41,9 @@ static bool same_bounds(const Bounds &a, const Bounds &b) {
 }
 
 static void capture_switcher_workspace(int monitor, int workspace) {
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Switcher workspace capture");
+#endif
     hypriso->screenshot_space(monitor, workspace);
     if (monitor != target_monitor())
         return;
@@ -98,7 +102,7 @@ static struct {
     Bounds from;
     Bounds current;
     float alpha = 1.0f;
-    long started = 0;
+    std::chrono::steady_clock::time_point started;
     bool snapshot_released = false;
     bool close_pending = false;
     bool previous_hold_open = false;
@@ -192,6 +196,9 @@ void drag_workspace_switcher::update_drag() {
         end_drag(dragged_preview.cid);
         return;
     }
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Switcher drag update");
+#endif
     auto &p = dragged_preview;
     if (!p.from_overview) {
         p.source = bounds_client(p.cid);
@@ -354,6 +361,35 @@ static void finish_landing(bool run_pending_close) {
         drag_workspace_switcher::close_visually();
 }
 
+static double landing_progress() {
+    const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - landing.started;
+    return elapsed.count() / landing_ms;
+}
+
+bool drag_workspace_switcher::landing_on_monitor(int monitor) {
+    return landing.cid != -1 && monitor == landing.monitor && !hypriso->rendering_snapshot();
+}
+
+// RENDER_PRE runs before Hyprland collects damage for this output.
+void drag_workspace_switcher::advance_landing(int monitor) {
+    if (!landing_on_monitor(monitor))
+        return;
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Switcher landing frame");
+#endif
+    const auto progress = landing_progress();
+    if (progress >= 1.0 && landing.snapshot_released) {
+        finish_landing(true);
+        return;
+    }
+    Bounds target;
+    if (!landing_target(target))
+        return;
+    damage_bounds(landing.current);
+    landing.current = lerp(landing.from, target, pull(slidetopos2, progress));
+    damage_bounds(landing.current);
+}
+
 static void start_landing(int cid, Container *target) {
     const auto &p = dragged_preview;
     if (cid == -1 || p.cid != cid || !p.ready || !target || hypriso->rendering_snapshot())
@@ -370,11 +406,12 @@ static void start_landing(int cid, Container *target) {
     landing.current = landing.from;
     damage_bounds(landing.current);
     landing.alpha = p.alpha;
-    landing.started = get_current_time_in_ms();
+    landing.started = std::chrono::steady_clock::now();
     landing.previous_hold_open = hold_open;
     // Keep the panel up until the window has visibly arrived.
     hold_open = true;
     const auto generation = ++landing_generation;
+    // Workspace capture needs its own render pass outside the output frame.
     later(16.0f, [generation](Timer *t) {
         t->keep_running = false;
         if (generation != landing_generation || landing.cid == -1)
@@ -383,13 +420,16 @@ static void start_landing(int cid, Container *target) {
             finish_landing(true);
             return;
         }
-        const auto t_norm = (get_current_time_in_ms() - landing.started) / landing_ms;
+        const auto t_norm = landing_progress();
         const int workspace = hypriso->get_client_workspace_id(landing.cid);
         if (!landing.snapshot_released && workspace >= 0 &&
             (workspace != landing.source_workspace || t_norm >= landing_release_start)) {
             // The copy flies to the window's place on screen, not over the
             // destination thumbnail, so that thumbnail can show the window as
             // soon as it has moved there.
+#ifdef TRACY_ENABLE
+            ZoneScopedN("Switcher landing snapshot handoff");
+#endif
             landing.snapshot_released = true;
             if (overview::is_showing())
                 overview::fake_paint(workspace);
@@ -401,12 +441,9 @@ static void start_landing(int cid, Container *target) {
             finish_landing(true);
             return;
         }
-        Bounds target;
-        if (landing_target(target)) {
-            damage_bounds(landing.current);
-            landing.current = lerp(landing.from, target, pull(slidetopos2, t_norm));
-            damage_bounds(landing.current);
-        }
+        // Once the snapshot is restored, only the deadline fallback remains.
+        if (landing.snapshot_released)
+            t->delay = std::ceil((1.0 - t_norm) * landing_ms);
         t->keep_running = true;
     });
 }
@@ -414,6 +451,9 @@ static void start_landing(int cid, Container *target) {
 static void paint_landing(int monitor) {
     if (landing.cid == -1 || monitor != landing.monitor || hypriso->rendering_snapshot())
         return;
+#ifdef TRACY_ENABLE
+    ZoneScopedN("Switcher landing draw");
+#endif
     const auto &b = landing.current;
     const float alpha = landing.alpha;
     if (alpha <= 0.0f)
@@ -1200,8 +1240,13 @@ bool drag_workspace_switcher::drop_window(int cid) {
                 const auto before = hypriso->get_active_workspace_id(monitor);
                 hypriso->move_to_workspace(cid, destination, false);
                 hypriso->bring_to_front(cid);
-                capture_switcher_workspace(monitor, before);
-                capture_switcher_workspace(monitor, hypriso->get_client_workspace_id(cid));
+                const int after = hypriso->get_client_workspace_id(cid);
+                if (before != after)
+                    capture_switcher_workspace(monitor, before);
+                // The landing handoff captures the destination with the window
+                // visible. Avoid a full workspace render with it still hidden.
+                if (landing.cid != cid || landing.snapshot_released)
+                    capture_switcher_workspace(monitor, after);
             });
             start_landing(cid, ch);
             return true;

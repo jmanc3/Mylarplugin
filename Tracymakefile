@@ -1,61 +1,26 @@
-PLUGIN_NAME = mylar-desktop
-MAKEFLAGS += -j16
+# Set TRACY_DIR to a Tracy checkout containing public/TracyClient.cpp.
+TRACY_DIR ?= ./tracy
+# Optimized captures by default. Use DEFAULT_BUILD=debug for a debug load.
+DEFAULT_BUILD := $(if $(filter debug,$(MAKECMDGOALS)),debug,release)
+BUILD_DIR := out/tracy/$(DEFAULT_BUILD)
+EXTRA_CXX_FLAGS := -I$(TRACY_DIR)/public -DTRACY_ENABLE -DTRACY_NO_MEMORY -DTRACY_ON_DEMAND -fno-omit-frame-pointer -g1 -pthread
+# Tracy owns thread-local destructors. Keep those in its client library so
+# they do not pin the plugin itself in memory across a Hyprland reload.
+EXTRA_LIBS := -Wl,-rpath,'$$ORIGIN'
+EXTRA_LINK_INPUTS := $(BUILD_DIR)/libmylar-tracy.so
 
-# --- Source discovery ---
-SOURCE_FILES := $(wildcard ./src/*.cpp ./src/*/*.cpp ./tracy/public/TracyClient.cpp)
-OBJECT_FILES := $(patsubst ./%, out/%, $(SOURCE_FILES:.cpp=.o))
+include Makefile
 
-# --- Pkg-config dependencies ---
-PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo wayland-server xkbcommon cairo dbus-1 alsa libpipewire-0.3 libpulse)
-PKG_LIBS  := $(shell pkg-config --libs   librsvg-2.0 libdrm hyprland pangocairo wayland-server xkbcommon cairo dbus-1 alsa libpipewire-0.3 libpulse)
+$(EXTRA_LINK_INPUTS): $(BUILD_DIR)/TracyClient.o
+	$(CXX) -shared -Wl,-soname,libmylar-tracy.so $< -pthread -ldl -o $@
 
-# --- Include paths ---
-INCLUDE_FLAGS := -I./include -I./tracy/public
-
-# --- Common compiler flags ---
-COMMON_FLAGS := -std=c++2b -fPIC --no-gnu-unique $(INCLUDE_FLAGS) $(PKG_FLAGS) \
-	-DTRACY_ENABLE -DTRACY_NO_MEMORY -DTRACY_ON_DEMAND
-
-# --- Build type flags ---
-DEBUG_FLAGS := -g -O0 -fno-omit-frame-pointer
-RELEASE_FLAGS := -O3 -DNDEBUG -fno-omit-frame-pointer
-
-# --- Output ---
-OUTPUT = out/$(PLUGIN_NAME).so
-
-.PHONY: all debug release clean load unload
-
-# --- Default target ---
-all: debug
-
-# --- Build modes ---
-debug:   CXX_FLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
-release: CXX_FLAGS := $(COMMON_FLAGS) $(RELEASE_FLAGS)
-
-debug release: $(OUTPUT) out/mylar-file-chooser
-
-out/mylar-file-chooser: helpers/file_chooser.cpp
-	@mkdir -p out
-	$(CXX) $< -o $@ $(shell pkg-config --cflags --libs gtk+-3.0)
-
-# --- Link step ---
-$(OUTPUT): $(OBJECT_FILES)
-	@echo "Linking $@"
-	$(CXX) -shared $^ -o $@ $(PKG_LIBS) -lrt
-
-# --- Compile step ---
-out/%.o: %.cpp
+$(BUILD_DIR)/TracyClient.o: $(TRACY_DIR)/public/TracyClient.cpp
 	@mkdir -p $(dir $@)
-	@echo "Compiling $<"
-	$(CXX) $(CXX_FLAGS) -c $< -o $@
+	$(CXX) $(CXX_FLAGS) $(EXTRA_CXX_FLAGS) -MMD -MP -c $< -o $@
 
-# --- Utility targets ---
-clean:
-	$(RM) $(OUTPUT) out/mylar-file-chooser $(OBJECT_FILES)
+-include $(BUILD_DIR)/TracyClient.d
 
-load: all unload
-	hyprctl plugin load ${PWD}/$(OUTPUT); sleep .4s
-
-unload:
-	hyprctl plugin unload ${PWD}/$(OUTPUT)
-
+clean: clean-tracy-client
+.PHONY: clean-tracy-client
+clean-tracy-client:
+	$(RM) $(EXTRA_LINK_INPUTS) $(BUILD_DIR)/TracyClient.o $(BUILD_DIR)/TracyClient.d

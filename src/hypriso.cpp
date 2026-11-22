@@ -2604,6 +2604,10 @@ void HyprIso::create_callbacks() {
         if (hypriso->on_render) {
             for (auto m : hyprmonitors) {
                 if (m->m == event.monitor) {
+                    if (stage == RENDER_PRE)
+                        drag_workspace_switcher::advance_landing(m->id);
+                    if (stage == RENDER_LAST_MOMENT && drag_workspace_switcher::landing_on_monitor(m->id))
+                        event.monitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_ANIMATION);
                     hypriso->on_render(m->id, (int)stage);
                 }
             }
