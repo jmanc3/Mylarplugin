@@ -468,7 +468,8 @@ static bool on_key_press(int id, int key, int state, bool update_mods) {
         snap_assist::close();
         overview::close();
         META_PRESSED = false;
-        zoom_factor = 1.0;
+        if (zoom_factor > 1.0)
+            heart::set_zoom(1.0);
     }
 
     // Only this key's handlers decide whether it is consumed. A flag left over from an
@@ -3260,6 +3261,8 @@ void heart::end() {
     ZoneScoped;
 #endif
     set_cursor_hidden_for_desktop_fade(false);
+    if (zoom_factor > 1.0)
+        set_zoom(1.0);
     clear_wallpaper_cursor_spinner_textures();
     wall_spinner_start_ms = -1;
     wall_spinner_end_ms = -1;

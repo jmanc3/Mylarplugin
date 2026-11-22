@@ -8238,14 +8238,25 @@ class CTakeoverKeyboardSink : public IKeyboardEventHandler {
 };
 
 static std::unordered_set<std::string> input_takeover_owners;
+static bool zoom_active = false;
 // Never freed: releases of swallowed presses may arrive after the takeover ends.
 static SP<IKeyboardEventHandler> takeover_keyboard_sink;
 static Hyprutils::Signal::CHyprSignalListener takeover_pointer_focus_listener;
 static Hyprutils::Signal::CHyprSignalListener takeover_keyboard_focus_listener;
+static Hyprutils::Signal::CHyprSignalListener zoom_fullscreen_listener;
+
+static void update_cursor_visibility_override() {
+    // A fullscreen client can hide its cursor. Use the lowest override group
+    // so resize and screenshot cursors can still take precedence.
+    if (zoom_active || (!input_takeover_owners.empty() && !g_pSeatManager->m_state.pointerFocus.lock()))
+        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+    else
+        Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+}
 
 // True for a toplevel window's surfaces (its subsurfaces and popups too).
 // Layer surfaces, like the dock and its menus, are not windows.
-static bool surface_owned_by_window(SP<CWLSurfaceResource> surface) {
+static PHLWINDOW window_owning_surface(SP<CWLSurfaceResource> surface) {
     while (surface && surface->m_role && surface->m_role->role() == SURFACE_ROLE_SUBSURFACE) {
         const auto sub = sc<CSubsurfaceRole *>(surface->m_role.get())->m_subsurface.lock();
         surface = sub ? sub->m_parent.lock() : nullptr;
@@ -8253,39 +8264,52 @@ static bool surface_owned_by_window(SP<CWLSurfaceResource> surface) {
     const auto hl = Desktop::View::CWLSurface::fromResource(surface);
     const auto view = hl ? hl->view() : nullptr;
     if (!view)
-        return false;
+        return nullptr;
     if (const auto popup = Desktop::View::CPopup::fromView(view))
-        return !!popup->windowOwner();
-    return !!Desktop::View::CWindow::fromView(view);
+        return popup->windowOwner();
+    return Desktop::View::CWindow::fromView(view);
 }
 
-// The takeover only targets windows, which sit under our compositor-drawn
-// overlays without knowing it. Layer surfaces (the dock) keep working.
 static void update_input_takeover() {
-    const auto pointer = g_pSeatManager->m_state.pointerFocus.lock();
-    // Switching workspaces refocuses the last window there, and that refocus
-    // gives it pointer focus again, which re-arms a game's pointer lock and
-    // freezes the cursor. Take it back as soon as it is given. The emit is
-    // the last thing setPointerFocus does, and clearing it emits again, which
-    // re-enters here and lets the constraint controller drop the lock.
-    if (pointer && surface_owned_by_window(pointer)) {
+    const bool overlay_active = !input_takeover_owners.empty();
+    const auto window = window_owning_surface(g_pSeatManager->m_state.pointerFocus.lock());
+    // A fullscreen game can lock the pointer. Clearing pointer focus releases
+    // its constraint. The focus change re-enters this function with no window.
+    if (window && (overlay_active || (zoom_active && Fullscreen::controller()->isFullscreen(window, Fullscreen::FSMODE_FULLSCREEN)))) {
         g_pSeatManager->setPointerFocus(nullptr, {});
         return;
     }
-    // A fullscreen game usually hides its cursor image, which stays applied
-    // while nothing has pointer focus. A layer surface sets its own cursor.
-    // The lowest override group lets SPECIAL_ACTION cursors (crosshair,
-    // resize) still win, and falls back to left_ptr when they are unset.
-    if (pointer)
-        Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
-    else
-        Pointer::Cursor::overrideController->setOverride("left_ptr", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+    update_cursor_visibility_override();
     // Keyboard focus itself stays on the window, because a fullscreen game
     // may minimize when it loses focus. Keybinds still run before the sink.
-    if (surface_owned_by_window(g_pSeatManager->m_state.keyboardFocus.lock()))
+    if (overlay_active && window_owning_surface(g_pSeatManager->m_state.keyboardFocus.lock()))
         g_pSeatManager->m_keyboardEventHandlers.push(takeover_keyboard_sink);
-    else
+    else if (takeover_keyboard_sink)
         g_pSeatManager->m_keyboardEventHandlers.remove(takeover_keyboard_sink);
+}
+
+static void sync_input_takeover(bool refocus_pointer) {
+    const bool overlay_active = !input_takeover_owners.empty();
+    takeover_pointer_focus_listener.reset();
+    takeover_keyboard_focus_listener.reset();
+    zoom_fullscreen_listener.reset();
+    if (overlay_active || zoom_active)
+        takeover_pointer_focus_listener = g_pSeatManager->m_events.pointerFocusChange.listen([] { update_input_takeover(); });
+    if (overlay_active) {
+        if (!takeover_keyboard_sink)
+            takeover_keyboard_sink = makeShared<CTakeoverKeyboardSink>();
+        takeover_keyboard_focus_listener = g_pSeatManager->m_events.keyboardFocusChange.listen([] { update_input_takeover(); });
+    }
+    if (zoom_active)
+        zoom_fullscreen_listener = Event::bus()->m_events.window.fullscreen.listen([] (PHLWINDOW) {
+            if (input_takeover_owners.empty() && !g_pSeatManager->m_state.pointerFocus.lock())
+                g_pInputManager->refocusPointer();
+            update_input_takeover();
+        });
+
+    update_input_takeover();
+    if (refocus_pointer)
+        g_pInputManager->refocusPointer();
 }
 
 void set_input_takeover(const std::string &owner, bool active) {
@@ -8295,27 +8319,8 @@ void set_input_takeover(const std::string &owner, bool active) {
     else
         input_takeover_owners.erase(owner);
     const bool is_active = !input_takeover_owners.empty();
-    if (was_active == is_active)
-        return;
-
-    if (!takeover_keyboard_sink)
-        takeover_keyboard_sink = makeShared<CTakeoverKeyboardSink>();
-
-    if (is_active) {
-        takeover_pointer_focus_listener = g_pSeatManager->m_events.pointerFocusChange.listen([] { update_input_takeover(); });
-        takeover_keyboard_focus_listener = g_pSeatManager->m_events.keyboardFocusChange.listen([] { update_input_takeover(); });
-        update_input_takeover();
-        return;
-    }
-
-    takeover_pointer_focus_listener.reset();
-    takeover_keyboard_focus_listener.reset();
-    g_pSeatManager->m_keyboardEventHandlers.remove(takeover_keyboard_sink);
-    // Restores the client's cursor image, then hands pointer focus (and any
-    // pointer constraint) back to whatever is under the cursor. This path
-    // skips the mouse move event, so our own listeners cannot cancel it.
-    Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
-    g_pInputManager->refocusPointer();
+    if (was_active != is_active)
+        sync_input_takeover(!is_active);
 }
 
 // Key repeat runs in the client, which keeps repeating until it is told the
@@ -10165,6 +10170,10 @@ void HyprIso::set_zoom_factor(float amount, bool instant) {
         if (m->m_activeWorkspace)
             m->m_activeWorkspace->space()->recalculate();
     }
+    if (zoom_active != (amount > 1.f)) {
+        zoom_active = amount > 1.f;
+        sync_input_takeover(!zoom_active && input_takeover_owners.empty());
+    }
 }
 
 int HyprIso::parent(int id) {
@@ -11024,7 +11033,7 @@ void HyprIso::all_lose_focus() {
     prev = Desktop::focusState()->window();
     // Only drop pointer focus if it belongs to a window; layer surfaces like
     // the dock keep pointer focus so clicking a dock icon can immediately toggle again.
-    if (surface_owned_by_window(g_pSeatManager->m_state.pointerFocus.lock()))
+    if (window_owning_surface(g_pSeatManager->m_state.pointerFocus.lock()))
         g_pSeatManager->setPointerFocus(nullptr, {});
     Desktop::focusState()->fullWindowFocus(nullptr, Desktop::eFocusReason::FOCUS_REASON_DESKTOP_STATE_CHANGE);
     if (on_activated)
