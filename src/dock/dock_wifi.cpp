@@ -11,7 +11,7 @@
 
 static std::mutex wifi_mutex;
 static std::condition_variable wifi_wakeup;
-static std::thread wifi_thread;
+static std::jthread wifi_thread;
 static bool wifi_thread_running = false;
 static int wifi_menu_count = 0;
 static std::vector<WifiCommand> wifi_commands;
@@ -37,7 +37,7 @@ const WifiAccessPoint *wifi_access_point(const WifiStatus &status, const std::st
     return nullptr;
 }
 
-static void wifi_worker() {
+static void wifi_worker(std::stop_token stop) {
     auto bus = wifi_backend_open();
     std::string device_path;
     unsigned long revision = 0;
@@ -61,15 +61,15 @@ static void wifi_worker() {
         message_until = std::chrono::steady_clock::now() + std::chrono::seconds(9);
     };
 
-    while (!finished) {
+    while (!stop.stop_requested() && !finished) {
         std::vector<WifiCommand> commands;
         {
             std::unique_lock<std::mutex> lock(wifi_mutex);
             // Nothing to show and nothing in flight: sleep until a menu opens.
             wifi_wakeup.wait(lock, [&]() {
-                return finished || wifi_menu_count > 0 || !wifi_commands.empty() || !pending_active.empty();
+                return stop.stop_requested() || finished || wifi_menu_count > 0 || !wifi_commands.empty() || !pending_active.empty();
             });
-            if (finished) break;
+            if (stop.stop_requested() || finished) break;
             commands.swap(wifi_commands);
         }
 
@@ -236,7 +236,7 @@ static void wifi_worker() {
 
         std::unique_lock<std::mutex> lock(wifi_mutex);
         wifi_wakeup.wait_for(lock, scanning || !pending_active.empty() ? std::chrono::milliseconds(500) :
-            std::chrono::seconds(3), []() { return finished || !wifi_commands.empty(); });
+            std::chrono::seconds(3), [&]() { return stop.stop_requested() || finished || !wifi_commands.empty(); });
     }
     wifi_backend_close(bus);
     std::lock_guard<std::mutex> lock(wifi_mutex);
@@ -253,7 +253,7 @@ void wifi_menu_opened() {
         if (!wifi_thread_running && !finished) {
             if (wifi_thread.joinable()) wifi_thread.join();
             wifi_thread_running = true;
-            wifi_thread = std::thread(wifi_worker);
+            wifi_thread = std::jthread(wifi_worker);
         }
     }
     wifi_wakeup.notify_all();
@@ -270,11 +270,12 @@ std::shared_ptr<const WifiMenuView> wifi_latest() {
 
 void wifi_stop() {
     // dock::stop and the last dock thread may both get here; only one joins.
-    std::thread worker;
+    std::jthread worker;
     {
         std::lock_guard<std::mutex> lock(wifi_mutex);
         wifi_menu_count = 0;
         wifi_commands.clear();
+        wifi_thread.request_stop();
         worker = std::move(wifi_thread);
     }
     wifi_wakeup.notify_all();

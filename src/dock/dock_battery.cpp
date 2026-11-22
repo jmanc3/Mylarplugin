@@ -29,7 +29,7 @@ struct BatteryView {
 
 static std::mutex battery_mutex;
 static std::condition_variable battery_wakeup;
-static std::thread battery_thread;
+static std::jthread battery_thread;
 static BatteryView battery_view;
 static bool watching_battery = false;
 static bool battery_refresh_requested = false;
@@ -150,14 +150,14 @@ static void request_battery_action(bool protector) {
 
 void watch_battery_level() {
     std::lock_guard<std::mutex> lock(battery_mutex);
-    if (watching_battery) return;
+    if (watching_battery || finished) return;
     if (battery_thread.joinable()) battery_thread.join();
     battery_action = 0;
     battery_refresh_requested = false;
     battery_view = BatteryView{};
     battery_view.history_enabled = set->battery_history_enabled;
     watching_battery = true;
-    battery_thread = std::thread([]() {
+    battery_thread = std::jthread([](std::stop_token stop) {
         const auto path = battery_history_path();
         BatteryView next;
         next.history = load_battery_history(path);
@@ -165,7 +165,7 @@ void watch_battery_level() {
         // alone cannot tell us whether the laptop was charging between readings.
         std::vector<BatterySample> discharge;
         bool save_needed = true;
-        while (!finished) {
+        while (!stop.stop_requested() && !finished) {
             int action;
             {
                 std::lock_guard<std::mutex> lock(battery_mutex);
@@ -245,8 +245,8 @@ void watch_battery_level() {
             }
             if (!finished) dock::change_in_battery();
             std::unique_lock<std::mutex> lock(battery_mutex);
-            battery_wakeup.wait_for(lock, std::chrono::seconds(next.status.valid ? 30 : 2), []() {
-                return finished || battery_action != 0 || battery_refresh_requested;
+            battery_wakeup.wait_for(lock, std::chrono::seconds(next.status.valid ? 30 : 2), [&]() {
+                return stop.stop_requested() || finished || battery_action != 0 || battery_refresh_requested;
             });
         }
         std::lock_guard<std::mutex> lock(battery_mutex);
@@ -643,9 +643,10 @@ void fill_battery_container(Dock *dock) {
 }
 
 void battery_stop() {
-    std::thread worker;
+    std::jthread worker;
     {
         std::lock_guard<std::mutex> lock(battery_mutex);
+        battery_thread.request_stop();
         worker = std::move(battery_thread);
     }
     battery_wakeup.notify_all();

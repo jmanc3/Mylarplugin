@@ -4,15 +4,8 @@
 #include "heart.h"
 #include <wayland-server-protocol.h>
 
-std::vector<MylarWindow *> mylar_windows;
-
 static MylarWindow *mylar(RawWindow *rw) {
-    for (auto m : mylar_windows) {
-        if (m->raw_window == rw) {
-            return m;
-        }
-    }
-    return nullptr;
+    return rw->mylar;
 }
 
 static MylarWindow *target_popup_if_exists_instead(MylarWindow *mw) {
@@ -156,11 +149,7 @@ void on_close(RawWindow *rw) {
         auto on_closed = std::move(m->root->on_closed);
         on_closed(m->root);
     }
-    for (int i = mylar_windows.size() - 1; i >= 0; i--)
-        if (m == mylar_windows[i]) {
-            //delete m->root;
-            mylar_windows.erase(mylar_windows.begin() + i);
-        }
+    rw->mylar = nullptr;
 }
 
 void on_scale_change(RawWindow *rw, float dpi) {
@@ -184,11 +173,14 @@ static void wire_handlers(MylarWindow *m) {
 MylarWindow *open_mylar_window(RawApp *app, WindowType type, RawWindowSettings settings) {
     auto m = new MylarWindow;
     m->raw_window = windowing::open_window(app, type, settings);
-    assert(m->raw_window);
+    if (!m->raw_window) {
+        delete m;
+        return nullptr;
+    }
     m->root = new Container();
     m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
     wire_handlers(m);
-    mylar_windows.push_back(m);
+    m->raw_window->mylar = m;
     // open_window could not paint before on_render was wired. The paint runs
     // on the window's loop, after the caller has filled the root.
     windowing::redraw(m->raw_window);
@@ -202,11 +194,14 @@ MylarWindow *open_mylar_popup(MylarWindow *parent, RawWindowSettings settings) {
 
     auto m = new MylarWindow;
     m->raw_window = windowing::open_popup(parent->raw_window, settings);
-    assert(m->raw_window);
+    if (!m->raw_window) {
+        delete m;
+        return nullptr;
+    }
     m->root = new Container();
     m->root->real_bounds = Bounds(0, 0, settings.pos.w, settings.pos.h);
     wire_handlers(m);
-    mylar_windows.push_back(m);
+    m->raw_window->mylar = m;
 
     parent->popup_window = m;
     windowing::redraw(m->raw_window);

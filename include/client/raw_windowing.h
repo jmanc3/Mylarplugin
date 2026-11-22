@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 #include <mutex>
+#include <stop_token>
 #include <vector>
 #include "drawing/context.h"
 #include <xkbcommon/xkbcommon.h>
@@ -144,7 +145,10 @@ struct RawWindowSettings {
     float scale_hint = 0;
 };
 
-struct RawWindow {    
+struct MylarWindow;
+
+struct RawWindow {
+    MylarWindow *mylar = nullptr;
     int id = -1;
 
     float dpi = 1.0;
@@ -202,7 +206,7 @@ enum struct WindowType {
 };
 
 namespace windowing {
-    RawApp *open_app();
+    RawApp *open_app(std::stop_token stop = {});
 
     RawWindow *open_window(RawApp *app, WindowType type, RawWindowSettings settings);
     RawWindow *open_popup(RawWindow *parent, RawWindowSettings settings);

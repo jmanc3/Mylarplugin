@@ -1458,8 +1458,7 @@ static void dbus_timer_destroy(DBusTimerEntry *entry) {
     if (entry->firing)
         return; // The firing callback finishes the teardown.
     if (entry->timer) {
-        wl_event_source_remove(entry->timer->source);
-        delete entry->timer;
+        cancel_timer(entry->timer);
     }
     delete entry;
 }

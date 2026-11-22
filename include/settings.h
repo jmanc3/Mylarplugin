@@ -4,13 +4,8 @@
 #include <vector>
 
 struct ConfigSettings;
-typedef struct _GtkWindow GtkWindow;
 
-// The GTK file chooser settings uses to pick a wallpaper image. Blocks until the
-// dialog closes and returns the chosen path, or "" when cancelled.
-std::string choose_file(bool folder = false, GtkWindow *parent = nullptr);
-// Cancels any open choose_file() dialog so plugin unload does not block or crash.
-void cancel_choose_file();
+std::string choose_file(bool folder = false);
 
 namespace settings {
     // focus_search: put the keyboard cursor in the search field, ready for typing.

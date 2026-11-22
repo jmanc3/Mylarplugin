@@ -1,3 +1,4 @@
+#include "plugin_lifetime.h"
 //
 // Created by jmanc3 on 9/30/21.
 //
@@ -49,7 +50,8 @@
 #include <unordered_map>
 
 // Global stuff
-bool audio_running = false;
+std::atomic<bool> audio_running = false;
+static std::stop_source audio_lifetime;
 
 // The PipeWire backend's work happens on pw_thread_loop; our audio thread just
 // parks here until audio_running goes false instead of polling it.
@@ -65,7 +67,7 @@ static void pipewire_unpark() {
 
 static void pipewire_park() {
     std::unique_lock<std::mutex> lock(pipewire_park_mutex);
-    pipewire_park_condition.wait(lock, []() { return !audio_running; });
+    pipewire_park_condition.wait(lock, []() { return audio_lifetime.stop_requested() || !audio_running; });
 }
 bool allow_audio_thread_creation = true;
 
@@ -77,7 +79,7 @@ enum AudioBackend {
 };
 
 // General stuff
-static AudioBackend backend = AudioBackend::UNSET;
+static std::atomic<AudioBackend> backend = AudioBackend::UNSET;
 snd_mixer_t *alsa_handle = nullptr;
 snd_mixer_elem_t *master_volume = nullptr;
 snd_mixer_selem_id_t *master_sid = nullptr;
@@ -87,7 +89,7 @@ snd_mixer_elem_t *speaker_volume = nullptr;
 snd_mixer_selem_id_t *speaker_sid = nullptr;
 
 // Pulseaudio stuff
-static bool ready = false;
+static std::atomic<bool> ready = false;
 static pa_mainloop *mainloop;
 static pa_mainloop_api *mainloop_api;
 static pa_context *context;
@@ -2295,8 +2297,6 @@ static void iterate_pulseaudio_mainloop() {
 }
 
 static bool try_establishing_connection_with_pulseaudio() {
-    mainloop = pa_mainloop_new();
-    if (!mainloop) return false;
     mainloop_api = pa_mainloop_get_api(mainloop);
     if (!mainloop_api) return false;
 
@@ -2308,10 +2308,7 @@ static bool try_establishing_connection_with_pulseaudio() {
     pa_proplist_sets(prop_list, PA_PROP_APPLICATION_ICON_NAME, "audio-card");
     pa_proplist_sets(prop_list, PA_PROP_APPLICATION_VERSION, "1");
     context = pa_context_new_with_proplist(mainloop_api, "Winbar Volume Control", prop_list);
-    if (!context) {
-        pa_mainloop_free(mainloop);
-        return false;
-    }
+    if (!context) return false;
 
     if (pa_context_connect(context, NULL, PA_CONTEXT_NOAUTOSPAWN, NULL) < 0) {
         return false;
@@ -2350,7 +2347,7 @@ static bool try_establishing_connection_with_pulseaudio() {
     }, nullptr);
 
     audio_running = true;
-    while (audio_running && !ready) {
+    while (!audio_lifetime.stop_requested() && audio_running && !ready) {
         iterate_pulseaudio_mainloop();
     }
     return ready;
@@ -2681,7 +2678,7 @@ static bool try_establishing_connection_with_pipewire() {
 
     audio_running = true;
     int wait_rounds = 0;
-    while (audio_running && !pw_initial_sync_done && wait_rounds < 8) {
+    while (!audio_lifetime.stop_requested() && audio_running && !pw_initial_sync_done && wait_rounds < 8) {
         pw_thread_loop_timed_wait(pw_thread_loop_instance, 1);
         wait_rounds++;
     }
@@ -2815,97 +2812,91 @@ bool try_establishing_connection_with_alsa() {
     return true;
 }
 
-static std::vector<std::thread> threads;
+static std::mutex audio_start_mutex;
+static std::thread audio_worker;
+static std::atomic<bool> audio_worker_done = true;
 
 void audio_sort() {
     sort();
 }
 
-void audio_start() {
-    if (!threads.empty() && !audio_running) {
-        audio_stop();
-        audio_join();
+static bool run_pulseaudio() {
+    mainloop = pa_mainloop_new();
+    if (!mainloop) return false;
+    bool connected;
+    {
+        std::stop_callback wake(audio_lifetime.get_token(), [loop = mainloop] { pa_mainloop_wakeup(loop); });
+        connected = try_establishing_connection_with_pulseaudio();
+        if (connected) {
+            backend = AudioBackend::PULSEAUDIO;
+            while (!audio_lifetime.stop_requested() && audio_running)
+                iterate_pulseaudio_mainloop();
+            mixer_clear_all();
+        }
+        ready = false;
+        if (context) {
+            pa_context_disconnect(context);
+            pa_context_unref(context);
+            context = nullptr;
+        }
     }
-    auto t = std::thread([]() -> void {
-        if (backend != AudioBackend::UNSET)
+    pa_mainloop_free(mainloop);
+    mainloop = nullptr;
+    delete_all_audio_clients();
+    audio_running = false;
+    backend = AudioBackend::UNSET;
+    return connected;
+}
+
+static bool run_pipewire() {
+    if (!try_establishing_connection_with_pipewire())
+        return false;
+    backend = AudioBackend::PIPEWIRE;
+    pipewire_park();
+    ready = false;
+    cleanup_pipewire_state();
+    delete_all_audio_clients();
+    audio_running = false;
+    backend = AudioBackend::UNSET;
+    return true;
+}
+
+void audio_start() {
+    std::lock_guard lock(audio_start_mutex);
+    if (plugin_lifetime.stop_requested() || !audio_worker_done || audio_running)
+        return;
+    if (audio_worker.joinable())
+        audio_worker.join();
+    audio_lifetime = std::stop_source{};
+    audio_worker_done = false;
+    audio_worker = std::thread([prefer_pipewire = set->prefer_pipewire_audio_backend] {
+        defer(audio_worker_done = true);
+        audio_thread_id = std::this_thread::get_id();
+        auto first = prefer_pipewire ? run_pipewire : run_pulseaudio;
+        auto second = prefer_pipewire ? run_pulseaudio : run_pipewire;
+        if (audio_lifetime.stop_requested() || first() || audio_lifetime.stop_requested() || second())
             return;
-        if (set->prefer_pipewire_audio_backend) {
-            if (try_establishing_connection_with_pipewire()) {
-                backend = AudioBackend::PIPEWIRE;
-                audio_thread_id = std::this_thread::get_id();
-                pipewire_park();
-                cleanup_pipewire_state();
-                delete_all_audio_clients();
-                audio_running = false;
-                backend = AudioBackend::UNSET;
-            } else if (try_establishing_connection_with_pulseaudio()) {
-                backend = AudioBackend::PULSEAUDIO;
-                audio_thread_id = std::this_thread::get_id();
-                while (audio_running) {
-                    iterate_pulseaudio_mainloop();
-                }
-                mixer_clear_all();
-                pa_context_disconnect(context);
-                pa_context_unref(context);
-                pa_mainloop_free(mainloop);
-                context = nullptr;
-                mainloop = nullptr;
-                delete_all_audio_clients();
-                audio_running = false;
-                backend = AudioBackend::UNSET;
-            } else if (try_establishing_connection_with_alsa()) {
-                backend = AudioBackend::ALSA;
-                audio_running = true;
-                ready = true;
-                audio_thread_id = std::this_thread::get_id();
-            }
-        } else {
-        	if (try_establishing_connection_with_pulseaudio()) {
-        	    backend = AudioBackend::PULSEAUDIO;
-        	    audio_thread_id = std::this_thread::get_id();
-        	    while (audio_running) {
-            		iterate_pulseaudio_mainloop();
-        	    }
-        	    mixer_clear_all();
-        	    pa_context_disconnect(context);
-        	    pa_context_unref(context);
-        	    pa_mainloop_free(mainloop);
-        	    context = nullptr;
-        	    mainloop = nullptr;
-        	    delete_all_audio_clients();
-                audio_running = false;
-                backend = AudioBackend::UNSET;
-        	} else if (try_establishing_connection_with_pipewire()) {
-        	    backend = AudioBackend::PIPEWIRE;
-        	    audio_thread_id = std::this_thread::get_id();
-        	    pipewire_park();
-        	    cleanup_pipewire_state();
-        	    delete_all_audio_clients();
-                audio_running = false;
-                backend = AudioBackend::UNSET;
-        	} else if (try_establishing_connection_with_alsa()) {
-        	    backend = AudioBackend::ALSA;
-        	    audio_running = true;
-        	    ready = true;
-        	    audio_thread_id = std::this_thread::get_id();
-        	}
+        if (!audio_lifetime.stop_requested() && try_establishing_connection_with_alsa()) {
+            backend = AudioBackend::ALSA;
+            audio_running = true;
+            ready = true;
         }
     });
-    threads.push_back(std::move(t));
 }
 
 void audio_stop() {
-    //if (audio_change_callback)
-        //audio_change_callback();
+    std::lock_guard lock(audio_start_mutex);
+    audio_lifetime.request_stop();
     ready = false;
     audio_running = false;
-    pipewire_unpark(); // Also covers a stop that lands before backend is set.
-    if (backend == AudioBackend::PULSEAUDIO) {
-        pa_mainloop_wakeup(mainloop);
-    } else if (backend == AudioBackend::PIPEWIRE) {
-        if (pw_thread_loop_instance)
-            pw_thread_loop_signal(pw_thread_loop_instance, false);
-    } else if (backend == AudioBackend::ALSA) {
+    pipewire_unpark();
+}
+
+void audio_join() {
+    std::lock_guard lock(audio_start_mutex);
+    if (audio_worker.joinable())
+        audio_worker.join();
+    if (backend == AudioBackend::ALSA) {
         if (alsa_handle) snd_mixer_close(alsa_handle);
         if (master_sid) snd_mixer_selem_id_free(master_sid);
         if (headphone_sid) snd_mixer_selem_id_free(headphone_sid);
@@ -2917,13 +2908,9 @@ void audio_stop() {
         delete_all_audio_clients();
         mixer_clear_all();
     }
+    ready = false;
+    audio_running = false;
     backend = AudioBackend::UNSET;
-}
-
-void audio_join() {
-    for (int i = 0; i < (int) threads.size(); ++i)
-        threads[i].join();
-    threads.clear();
 }
 
 void audio(const std::function<void()> &callback) {
@@ -2950,11 +2937,7 @@ void audio(const std::function<void()> &callback) {
 
     // We handle the case where this function is called from the audio thread which would obviously lock us up.
     if (std::this_thread::get_id() == audio_thread_id) {
-        // re-call the function passed in but on another thread
-        std::thread temp([callback]() {
-            audio(callback);
-        });
-        temp.detach();
+        main_thread([callback] { audio(callback); });
         return;
     }
 

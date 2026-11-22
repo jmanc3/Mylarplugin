@@ -1,3 +1,5 @@
+#include "cancellable_command.h"
+#include "plugin_lifetime.h"
 
 #include "settings.h"
 #include "pango_font_cache.h"
@@ -24,6 +26,7 @@
 #include "wallpaper_layout.h"
 #include <chrono>
 #include <csetjmp>
+#include <dlfcn.h>
 #include <hyprland/src/helpers/MiscFunctions.hpp>
 
 #include <gtk/gtk.h>
@@ -48,6 +51,7 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 static RawApp *settings_app = nullptr;
+static std::atomic<RawWindow *> settings_redraw_window = nullptr;
 static MylarWindow *settings_mylar = nullptr;
 static std::string requested_page;
 static bool icon_cache_rescan_in_progress = false;
@@ -478,26 +482,6 @@ static std::string trim_newline(std::string s) {
     return s;
 }
 
-static std::mutex choose_file_mutex;
-static GtkWidget *active_choose_file_dialog = nullptr;
-static bool choose_file_cancelled = false;
-
-void cancel_choose_file() {
-    std::lock_guard<std::mutex> lock(choose_file_mutex);
-    choose_file_cancelled = true;
-    if (active_choose_file_dialog) {
-        GtkWidget *dialog = active_choose_file_dialog;
-        g_object_ref(dialog);
-        g_idle_add(+[](gpointer data) -> gboolean {
-            auto *dlg = static_cast<GtkWidget *>(data);
-            if (GTK_IS_DIALOG(dlg))
-                gtk_dialog_response(GTK_DIALOG(dlg), GTK_RESPONSE_CANCEL);
-            g_object_unref(dlg);
-            return G_SOURCE_REMOVE;
-        }, dialog);
-    }
-}
-
 struct SettingsWorker {
     std::atomic<bool> done = false;
     std::thread thread;
@@ -506,7 +490,7 @@ struct SettingsWorker {
 static std::atomic<bool> settings_workers_stopping = false;
 static std::mutex settings_workers_mutex;
 static std::vector<std::shared_ptr<SettingsWorker>> settings_workers;
-static std::atomic<pid_t> sddm_pkexec_pid = -1;
+
 
 static void reap_settings_workers_locked() {
     for (int i = (int) settings_workers.size() - 1; i >= 0; i--) {
@@ -521,7 +505,7 @@ static void reap_settings_workers_locked() {
 static void spawn_settings_worker(std::function<void()> fn) {
     std::lock_guard<std::mutex> lock(settings_workers_mutex);
     reap_settings_workers_locked();
-    if (settings_workers_stopping.load())
+    if (settings_workers_stopping.load() || plugin_lifetime.stop_requested())
         return;
     auto worker = std::make_shared<SettingsWorker>();
     worker->thread = std::thread([worker, fn = std::move(fn)]() {
@@ -531,60 +515,26 @@ static void spawn_settings_worker(std::function<void()> fn) {
     settings_workers.push_back(std::move(worker));
 }
 
-std::string choose_file(bool folder, GtkWindow* parent) {
+#ifndef MYLAR_FILE_CHOOSER_PATH
+#define MYLAR_FILE_CHOOSER_PATH "/usr/share/mylardesktop/mylar-file-chooser"
+#endif
+
+std::string choose_file(bool folder) {
+    // A separate GTK process can be interrupted even during GTK's first
+    // Wayland round trip. Local builds keep it beside the plugin.
+    std::filesystem::path helper = MYLAR_FILE_CHOOSER_PATH;
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void *>(&choose_file), &info) && info.dli_fname) {
+        auto local = std::filesystem::path(info.dli_fname).parent_path() / "mylar-file-chooser";
+        if (access(local.c_str(), X_OK) == 0)
+            helper = local;
+    }
+    std::vector<std::string> args{helper.string()};
+    if (folder)
+        args.emplace_back("--directory");
     std::string filename;
-
-    if (!gtk_init_check(nullptr, nullptr))
-        return filename;
-
-    GtkFileChooserAction action = folder
-        ? GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER
-        : GTK_FILE_CHOOSER_ACTION_OPEN;
-
-    const char* accept_label = folder ? "_Select" : "_Open";
-
-    GtkWidget* dialog = gtk_file_chooser_dialog_new(
-        folder ? "Select Folder" : "Select File",
-        parent,
-        action,
-        "_Cancel", GTK_RESPONSE_CANCEL,
-        accept_label, GTK_RESPONSE_ACCEPT,
-        nullptr);
-
-    if (!dialog)
-        return filename;
-
-    {
-        std::lock_guard<std::mutex> lock(choose_file_mutex);
-        if (choose_file_cancelled) {
-            gtk_widget_destroy(dialog);
-            while (gtk_events_pending())
-                gtk_main_iteration();
-            return filename;
-        }
-        active_choose_file_dialog = dialog;
-    }
-
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-        char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-        if (path) {
-            filename = path;
-            g_free(path);
-        }
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(choose_file_mutex);
-        if (active_choose_file_dialog == dialog)
-            active_choose_file_dialog = nullptr;
-    }
-
-    gtk_widget_destroy(dialog);
-
-    // Needed if you're not already running gtk_main()
-    while (gtk_events_pending())
-        gtk_main_iteration();
-
+    if (run_cancellable_command(args, filename) != 0)
+        return {};
     return filename;
 }
 
@@ -3900,6 +3850,7 @@ static void trial_dialog_open() {
     s.app_id = "preferences-system"; // same class as Settings: restore rules leave dialogs alone
     s.parent_window = settings_mylar->raw_window;
     auto m = open_mylar_window(settings_app, WindowType::NORMAL, s);
+    if (!m) return;
     m->root->user_data = m;
     trial_dialog = m;
     trial_dialog_fill(m->root);
@@ -3990,12 +3941,7 @@ static void settings_redraw_from_ui() {
 
 // For worker threads.
 static void settings_request_redraw() {
-    auto mylar = settings_mylar;
-    if (!mylar)
-        return;
-    std::lock_guard<std::mutex> lock(mylar->raw_window->creator->mutex);
-    if (settings_mylar)
-        windowing::redraw(settings_mylar->raw_window);
+    windowing::redraw(settings_redraw_window.load());
 }
 
 // Applies wallpaper setting changes in the compositor, and saves them.
@@ -4579,11 +4525,9 @@ static void make_wallpaper_row(Container *padded_right) {
         set->draw_wallpaper = c;
         main_thread([]() { damage_all(); });
     }, "Choose file", []() {
-        static bool chooser_open = false;
-        if (chooser_open)
+        static std::atomic<bool> chooser_open = false;
+        if (chooser_open.exchange(true))
             return;
-
-        chooser_open = true;
 
         std::string target = wall_target;
         spawn_settings_worker([target]() {
@@ -4785,11 +4729,9 @@ static void fill_display_settings(Container *root) {
             damage_all();
         });
     }, "Change folder", []() {
-        static bool chooser_open = false;
-        if (chooser_open)
+        static std::atomic<bool> chooser_open = false;
+        if (chooser_open.exchange(true))
             return;
-
-        chooser_open = true;
 
         spawn_settings_worker([]() {
             const auto file = trim_newline(choose_file(true));
@@ -5109,13 +5051,13 @@ static void fill_dock_settings(Container *root) {
     make_vert_space(padded_right, 10);
 
     make_bool(padded_right, "Show docks", "", set->show_docks, [](bool c) {
-        set->show_docks = c;
-
-        if (set->show_docks) {
-            dock::start();
-        } else {
-            dock::stop();
-        }
+        main_thread([c] {
+            set->show_docks = c;
+            if (c)
+                dock::start();
+            else
+                dock::stop();
+        });
     }, "\ue75b");
 
     make_dropdown_option(padded_right, "Dock style", "How dock icons are drawn", "\ue790", set->dock_style,
@@ -7200,23 +7142,11 @@ static void sddm_apply_async() {
             " && install -Dm644 " + sddm_shell_quote(staged_theme_user.string()) + " " +
             sddm_shell_quote((std::filesystem::path(sys.theme_dir) / "theme.conf.user").string());
 
-        pid_t pid = fork();
-        if (pid == 0) {
-            execlp("pkexec", "pkexec", "sh", "-c", cmd.c_str(), (char *) nullptr);
-            _exit(127);
-        }
-        if (pid < 0) {
-            finish("Failed to launch pkexec", "Failed to launch authentication dialog");
-            return;
-        }
-        sddm_pkexec_pid = pid;
-        int status = 0;
-        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
-        sddm_pkexec_pid = -1;
-
-        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        std::string output;
+        int status = run_cancellable_command({"pkexec", "sh", "-c", cmd}, output);
+        if (status == 0) {
             finish("Applied to SDDM (" + sys.theme + ", scale " + scale + ")", "SDDM settings applied", true);
-        } else if (WIFEXITED(status) && (WEXITSTATUS(status) == 126 || WEXITSTATUS(status) == 127)) {
+        } else if (status == 126 || status == 127) {
             finish("Authentication cancelled");
         } else {
             finish("Failed to apply SDDM settings", "Failed to apply SDDM settings");
@@ -7423,10 +7353,9 @@ static void fill_sddm_settings(Container *root) {
         make_button_option(padded_right, "Custom wallpaper",
                            has_custom ? "Custom image selected (can also drag and drop here)" : "Choose an image or drag and drop one here",
                            "Choose file", []() {
-            static bool chooser_open = false;
-            if (chooser_open)
+            static std::atomic<bool> chooser_open = false;
+            if (chooser_open.exchange(true))
                 return;
-            chooser_open = true;
             spawn_settings_worker([]() {
                 sddm_set_custom_wallpaper_from_file(trim_newline(choose_file()));
                 chooser_open = false;
@@ -13153,6 +13082,10 @@ static std::atomic<bool> settings_thread_exited = true;
 void actual_start() {
     theme = set->dark_theme ? dark_theme : light_theme;
     auto app = windowing::open_app();
+    if (!app) {
+        settings_thread_exited = true;
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
         if (settings_close_requested) {
@@ -13190,8 +13123,18 @@ void actual_start() {
     settings.app_id = "preferences-system";
     settings.scale_hint = settings_open_scale.load();
     auto mylar = open_mylar_window(settings_app, WindowType::NORMAL, settings);
+    if (!mylar) {
+        windowing::close_app(app);
+        windowing::main_loop(app);
+        std::lock_guard lock(settings_lifecycle_mutex);
+        settings_app = nullptr;
+        delete app;
+        settings_thread_exited = true;
+        return;
+    }
     mylar->root->user_data = mylar;
     settings_mylar = mylar;
+    settings_redraw_window = mylar->raw_window;
     fill_root(mylar->root);
     // Ctrl+L clears the search query and puts the cursor in the search field.
     auto forward_key = mylar->raw_window->on_key_press;
@@ -13269,6 +13212,7 @@ void actual_start() {
     display_trial_watch();
 
     windowing::main_loop(settings_app);
+    settings_redraw_window = nullptr;
 
     settings_wifi_release();
     settings_bluetooth_release();
@@ -13296,6 +13240,8 @@ void actual_start() {
 };
 
 void settings::start(std::string page, bool focus_search) {
+    if (plugin_lifetime.stop_requested())
+        return;
     if (!page.empty()) {
         requested_page = page;
     } else if (!settings_app) {
@@ -13362,9 +13308,6 @@ void settings::start(std::string page, bool focus_search) {
 }
 
 void settings::stop() {
-    cancel_choose_file();
-    if (pid_t pid = sddm_pkexec_pid.load(); pid > 0)
-        kill(pid, SIGTERM);
     std::thread to_join;
     {
         std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
@@ -13389,10 +13332,6 @@ void settings::stop() {
     {
         std::lock_guard<std::mutex> lock(settings_lifecycle_mutex);
         settings_close_requested = false;
-    }
-    {
-        std::lock_guard<std::mutex> lock(choose_file_mutex);
-        choose_file_cancelled = false;
     }
     settings_workers_stopping = false;
 }

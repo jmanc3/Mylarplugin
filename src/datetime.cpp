@@ -1,7 +1,7 @@
 #include "datetime.h"
 
 #include "hypriso.h"
-#include "process.hpp"
+#include "cancellable_command.h"
 
 #include <algorithm>
 #include <cstring>
@@ -24,13 +24,7 @@ struct RunResult {
 // Runs argv directly (no shell) and collects stdout+stderr.
 RunResult run(const std::vector<std::string> &argv) {
     RunResult result;
-    std::mutex m;
-    auto collect = [&result, &m](const char *bytes, size_t n) {
-        std::lock_guard lock(m);
-        result.output.append(bytes, n);
-    };
-    TinyProcessLib::Process process(argv, "", collect, collect);
-    result.status = process.get_exit_status();
+    result.status = run_cancellable_command(argv, result.output, true);
     return result;
 }
 

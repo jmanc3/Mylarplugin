@@ -1,3 +1,5 @@
+#include "plugin_lifetime.h"
+#include <ranges>
 #include "dock/dock.h"
 
 #include "dock/dock_applications.h"
@@ -103,7 +105,12 @@ static const char *kFallbackIconPath = "/usr/share/mylardesktop/icons/applicatio
 
 static container_alignment icon_alignment = container_alignment::ALIGN_LEFT;
 
-static std::vector<std::thread> dock_threads;
+struct DockThread {
+    std::string monitor;
+    std::jthread thread;
+};
+
+static std::vector<DockThread> dock_threads;
 
 struct DockWorker {
     std::atomic<bool> done = false;
@@ -322,7 +329,16 @@ struct Windows {
     std::vector<int> to_be_removed;
 };
 
-static std::vector<Dock *> docks;
+static std::mutex docks_mutex;
+static std::vector<std::shared_ptr<Dock>> docks;
+
+// Pin each dock, including its app and window, until the reader finishes.
+static auto active_docks() {
+    std::lock_guard lock(docks_mutex);
+    auto snapshot = docks;
+    return std::move(snapshot) | std::views::transform([](const auto &dock) { return dock.get(); });
+}
+
 static std::mutex pending_notifications_mutex;
 static std::vector<NotificationInfo> pending_notifications;
 
@@ -1007,7 +1023,7 @@ void set_brightness(float amount) {
         if (finished)
             return;
 
-        for (auto d : docks)
+        for (auto d : active_docks())
             windowing::redraw(d->window->raw_window);
     });
 }
@@ -1213,7 +1229,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             pop.text = stacking_rule;
             pop.icon_left = full_icon_path;
             pop.on_clicked = [uuid]() {
-                for (auto d : docks) {
+                for (auto d : active_docks()) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         for (auto p : icons->children) {
                             auto pin = (Pin*)p->user_data;
@@ -1238,7 +1254,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             pop.on_clicked = [stacking_rule]() {
                 // go through the dock and find the first pin to match the stacking rule and copy over the data then, when edit done
                 // call docK::edit_pin(original_stacking_rule, new_stacking_rule, new_command, new_icon);
-                for (auto d : docks) {
+                for (auto d : active_docks()) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         for (auto p : icons->children) {
                             auto pin = (Pin*)p->user_data;
@@ -1270,7 +1286,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
             pop.is_text_icon = true;
             auto text = pop.text;
             pop.on_clicked = [text, stacking_rule, pin_text]() {
-                for (auto d : docks) {
+                for (auto d : active_docks()) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         for (auto p : icons->children) {
                             auto pin = (Pin*)p->user_data;
@@ -1280,7 +1296,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                         }
                     }
                 }
-                for (auto d : docks) {
+                for (auto d : active_docks()) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         write_saved_pins_to_file(icons);
                         break;
@@ -1302,7 +1318,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                 pop.is_text_icon = true;
                 auto text = pop.text;
                 pop.on_clicked = [text, stacking_rule, uuid]() {
-                    for (auto d : docks) {
+                    for (auto d : active_docks()) {
                         if (auto icons = container_by_name("icons", d->window->root)) {
                             for (auto p : icons->children) {
                                 auto pin = (Pin*)p->user_data;
@@ -1342,7 +1358,7 @@ static void pinned_right_click(int cid, int startoff, int cw, std::string uuid, 
                 pop.icon_left = "\uE10A";
                 auto text = pop.text;
                 pop.on_clicked = [text, stacking_rule, uuid]() {
-                    for (auto d : docks) {
+                    for (auto d : active_docks()) {
                         if (auto icons = container_by_name("icons", d->window->root)) {
                             for (auto p : icons->children) {
                                 auto pin = (Pin*)p->user_data;
@@ -1761,7 +1777,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
                 Bounds icon;
                 std::string source;
                 bool still_dragging = false;
-                for (auto d : docks) {
+                for (auto d : active_docks()) {
                     if (d->app != hover->app)
                         continue;
                     if (auto icons = container_by_name("icons", d->window->root)) {
@@ -1835,7 +1851,7 @@ static void create_pinned_icon(Container *icons, std::string stack_rule, std::st
             std::vector<int> ids;
             Bounds icon;
             std::string source;
-            for (auto d : docks) {
+            for (auto d : active_docks()) {
                 if (d->app != hover->app)
                     continue;
                 if (auto icons = container_by_name("icons", d->window->root)) {
@@ -2403,7 +2419,7 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
         if (any_change) {
             calc_natural_positions(icons, total_width, root);
             debounce("icon reorder", 400, []() {
-                for (auto d : docks) {
+                for (auto d : active_docks()) {
                     if (auto icons = container_by_name("icons", d->window->root)) {
                         write_saved_pins_to_file(icons);
                         break;
@@ -2750,6 +2766,8 @@ static void fill_root(Container *root) {
 
             RawWindowSettings settings = make_icon_anchored_popup_settings(
                 c, dpi, volume_popup_w * 2.4, volume_popup_w * 1.9);
+            settings.popup.constraint_adjustment |= RawWindowSettings::POPUP_CONSTRAINT_RESIZE_X |
+                                                    RawWindowSettings::POPUP_CONSTRAINT_RESIZE_Y;
             settings.keyboard_focus_on_click = true;
 
             dock->applications = open_mylar_popup(mylar, settings);
@@ -2766,10 +2784,10 @@ static void fill_root(Container *root) {
             dock->applications->root->wanted_bounds.h = FILL_SPACE;
             fill_applications_container(dock->applications->root);
 
-            later(30, [dock, applications](Timer *) {
+            windowing::timer(dock->app, 30, [dock, applications](void *) {
                 if (dock->applications == applications)
                     windowing::request_keyboard_focus(applications->raw_window);
-            });
+            }, nullptr);
             windowing::redraw(dock->applications->raw_window);
         };
         super->after_paint = paint {
@@ -2903,7 +2921,7 @@ static void fill_root(Container *root) {
             } else {
                 icon_alignment = ALIGN_LEFT;
             }
-            for (auto d : docks) {
+            for (auto d : active_docks()) {
                 if (auto icons = container_by_name("icons", d->window->root)) {
                     for (auto p : icons->children) {
                         auto data = (Pin *) p->user_data;
@@ -3495,7 +3513,9 @@ static void write_saved_pins_to_file(Container *icons) {
     if (!home)
         return;
     std::filesystem::path filepath = std::filesystem::path(home) / ".config/mylar/pinned_items.ini";
-    std::filesystem::create_directories(filepath.parent_path());
+    std::error_code ec;
+    std::filesystem::create_directories(filepath.parent_path(), ec);
+    if (ec) return;
     std::ofstream out(filepath, std::ios::trunc);
     if (!out)
         return;
@@ -3609,7 +3629,7 @@ static void schedule_startup_audio_update(Dock *dock) {
     }, dock);
 }
 
-void dock_start(std::string monitor_name) {
+void dock_start(std::stop_token stop, std::string monitor_name) {
     // Docks can be recreated, so always pick up the persisted setting before
     // the first grouping pass.
     if (set) {
@@ -3619,7 +3639,7 @@ void dock_start(std::string monitor_name) {
     dock_start_time = get_current_time_in_ms();
 
     if (!monitor_name.empty()) {
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 
             // A dock that is still shutting down (monitor disabled then re-enabled) doesn't count.
@@ -3628,9 +3648,17 @@ void dock_start(std::string monitor_name) {
             }
         }
     }
-    auto dock = new Dock;
+    auto owner = std::shared_ptr<Dock>(new Dock, [](Dock *dock) {
+        delete dock->app;
+        delete dock->window;
+        delete dock->collection;
+        delete dock;
+    });
+    auto dock = owner.get();
+    dock->app = windowing::open_app(stop);
+    if (!dock->app)
+        return;
     dock->collection = new Windows;
-    dock->app = windowing::open_app();
     RawWindowSettings settings;
     settings.pos.w = 0;
     settings.pos.h = 40;
@@ -3639,6 +3667,11 @@ void dock_start(std::string monitor_name) {
     settings.monitor_name = monitor_name;
     dock->creation_settings = settings;
     dock->window = open_mylar_window(dock->app, WindowType::DOCK, settings);
+    if (!dock->window) {
+        windowing::close_app(dock->app);
+        windowing::main_loop(dock->app);
+        return;
+    }
     dock->window->raw_window->on_scale_change = [dock](RawWindow *rw, float dpi) {
         if (auto icons = container_by_name("icons", dock->window->root)) {
             for (auto p : icons->children) {
@@ -3655,7 +3688,10 @@ void dock_start(std::string monitor_name) {
     if (auto icons = container_by_name("icons", dock->window->root))
         load_saved_pins_from_file(icons);
     dock->window->root->alignment = ALIGN_RIGHT;
-    docks.push_back(dock);
+    {
+        std::lock_guard lock(docks_mutex);
+        docks.push_back(owner);
+    }
     {
         std::vector<NotificationInfo> queued;
         {
@@ -3674,8 +3710,15 @@ void dock_start(std::string monitor_name) {
     schedule_startup_audio_update(dock);
     windowing::main_loop(dock->app);
     cleanup_dock_notifications(dock);
-    if (docks.size() == 1) {
-        finished = true;
+    bool last;
+    {
+        std::lock_guard lock(docks_mutex);
+        std::erase(docks, owner);
+        last = docks.empty();
+        if (last)
+            finished = true;
+    }
+    if (last) {
         battery_stop();
         wifi_stop();
     }
@@ -3683,16 +3726,6 @@ void dock_start(std::string monitor_name) {
         if (auto icons = container_by_name("icons", dock->window->root))
             write_saved_pins_to_file(icons);
     }
-    for (int i = docks.size() - 1; i >= 0; i--) {
-        if (docks[i] == dock) {
-            docks.erase(docks.begin() + i);
-        }
-    }
-
-    // Cleanup dock
-    delete dock->app;
-    delete dock->window;
-    delete dock;
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();
 }
@@ -3702,6 +3735,8 @@ static int get_dock_alignment() {
 }
 
 void dock::start(std::string monitor_name) {
+    if (plugin_lifetime.stop_requested())
+        return;
     if (set) {
         merge_windows = set->dock_merge_windows;
         dock_style = parse_dock_style(set->dock_style);
@@ -3716,56 +3751,30 @@ void dock::start(std::string monitor_name) {
     finished = false;
     bluetooth_start();
 
-    std::thread t(dock_start, monitor_name);
-    dock_threads.push_back(std::move(t));
+    dock_threads.push_back({monitor_name, std::jthread(dock_start, monitor_name)});
 
     preload_scripts();
 }
 
 void dock::stop(std::string monitor_name) {
-    if (monitor_name.empty()) {
-        finished = true;
-        bluetooth_stop();
-        battery_stop();
-        wifi_stop();
-
-        // Never call close_app() while holding app->mutex: it takes the loop's
-        // dispatch_mut, and the dock thread takes app->mutex *inside* dispatch
-        // (frame callback -> on_render, pointer motion, ...). Holding both in the
-        // opposite order deadlocks the compositor thread, freezing all input.
-        for (auto d : docks) {
-            //windowing::close_window(d->window->raw_window);
-            windowing::close_app(d->app);
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        for (int i = 0; i < (int) dock_threads.size(); i++) {
-            if (dock_threads[i].joinable()) {
-                dock_threads[i].join();
-            }
-        }
-        stop_dock_workers();
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        dock_threads.clear();
-        docks.clear();
-    } else {
-        for (auto d : docks) {
-            bool close = false;
-            {
-                std::lock_guard<std::mutex> lock(d->app->mutex);
-                if (d->creation_settings.monitor_name == monitor_name) {
-                    d->closing = true;
-                    close = true;
-                }
-            }
-            // Outside app->mutex (see above): close_app() takes dispatch_mut.
-            if (close)
-                windowing::close_app(d->app);
-        }
+    if (!monitor_name.empty()) {
+        for (auto dock : active_docks())
+            if (dock->creation_settings.monitor_name == monitor_name)
+                dock->closing = true;
+        for (auto &worker : dock_threads)
+            if (worker.monitor == monitor_name)
+                worker.thread.request_stop();
+        return;
     }
+
+    finished = true;
+    for (auto &worker : dock_threads)
+        worker.thread.request_stop();
+    bluetooth_stop();
+    battery_stop();
+    wifi_stop();
+    dock_threads.clear(); // jthread joins after every client has received its stop request.
+    stop_dock_workers();
 }
 
 // This happens on the main thread, not the dock thread
@@ -3817,7 +3826,7 @@ void dock::add_window(int cid) {
         }
     }
 
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto c = container_by_name("icons", d->window->root)) {
             for (auto ch : c->children) {
@@ -3832,7 +3841,7 @@ void dock::add_window(int cid) {
     }
 
 
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
 
         // Check if cid should even be displayed in dock
@@ -3859,7 +3868,7 @@ void dock::add_window(int cid) {
 
 // This happens on the main thread, not the dock thread
 void dock::remove_window(int cid) {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         std::lock_guard<std::mutex> guard(d->collection->mut);
         // merge_to_be_into_list applies removals before additions. If this
@@ -3879,7 +3888,7 @@ void dock::remove_window(int cid) {
 }
 
 void dock::title_change(int cid, std::string title) {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         for (auto window : d->collection->list) {
             if (window->cid == cid) {
@@ -3892,7 +3901,7 @@ void dock::title_change(int cid, std::string title) {
 
 void dock::on_activated(int cid) {
     active_cid = cid;
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto p : icons->children) {
@@ -3908,7 +3917,7 @@ void dock::on_activated(int cid) {
             }
         }
     }
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         windowing::redraw(d->window->raw_window);
     }
@@ -3918,7 +3927,7 @@ void dock::on_hidden(int cid, bool hidden) {
     if (set && !set->dock_bounce_animation)
         return;
     const long now = get_current_time_in_ms();
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         bool bounced = false;
         if (auto icons = container_by_name("icons", d->window->root)) {
@@ -3940,7 +3949,7 @@ void dock::on_hidden(int cid, bool hidden) {
 }
 
 void dock::change_in_systray() {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (d->extra && windowing::has_window(d->extra->raw_window))
             windowing::redraw(d->extra->raw_window);
@@ -3948,7 +3957,7 @@ void dock::change_in_systray() {
 }
 
 void dock::redraw() {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         update_tiling_menu(d);
         windowing::redraw(d->window->raw_window);
@@ -3957,7 +3966,7 @@ void dock::redraw() {
 
 // Called on the main thread after workspace and monitor assignments settle.
 void dock::update_workspaces() {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         update_tiling_menu(d);
         for (auto window : d->collection->list)
@@ -3973,7 +3982,7 @@ void dock::set_dock_merge(bool enabled) {
     // Rebuild every pin's window list from the collection instead of removing
     // and re-adding windows. Removing and re-adding created separate pins for
     // windows that should have been grouped under an existing pinned icon.
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto pin_container : icons->children) {
@@ -3995,7 +4004,7 @@ void dock::set_dock_style(const std::string &style) {
 }
 
 void dock::relayout() {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto icons = container_by_name("icons", d->window->root)) {
             for (auto pin_container : icons->children) {
@@ -4018,7 +4027,7 @@ void dock::toggle_dock_merge() {
 
 void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {
     if (!original_stacking_rule.empty()) {
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
             if (auto icons = container_by_name("icons", d->window->root)) {
                 for (auto p : icons->children) {
@@ -4033,7 +4042,7 @@ void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking
             }
         }
     } else {
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
             if (auto icons = container_by_name("icons", d->window->root)) {
                 create_pinned_icon(icons, new_stacking_rule, new_command, new_icon);
@@ -4043,7 +4052,7 @@ void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking
 }
 
 Bounds dock::get_item_location(std::string monitor_name, std::string item_name) {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (d->creation_settings.monitor_name == monitor_name) {
             for (auto c : d->window->root->children) {
@@ -4061,7 +4070,7 @@ Bounds dock::get_item_location(std::string monitor_name, std::string item_name) 
 
 std::map<int, Bounds> dock::try_get_locations(const std::string &name) {
     std::map<int, Bounds> locations;
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         if (d->creation_settings.monitor_name != name)
             continue;
         // The compositor must not wait for the dock's rendering thread.
@@ -4082,7 +4091,7 @@ std::map<int, Bounds> dock::try_get_locations(const std::string &name) {
 }
 
 Bounds dock::get_location(std::string name, int cid) {
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (d->creation_settings.monitor_name == name) {
             if (auto icons = container_by_name("icons", d->window->root)) {
@@ -4104,7 +4113,7 @@ Bounds dock::get_location(std::string name, int cid) {
 }
 
 void run_on_every_dock(std::function<void(Dock *)> func) {
-    for (auto d : docks)
+    for (auto d : active_docks())
         windowing::run_on_app(d->app, [d, func]() { func(d); });
 }
 
@@ -4117,7 +4126,7 @@ void total_update() {
                 volume_level = std::round(client.get_volume() * 100);
             }
         }
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
 
             if (d->volume) {
@@ -4140,7 +4149,7 @@ void dock::change_in_audio() {
 void dock::change_in_battery() {
     main_thread([]() {
         if (finished) return;
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
             windowing::redraw(d->window->raw_window);
             if (d->battery)
@@ -4160,7 +4169,7 @@ void dock::create_slept_button() {
     if (slept_windows.empty())
         return;
     // look for c 'icons' and insert after
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         auto root = d->window->root;
         auto sleep_button = simple_dock_item(root, []() {
@@ -4242,7 +4251,7 @@ void dock::remove_slept_button() {
     }
     slept_windows.clear();
 
-    for (auto d : docks) {
+    for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         actual_remove_slept_button(d);
     }
@@ -4251,27 +4260,26 @@ void dock::remove_slept_button() {
 void dock::open_projection() {
     auto monitor_id = hypriso->monitor_from_cursor();
     auto monitor_name = hypriso->monitor_name(monitor_id);
-    for (auto d : docks) {
-        std::lock_guard<std::mutex> lock(d->app->mutex);
+    for (auto d : active_docks()) {
         if (d->creation_settings.monitor_name != monitor_name)
             continue;
-        auto mylar = d->window;
-        if (auto open = mylar->popup_window) {
-            windowing::close_window(open->raw_window);
-            mylar->popup_window = nullptr;
-            // Pressing the shortcut again closes the menu it opened.
-            if (open == d->extra)
+        windowing::run_on_app(d->app, [d] {
+            std::lock_guard lock(d->app->mutex);
+            auto mylar = d->window;
+            if (auto open = mylar->popup_window) {
+                windowing::close_window(open->raw_window);
+                mylar->popup_window = nullptr;
+                if (open == d->extra)
+                    return;
+                windowing::timer(d->app, 40, [d](void *) {
+                    std::lock_guard lock(d->app->mutex);
+                    if (!finished && !d->window->popup_window)
+                        open_extra_popup(d, "project", true);
+                }, nullptr);
                 return;
-            // Give the closed popup's grab a moment to go away first.
-            windowing::timer(d->app, 40, [](void *data) {
-                auto dock = (Dock *) data;
-                std::lock_guard<std::mutex> lock(dock->app->mutex);
-                if (!finished && !dock->window->popup_window)
-                    open_extra_popup(dock, "project", true);
-            }, d);
-            return;
-        }
-        open_extra_popup(d, "project", true);
+            }
+            open_extra_popup(d, "project", true);
+        });
         return;
     }
 }
@@ -4279,21 +4287,18 @@ void dock::open_projection() {
 void dock::open_applications() {
     auto monitor_id = hypriso->monitor_from_cursor();
     auto monitor_name = hypriso->monitor_name(monitor_id);
-    for (auto d: docks) {
-        std::lock_guard<std::mutex> lock(d->app->mutex);
-        if (d->creation_settings.monitor_name == monitor_name) {
-            bool closed_window = false;
-            if (d->applications)
-                closed_window = windowing::close_window(d->applications->raw_window);
-            if (closed_window)
+    for (auto d : active_docks()) {
+        if (d->creation_settings.monitor_name != monitor_name)
+            continue;
+        windowing::run_on_app(d->app, [d] {
+            std::lock_guard lock(d->app->mutex);
+            if (d->applications && windowing::close_window(d->applications->raw_window))
                 return;
-
-            if (auto s = container_by_name("super", d->window->root)) {
-                if (s->when_clicked) {
+            if (auto s = container_by_name("super", d->window->root))
+                if (s->when_clicked)
                     s->when_clicked(d->window->root, s);
-                }
-            }
-        }
+        });
+        return;
     }
 }
 
@@ -4302,7 +4307,7 @@ void dock::show_notification(const NotificationInfo &ni) {
     main_thread([ni]() {
         if (finished)
             return;
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             if (!d || d->closing)
                 continue;
             windowing::run_on_app(d->app, [d]() {
@@ -4310,8 +4315,9 @@ void dock::show_notification(const NotificationInfo &ni) {
             });
         }
         std::string monitor_name = hypriso->monitor_name(hypriso->monitor_from_cursor());
+        auto snapshot = active_docks();
         Dock *target = nullptr;
-        for (auto d : docks) {
+        for (auto d : snapshot) {
             if (!d || d->closing)
                 continue;
             if (!target)
@@ -4339,7 +4345,7 @@ void dock::close_notification(uint32_t id) {
     main_thread([id]() {
         if (finished)
             return;
-        for (auto d : docks) {
+        for (auto d : active_docks()) {
             if (!d || d->closing)
                 continue;
             windowing::run_on_app(d->app, [d, id]() {

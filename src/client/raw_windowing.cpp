@@ -1,3 +1,5 @@
+#include "plugin_lifetime.h"
+#include <optional>
 // wl_input.c
  
 #include "client/raw_windowing.h"
@@ -71,7 +73,7 @@ extern "C" {
 #include "tracy/Tracy.hpp"
 #endif
 
-static int unique_id = 0;
+static std::atomic<int> unique_id = 0;
 static uint32_t popup_reposition_token = 1;
 
 struct wl_window;
@@ -250,17 +252,36 @@ struct wl_context {
     int id;
     RawApp *ra;
 
-    std::vector<PolledFunction> polled_fds;
+    std::vector<std::shared_ptr<PolledFunction>> polled_fds;
+    std::mutex poll_mutex;
+
+    void watch_fd(PolledFunction handler) {
+        std::lock_guard lock(poll_mutex);
+        polled_fds.push_back(std::make_shared<PolledFunction>(std::move(handler)));
+    }
+
+    bool unwatch_fd(int fd) {
+        std::lock_guard lock(poll_mutex);
+        return std::erase_if(polled_fds, [fd](const auto &handler) { return handler->fd == fd; }) != 0;
+    }
+
+    auto poll_snapshot() {
+        std::lock_guard lock(poll_mutex);
+        return polled_fds;
+    }
+
+    bool still_watched(const std::shared_ptr<PolledFunction> &handler) {
+        std::lock_guard lock(poll_mutex);
+        return std::find(polled_fds.begin(), polled_fds.end(), handler) != polled_fds.end();
+    }
     
     std::vector<std::function<void()>> functions_to_call;
     std::mutex functions_mut;
-    bool have_functions_to_execute = false;
+    std::atomic_bool have_functions_to_execute = false;
 
-    // A close request may come from a thread other than the Wayland loop.
-    // Keep it from returning while libwayland is invoking client callbacks.
-    std::recursive_mutex dispatch_mut;
-    std::mutex display_shutdown_mut;
-    int display_fd = -1;
+    using StopCallback = std::stop_callback<std::function<void()>>;
+    std::optional<StopCallback> plugin_stop;
+    std::optional<StopCallback> app_stop;
   
     // close_app() may be called from a thread other than the Wayland event loop.
     // Keep the stop request synchronized with the loop that owns `display`.
@@ -390,7 +411,7 @@ struct wl_window {
     // Last keyboard interactivity mode sent for this layer surface.
     uint32_t keyboard_interactivity = ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
     bool is_layer = true;
-    bool marked_for_closing = false;
+    std::atomic_bool marked_for_closing = false;
 
     RawWindowSettings::PopupPositioner popup_positioner = {};
     bool popup_use_fallback_anchor_rect = false;
@@ -398,12 +419,36 @@ struct wl_window {
     int popup_fallback_anchor_y = 0;
 };
 
-std::mutex apps_mutex;
+static std::recursive_mutex registry_mutex;
 std::vector<wl_context *> apps;
 std::vector<wl_window *> windows;
 
+// Raw lookup results are for the owning loop. Cross-thread operations hold
+// registry_mutex through the enqueue or wake, never through client callbacks.
+static wl_context *find_context(RawApp *app) {
+    std::lock_guard lock(registry_mutex);
+    for (auto ctx : apps)
+        if (ctx->ra == app)
+            return ctx;
+    return nullptr;
+}
+
+static wl_window *find_window(RawWindow *window) {
+    std::lock_guard lock(registry_mutex);
+    for (auto win : windows)
+        if (win->rw == window)
+            return win;
+    return nullptr;
+}
+
+static void register_window(wl_window *window) {
+    std::lock_guard lock(registry_mutex);
+    windows.push_back(window);
+}
+
 static struct wl_buffer *create_shm_buffer(struct wl_context *d, int width, int height);
 static struct wl_buffer *get_attach_buffer(struct wl_window *win);
+void wl_window_destroy(wl_window *win);
 static void commit_initial_buffer(wl_window *win);
 
 static void buffer_release(void *data, struct wl_buffer *wl_buffer) {
@@ -533,6 +578,8 @@ static void handle_surface_configure(void *data,
         (win->pending_width != win->logical_width || win->pending_height != win->logical_height)) {
         if (win->configured) {
             painted = config_surface(win, win->pending_width, win->pending_height);
+        } else if (win->xdg_popup) {
+            wl_window_resize_buffer(win, win->pending_width, win->pending_height);
         }
     }
 
@@ -687,7 +734,7 @@ void on_window_render(wl_window *win) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
-    if (win->marked_for_closing) return;
+    if (!win->ctx->running || win->marked_for_closing) return;
     win->redraw_requested.store(true);
     // All paint paths share this gate, including input callbacks and redraw_now.
     // Keep the update pending until the compositor invites the next frame.
@@ -883,13 +930,7 @@ static void handle_fractional_scale_preferred_scale(
     uint32_t scale)
 {
     auto win = (wl_window *) data;
-    bool found = false;
-    for (auto w : windows)
-        if (w == win)
-            found = true;
-    if (!found)
-        return;
-    if (!win->rw)
+    if (!win->rw || find_window(win->rw) != win)
         return;
     win->rw->fractional_scale_set_once = true;
     win->current_fractional_scale = ((float) scale) / 120.0f;
@@ -1013,8 +1054,10 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     log("surface commit");
     wl_surface_commit(win->surface);
 
-    if (!win->configured)
-        wl_display_dispatch(ctx->display);
+    if (!win->configured && wl_display_dispatch(ctx->display) < 0) {
+        wl_window_destroy(win);
+        return nullptr;
+    }
 
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create gpu or shm buffers
     if (!win->use_gpu)
@@ -1023,7 +1066,8 @@ struct wl_window *wl_window_create(struct wl_context *ctx,
     wl_surface_commit(win->surface);
 
     win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
-    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
+    if (win->fractional_scale)
+        wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
 
     ctx->windows.push_back(win);
     return win;
@@ -1067,7 +1111,8 @@ struct wl_window *wl_popup_window_create(struct wl_context *ctx,
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h);
 
     win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
-    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
+    if (win->fractional_scale)
+        wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
 
     ctx->windows.push_back(win);
     return win;
@@ -1129,6 +1174,10 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     win->rw = rw;
 
     win->surface = wl_compositor_create_surface(ctx->compositor);
+    if (!win->surface) {
+        delete win;
+        return nullptr;
+    }
 
     win->viewport = wp_viewporter_get_viewport(ctx->viewporter, win->surface);
 
@@ -1144,6 +1193,11 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     if (!found) {
         win->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
             ctx->layer_shell, win->surface, NULL, layer, title);
+    }
+
+    if (!win->layer_surface) {
+        wl_window_destroy(win);
+        return nullptr;
     }
 
     if (bottom_right_anchor) {
@@ -1194,8 +1248,10 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
 
     log("surface commit");
     wl_surface_commit(win->surface);
-    if (!win->configured)
-        wl_display_dispatch(ctx->display);
+    if (!win->configured && wl_display_dispatch(ctx->display) < 0) {
+        wl_window_destroy(win);
+        return nullptr;
+    }
 
     wl_window_resize_buffer(win, win->scaled_w, win->scaled_h); // create gpu or shm buffers
     if (!win->use_gpu)
@@ -1204,7 +1260,8 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
     wl_surface_commit(win->surface);
 
     win->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(ctx->fractional_scale_manager, win->surface);
-    wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
+    if (win->fractional_scale)
+        wp_fractional_scale_v1_add_listener(win->fractional_scale, &fractional_scale_listener, win);
 
     ctx->windows.push_back(win);
     return win;
@@ -2069,7 +2126,7 @@ static void dnd_receive_drop(wl_context *ctx) {
             finish_clipboard_read(ctx, state, true);
     };
     ctx->clipboard_reads.push_back(state);
-    ctx->polled_fds.push_back(std::move(read_function));
+    ctx->watch_fd(std::move(read_function));
     wl_display_flush(ctx->display);
 }
 
@@ -2130,12 +2187,7 @@ static const wl_data_source_listener clipboard_source_listener = {
 };
 
 static void finish_clipboard_read(wl_context *ctx, clipboard_read_state *state, bool deliver) {
-    for (int i = ctx->polled_fds.size() - 1; i >= 0; --i) {
-        if (ctx->polled_fds[i].fd == state->fd) {
-            ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
-            break;
-        }
-    }
+    ctx->unwatch_fd(state->fd);
     close(state->fd);
     if (state->offer) {
         // finish is only valid once an action was negotiated.
@@ -2362,27 +2414,14 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_handle_global_remove
 };
 
-struct wl_context *wl_context_create(void) {
-    wl_context *ctx = new wl_context;
-    ctx->display = wl_display_connect(NULL);
-    if (!ctx->display) {
-        fprintf(stderr, "Failed to connect to Wayland display\n");
-        free(ctx);
-        return NULL;
-    }
-    ctx->display_fd = wl_display_get_fd(ctx->display);
-
-    ctx->registry = wl_display_get_registry(ctx->display);
-    wl_registry_add_listener(ctx->registry, &registry_listener, ctx);
-    wl_display_roundtrip(ctx->display); // populate globals
-
-    ctx->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    ctx->shm_format = WL_SHM_FORMAT_ARGB8888; // default; discover if needed
-    return ctx;
-}
-
 void wl_window_destroy(struct wl_window *win) {
     if (!win) return;
+    {
+        std::lock_guard lock(registry_mutex);
+        std::erase(windows, win);
+    }
+    if (win->fractional_scale) wp_fractional_scale_v1_destroy(win->fractional_scale);
+    if (win->viewport) wp_viewport_destroy(win->viewport);
     if (win->ctx->pointer_scroll_window == win)
         pointer_scroll_cancel(win->ctx);
     if (win->ctx->dnd_window == win)
@@ -2400,18 +2439,18 @@ void wl_window_destroy(struct wl_window *win) {
 
     if (win->surface) wl_surface_destroy(win->surface);
 
-    for (int i = windows.size() - 1; i >= 0; i--)
-        if (windows[i] == win)
-            windows.erase(windows.begin() + i);
-
     delete win;
 }
 
 void wl_context_destroy(struct wl_context *ctx) {
     if (!ctx) return;
 
-    for (auto w : ctx->windows)
-        wl_window_destroy(w);
+    {
+        std::lock_guard lock(registry_mutex);
+        std::erase(apps, ctx);
+    }
+    for (auto it = ctx->windows.rbegin(); it != ctx->windows.rend(); ++it)
+        wl_window_destroy(*it);
 
     for (auto read : ctx->clipboard_reads)
         delete read;
@@ -2441,30 +2480,16 @@ void wl_context_destroy(struct wl_context *ctx) {
     if (ctx->layer_shell) zwlr_layer_shell_v1_destroy(ctx->layer_shell);
     if (ctx->xkb_ctx) xkb_context_unref(ctx->xkb_ctx);
 
-    wl_registry_destroy(ctx->registry);
-    {
-        std::lock_guard<std::mutex> shutdown_lock(ctx->display_shutdown_mut);
-        ctx->display_fd = -1;
-    }
+    if (ctx->registry) wl_registry_destroy(ctx->registry);
+    ctx->app_stop.reset();
+    ctx->plugin_stop.reset();
     wl_display_disconnect(ctx->display);
 
     for (const auto &pf : ctx->polled_fds)
-        if (pf.fd >= 0 && pf.fd != ctx->wake_pipe[0])
-            close(pf.fd);
+        if (pf->fd >= 0 && pf->fd != ctx->wake_pipe[0])
+            close(pf->fd);
     close(ctx->wake_pipe[0]);
     close(ctx->wake_pipe[1]);
-
-    {
-        std::lock_guard<std::mutex> apps_lock(apps_mutex);
-        for (int i = apps.size() - 1; i >= 0; i--)
-            if (apps[i] == ctx)
-                apps.erase(apps.begin() + i);
-    }
-
-    // Wait for any in-flight close_app() that looked up ctx before we erased it.
-    {
-        std::lock_guard<std::mutex> shutdown_lock(ctx->display_shutdown_mut);
-    }
 
     delete ctx;
 }
@@ -2472,10 +2497,7 @@ void wl_context_destroy(struct wl_context *ctx) {
 int wake_pipe[2];
 
 void windowing::main_loop(RawApp *app) {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
+    auto ctx = find_context(app);
     if (!ctx)
         return;
 
@@ -2499,7 +2521,7 @@ void windowing::main_loop(RawApp *app) {
         }
     };
 
-    ctx->polled_fds.push_back(wake_pf);
+    ctx->watch_fd(wake_pf);
 
     // Keep one stable repeat descriptor in the poll set. Creating/removing it
     // from a Wayland callback would invalidate the poll snapshot being walked.
@@ -2522,7 +2544,7 @@ void windowing::main_loop(RawApp *app) {
             const uint32_t interval_ms = std::max(1, 1000 / ctx->key_repeat_rate);
             timerfd_update(pf.fd, interval_ms);
         };
-        ctx->polled_fds.push_back(repeat_pf);
+        ctx->watch_fd(repeat_pf);
     }
 
     ctx->pointer_scroll_timer_fd = create_timerfd_ms(0);
@@ -2532,12 +2554,11 @@ void windowing::main_loop(RawApp *app) {
         scroll_pf.fd = ctx->pointer_scroll_timer_fd;
         scroll_pf.name = "touchpad momentum";
         scroll_pf.func = [ctx](PolledFunction pf) {
-            std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
             uint64_t expirations = 0;
             if ((pf.revents & POLLIN) && read(pf.fd, &expirations, sizeof expirations) > 0)
                 pointer_scroll_tick(ctx);
         };
-        ctx->polled_fds.push_back(scroll_pf);
+        ctx->watch_fd(scroll_pf);
     }
 
     while (ctx->running) {
@@ -2545,15 +2566,19 @@ void windowing::main_loop(RawApp *app) {
         // then read_events() when readable or cancel_read() otherwise.  In
         // particular, never begin a read after the display has been woken for
         // shutdown.
-        while (ctx->running && wl_display_prepare_read(ctx->display) != 0) {
-            std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
-            if (!ctx->running || wl_display_dispatch_pending(ctx->display) < 0) {
+        int prepared = wl_display_prepare_read(ctx->display);
+        while (prepared != 0 && ctx->running) {
+            if (wl_display_dispatch_pending(ctx->display) < 0) {
                 ctx->running = false;
                 break;
             }
+            prepared = wl_display_prepare_read(ctx->display);
         }
-        if (!ctx->running)
+        if (!ctx->running) {
+            if (prepared == 0)
+                wl_display_cancel_read(ctx->display);
             break;
+        }
 
         if (wl_display_flush(ctx->display) < 0) {
             if (errno == EAGAIN) {
@@ -2568,15 +2593,15 @@ void windowing::main_loop(RawApp *app) {
         }
 
         // Build pollfds based on ctx->polled_fds
-        const auto polled_functions = ctx->polled_fds;
+        const auto polled_functions = ctx->poll_snapshot();
         std::vector<struct pollfd> pfds;
         pfds.reserve(polled_functions.size() + 1);
 
         for (const auto &p : polled_functions) {
             short ev = POLLIN | POLLERR | POLLHUP | POLLNVAL;
-            if (p.fd == wayland_fd && need_flush)
+            if (p->fd == wayland_fd && need_flush)
                 ev |= POLLOUT;
-            pfds.push_back({ p.fd, ev, 0 });
+            pfds.push_back({ p->fd, ev, 0 });
         }
         pfds.insert(pfds.begin(), { wayland_fd,
                                     static_cast<short>(POLLIN | POLLERR | POLLHUP | POLLNVAL |
@@ -2606,7 +2631,7 @@ void windowing::main_loop(RawApp *app) {
         // before dispatching any newly received Wayland events: poll can
         // report both descriptors in the same iteration.
         for (size_t i = 0; i < polled_functions.size(); ++i) {
-            if (polled_functions[i].fd == ctx->wake_pipe[0] &&
+            if (polled_functions[i]->fd == ctx->wake_pipe[0] &&
                 (pfds[i + 1].revents & POLLIN)) {
                 char buf[64];
                 while (read(ctx->wake_pipe[0], buf, sizeof buf) > 0) {}
@@ -2627,30 +2652,23 @@ void windowing::main_loop(RawApp *app) {
         if ((wayland_revents & POLLOUT) && wl_display_flush(ctx->display) == 0)
             need_flush = false;
 
-        {
-            // Do not allow close_app() to return while this call is executing:
-            // its caller is then free to release the objects referenced by
-            // Wayland listener callbacks.
-            std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
-            if (!ctx->running || wl_display_get_error(ctx->display) != 0 ||
-                wl_display_dispatch_pending(ctx->display) < 0) {
-                ctx->running = false;
-                break;
-            }
+        if (!ctx->running || wl_display_get_error(ctx->display) != 0 ||
+            wl_display_dispatch_pending(ctx->display) < 0) {
+            ctx->running = false;
+            break;
         }
 
         // The Wayland display is owned entirely by the code above.  Dispatch
         // the auxiliary descriptors only after its read transaction is closed.
         // Timer callbacks can remove themselves and register another timer.
         // Keep callbacks paired with the descriptors that were actually polled.
-        for (size_t i = 0; i < polled_functions.size(); i++) {
-            auto p = polled_functions[i];
-            p.revents = pfds[i + 1].revents;
-
-            const bool registered = std::any_of(ctx->polled_fds.begin(), ctx->polled_fds.end(),
-                [&](const auto &current) { return current.fd == p.fd; });
-            if (registered && p.revents && p.func)
-                p.func(p);  // call the polled handler
+        for (size_t i = 0; ctx->running && i < polled_functions.size(); i++) {
+            const auto &handler = polled_functions[i];
+            if (pfds[i + 1].revents && ctx->still_watched(handler) && handler->func) {
+                auto event = *handler;
+                event.revents = pfds[i + 1].revents;
+                event.func(event);
+            }
         }
 
         if (!ctx->running)
@@ -2664,6 +2682,7 @@ void windowing::main_loop(RawApp *app) {
                 ctx->have_functions_to_execute = false;
             }
             for (auto &func : to_call) {
+                if (!ctx->running) break;
                 func();
             }
         }
@@ -2695,44 +2714,47 @@ void windowing::main_loop(RawApp *app) {
     wl_context_destroy(ctx);
 }
 
-RawApp *windowing::open_app() {
-    auto ra = new RawApp;
-    ra->id = unique_id++;
-    
-    struct wl_context *ctx = wl_context_create();
-    ctx->id = ra->id;
-    ctx->ra = ra;
-    
-    pipe2(ctx->wake_pipe, O_CLOEXEC | O_NONBLOCK);
-
-    {
-        std::lock_guard<std::mutex> apps_lock(apps_mutex);
-        apps.push_back(ctx);
+RawApp *windowing::open_app(std::stop_token stop) {
+    if (stop.stop_requested() || plugin_lifetime.stop_requested())
+        return nullptr;
+    auto ctx = new wl_context;
+    ctx->display = wl_display_connect(nullptr);
+    if (!ctx->display || pipe2(ctx->wake_pipe, O_CLOEXEC | O_NONBLOCK) < 0) {
+        if (ctx->display)
+            wl_display_disconnect(ctx->display);
+        delete ctx;
+        return nullptr;
     }
-    
-    while (still_need_work(ctx))
-        wl_display_dispatch(ctx->display); 
 
-    return ra;
-}
-
-static wl_context *find_context(RawApp *app) {
-    if (!app)
+    auto interrupt = [ctx, fd = wl_display_get_fd(ctx->display)] {
+        ctx->running = false;
+        shutdown(fd, SHUT_RDWR);
+        write(ctx->wake_pipe[1], "x", 1);
+    };
+    ctx->plugin_stop.emplace(plugin_lifetime.get_token(), interrupt);
+    ctx->app_stop.emplace(stop, interrupt);
+    ctx->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    ctx->shm_format = WL_SHM_FORMAT_ARGB8888;
+    ctx->registry = wl_display_get_registry(ctx->display);
+    if (ctx->registry) {
+        wl_registry_add_listener(ctx->registry, &registry_listener, ctx);
+        if (wl_display_roundtrip(ctx->display) < 0)
+            ctx->running = false;
+    }
+    while (ctx->running && still_need_work(ctx))
+        if (wl_display_dispatch(ctx->display) < 0)
+            ctx->running = false;
+    if (!ctx->running || !ctx->registry || !ctx->compositor) {
+        wl_context_destroy(ctx);
         return nullptr;
-    std::lock_guard<std::mutex> apps_lock(apps_mutex);
-    for (auto c : apps)
-        if (c->id == app->id)
-            return c;
-    return nullptr;
-}
-
-static wl_window *find_window(RawWindow *window) {
-    if (!window)
-        return nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            return w;
-    return nullptr;
+    }
+    auto app = new RawApp;
+    app->id = unique_id++;
+    ctx->ra = app;
+    ctx->id = app->id;
+    std::lock_guard lock(registry_mutex);
+    apps.push_back(ctx);
+    return app;
 }
 
 static wl_window *layer_surface_for(wl_window *window) {
@@ -2841,11 +2863,8 @@ static xdg_popup *create_popup_role(wl_window *win, wl_window *parent_win, xdg_p
 }
 
 RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSettings settings) {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
-    if (!ctx)
+    auto ctx = find_context(app);
+    if (!ctx || !ctx->running)
         return nullptr;
     
     auto rw = new RawWindow;
@@ -2854,12 +2873,14 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
 
     if (type == WindowType::NORMAL) {
         struct xdg_toplevel *parent_toplevel = nullptr;
-        if (settings.parent_window)
-            for (auto w : windows)
-                if (w->id == settings.parent_window->id && w->xdg_toplevel)
-                    parent_toplevel = w->xdg_toplevel;
+        if (auto parent = find_window(settings.parent_window))
+            parent_toplevel = parent->xdg_toplevel;
         auto window = wl_window_create(ctx, settings.pos.w, settings.pos.h, settings.pos.min_w, settings.pos.min_h, settings.name.c_str(), rw, settings.app_id,
                                        parent_toplevel, settings.pos.max_w, settings.pos.max_h);
+        if (!window) {
+            delete rw;
+            return nullptr;
+        }
         rw->drawing_context = window->cr;
         window->id = rw->id;
         if (settings.scale_hint > 0 && !rw->fractional_scale_set_once)
@@ -2867,19 +2888,27 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         window->on_render = on_window_render;  // set now that rw is set (resize_buffer skipped it)
         if (window->on_render)
             window->on_render(window);  // paint first frame so window is not blank on first show
-        windows.push_back(window);
+        register_window(window);
     }
     if (type == WindowType::DOCK) {
         auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_TOP, settings.name.c_str(), settings.alignment, settings.monitor_name, true, rw);
+        if (!window) {
+            delete rw;
+            return nullptr;
+        }
         rw->drawing_context = window->cr;
         window->id = rw->id;
         window->on_render = on_window_render;
         if (window->on_render)
             window->on_render(window);
-        windows.push_back(window);        
+        register_window(window);
     }
     if (type == WindowType::NOTIFICATION) {
         auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, settings.name.c_str(), settings.alignment, settings.monitor_name, false, rw, &settings.layer_margins, true);
+        if (!window) {
+            delete rw;
+            return nullptr;
+        }
         rw->drawing_context = window->cr;
         window->id = rw->id;
         if (settings.scale_hint > 0 && !rw->fractional_scale_set_once)
@@ -2887,7 +2916,7 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
         window->on_render = on_window_render;
         if (window->on_render)
             window->on_render(window);
-        windows.push_back(window);
+        register_window(window);
     }
     return rw;
 }
@@ -2897,7 +2926,7 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
         return nullptr;
 
     wl_context *ctx = find_context(parent->creator);
-    if (!ctx || !ctx->wm_base)
+    if (!ctx || !ctx->running || !ctx->wm_base)
         return nullptr;
 
     auto rw = new RawWindow;
@@ -2921,10 +2950,11 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
     window->popup_use_fallback_anchor_rect = !settings.popup.use_explicit_anchor_rect;
     window->popup_fallback_anchor_x = settings.pos.x;
     window->popup_fallback_anchor_y = settings.pos.y;
-    windows.push_back(window);
+    register_window(window);
 
     xdg_positioner *positioner = xdg_wm_base_create_positioner(ctx->wm_base);
     if (!positioner) {
+        std::erase(ctx->windows, window);
         wl_window_destroy(window);
         delete rw;
         return nullptr;
@@ -2938,6 +2968,7 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
     wl_window *parent_wl = find_window(parent);
     if (!create_popup_role(window_wl, parent_wl, positioner)) {
         xdg_positioner_destroy(positioner);
+        std::erase(ctx->windows, window);
         wl_window_destroy(window);
         delete rw;
         return nullptr;
@@ -2984,32 +3015,24 @@ RawWindow *windowing::open_popup(RawWindow *parent, RawWindowSettings settings) 
 }
 
 void windowing::wake_up(RawWindow *window) {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == window->creator->id)
-            ctx = c;
+    std::lock_guard registry_lock(registry_mutex);
+    auto ctx = find_context(window->creator);
     if (!ctx)
         return;
-    wl_window *win = nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            win = w;
+    auto win = find_window(window);
     if (!win)
         return;
     write(ctx->wake_pipe[1], "x", 1);
 }
 
 void windowing::redraw_now(RawWindow *window) {
-    for (auto win : windows) {
-        if (win->rw == window) {
-            if (!win->marked_for_closing && win->ctx && win->ctx->running && win->on_render)
-                win->on_render(win);
-            return;
-        }
-    }
+    if (auto win = find_window(window))
+        if (!win->marked_for_closing && win->ctx->running && win->on_render)
+            win->on_render(win);
 }
 
 static void queue_keyboard_interactivity(RawWindow *window, uint32_t mode, bool only_if_unfocused) {
+    std::lock_guard registry_lock(registry_mutex);
     if (!window || !window->creator)
         return;
     auto ctx = find_context(window->creator);
@@ -3177,10 +3200,11 @@ void windowing::get_clipboard(RawWindow *window, std::function<void(std::string)
             finish_clipboard_read(ctx, state, true);
     };
     ctx->clipboard_reads.push_back(state);
-    ctx->polled_fds.push_back(std::move(read_function));
+    ctx->watch_fd(std::move(read_function));
 }
 
 void windowing::redraw(RawWindow *window) {
+    std::lock_guard registry_lock(registry_mutex);
     if (!window) return;
     for (auto win : windows) {
         if (win->rw == window) {
@@ -3194,21 +3218,18 @@ void windowing::redraw(RawWindow *window) {
 }
 
 void windowing::set_size(RawWindow *window, int width, int height) {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == window->creator->id)
-            ctx = c;
+    std::lock_guard registry_lock(registry_mutex);
+    auto ctx = find_context(window->creator);
     if (!ctx)
         return;
-    wl_window *win = nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            win = w;
+    auto win = find_window(window);
     if (!win)
         return;
     
     std::lock_guard<std::mutex> lock(ctx->functions_mut);
-    ctx->functions_to_call.push_back([win, width, height]() {
+    ctx->functions_to_call.push_back([window, width, height]() {
+        auto win = find_window(window);
+        if (!win || !win->layer_surface) return;
         zwlr_layer_surface_v1_set_size(win->layer_surface, width, height);
         wl_surface_commit(win->surface);
     });
@@ -3217,24 +3238,20 @@ void windowing::set_size(RawWindow *window, int width, int height) {
 };
 
 void windowing::set_layer_margin(RawWindow *window, int top, int right, int bottom, int left) {
+    std::lock_guard registry_lock(registry_mutex);
     if (!window || !window->creator)
         return;
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == window->creator->id)
-            ctx = c;
+    auto ctx = find_context(window->creator);
     if (!ctx)
         return;
-    wl_window *win = nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            win = w;
+    auto win = find_window(window);
     if (!win || !win->layer_surface)
         return;
 
     std::lock_guard<std::mutex> lock(ctx->functions_mut);
-    ctx->functions_to_call.push_back([win, top, right, bottom, left]() {
-        if (win->marked_for_closing || !win->layer_surface)
+    ctx->functions_to_call.push_back([window, top, right, bottom, left]() {
+        auto win = find_window(window);
+        if (!win || win->marked_for_closing || !win->layer_surface)
             return;
         zwlr_layer_surface_v1_set_margin(win->layer_surface, top, right, bottom, left);
         wl_surface_commit(win->surface);
@@ -3249,20 +3266,15 @@ static void set_popup_size_impl(
     int height,
     const RawWindowSettings *settings)
 {
+    std::lock_guard registry_lock(registry_mutex);
     if (!window || !window->creator)
         return;
 
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == window->creator->id)
-            ctx = c;
+    auto ctx = find_context(window->creator);
     if (!ctx)
         return;
 
-    wl_window *win = nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            win = w;
+    auto win = find_window(window);
     if (!win || !win->xdg_popup || !ctx->wm_base)
         return;
 
@@ -3277,7 +3289,7 @@ static void set_popup_size_impl(
     std::lock_guard<std::mutex> lock(ctx->functions_mut);
     ctx->functions_to_call.push_back([
         ctx,
-        win,
+        window,
         popup_w,
         popup_h,
         has_settings,
@@ -3286,6 +3298,7 @@ static void set_popup_size_impl(
         updated_fallback_anchor_x,
         updated_fallback_anchor_y
     ]() {
+        auto win = find_window(window);
         if (!ctx || !win || !win->xdg_popup || !ctx->wm_base)
             return;
 
@@ -3328,6 +3341,7 @@ void windowing::set_popup_size(RawWindow *window, int width, int height, const R
 }
 
 bool windowing::has_window(RawWindow *window) {
+    std::lock_guard registry_lock(registry_mutex);
     for (auto w : windows)
         if (w->rw == window)
             return true;
@@ -3335,25 +3349,11 @@ bool windowing::has_window(RawWindow *window) {
 }
 
 bool windowing::close_window(RawWindow *window) {
-    bool found = false;
-    for (auto w : windows)
-        if (w->rw == window)
-            found = true;
-    if (!found)
-        return false;
- 
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == window->creator->id)
-            ctx = c;
-    if (!ctx)
-        return false;
-    wl_window *win = nullptr;
-    for (auto w : windows)
-        if (w->id == window->id)
-            win = w;
+    std::lock_guard registry_lock(registry_mutex);
+    auto win = find_window(window);
     if (!win)
         return false;
+    auto ctx = win->ctx;
     win->marked_for_closing = true;
     // Child popups must be destroyed before their parent (xdg-shell protocol error otherwise).
     // They were created later, so the back-to-front cleanup loop destroys them first.
@@ -3365,39 +3365,17 @@ bool windowing::close_window(RawWindow *window) {
 }
 
 void windowing::close_app(RawApp *app) {
-    if (!app)
-        return;
-    wl_context *ctx = nullptr;
-    std::unique_lock<std::mutex> shutdown_lock;
-    {
-        std::lock_guard<std::mutex> apps_lock(apps_mutex);
-        for (auto c : apps)
-            if (c->id == app->id)
-                ctx = c;
-        if (!ctx)
-            return;
-        shutdown_lock = std::unique_lock<std::mutex>(ctx->display_shutdown_mut);
+    std::lock_guard lock(registry_mutex);
+    if (auto ctx = find_context(app)) {
+        ctx->running = false;
+        shutdown(wl_display_get_fd(ctx->display), SHUT_RDWR);
+        write(ctx->wake_pipe[1], "x", 1);
     }
-
-    // This can be called from another thread.  Set the stop flag and shut down
-    // the Wayland socket *before* taking dispatch_mut: the client thread can be
-    // holding dispatch_mut inside wl_display_dispatch_pending -> on_render ->
-    // Mesa EGL waiting on the compositor main thread, which would deadlock if
-    // we waited on dispatch_mut first.  main_loop() owns the actual Wayland
-    // destruction after it observes this flag.
-    ctx->running = false;
-    if (ctx->display_fd >= 0)
-        shutdown(ctx->display_fd, SHUT_RDWR);
-    write(ctx->wake_pipe[1], "x", 1);
-    std::lock_guard<std::recursive_mutex> lock(ctx->dispatch_mut);
 }
 
 void RawApp::update_monitor_information() {
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == id)
-            ctx = c;
-
+    auto ctx = find_context(this);
+    if (!ctx) return;
     monitor_names.clear();
     
     for (auto o : ctx->outputs) {
@@ -3411,12 +3389,10 @@ void RawApp::print_monitors() {
 
 // returns file descriptor takes the function that will be called after ms time
 void windowing::run_on_app(RawApp *app, std::function<void()> function) {
+    std::lock_guard registry_lock(registry_mutex);
     if (!app || !function)
         return;
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
+    auto ctx = find_context(app);
     if (!ctx)
         return;
     std::lock_guard<std::mutex> lock(ctx->functions_mut);
@@ -3426,30 +3402,24 @@ void windowing::run_on_app(RawApp *app, std::function<void()> function) {
 }
 
 int windowing::timer(RawApp *app, int ms, std::function<void(void *data)> actual_function, void *data) {
+    std::lock_guard lock(registry_mutex);
     if (!app)
         return -1;
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
+    auto ctx = find_context(app);
     if (!ctx)
         return -1;
     PolledFunction pf;
     pf.fd = create_timerfd_ms(ms);
     pf.data = data;
     pf.func = [ctx, actual_function](PolledFunction f) {
-        for (int i = 0; i < (int) ctx->polled_fds.size(); i++) {
-            if (ctx->polled_fds[i].fd == f.fd) {
-                close(f.fd);
-                ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
-                break;
-            }
-        }
+        if (!ctx->unwatch_fd(f.fd))
+            return;
+        close(f.fd);
         if (actual_function)
             actual_function(f.data);
     };
-    ctx->polled_fds.push_back(pf);
-
+    ctx->watch_fd(pf);
+    write(ctx->wake_pipe[1], "x", 1);
     return pf.fd;
 }
 
@@ -3461,21 +3431,14 @@ void windowing::timer_update(int fd, int ms) {
 }
 
 void windowing::timer_stop(RawApp *app, int fd) {
+    std::lock_guard lock(registry_mutex);
    if (fd == -1)
         return;
    if (!app)
         return;
-    wl_context *ctx = nullptr;
-    for (auto c : apps)
-        if (c->id == app->id)
-            ctx = c;
+    auto ctx = find_context(app);
     if (!ctx)
         return;
-    for (int i = 0; i < (int) ctx->polled_fds.size(); i++) {
-        if (ctx->polled_fds[i].fd == fd) {
-            close(fd);
-            ctx->polled_fds.erase(ctx->polled_fds.begin() + i);
-            break;
-        }
-    }
+    if (ctx->unwatch_fd(fd))
+        close(fd);
 }

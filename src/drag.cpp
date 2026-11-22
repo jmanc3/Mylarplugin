@@ -172,14 +172,8 @@ void drag::snap_window(int snap_mon, int cid, int pos) {
     update_restore_info_for(cid, true);
 
     // This is so that windows that are being moved get unhovered my mouse
-    later(new int(0), 10, [](Timer *t) {
-        t->keep_running = true;
-        int *times = (int *) t->data; 
-        *times = (*times) + 1;
-        if (*times > 20) {
-            t->keep_running = false;
-            delete (int *) t->data;
-        }
+    later(10, [times = 0](Timer *t) mutable {
+        t->keep_running = ++times <= 20;
         if (hypriso->on_mouse_move) {
             auto m = mouse();
             hypriso->on_mouse_move(0, m.x, m.y);

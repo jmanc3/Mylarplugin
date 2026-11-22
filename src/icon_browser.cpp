@@ -1,3 +1,4 @@
+#include "plugin_lifetime.h"
 #include "icon_browser.h"
 
 #include "client/raw_windowing.h"
@@ -204,9 +205,6 @@ static Bounds text(drawing::Context *cr, double x, double y, const std::string &
 }
 
 struct BrowserSession {
-    std::mutex mutex;
-    RawApp *app = nullptr;
-    bool close_requested = false;
     std::atomic<bool> exited = false;
     std::thread thread;
 };
@@ -241,7 +239,7 @@ static void reap_finished_locked() {
 static void spawn_worker(std::function<void()> fn) {
     std::lock_guard<std::mutex> lock(sessions_mutex);
     reap_finished_locked();
-    if (browser_stopping.load())
+    if (browser_stopping.load() || plugin_lifetime.stop_requested())
         return;
     auto worker = std::make_shared<WorkerThread>();
     worker->thread = std::thread([worker, fn = std::move(fn)]() {
@@ -270,7 +268,7 @@ static std::shared_ptr<BrowserIndex> build_index() {
     std::vector<IconTarget> targets;
     targets.reserve(batch_size);
     for (size_t offset = 0; offset < names.size(); offset += batch_size) {
-        if (browser_stopping.load())
+        if (browser_stopping.load() || plugin_lifetime.stop_requested())
             return index;
         targets.clear();
         size_t end = std::min(names.size(), offset + batch_size);
@@ -280,7 +278,7 @@ static std::shared_ptr<BrowserIndex> build_index() {
         pick_best(targets, 32);
 
         for (auto &target : targets) {
-            if (browser_stopping.load())
+            if (browser_stopping.load() || plugin_lifetime.stop_requested())
                 return index;
             if (target.candidates.empty())
                 continue;
@@ -1365,15 +1363,9 @@ static void fill_root(Container *root) {
 
 static void start_icon_browser(std::shared_ptr<BrowserSession> session) {
     auto app = windowing::open_app();
-    {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        if (session->close_requested) {
-            windowing::close_app(app);
-            windowing::main_loop(app);
-            session->exited = true;
-            return;
-        }
-        session->app = app;
+    if (!app) {
+        session->exited = true;
+        return;
     }
     RawWindowSettings settings;
     settings.pos.w = 900;
@@ -1381,6 +1373,13 @@ static void start_icon_browser(std::shared_ptr<BrowserSession> session) {
     settings.name = "Icon Browser";
     settings.app_id = "preferences-desktop-icons";
     auto mylar = open_mylar_window(app, WindowType::NORMAL, settings);
+    if (!mylar) {
+        windowing::close_app(app);
+        windowing::main_loop(app);
+        delete app;
+        session->exited = true;
+        return;
+    }
     auto data = new BrowserData;
     data->app = app;
     data->window = mylar;
@@ -1411,10 +1410,6 @@ static void start_icon_browser(std::shared_ptr<BrowserSession> session) {
 
     windowing::main_loop(app);
 
-    {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        session->app = nullptr;
-    }
 
     mylar->root->user_data = nullptr;
     delete data;
@@ -1426,7 +1421,7 @@ static void start_icon_browser(std::shared_ptr<BrowserSession> session) {
 void icon_browser::open() {
     std::lock_guard<std::mutex> lock(sessions_mutex);
     reap_finished_locked();
-    if (browser_stopping.load())
+    if (browser_stopping.load() || plugin_lifetime.stop_requested())
         return;
     auto session = std::make_shared<BrowserSession>();
     session->thread = std::thread(start_icon_browser, session);
@@ -1441,13 +1436,6 @@ void icon_browser::stop() {
         browser_stopping = true;
         sessions.swap(browser_sessions);
         workers.swap(browser_workers);
-    }
-    cancel_choose_file();
-    for (auto &session : sessions) {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        session->close_requested = true;
-        if (session->app)
-            windowing::close_app(session->app);
     }
     for (auto &session : sessions) {
         if (session->thread.joinable())

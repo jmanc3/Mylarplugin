@@ -801,6 +801,7 @@ void close_window(int id);
 
 Bounds mouse();
 
+void cancel_timer(Timer *timer);
 Timer* later(void* data, float time_ms, const std::function<void(Timer*)>& fn);
 
 Timer* later(float time_ms, const std::function<void(Timer*)>& fn);

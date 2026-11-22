@@ -4,6 +4,9 @@
  * 
  */
 
+#include "plugin_lifetime.h"
+
+
 #include "systray.h"
 #include "heart.h"
 
@@ -82,6 +85,8 @@ std::unordered_map<std::string, WindowRestoreLocation> restore_infos;
 std::unordered_map<std::string, Datas> datas;
 
 std::vector<Container *> actual_monitors; // actually just root of all
+std::stop_source plugin_lifetime;
+
 Container *actual_root = new Container;
 
 void draw_text(std::string text, int x, int y);
@@ -921,6 +926,8 @@ struct RememberedWindowPosition {
 
 static std::vector<RememberedWindowPosition> remembered_window_positions;
 static unsigned remembered_window_positions_generation = 0;
+static std::unordered_map<int, Bounds> previous_monitor_bounds;
+static bool monitor_layout_update_pending = false;
 
 static Bounds client_to_outer(int cid, Bounds b) {
     if (hypriso->has_decorations(cid)) {
@@ -1049,12 +1056,52 @@ static WallSlot *wall_slot(Container *m, bool first);
 static void wall_slot_load_initial(Container *c, int id);
 static void wall_slot_clear(WallSlot *slot);
 
+static void fit_windows_on_shrunken_monitors(const std::unordered_set<int> &monitors) {
+    for (auto c : actual_root->children) {
+        if (c->custom_type != (int) TYPE::CLIENT || *datum<bool>(c, "snapped"))
+            continue;
+        const int cid = *datum<int>(c, "cid");
+        const int mon = get_monitor(cid);
+        if (!monitors.contains(mon) || !hypriso->is_floating(cid) || hypriso->is_fullscreen(cid))
+            continue;
+        const auto area = bounds_reserved_monitor(mon);
+        if (area.w <= 0 || area.h <= 0)
+            continue;
+        const auto outer = client_to_outer(cid, bounds_client_final(cid));
+        if (outer.x >= area.x && outer.y >= area.y && outer.right() <= area.right() && outer.bottom() <= area.bottom())
+            continue;
+        const auto target = outer_to_client(cid, remap_floating(outer, area, area));
+        if (target.w >= 1 && target.h >= 1)
+            hypriso->move_resize(cid, target, false);
+    }
+}
+
 static void on_monitor_layout_change() {
     update_xrdb_dpi();
     publish_wall_monitors();
-    if (remembered_window_positions.empty())
+    if (monitor_layout_update_pending)
         return;
+    monitor_layout_update_pending = true;
     later_immediate([](Timer *) {
+        monitor_layout_update_pending = false;
+        std::unordered_set<int> shrunken_monitors;
+        for (auto m : actual_monitors) {
+            const int id = *datum<int>(m, "cid");
+            const auto now = bounds_monitor(id);
+            if (now.w <= 0 || now.h <= 0)
+                continue;
+            auto previous = previous_monitor_bounds.find(id);
+            if (previous != previous_monitor_bounds.end() &&
+                (now.w < previous->second.w || now.h < previous->second.h))
+                shrunken_monitors.insert(id);
+            previous_monitor_bounds[id] = now;
+        }
+        if (remembered_window_positions.empty()) {
+            if (shrunken_monitors.empty())
+                return;
+            // Hyprland's own monitor rules can change the layout without a Mylar display trial.
+            fit_windows_on_shrunken_monitors(shrunken_monitors);
+        }
         for (auto &r : remembered_window_positions) {
             auto c = get_cid_container(r.cid);
             if (!c)
@@ -1209,6 +1256,7 @@ static void on_monitor_open(int id) {
     actual_monitors.push_back(c);
     auto cid = datum<int>(c, "cid");
     *cid = id;
+    previous_monitor_bounds[id] = bounds_monitor(id);
     create_magic_workspace_exit(id);
     heart::layout_containers();
     if (set->show_docks)
@@ -1226,6 +1274,7 @@ static void on_monitor_open(int id) {
 }
 
 static void on_monitor_closed(int id) {
+    previous_monitor_bounds.erase(id);
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type == (int) TYPE::MAGIC_WORKSPACE_EXIT && *datum<int>(c, "monitor") == id) {
@@ -3060,6 +3109,7 @@ void watch_wallpaper_change() {
 }
 
 void heart::begin() {
+    plugin_lifetime = std::stop_source{};
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -3205,6 +3255,7 @@ void heart::begin() {
 }
 
 void heart::end() {
+    plugin_lifetime.request_stop();
 #ifdef TRACY_ENABLE
     ZoneScoped;
 #endif
@@ -3215,6 +3266,8 @@ void heart::end() {
     wall_spinner_has_last_damage = false;
     hypriso->on_config_reload = nullptr;
     hypriso->on_monitor_layout_change = nullptr;
+    previous_monitor_bounds.clear();
+    monitor_layout_update_pending = false;
     hypriso->on_resize_ended = nullptr;
     hypriso->on_tiled_drag_started = nullptr;
     hypriso->on_tiled_drag_motion = nullptr;
@@ -3222,15 +3275,23 @@ void heart::end() {
     hypriso->on_workspace_tiling_change = nullptr;
     hypriso->on_window_workspace_change = nullptr;
     
-    save_restore_infos();
-    
+    try {
+        save_restore_infos();
+    } catch (const std::exception &error) {
+        fprintf(stderr, "Mylar: saving window positions during unload: %s\n", error.what());
+    }
+
     settings::stop();
     icon_browser::stop();
     edit_pin::stop();
     dock::stop();
     stop_heart_workers();
     
-    settings::load_save_settings(true, set);
+    try {
+        settings::load_save_settings(true, set);
+    } catch (const std::exception &error) {
+        fprintf(stderr, "Mylar: saving settings during unload: %s\n", error.what());
+    }
     poll_thread->stop();
     
     audio_stop();

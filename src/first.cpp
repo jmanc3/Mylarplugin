@@ -94,12 +94,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) { // When star
 APICALL EXPORT void PLUGIN_EXIT() {
     stop_client_key_repeat();
     try {
-        settings::load_save_settings(true, set); // save
         heart::end();
-    } catch (...) {
-
+    } catch (const std::exception &error) {
+        fprintf(stderr, "Mylar: plugin teardown failed: %s\n", error.what());
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // The compositor thread outlives this plugin; workers release their own
     // caches when their rendering loops finish.
     cleanup_cached_pango_fonts();

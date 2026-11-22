@@ -87,5 +87,11 @@ install(
     DESTINATION "share/mylardesktop"
 )
 
+add_executable(mylar-file-chooser helpers/file_chooser.cpp)
+target_link_libraries(mylar-file-chooser PRIVATE PkgConfig::deps)
+add_dependencies(Mylardesktop mylar-file-chooser)
+target_compile_definitions(Mylardesktop PRIVATE MYLAR_FILE_CHOOSER_PATH="${CMAKE_INSTALL_PREFIX}/share/mylardesktop/mylar-file-chooser")
+install(TARGETS mylar-file-chooser DESTINATION share/mylardesktop)
+
 install(TARGETS Mylardesktop)
 

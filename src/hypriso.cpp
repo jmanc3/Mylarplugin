@@ -6131,6 +6131,8 @@ void change_root_config_path(std::string path, bool force = true) {
 }
 
 static std::vector<PF *> polled;
+static std::mutex timers_mutex;
+static std::unordered_set<Timer *> live_timers;
 static int inotify_fd = -1;
 static PF* inotify_poll_pf = nullptr;
 static std::unordered_map<int, std::function<void(FileWatchUpdate, int)>> inotify_watchers;
@@ -6221,6 +6223,14 @@ void HyprIso::end() {
     g_pHyprRenderer->context().m_pass.removeAllOfType("CBorderPassElement");
     g_pHyprRenderer->context().m_pass.removeAllOfType("CTexPassElement");
     g_pHyprRenderer->context().m_pass.removeAllOfType("CAnyPassElement");
+    {
+        std::lock_guard lock(timers_mutex);
+        for (auto timer : live_timers) {
+            wl_event_source_remove(timer->source);
+            delete timer;
+        }
+        live_timers.clear();
+    }
     for (auto pf : polled) {
         if (!pf)
             continue;
@@ -8667,6 +8677,13 @@ double HyprIso::last_render_ms(int monitor) {
     return 0.0;
 }
 
+void cancel_timer(Timer *timer) {
+    std::lock_guard lock(timers_mutex);
+    live_timers.erase(timer);
+    wl_event_source_remove(timer->source);
+    delete timer;
+}
+
 int later_action(void* user_data) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -8675,16 +8692,7 @@ int later_action(void* user_data) {
     if (timer->func)
         timer->func(timer);
     if (!timer->keep_running) {
-        for (int i = polled.size() - 1; i >= 0; i--) {
-            if (polled[i] && polled[i]->source)
-                if (polled[i]->source == timer->source) {
-                    delete polled[i];
-                    polled.erase(polled.begin() + i);
-                }
-        }
-        // remove from vec
-        wl_event_source_remove(timer->source);
-        delete timer;
+        cancel_timer(timer);
     } else {
         wl_event_source_timer_update(timer->source, timer->delay);
     }
@@ -8699,27 +8707,15 @@ Timer* later(void* data, float time_ms, const std::function<void(Timer*)>& fn) {
     timer->func   = fn;
     timer->data   = data;
     timer->delay  = time_ms;
+    std::lock_guard lock(timers_mutex);
     timer->source = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, &later_action, timer);
+    live_timers.insert(timer);
     wl_event_source_timer_update(timer->source, time_ms);
-    //auto pf = new PF;
-    //pf->source = timer->source;
-    //polled.push_back(pf);
     return timer;
 }
 
 Timer* later(float time_ms, const std::function<void(Timer*)>& fn) {
-#ifdef TRACY_ENABLE
-    ZoneScoped;
-#endif
-    auto timer    = new Timer;
-    timer->func   = fn;
-    timer->delay  = time_ms;
-    timer->source = wl_event_loop_add_timer(g_pCompositor->m_wlEventLoop, &later_action, timer);
-    wl_event_source_timer_update(timer->source, time_ms);
-    auto pf = new PF;
-    pf->source = timer->source;
-    polled.push_back(pf);
-    return timer;
+    return later(nullptr, time_ms, fn);
 }
 
 Timer* later_immediate(const std::function<void(Timer*)>& fn) {
@@ -11718,7 +11714,7 @@ void prune_expired_popups() {
 }
 
 void schedule_prune_expired_popups() {
-    g_pEventLoopManager->doLater([] { prune_expired_popups(); });
+    main_thread(prune_expired_popups);
 }
 
 void popup_created(SP<Desktop::View::CPopup> popup) {

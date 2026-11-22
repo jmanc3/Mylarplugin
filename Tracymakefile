@@ -32,7 +32,11 @@ all: debug
 debug:   CXX_FLAGS := $(COMMON_FLAGS) $(DEBUG_FLAGS)
 release: CXX_FLAGS := $(COMMON_FLAGS) $(RELEASE_FLAGS)
 
-debug release: $(OUTPUT)
+debug release: $(OUTPUT) out/mylar-file-chooser
+
+out/mylar-file-chooser: helpers/file_chooser.cpp
+	@mkdir -p out
+	$(CXX) $< -o $@ $(shell pkg-config --cflags --libs gtk+-3.0)
 
 # --- Link step ---
 $(OUTPUT): $(OBJECT_FILES)
@@ -47,7 +51,7 @@ out/%.o: %.cpp
 
 # --- Utility targets ---
 clean:
-	$(RM) $(OUTPUT) $(OBJECT_FILES)
+	$(RM) $(OUTPUT) out/mylar-file-chooser $(OBJECT_FILES)
 
 load: all unload
 	hyprctl plugin load ${PWD}/$(OUTPUT); sleep .4s

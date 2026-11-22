@@ -1,3 +1,4 @@
+#include "plugin_lifetime.h"
 #include "edit_pin.h"
 #include "pango_font_cache.h"
 
@@ -1301,9 +1302,6 @@ static void fill_root(Container *window_root) {
 }
 
 struct EditPinSession {
-    std::mutex mutex;
-    RawApp *app = nullptr;
-    bool close_requested = false;
     std::atomic<bool> exited = false;
     std::thread thread;
 };
@@ -1324,15 +1322,9 @@ static void reap_edit_pin_sessions_locked() {
 
 static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string stacking_rule, std::string icon, std::string command) {
     auto app = windowing::open_app();
-    {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        if (session->close_requested) {
-            windowing::close_app(app);
-            windowing::main_loop(app);
-            session->exited = true;
-            return;
-        }
-        session->app = app;
+    if (!app) {
+        session->exited = true;
+        return;
     }
     RawWindowSettings settings;
     settings.pos.w = 800;
@@ -1340,6 +1332,13 @@ static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string 
     settings.name = "Edit pin";
     settings.app_id = edit_pin::kAppId;
     auto mylar = open_mylar_window(app, WindowType::NORMAL, settings);
+    if (!mylar) {
+        windowing::close_app(app);
+        windowing::main_loop(app);
+        delete app;
+        session->exited = true;
+        return;
+    }
     auto pin_data = new PinData;
     pin_data->original_stacking_rule = stacking_rule;
     pin_data->stacking_rule = stacking_rule;
@@ -1356,10 +1355,6 @@ static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string 
     fill_root(mylar->root);
     
     windowing::main_loop(app);
-    {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        session->app = nullptr;
-    }
     *alive = false;
     
     cleanup_cached_pango_fonts();
@@ -1370,7 +1365,7 @@ static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string 
 void edit_pin::open(std::string stacking_rule, std::string icon, std::string command) {
     std::lock_guard<std::mutex> lock(edit_pin_sessions_mutex);
     reap_edit_pin_sessions_locked();
-    if (edit_pin_stopping.load())
+    if (edit_pin_stopping.load() || plugin_lifetime.stop_requested())
         return;
     auto session = std::make_shared<EditPinSession>();
     session->thread = std::thread(start_edit_pin, session, std::move(stacking_rule), std::move(icon), std::move(command));
@@ -1383,12 +1378,6 @@ void edit_pin::stop() {
         std::lock_guard<std::mutex> lock(edit_pin_sessions_mutex);
         edit_pin_stopping = true;
         sessions.swap(edit_pin_sessions);
-    }
-    for (auto &session : sessions) {
-        std::lock_guard<std::mutex> lock(session->mutex);
-        session->close_requested = true;
-        if (session->app)
-            windowing::close_app(session->app);
     }
     for (auto &session : sessions) {
         if (session->thread.joinable())

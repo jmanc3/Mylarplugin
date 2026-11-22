@@ -1345,10 +1345,10 @@ void open_extra_popup(Dock *dock, std::string page, bool via_keyboard) {
     fill_extra_container(extra->root, page, via_keyboard);
 
     if (via_keyboard) {
-        later(30, [dock, extra](Timer *) {
+        windowing::timer(dock->app, 30, [dock, extra](void *) {
             if (dock->extra == extra && windowing::has_window(extra->raw_window))
                 windowing::request_keyboard_focus(extra->raw_window);
-        });
+        }, nullptr);
     }
     windowing::redraw(extra->raw_window);
 }

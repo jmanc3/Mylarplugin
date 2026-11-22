@@ -7,7 +7,6 @@
 #include "settings.h"
 #include "text_editor.h"
 
-#include <dbus/dbus.h>
 #include <hyprutils/path/Path.hpp>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -640,37 +639,6 @@ static const PowerItem power_items[] = {
 };
 static constexpr int power_item_count = sizeof(power_items) / sizeof(power_items[0]);
 
-// systemd-logind over the system bus. interactive=true lets polkit ask when needed.
-static void login1_call(std::string method) {
-    std::thread([method]() {
-        DBusError error;
-        dbus_error_init(&error);
-        DBusConnection *connection = dbus_bus_get_private(DBUS_BUS_SYSTEM, &error);
-        if (!connection) {
-            fprintf(stderr, "mylar: system bus unavailable for %s: %s\n", method.c_str(), error.message ? error.message : "");
-            dbus_error_free(&error);
-            return;
-        }
-        dbus_connection_set_exit_on_disconnect(connection, false);
-        DBusMessage *message = dbus_message_new_method_call("org.freedesktop.login1", "/org/freedesktop/login1",
-                                                            "org.freedesktop.login1.Manager", method.c_str());
-        dbus_bool_t interactive = true;
-        if (message && dbus_message_append_args(message, DBUS_TYPE_BOOLEAN, &interactive, DBUS_TYPE_INVALID)) {
-            // Long timeout: polkit may be waiting on an authentication prompt.
-            DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection, message, 120000, &error);
-            if (reply)
-                dbus_message_unref(reply);
-            else
-                fprintf(stderr, "mylar: login1 %s failed: %s\n", method.c_str(), error.message ? error.message : "");
-        }
-        if (message)
-            dbus_message_unref(message);
-        dbus_error_free(&error);
-        dbus_connection_close(connection);
-        dbus_connection_unref(connection);
-    }).detach();
-}
-
 // Path of the loaded plugin .so, so it can be unloaded and loaded again.
 static std::string plugin_path() {
     Dl_info info;
@@ -685,10 +653,10 @@ static void run_power_action(int index) {
     if (index == 0) {
         // Same as the "Log out" shortcut: hyprshutdown when installed, otherwise exit Hyprland.
         launch_command("command -v hyprshutdown >/dev/null 2>&1 && hyprshutdown || hyprctl dispatch 'hl.dsp.exit()'");
-    } else if (index == 1) {
-        login1_call("PowerOff");
-    } else if (index == 2) {
-        login1_call("Reboot");
+    } else if (index == 1 || index == 2) {
+        const char *method = index == 1 ? "PowerOff" : "Reboot";
+        launch_command(std::string("gdbus call --system --timeout 120 --dest org.freedesktop.login1 "
+                                   "--object-path /org/freedesktop/login1 --method org.freedesktop.login1.Manager.") + method + " true");
     } else if (index == 3) {
         auto path = plugin_path();
         if (path.empty())
@@ -705,10 +673,10 @@ static void close_power_menu(Dock *dock, bool refocus_applications) {
     windowing::close_window(dock->power_menu->raw_window);
     if (refocus_applications && dock->applications) {
         auto applications = dock->applications;
-        later(30, [dock, applications](Timer *) {
+        windowing::timer(dock->app, 30, [dock, applications](void *) {
             if (dock->applications == applications)
                 windowing::request_keyboard_focus(applications->raw_window);
-        });
+        }, nullptr);
     }
 }
 
@@ -824,10 +792,10 @@ static void open_power_menu(Container *root, Container *anchor, bool via_keyboar
         };
     }
 
-    later(30, [dock, menu](Timer *) {
+    windowing::timer(dock->app, 30, [dock, menu](void *) {
         if (dock->power_menu == menu)
             windowing::request_keyboard_focus(menu->raw_window);
-    });
+    }, nullptr);
     windowing::redraw(menu->raw_window);
 }
 

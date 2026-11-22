@@ -7,6 +7,7 @@
 
 #include <pulse/mainloop.h>
 #include <thread>
+#include <atomic>
 #include <pulse/pulseaudio.h>
 #include <vector>
 #include <string>
@@ -16,7 +17,7 @@
 #include <cmath>
 #include <pipewire/node.h>
 
-extern bool audio_running;
+extern std::atomic<bool> audio_running;
 extern bool allow_audio_thread_creation;
 
 struct AudioClient {
