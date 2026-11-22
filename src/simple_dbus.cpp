@@ -18,7 +18,6 @@
 //#include "wifi_backend.h"
 #include "dbus_helper.h"
 #include "dock/dock.h"
-#include "mpris.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1709,8 +1708,6 @@ void dbus_start(DBusBusType dbusType) {
 }
 
 void dbus_end() {
-    // Drops the MPRIS filter and cancels its calls before the connection goes away.
-    mpris::stop();
     status_notifier_hosts.clear();
     status_notifier_hosts.shrink_to_fit();
     status_notifier_items.clear();

@@ -514,7 +514,7 @@ void fill_root(Container *root, Container *alt_tab_parent) {
 
 static bool is_showing = false;
 static unsigned int alt_tab_generation = 0;
-static constexpr long alt_tab_fast_capture_ms = 42;
+static constexpr long alt_tab_fast_capture_ms = 20;
 static constexpr long alt_tab_max_fast_capture_ms = 250;
 static constexpr long alt_tab_slow_capture_ms = 400;
 static constexpr long alt_tab_max_slow_capture_ms = 2000;

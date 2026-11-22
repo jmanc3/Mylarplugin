@@ -861,7 +861,6 @@ static void mixer_pa_stream_identity(AudioNodeInfo &info, const char *name, pa_p
         info.description = media;
     info.name = info.description;
     info.app_name = mixer_pa_prop(p, PA_PROP_APPLICATION_NAME);
-    info.pid = parse_pid_value(mixer_pa_prop(p, PA_PROP_APPLICATION_PROCESS_ID).c_str());
     if (info.icon_name.empty()) {
         info.icon_name = mixer_pick_icon(mixer_pa_prop(p, PA_PROP_APPLICATION_ICON_NAME), info.app_name,
                                          info.description, fallback_icon);
@@ -1105,11 +1104,6 @@ static void mixer_pw_node_identity(MixerNode *n, const spa_dict *props) {
         auto app = get(PW_KEY_APP_NAME);
         if (!app.empty())
             n->info.app_name = app;
-        auto pid = get(PW_KEY_APP_PROCESS_ID);
-        if (pid.empty())
-            pid = get("client.pid");
-        if (!pid.empty())
-            n->info.pid = parse_pid_value(pid.c_str());
         if (n->info.icon_name.empty() || n->info.icon_name == "applications-multimedia" ||
             n->info.icon_name == "audio-input-microphone") {
             n->info.icon_name = mixer_pick_icon(get(PW_KEY_APP_ICON_NAME), n->info.app_name, n->info.description,

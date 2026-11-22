@@ -1053,6 +1053,9 @@ void create_overview_for_monitor(int monitor) {
     over->pre_layout = [monitor](Container *root, Container *c, const Bounds &b) {
         c->wanted_bounds = bounds_monitor(monitor);
         c->real_bounds = c->wanted_bounds;
+        auto s = scale(monitor);
+        c->minimum_x_distance_to_move_before_drag_begins = 6 * s;
+        c->minimum_y_distance_to_move_before_drag_begins = 6 * s;
     };
     over->when_paint = [monitor](Container *root, Container *c) {
         if (current_rendering_monitor() == monitor && *datum<int>(root, "stage") == (int) STAGE::RENDER_POST_WINDOWS)

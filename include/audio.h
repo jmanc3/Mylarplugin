@@ -130,7 +130,6 @@ struct AudioNodeInfo {
     std::string description; // Human readable device description, or the stream's media name
     std::string app_name;    // Streams only
     std::string icon_name;
-    int pid = -1;
     // Streams: index of the sink/source they are connected to. Devices: index of their card.
     uint32_t device = UINT32_MAX;
     // Sources only: index of the sink this is the monitor of.

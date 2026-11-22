@@ -936,7 +936,7 @@ void actual_open(int monitor, int cid) {
         hypriso->render_whitelist.push_back(i);
 }
 
-static constexpr long snap_fast_capture_ms = 42;
+static constexpr long snap_fast_capture_ms = 20;
 static constexpr long snap_max_fast_capture_ms = 250;
 static constexpr long snap_slow_capture_ms = 400;
 static constexpr long snap_max_slow_capture_ms = 2000;
