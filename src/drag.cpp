@@ -186,7 +186,7 @@ void drag::end(int cid) {
         if (!drag::dragging())
             drag_workspace_switcher::close_visually();
     });
-    drag_workspace_switcher::drop_window(cid);
+    const bool dropped_on_workspace = drag_workspace_switcher::drop_window(cid);
     drag_workspace_switcher::end_drag(cid);
 
     delete data;
@@ -194,7 +194,7 @@ void drag::end(int cid) {
 
     int mon = hypriso->monitor_from_cursor();
     auto m = mouse();
-    auto pos = mouse_to_snap_position(mon, m.x, m.y);
+    auto pos = dropped_on_workspace ? SnapPosition::NONE : mouse_to_snap_position(mon, m.x, m.y);
     if (!hypriso->can_maximize(cid))
         pos = SnapPosition::NONE;
     snap_preview::on_drag_end(cid, m.x, m.y, (int) pos);

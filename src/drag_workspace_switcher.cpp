@@ -1269,15 +1269,29 @@ bool drag_workspace_switcher::drop_window(int cid) {
                 destination = spaces.empty() ? 1 : spaces.back() + 1;
             } else
                 destination = hypriso->space_id_to_raw(space);
+            const bool center_on_drop = !overview::is_showing();
             // Finish the compositor's drag before moving the window; otherwise
             // its final retiling can undo the workspace drop.
-            later_immediate([cid, monitor, destination](Timer *) {
+            later_immediate([cid, monitor, destination, center_on_drop](Timer *) {
                 if (!hypriso->is_mapped(cid))
                     return;
                 const auto before = hypriso->get_active_workspace_id(monitor);
+                const int source = hypriso->get_client_workspace_id(cid);
                 hypriso->move_to_workspace(cid, destination, false);
-                hypriso->bring_to_front(cid);
                 const int after = hypriso->get_client_workspace_id(cid);
+                if (center_on_drop && after != -1 && after != source && hypriso->is_floating(cid) && !hypriso->is_fullscreen(cid)) {
+                    const auto screen = bounds_monitor(get_monitor(cid));
+                    auto window = bounds_client_final(cid);
+                    if (screen.w > 0 && screen.h > 0 && window.w > 0 && window.h > 0) {
+                        const auto extents = extents_client(cid);
+                        const auto width = window.w + extents.left + extents.right;
+                        const auto height = window.h + extents.top + extents.bottom;
+                        window.x = screen.x + std::max(0.0, (screen.w - width) * .5) + extents.left;
+                        window.y = screen.y + std::max(0.0, (screen.h - height) * .5) + extents.top;
+                        hypriso->move_resize(cid, window);
+                    }
+                }
+                hypriso->bring_to_front(cid);
                 if (before != after)
                     capture_switcher_workspace(monitor, before);
                 // The landing handoff captures the destination with the window
