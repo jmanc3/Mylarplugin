@@ -5,6 +5,7 @@
 #include "drag_workspace_switcher.h"
 #include "first.h"
 #include "heart.h"
+#include "thumbnail_capture.h"
 #include "hypriso.h"
 #include "layout_thumbnails.h"
 #include "titlebar.h"
@@ -15,7 +16,6 @@
 #include "snap_assist.h"
 #include "spring.h"
 
-#include <chrono>
 #include <linux/input-event-codes.h>
 #include <map>
 #include <memory>
@@ -38,16 +38,12 @@ static constexpr int teaser_workspace = -1;
 static constexpr double thumbnail_fade_ms = 200.0;
 static constexpr double departure_ms = 300.0;
 // Timers use whole milliseconds: 42ms ~= 24 FPS for focused/below/hovered windows.
-static constexpr long fast_capture_ms = 42;
-static constexpr long max_fast_capture_ms = 250;
-static constexpr long slow_capture_ms = 400;
-static constexpr long max_slow_capture_ms = 2000;
+static constexpr long fast_capture_ms = 20;
 static constexpr long wallpaper_capture_ms = 1000;
 static constexpr long max_wallpaper_capture_ms = 4000;
 static constexpr long idle_scene_update_ms = 50;
 static constexpr long preload_interval_ms = 750;
 static constexpr long preload_refresh_ms = 2000;
-static constexpr double initial_capture_budget_ms = 6.0;
 static constexpr double damage_pad_px = 4.0;
 static bool preloader_started = false;
 static std::map<int, long> preloaded_captures;
@@ -169,15 +165,12 @@ struct OverviewScene {
     std::map<int, Bounds> desktop_origins;
     float desktop_origin_weight = 1.0f;
     bool taking_desktop = false;
-    std::map<int, long> window_captures;
+    thumbnail_capture::History captures;
     std::map<int, long> wallpaper_captures;
     long last_update = 0;
     unsigned long long drag_order = 0;
     float last_openess = -1.0f;
     float last_desktop_origin_weight = -1.0f;
-    double smoothed_capture_ms = 0.0;
-    double smoothed_window_capture_ms = 1.5;
-    size_t capture_cursor = 0;
 };
 
 static std::unique_ptr<OverviewScene> scene;
@@ -1292,45 +1285,16 @@ static long screenshots(bool initial = false) {
 #ifdef TRACY_ENABLE
     ZoneScopedN("Overview screenshot batch");
 #endif
-    const auto tick_start = std::chrono::steady_clock::now();
-    const auto now = get_current_time_in_ms();
-
-    const double render_ms = max_monitor_render_ms();
-    const double frame_budget_ms = min_monitor_frame_budget_ms();
+    const auto active_workspaces = thumbnail_capture::active_workspaces();
+    thumbnail_capture::Batch batch(scene->captures, max_monitor_render_ms(), min_monitor_frame_budget_ms(),
+                                   initial, fast_capture_ms, active_workspaces);
+    const long effective_wall_ms = batch.scaled_interval(wallpaper_capture_ms, max_wallpaper_capture_ms);
     const bool busy_motion = animating || any_monitor_workspace_gesture();
-    const double load_ratio = (render_ms + scene->smoothed_capture_ms) / std::max(1.0, frame_budget_ms);
-    const double load_scale = load_ratio <= 0.35 ? 1.0 : 1.0 + (load_ratio - 0.35) * 4.0;
-
-    long effective_fast_ms = std::clamp<long>(std::lround(fast_capture_ms * load_scale), fast_capture_ms, max_fast_capture_ms);
-    long effective_slow_ms = std::clamp<long>(std::lround(slow_capture_ms * load_scale), slow_capture_ms, max_slow_capture_ms);
-    long effective_wall_ms = std::clamp<long>(std::lround(wallpaper_capture_ms * load_scale), wallpaper_capture_ms, max_wallpaper_capture_ms);
     if (busy_motion && !initial) {
-        effective_fast_ms = std::max(effective_fast_ms, 120L);
-        effective_slow_ms = std::max(effective_slow_ms, 800L);
+        batch.fast_ms = std::max(batch.fast_ms, 120L);
+        batch.slow_ms = std::max(batch.slow_ms, 800L);
     }
-    const double tick_budget_ms = initial
-        ? initial_capture_budget_ms
-        : std::clamp(frame_budget_ms * 0.35 - render_ms * 0.5, 1.5, 6.0);
 
-    std::map<int, int> active_workspaces;
-    std::map<int, int> priority_counts;
-    std::vector<int> priority_windows;
-    for (auto m : actual_monitors) {
-        const int mid = *datum<int>(m, "cid");
-        active_workspaces[mid] = hypriso->get_active_workspace_id(mid);
-    }
-    // The compositor stack runs from bottom to top. Capture the focused window
-    // and the one directly below it on each monitor's active workspace at 24 FPS.
-    const auto stacking = get_window_stacking_order();
-    for (auto it = stacking.rbegin(); it != stacking.rend(); ++it) {
-        const int mid = get_monitor(*it);
-        if (!active_workspaces.contains(mid) || priority_counts[mid] >= 2 || is_slept(*it) || !get_cid_container(*it))
-            continue;
-        if (hypriso->get_active_workspace_id_client(*it) != active_workspaces.at(mid))
-            continue;
-        priority_windows.push_back(*it);
-        priority_counts[mid]++;
-    }
     // Use the rendered hit boxes, including peek and returning thumbnails,
     // rather than the original desktop window bounds.
     int hovered = -1;
@@ -1360,11 +1324,6 @@ static long screenshots(bool initial = false) {
         }
     }
 
-    struct CaptureCandidate {
-        int cid;
-        int tier; // 0 = missing thumbnail, 1 = hovered, 2 = priority, 3 = visible dirty/fallback
-    };
-    std::vector<CaptureCandidate> candidates;
     for (int i = (int) actual_root->children.size() - 1; i >= 0; i--) {
         auto c = actual_root->children[i];
         if (c->custom_type != (int) TYPE::CLIENT)
@@ -1379,80 +1338,31 @@ static long screenshots(bool initial = false) {
             (scene->monitors.contains(mid) && scene->monitors.at(mid).dragged == cid);
         if (!visible && !missing)
             continue;
-        if (initial && !missing && (!active_workspaces.contains(mid) || wid != active_workspaces.at(mid)))
+        const bool on_active = active_workspaces.contains(mid) && wid == active_workspaces.at(mid);
+        if (initial && !missing && !on_active)
             continue;
-
-        const bool fast = cid == hovered || std::find(priority_windows.begin(), priority_windows.end(), cid) != priority_windows.end();
-        const bool dirty = hypriso->is_deco_dirty(cid);
-        const auto previous = scene->window_captures.find(cid);
-        long last_cap = previous != scene->window_captures.end() ? previous->second : 0;
-        if (last_cap == 0) {
-            auto pre = preloaded_captures.find(cid);
-            if (pre != preloaded_captures.end())
-                last_cap = pre->second;
-        }
-        const long elapsed = last_cap == 0 ? effective_slow_ms * 4 : now - last_cap;
-        if (!missing) {
-            const long min_interval = fast ? effective_fast_ms : effective_slow_ms;
-            if (elapsed < min_interval)
-                continue;
-            // Focused, one-below, and hovered windows always refresh at the fast
-            // 24 FPS rate so they appear real-time (including video subsurfaces).
-            // Background windows skip re-capture unless dirty or due for fallback.
-            if (!fast && !dirty) {
-                const bool on_active = active_workspaces.contains(mid) && wid == active_workspaces.at(mid);
-                if (initial || !on_active || elapsed < effective_slow_ms * 3)
-                    continue;
-            }
-        }
-        const int tier = missing ? 0 : (cid == hovered ? 1 : (fast ? 2 : 3));
-        candidates.push_back({cid, tier});
+        const auto pre = preloaded_captures.find(cid);
+        batch.add(cid, cid == hovered, {}, missing, hypriso->is_deco_dirty(cid), !initial && on_active,
+                  pre == preloaded_captures.end() ? 0 : pre->second);
     }
 
-    if (!candidates.empty()) {
-        std::stable_sort(candidates.begin(), candidates.end(), [](const CaptureCandidate &a, const CaptureCandidate &b) {
-            return a.tier < b.tier;
-        });
-        // Rotate equal-priority non-missing candidates so budgeted ticks never starve a window.
-        size_t rot_start = 0;
-        while (rot_start < candidates.size() && candidates[rot_start].tier <= 1)
-            rot_start++;
-        if (candidates.size() - rot_start > 1) {
-            const size_t span = candidates.size() - rot_start;
-            const size_t shift = scene->capture_cursor % span;
-            std::rotate(candidates.begin() + rot_start, candidates.begin() + rot_start + shift, candidates.end());
-        }
-    }
-
-    bool budget_exceeded = false;
-    size_t captured_count = 0;
-    for (const auto &cand : candidates) {
-        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
-        if (cand.tier > 0 && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
-            budget_exceeded = true;
+    for (const auto &candidate : batch.ordered_candidates()) {
+        if (batch.defer_capture(candidate.tier == 0))
             break;
-        }
-        const auto single_start = std::chrono::steady_clock::now();
-        hypriso->screenshot_deco(cand.cid);
-        const double single_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - single_start).count();
-        scene->smoothed_window_capture_ms = scene->smoothed_window_capture_ms * 0.75 + single_ms * 0.25;
-        const long cap_time = get_current_time_in_ms();
-        scene->window_captures[cand.cid] = cap_time;
-        preloaded_captures[cand.cid] = cap_time;
-        captured_count++;
+        hypriso->screenshot_deco(candidate.cid);
+        const long timestamp = get_current_time_in_ms();
+        batch.record(candidate.cid, timestamp);
+        preloaded_captures[candidate.cid] = timestamp;
         if (!initial)
-            damage_window_thumbnail(cand.cid);
+            damage_window_thumbnail(candidate.cid);
     }
-    if (captured_count > 0)
-        scene->capture_cursor += captured_count;
-    std::erase_if(scene->window_captures, [](const auto &entry) { return !get_cid_container(entry.first); });
 
     for (auto m : actual_monitors) {
         const int mid = *datum<int>(m, "cid");
         if (!initial && wallpaper_fade_active.contains(mid))
             continue;
         auto fade_it = wallpaper_fade_until.find(mid);
-        const bool fading_wall = fade_it != wallpaper_fade_until.end() && now < fade_it->second;
+        const bool fading_wall = fade_it != wallpaper_fade_until.end() && batch.now < fade_it->second;
         if (fade_it != wallpaper_fade_until.end() && !fading_wall) {
             wallpaper_fade_until.erase(fade_it);
             dirty_wallpapers.insert(mid);
@@ -1461,13 +1371,10 @@ static long screenshots(bool initial = false) {
         if (!missing_wall && (initial || busy_motion))
             continue;
         const auto previous = scene->wallpaper_captures.find(mid);
-        if (!missing_wall && previous != scene->wallpaper_captures.end() && now - previous->second < effective_wall_ms)
+        if (!missing_wall && previous != scene->wallpaper_captures.end() && batch.now - previous->second < effective_wall_ms)
             continue;
-        const double elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
-        if (!missing_wall && captured_count > 0 && elapsed_ms >= tick_budget_ms) {
-            budget_exceeded = true;
+        if (batch.defer_capture(missing_wall))
             break;
-        }
         hypriso->screenshot_wallpaper(mid);
         if (!fading_wall && hypriso->has_wallpaper_thumbnail(mid))
             dirty_wallpapers.erase(mid);
@@ -1477,12 +1384,7 @@ static long screenshots(bool initial = false) {
     }
     std::erase_if(scene->wallpaper_captures, [&active_workspaces](const auto &entry) { return !active_workspaces.contains(entry.first); });
 
-    const double total_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tick_start).count();
-    if (!initial)
-        scene->smoothed_capture_ms = scene->smoothed_capture_ms * 0.75 + total_ms * 0.25;
-    if (budget_exceeded)
-        return std::min(effective_fast_ms, 50L);
-    return effective_fast_ms;
+    return batch.finish();
 }
 
 static void set_input_bypass(bool bypass) {
