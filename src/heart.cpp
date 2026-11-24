@@ -3039,10 +3039,41 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
         *datum<bool>(c, "dock_popup") = !owner_is_window && is_dock_layer(parent_id);
         c->pre_layout = [](Container *root, Container *c, const Bounds &b) {
             auto bounds = bounds_popup(*datum<int>(c, "cid"));
+            const bool mapped = bounds.w > 0 && bounds.h > 0;
             auto previous = c->real_bounds;
             // Unmapped but still fading out: the snapshot stays where the popup was.
-            if (*datum<bool>(c, "dock_popup") && (bounds.w <= 0 || bounds.h <= 0) && alpha_popup(*datum<int>(c, "cid")) > 0.0f)
+            if (*datum<bool>(c, "dock_popup") && !mapped && alpha_popup(*datum<int>(c, "cid")) > 0.0f)
                 bounds = previous;
+            if (*datum<bool>(c, "dock_popup") && mapped) {
+                std::string mon_name;
+                const double cx = bounds.x + bounds.w * 0.5;
+                const double cy = bounds.y + bounds.h * 0.5;
+                for (auto m : actual_monitors) {
+                    const int mid = *datum<int>(m, "cid");
+                    const auto mb = bounds_monitor(mid);
+                    if (cx >= mb.x && cx < mb.right() && cy >= mb.y && cy < mb.bottom()) {
+                        mon_name = hypriso->monitor_name(mid);
+                        break;
+                    }
+                }
+                if (!mon_name.empty()) {
+                    std::vector<Bounds> cards;
+                    if (dock::try_get_date_menu_cards(mon_name, cards) && !cards.empty()) {
+                        auto cached = datum<std::vector<Bounds>>(c, "shadow_cards");
+                        bool changed = cached->size() != cards.size();
+                        for (size_t i = 0; !changed && i < cards.size(); ++i) {
+                            const auto &a = (*cached)[i];
+                            const auto &b2 = cards[i];
+                            if (a.x != b2.x || a.y != b2.y || a.w != b2.w || a.h != b2.h)
+                                changed = true;
+                        }
+                        if (changed) {
+                            *cached = std::move(cards);
+                            damage_popup_shadow(bounds);
+                        }
+                    }
+                }
+            }
             if (*datum<bool>(c, "dock_popup") &&
                 (bounds.x != previous.x || bounds.y != previous.y || bounds.w != previous.w || bounds.h != previous.h)) {
                 damage_popup_shadow(previous);
@@ -3070,12 +3101,28 @@ void on_popup_open(int id, int parent_id, bool owner_is_window) {
 
             // Layer popups are drawn after this stage. Match their outer Cairo silhouette.
             renderfix
-            const auto radius = std::min(std::round(dock::popup_corner_radius * s),
-                                         std::floor(std::min(c->real_bounds.w, c->real_bounds.h) * .5));
             const auto alpha = alpha_popup(*datum<int>(c, "cid"));
             if (alpha <= 0.0f)
                 return;
-            render_drop_shadow(rid, 1.0, {0, 0, 0, .0108f * alpha}, radius, 2.0, c->real_bounds, std::round(dock_popup_shadow_size * s));
+            auto draw_shadow = [&](const Bounds &box) {
+                if (box.w <= 0 || box.h <= 0)
+                    return;
+                const auto radius = std::min(std::round(dock::popup_corner_radius * s),
+                                             std::floor(std::min(box.w, box.h) * .5));
+                render_drop_shadow(rid, 1.0, {0, 0, 0, .0108f * alpha}, radius, 2.0, box, std::round(dock_popup_shadow_size * s));
+            };
+            const auto *cards = datum<std::vector<Bounds>>(c, "shadow_cards");
+            if (!cards->empty()) {
+                for (const auto &card : *cards) {
+                    Bounds box(c->real_bounds.x + card.x * s,
+                               c->real_bounds.y + card.y * s,
+                               card.w * s,
+                               card.h * s);
+                    draw_shadow(box);
+                }
+            } else {
+                draw_shadow(c->real_bounds);
+            }
         };
         *datum<int>(c, "cid") = id; 
         *datum<float>(c, "shadow_alpha") = 0.0f;

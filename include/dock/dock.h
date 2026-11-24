@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <map>
+#include <vector>
 
 struct Bounds;
 struct NotificationInfo;
@@ -53,4 +54,5 @@ namespace dock {
     Bounds get_location(std::string name, int cid);
     std::map<int, Bounds> try_get_locations(const std::string &name);
     Bounds get_item_location(std::string monitor_name, std::string item_name);
+    bool try_get_date_menu_cards(const std::string &monitor_name, std::vector<Bounds> &out);
 };

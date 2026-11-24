@@ -3726,6 +3726,7 @@ void dock_start(std::stop_token stop, std::string monitor_name) {
         if (auto icons = container_by_name("icons", dock->window->root))
             write_saved_pins_to_file(icons);
     }
+    cleanup_popup_frames();
     cleanup_cached_pango_fonts();
     drawing::cleanup_thread_resources();
 }
@@ -4066,6 +4067,30 @@ Bounds dock::get_item_location(std::string monitor_name, std::string item_name) 
     }
 
     return {0, 0, 100, 100};
+}
+
+bool dock::try_get_date_menu_cards(const std::string &monitor_name, std::vector<Bounds> &out) {
+    out.clear();
+    for (auto d : active_docks()) {
+        if (d->creation_settings.monitor_name != monitor_name)
+            continue;
+        // The compositor must not wait for the dock's rendering thread.
+        std::unique_lock<std::mutex> lock(d->app->mutex, std::try_to_lock);
+        if (!lock.owns_lock())
+            return false;
+        if (!d->date_menu || !d->date_menu->root || !d->date_menu->raw_window)
+            return true;
+        const float dpi = d->date_menu->raw_window->dpi > 0.0f ? d->date_menu->raw_window->dpi : 1.0f;
+        for (auto *ch : d->date_menu->root->children) {
+            if (!ch || !ch->exists || ch->real_bounds.w <= 0 || ch->real_bounds.h <= 0)
+                continue;
+            Bounds b = ch->real_bounds;
+            b.scale(1.0 / dpi);
+            out.push_back(b);
+        }
+        return true;
+    }
+    return true;
 }
 
 std::map<int, Bounds> dock::try_get_locations(const std::string &name) {

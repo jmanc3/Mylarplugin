@@ -30,6 +30,7 @@ void drawRoundedRect(drawing::Context *cr, double x, double y, double width, dou
 
 void paint_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi,
                             RGBA background = {1, 1, 1, 1}, RGBA outline = border_color);
+void cleanup_popup_frames();
 // Intersects the current clip with the inside of the popup's rounded outline.
 // Callers wrap it in cairo_save / cairo_restore.
 void clip_to_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi);

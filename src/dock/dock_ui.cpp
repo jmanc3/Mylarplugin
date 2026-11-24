@@ -180,20 +180,101 @@ static void popup_background_path(drawing::Context *cr, const Bounds &bounds, do
     cr->close_path();
 }
 
+struct PopupFrameKey {
+    int w, h;
+    int fx, fy; // sub-pixel offset, 1/8th px
+    int radius, border; // 1/8th px
+    uint32_t fill, stroke;
+    bool operator==(const PopupFrameKey &) const = default;
+};
+
+struct PopupFrameEntry {
+    PopupFrameKey key;
+    cairo_surface_t *surface;
+};
+
+// A plain pointer: a thread_local with a destructor would keep the plugin from
+// unloading while its thread is alive. Freed by cleanup_popup_frames().
+static thread_local std::vector<PopupFrameEntry> *popup_frames = nullptr;
+
+void cleanup_popup_frames() {
+    if (!popup_frames)
+        return;
+    for (auto &entry : *popup_frames)
+        cairo_surface_destroy(entry.surface);
+    delete popup_frames;
+    popup_frames = nullptr;
+}
+
 void paint_popup_background(drawing::Context *cr, const Bounds &bounds, double dpi,
                             RGBA background, RGBA outline) {
     if (bounds.w <= 0 || bounds.h <= 0)
         return;
+    if (!popup_frames)
+        popup_frames = new std::vector<PopupFrameEntry>;
+    auto &cache = *popup_frames;
+
     const double stroke = std::min(dpi, std::min(bounds.w, bounds.h));
+    const double radius = std::min(std::round(dock::popup_corner_radius * dpi), std::floor(std::min(bounds.w, bounds.h) * .5));
+    const double x0 = std::floor(bounds.x);
+    const double y0 = std::floor(bounds.y);
+    const int w = (int) std::ceil(bounds.x + bounds.w) - (int) x0;
+    const int h = (int) std::ceil(bounds.y + bounds.h) - (int) y0;
+    if (w <= 0 || h <= 0)
+        return;
+
+    auto pack = [](RGBA c) {
+        auto ch = [](double v) { return (uint32_t) std::lround(std::clamp(v, 0.0, 1.0) * 255); };
+        return ch(c.r) << 24 | ch(c.g) << 16 | ch(c.b) << 8 | ch(c.a);
+    };
+    const PopupFrameKey key{w, h, (int) std::lround((bounds.x - x0) * 8), (int) std::lround((bounds.y - y0) * 8),
+                            (int) std::lround(radius * 8), (int) std::lround(stroke * 8),
+                            pack(background), pack(outline)};
+
+    cairo_surface_t *surface = nullptr;
+    for (auto &entry : cache) {
+        if (entry.key == key) {
+            surface = entry.surface;
+            break;
+        }
+    }
+    if (!surface) {
+        if (cache.size() >= 48) {
+            cairo_surface_destroy(cache.front().surface);
+            cache.erase(cache.begin());
+        }
+        surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+        auto c = cairo_create(surface);
+        cairo_set_antialias(c, CAIRO_ANTIALIAS_BEST);
+        const double half = stroke * 0.5;
+        const double x = key.fx / 8.0 + half;
+        const double y = key.fy / 8.0 + half;
+        const double rw = std::max(0.0, bounds.w - stroke);
+        const double rh = std::max(0.0, bounds.h - stroke);
+        const double r = std::max(0.0, std::min(radius - half, std::min(rw, rh) * 0.5));
+        cairo_new_sub_path(c);
+        cairo_arc(c, x + rw - r, y + r, r, -M_PI / 2, 0);
+        cairo_arc(c, x + rw - r, y + rh - r, r, 0, M_PI / 2);
+        cairo_arc(c, x + r, y + rh - r, r, M_PI / 2, M_PI);
+        cairo_arc(c, x + r, y + r, r, M_PI, 3 * M_PI / 2);
+        cairo_close_path(c);
+        cairo_set_source_rgba(c, background.r, background.g, background.b, background.a);
+        cairo_fill_preserve(c);
+        if (stroke > 0) {
+            cairo_set_line_width(c, stroke);
+            cairo_set_source_rgba(c, outline.r, outline.g, outline.b, outline.a);
+            cairo_stroke(c);
+        }
+        cairo_destroy(c);
+        cairo_surface_flush(surface);
+        cache.push_back({key, surface});
+    }
+
     cr->save();
-    set_argb(cr, background);
-    popup_background_path(cr, bounds, dpi, 0);
+    cr->new_path();
+    cr->set_source_surface(surface, x0, y0);
+    cr->rectangle(x0, y0, w, h);
     cr->fill();
-    set_argb(cr, outline);
-    cr->set_line_width(stroke);
-    // Inset the stroke and its radius equally so its outer edge matches the fill.
-    popup_background_path(cr, bounds, dpi, stroke * .5);
-    cr->stroke();
     cr->restore();
 }
 
