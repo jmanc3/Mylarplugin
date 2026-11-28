@@ -10390,6 +10390,16 @@ Bounds HyprIso::workspace_offset(int id) {
     return {};
 }
 
+int HyprIso::active_window() {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    auto focused = Desktop::focusState()->window();
+    if (!focused)
+        return -1;
+    return get_wid(focused);
+}
+
 bool HyprIso::has_focus(int client) {
 #ifdef TRACY_ENABLE
     ZoneScoped;
@@ -10399,6 +10409,41 @@ bool HyprIso::has_focus(int client) {
             return hw->w == Desktop::focusState()->window();
         }
     }
+    return false;
+}
+
+bool HyprIso::is_cursor_showing() {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (!g_pHyprRenderer)
+        return false;
+    if (!g_pHyprRenderer->shouldRenderCursor())
+        return false;
+    if (g_pInputManager && g_pInputManager->pointerConstraints().locked())
+        return false;
+    return true;
+}
+
+bool HyprIso::has_top_or_overlay_layer_at_cursor() {
+#ifdef TRACY_ENABLE
+    ZoneScoped;
+#endif
+    if (!g_pInputManager)
+        return false;
+    const auto pos = g_pInputManager->getMouseCoordsInternal();
+    const auto mon = State::monitorState()->query().vec(pos).run();
+    if (!mon)
+        return false;
+
+    Vector2D surfaceCoords;
+    PHLLS    layerFound;
+    if (Desktop::viewState()->hitTest().layerPopupSurfaceAt(pos, mon, &surfaceCoords, &layerFound))
+        return true;
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &mon->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &surfaceCoords, &layerFound))
+        return true;
+    if (Desktop::viewState()->hitTest().layerSurfaceAt(pos, &mon->m_layerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords, &layerFound))
+        return true;
     return false;
 }
 

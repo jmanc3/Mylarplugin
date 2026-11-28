@@ -558,7 +558,10 @@ struct HyprIso {
     void bring_to_front(int id, bool focus = true);
     void set_hidden(int id, bool state, bool animate_to_dock = false);
     
+    int active_window();
     bool has_focus(int client);
+    bool is_cursor_showing();
+    bool has_top_or_overlay_layer_at_cursor();
     void all_lose_focus();
     void all_gain_focus();
 

@@ -153,6 +153,120 @@ static bool on_mouse_move(int id, float x, float y) {
     return consumed;
 }
 
+static int top_right_close_pressed_cid = -1;
+
+static int eligible_top_right_close_window(float x, float y) {
+    if (drag::dragging() || resizing::resizing() || overview::is_showing() || screenshot_tool::is_open() || alt_tab::showing() || hypriso->dnd_active())
+        return -1;
+    if (zoom_factor != 1.0)
+        return -1;
+    if (!hypriso->is_cursor_showing())
+        return -1;
+
+    const int mon = hypriso->monitor_from_cursor();
+    if (mon == -1)
+        return -1;
+
+    const Bounds mb = bounds_monitor(mon);
+    if (mb.w <= 0 || mb.h <= 0)
+        return -1;
+
+    constexpr float corner_px = 4.0f;
+    if (x < mb.x + mb.w - corner_px || x > mb.x + mb.w || y < mb.y || y > mb.y + corner_px)
+        return -1;
+
+    const Bounds reserved = bounds_reserved_monitor(mon);
+    if (reserved.y > mb.y + corner_px || (reserved.x + reserved.w) < (mb.x + mb.w - corner_px))
+        return -1;
+
+    if (hypriso->has_top_or_overlay_layer_at_cursor())
+        return -1;
+
+    const int active_ws = hypriso->get_active_workspace_id(mon);
+    auto order = get_window_stacking_order();
+    for (int wid : order) {
+        if (get_monitor(wid) == mon && hypriso->is_fullscreen(wid) &&
+            (hypriso->is_pinned(wid) || hypriso->get_client_workspace_id(wid) == active_ws)) {
+            return -1;
+        }
+    }
+
+    const int cid = hypriso->active_window();
+    if (cid == -1)
+        return -1;
+    if (!hypriso->is_mapped(cid) || hypriso->is_hidden(cid))
+        return -1;
+    if (hypriso->is_fullscreen(cid) || hypriso->is_fake_fullscreen(cid))
+        return -1;
+    if (hypriso->has_decorations(cid))
+        return -1;
+    if (get_monitor(cid) != mon)
+        return -1;
+    if (!hypriso->is_pinned(cid) && hypriso->get_client_workspace_id(cid) != active_ws)
+        return -1;
+
+    auto c = get_cid_container(cid);
+    if (!c)
+        return -1;
+
+    const bool snapped = *datum<bool>(c, "snapped");
+    const auto snap_type = (SnapPosition) *datum<int>(c, "snap_type");
+    const bool right_corner_snapped = snapped && (
+        snap_type == SnapPosition::MAX ||
+        snap_type == SnapPosition::RIGHT ||
+        snap_type == SnapPosition::TOP_RIGHT
+    );
+    if (!right_corner_snapped)
+        return -1;
+
+    bool found_active = false;
+    for (int wid : order) {
+        if (wid == cid) {
+            found_active = true;
+            continue;
+        }
+        if (!found_active)
+            continue;
+        if (!hypriso->is_mapped(wid) || hypriso->is_hidden(wid))
+            continue;
+        if (get_monitor(wid) != mon)
+            continue;
+        if (!hypriso->is_pinned(wid) && hypriso->get_client_workspace_id(wid) != active_ws)
+            continue;
+        if (bounds_contains(bounds_full_client(wid), x, y))
+            return -1;
+    }
+
+    return cid;
+}
+
+static bool handle_top_right_corner_close(int button, int state, float x, float y, bool already_consumed, bool dismissed_popup) {
+    if (button != BTN_LEFT)
+        return false;
+
+    if (!state) {
+        if (top_right_close_pressed_cid == -1)
+            return false;
+        const int pressed_cid = top_right_close_pressed_cid;
+        top_right_close_pressed_cid = -1;
+        if (eligible_top_right_close_window(x, y) == pressed_cid) {
+            later_immediate([pressed_cid](Timer *) { close_window(pressed_cid); });
+        }
+        return true;
+    }
+
+    top_right_close_pressed_cid = -1;
+    if (already_consumed || dismissed_popup)
+        return false;
+
+    const int cid = eligible_top_right_close_window(x, y);
+    if (cid == -1)
+        return false;
+
+    top_right_close_pressed_cid = cid;
+    return true;
+}
+
 static bool on_mouse_press(int id, int button, int state, float x, float y) {
     mouse_down = state;
     heart::layout_containers();
@@ -207,6 +321,8 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
            root->consumed_event = false;
         } 
     }
+    if (handle_top_right_corner_close(button, state, x, y, consumed, any_closed))
+        consumed = true;
     return consumed;
 }
 
