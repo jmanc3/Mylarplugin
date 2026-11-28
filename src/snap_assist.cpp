@@ -1010,30 +1010,79 @@ void actual_open(int monitor, int cid) {
 }
 
 static thumbnail_capture::History captures;
+static thumbnail_capture::History deco_captures;
+
+static std::set<int> top_preview_cids(const Container *helper, int limit = 3) {
+    std::set<int> present;
+    for (auto thumb : helper->children) {
+        auto data = (SnapThumb *) thumb->user_data;
+        if (data)
+            present.insert(data->cid);
+    }
+    std::set<int> top;
+    const auto stacking = get_window_stacking_order();
+    for (auto it = stacking.rbegin(); it != stacking.rend() && (int) top.size() < limit; ++it) {
+        if (present.contains(*it))
+            top.insert(*it);
+    }
+    return top;
+}
 
 static long snap_capture_thumbnails(int monitor, bool initial) {
-    thumbnail_capture::Batch batch(captures, monitor, initial, {{monitor, hypriso->get_active_workspace_id(monitor)}});
+    const thumbnail_capture::Workspaces workspaces = {{monitor, hypriso->get_active_workspace_id(monitor)}};
+    thumbnail_capture::Batch batch(captures, monitor, initial, workspaces);
+    thumbnail_capture::Batch deco_batch(deco_captures, monitor, false, workspaces);
     std::set<int> seen;
+    std::set<int> seen_deco;
+    bool has_deco = false;
     for (auto child : actual_root->children) {
         if (child->custom_type != (int) TYPE::SNAP_HELPER)
             continue;
         auto helper_data = (HelperData *) child->user_data;
         if (!helper_data || !helper_data->showing)
             continue;
+        const auto top = top_preview_cids(child, 3);
+        const bool closing_deco = helper_data->closing && helper_data->visibility <= 0.5f;
         for (auto thumb : child->children) {
             auto data = (SnapThumb *) thumb->user_data;
             if (!data)
                 continue;
             const int cid = data->cid;
-            if (seen.contains(cid))
-                continue;
             const bool hovered = thumb->state.mouse_hovering ||
                 (!thumb->children.empty() && thumb->children[0]->state.mouse_hovering);
-            if (batch.add_preview(cid, hovered, thumb->real_bounds))
-                seen.insert(cid);
+            const bool fast = hovered || top.contains(cid);
+            const bool start_at_final_position =
+                !same_visible_workspace(helper_data, cid) || hypriso->is_hidden(cid);
+            if (closing_deco && !start_at_final_position) {
+                if (seen_deco.contains(cid))
+                    continue;
+                has_deco = true;
+                if (deco_batch.add(cid, fast, thumb->real_bounds, !hypriso->has_deco_thumbnail(cid), hypriso->is_deco_dirty(cid), true))
+                    seen_deco.insert(cid);
+            } else {
+                if (seen.contains(cid))
+                    continue;
+                if (batch.add_preview(cid, fast, thumb->real_bounds))
+                    seen.insert(cid);
+            }
         }
     }
-    return batch.capture_previews();
+    const long preview_delay = batch.capture_previews();
+    if (!has_deco)
+        return preview_delay;
+
+    bool captured_deco = false;
+    for (const auto &candidate : deco_batch.ordered_candidates()) {
+        if (deco_batch.defer_capture(candidate.tier == 0))
+            break;
+        hypriso->screenshot_deco(candidate.cid);
+        deco_batch.record(candidate.cid, get_current_time_in_ms());
+        captured_deco = true;
+    }
+    const long deco_delay = deco_batch.finish();
+    if (captured_deco)
+        hypriso->damage_entire(monitor);
+    return std::min(preview_delay, deco_delay);
 }
 
 void snap_assist::open(int monitor, int cid) {
@@ -1048,6 +1097,7 @@ void snap_assist::open(int monitor, int cid) {
         instant_close();
 
     captures = {};
+    deco_captures = {};
 
     const auto generation = lifecycle;
     later_immediate([monitor, cid, generation](Timer *) {
@@ -1138,14 +1188,18 @@ void snap_assist::close(bool force) {
            helper_data->closing = true;
            helper_data->should_slide = false;
            if (helper_data->showing) {
+               deco_captures = {};
+               const auto top = top_preview_cids(child, 3);
                for (auto thumb : child->children) {
                    auto tdata = (SnapThumb *) thumb->user_data;
                    if (!tdata)
                        continue;
                    if (!same_visible_workspace(helper_data, tdata->cid) || hypriso->is_hidden(tdata->cid))
                        continue;
-                   if (!hypriso->has_deco_thumbnail(tdata->cid) || hypriso->is_deco_dirty(tdata->cid))
+                   if (!hypriso->has_deco_thumbnail(tdata->cid) || hypriso->is_deco_dirty(tdata->cid) || top.contains(tdata->cid)) {
                        hypriso->screenshot_deco(tdata->cid);
+                       deco_captures.windows[tdata->cid] = get_current_time_in_ms();
+                   }
                }
            }
            if (!already_started_closing) {
