@@ -3817,6 +3817,7 @@ void dock::add_window(int cid) {
     std::string command = get_launch_command(cid);
     std::string icon = c3ic_fix_wm_class(hypriso->class_name(cid));
     std::string stack_rule = icon;
+    bool is_steam_game = false;
 
     // Steam x11 games
     if (hypriso->is_x11(cid)) {
@@ -3824,9 +3825,11 @@ void dock::add_window(int cid) {
         if (id != -1 && stack_rule != "steam") {
             icon = fz("steam_icon_{}", id);
             command = get_steam_launch_command(icon);
+            is_steam_game = true;
         }
     }
 
+    bool matched_existing = false;
     for (auto d : active_docks()) {
         std::lock_guard<std::mutex> lock(d->app->mutex);
         if (auto c = container_by_name("icons", d->window->root)) {
@@ -3835,9 +3838,20 @@ void dock::add_window(int cid) {
                 if (pin->stacking_rule == stack_rule) {
                     command = pin->command;
                     icon = pin->icon;
+                    matched_existing = true;
                     break;
                 }
             }
+        }
+        if (matched_existing)
+            break;
+    }
+
+    if (!matched_existing && !is_steam_game) {
+        std::string desktop_icon = desktop_icon_for_wm_class(stack_rule);
+        if (!desktop_icon.empty() &&
+            (!icons_loaded || !one_shot_icon(48, {desktop_icon, to_lower(desktop_icon), c3ic_fix_wm_class(desktop_icon)}).empty())) {
+            icon = desktop_icon;
         }
     }
 

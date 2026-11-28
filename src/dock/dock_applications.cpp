@@ -1437,3 +1437,47 @@ std::vector<desktop_file::Action> desktop_actions_for_wm_class(const std::string
     }
     return best ? best->actions : std::vector<desktop_file::Action>{};
 }
+
+std::string desktop_icon_for_wm_class(const std::string &stacking_rule) {
+    if (stacking_rule.empty())
+        return {};
+
+    std::lock_guard<std::mutex> lock(scripts_mutex);
+    if (!scripts_refresh.valid())
+        scripts_refresh = load_scripts_async();
+    if (scripts_refresh.valid() &&
+        (scripts.empty() || scripts_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready)) {
+        scripts = scripts_refresh.get();
+    }
+
+    const std::string lower_rule = to_lower(stacking_rule);
+    const std::string fixed_lower_rule = to_lower(c3ic_fix_wm_class(stacking_rule));
+    auto match_candidate = [&](const std::string &candidate) -> int {
+        if (candidate.empty())
+            return 99;
+        if (candidate == stacking_rule)
+            return 0;
+        if (to_lower(candidate) == lower_rule)
+            return 1;
+        if (to_lower(c3ic_fix_wm_class(candidate)) == fixed_lower_rule)
+            return 2;
+        return 99;
+    };
+
+    const Script *best = nullptr;
+    int best_rank = 99;
+    for (const auto &s : scripts) {
+        if (!s.is_desktop || !s.builtin.empty() || s.startup_wm_class.empty() || s.icon.empty())
+            continue;
+        if (s.icon.starts_with('/') && access(s.icon.c_str(), R_OK) != 0)
+            continue;
+        int rank = match_candidate(s.startup_wm_class);
+        if (rank < best_rank) {
+            best_rank = rank;
+            best = &s;
+            if (best_rank == 0)
+                break;
+        }
+    }
+    return best ? best->icon : std::string{};
+}

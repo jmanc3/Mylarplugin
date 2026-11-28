@@ -39,3 +39,6 @@ std::string resolve_application_icon(const ApplicationEntry &entry, int icon_siz
 // Custom [Desktop Action ...] entries from the .desktop file matching
 // `stacking_rule` by StartupWMClass, X-DBUS-ServiceName, or desktop filename.
 std::vector<desktop_file::Action> desktop_actions_for_wm_class(const std::string &stacking_rule);
+
+// Icon= from the .desktop file whose StartupWMClass matches `stacking_rule`.
+std::string desktop_icon_for_wm_class(const std::string &stacking_rule);
