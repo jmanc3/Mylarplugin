@@ -276,6 +276,21 @@ static bool on_mouse_press(int id, int button, int state, float x, float y) {
     y = mou.y;
     
     const bool any_closed = popup::dismiss_outside(x, y);
+    static bool rename_pointer_pressed_inside = false;
+    if (desktop_icons::is_renaming()) {
+        if (state) {
+            if (desktop_icons::rename_bounds_contains(x, y)) {
+                rename_pointer_pressed_inside = true;
+                return false;
+            }
+            desktop_icons::finish_rename(true);
+        } else if (rename_pointer_pressed_inside) {
+            rename_pointer_pressed_inside = false;
+            return false;
+        }
+    } else if (!state) {
+        rename_pointer_pressed_inside = false;
+    }
     auto pierced = pierced_containers(actual_root, x, y);
     bool any_desktop_icons_pierced = false;
     if (!pierced.empty())

@@ -1162,7 +1162,9 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
                                          int alignment,
                                          std::string monitor_name, bool exclusive_zone, RawWindow *rw,
                                          const RawWindowSettings::LayerMargins *margins = nullptr,
-                                         bool bottom_right_anchor = false)
+                                         bool bottom_right_anchor = false,
+                                         bool top_left_anchor = false,
+                                         bool ignore_exclusive_zones = false)
 {
     struct wl_window *win = new wl_window;
     win->ctx = ctx;
@@ -1200,7 +1202,11 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
         return nullptr;
     }
 
-    if (bottom_right_anchor) {
+    if (top_left_anchor) {
+        zwlr_layer_surface_v1_set_anchor(win->layer_surface,
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+            ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT);
+    } else if (bottom_right_anchor) {
         zwlr_layer_surface_v1_set_anchor(win->layer_surface,
             ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
             ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
@@ -1240,6 +1246,8 @@ struct wl_window *wl_layer_window_create(struct wl_context *ctx, int width, int 
         } else {
             zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, width);
         }
+    } else if (ignore_exclusive_zones) {
+        zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, -1);
     } else {
         zwlr_layer_surface_v1_set_exclusive_zone(win->layer_surface, 0);
     }
@@ -2905,6 +2913,21 @@ RawWindow *windowing::open_window(RawApp *app, WindowType type, RawWindowSetting
     }
     if (type == WindowType::NOTIFICATION) {
         auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, settings.name.c_str(), settings.alignment, settings.monitor_name, false, rw, &settings.layer_margins, true);
+        if (!window) {
+            delete rw;
+            return nullptr;
+        }
+        rw->drawing_context = window->cr;
+        window->id = rw->id;
+        if (settings.scale_hint > 0 && !rw->fractional_scale_set_once)
+            apply_scale_hint(window, settings.scale_hint);
+        window->on_render = on_window_render;
+        if (window->on_render)
+            window->on_render(window);
+        register_window(window);
+    }
+    if (type == WindowType::OVERLAY) {
+        auto window = wl_layer_window_create(ctx, settings.pos.w, settings.pos.h, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, settings.name.c_str(), settings.alignment, settings.monitor_name, false, rw, &settings.layer_margins, false, true, true);
         if (!window) {
             delete rw;
             return nullptr;

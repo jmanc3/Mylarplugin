@@ -1,14 +1,21 @@
 #include "desktop_icons.h"
+#include "client/raw_windowing.h"
+#include "client/windowing.h"
 #include "container.h"
+#include "dock/dock_ui.h"
+#include "events.h"
 #include "heart.h"
 #include "hypriso.h"
 #include "icons.h"
 #include "overview.h"
+#include "pango_font_cache.h"
 #include "popup.h"
 #include "settings.h"
+#include "text_editor.h"
 #include "wallpaper_layout.h"
 
 #include <gio/gio.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -487,6 +494,7 @@ struct IcoContainerData : UserData {
     Container *c;
     long last_time_pressed = 0;
     bool is_selected = false;
+    bool is_renaming = false;
     // Grid slot; (0,0) is top-left, (0,1) is the slot below. (-1,-1) = unset.
     int x_pos = -1;
     int y_pos = -1;
@@ -1004,6 +1012,471 @@ static bool is_editable_desktop_item(const DesktopItem& item) {
     return editable;
 }
 
+struct DesktopRenameSession {
+    std::string original_filepath;
+    std::string original_extension;
+    bool is_folder = false;
+    bool is_desktop_file = false;
+    int grid_x = -1;
+    int grid_y = -1;
+    Bounds box_bounds;
+
+    RawApp *app = nullptr;
+    MylarWindow *window = nullptr;
+    Container *editor = nullptr;
+    bool had_keyboard_focus = false;
+
+    std::atomic<bool> finishing = false;
+    std::atomic<bool> exited = false;
+    std::thread thread;
+};
+
+static std::mutex desktop_rename_mutex;
+static std::shared_ptr<DesktopRenameSession> active_desktop_rename;
+static std::vector<std::shared_ptr<DesktopRenameSession>> finished_desktop_renames;
+static std::string pending_select_filepath;
+
+static void reap_desktop_renames_locked() {
+    for (int i = (int) finished_desktop_renames.size() - 1; i >= 0; --i) {
+        if (finished_desktop_renames[i]->exited.load()) {
+            if (finished_desktop_renames[i]->thread.joinable())
+                finished_desktop_renames[i]->thread.join();
+            finished_desktop_renames.erase(finished_desktop_renames.begin() + i);
+        }
+    }
+}
+
+static void update_desktop_entry_name(const std::filesystem::path &path, const std::string &new_name) {
+    std::ifstream in(path);
+    if (!in)
+        return;
+
+    std::vector<std::string> lines;
+    std::string line;
+    bool in_desktop_entry = false;
+    bool replaced = false;
+    int desktop_entry_line = -1;
+
+    while (std::getline(in, line)) {
+        std::string clean = line;
+        if (!clean.empty() && clean.back() == '\r')
+            clean.pop_back();
+        if (clean.starts_with('[') && clean.ends_with(']')) {
+            in_desktop_entry = (clean == "[Desktop Entry]");
+            if (in_desktop_entry)
+                desktop_entry_line = static_cast<int>(lines.size());
+        } else if (in_desktop_entry && !replaced) {
+            const auto eq = clean.find('=');
+            if (eq != std::string::npos && trim_copy(clean.substr(0, eq)) == "Name") {
+                line = "Name=" + new_name;
+                replaced = true;
+            }
+        }
+        lines.push_back(std::move(line));
+    }
+    in.close();
+
+    if (!replaced && desktop_entry_line >= 0)
+        lines.insert(lines.begin() + desktop_entry_line + 1, "Name=" + new_name);
+    else if (!replaced)
+        return;
+
+    std::ofstream out(path, std::ios::trunc);
+    if (!out)
+        return;
+    for (const auto &l : lines)
+        out << l << '\n';
+}
+
+static void clear_icon_renaming_flag(const std::string &filepath) {
+    for (auto *desktop : actual_root->children) {
+        if (desktop->custom_type != (int) TYPE::DESKTOP_ICONS)
+            continue;
+        for (auto *icon : desktop->children) {
+            auto *ico = (IcoContainerData *) icon->user_data;
+            auto *item = *datum<DesktopItem *>(icon, "DesktopItem");
+            if (ico && ico->is_renaming && (!item || item->full_filepath == filepath)) {
+                ico->is_renaming = false;
+                damage_icon(icon);
+            }
+        }
+    }
+}
+
+static void apply_desktop_icon_rename(const std::shared_ptr<DesktopRenameSession> &session, const std::string &raw_input) {
+    const std::string new_base = trim_copy(raw_input);
+    if (new_base.empty())
+        return;
+
+    if (new_base == "." || new_base == ".." ||
+        new_base.find('/') != std::string::npos ||
+        new_base.find('\0') != std::string::npos) {
+        notify("Invalid file name.");
+        return;
+    }
+
+    const std::filesystem::path old_path(session->original_filepath);
+    const std::string new_filename = new_base + session->original_extension;
+    const std::filesystem::path new_path = old_path.parent_path() / new_filename;
+
+    if (new_path == old_path && !session->is_desktop_file)
+        return;
+
+    std::error_code ec;
+    if (new_path != old_path) {
+        const auto existing_status = std::filesystem::symlink_status(new_path, ec);
+        if (!ec && std::filesystem::exists(existing_status)) {
+            notify(fz("A file named \"{}\" already exists.", new_filename));
+            return;
+        }
+        ec.clear();
+        std::filesystem::rename(old_path, new_path, ec);
+        if (ec) {
+            notify(fz("Unable to rename: {}", ec.message()));
+            return;
+        }
+    }
+
+    if (session->is_desktop_file) {
+        std::error_code sym_ec;
+        if (!std::filesystem::is_symlink(new_path, sym_ec) && !sym_ec &&
+            std::filesystem::is_regular_file(new_path, sym_ec) && !sym_ec) {
+            update_desktop_entry_name(new_path, new_base);
+        }
+    }
+
+    if (session->grid_x >= 0 && session->grid_y >= 0) {
+        const auto section = current_desktop_section_key();
+        if (!section.empty()) {
+            auto sections = read_icon_position_sections();
+            auto &saved = sections[section];
+            saved.erase(old_path.filename().string());
+            saved[new_path.filename().string()] = {session->grid_x, session->grid_y};
+            write_icon_position_sections(sections);
+        }
+    }
+
+    pending_select_filepath = new_path.string();
+    on_change_in_desktop_folder();
+    heart::layout_containers();
+    damage_all();
+    request_refresh();
+}
+
+static void finish_rename_from_client(const std::shared_ptr<DesktopRenameSession> &session, bool commit, std::string new_text) {
+    if (session->finishing.exchange(true))
+        return;
+
+    if (session->window && session->window->raw_window)
+        windowing::close_window(session->window->raw_window);
+    if (session->app)
+        windowing::close_app(session->app);
+
+    main_thread([session, commit, new_text = std::move(new_text)]() {
+        {
+            std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+            if (active_desktop_rename == session) {
+                finished_desktop_renames.push_back(std::move(active_desktop_rename));
+                active_desktop_rename.reset();
+            }
+            reap_desktop_renames_locked();
+        }
+        clear_icon_renaming_flag(session->original_filepath);
+        if (commit)
+            apply_desktop_icon_rename(session, new_text);
+        damage_all();
+        request_refresh();
+    });
+}
+
+static void run_desktop_rename_session(std::shared_ptr<DesktopRenameSession> session,
+                                       int width, int height,
+                                       int margin_left, int margin_top,
+                                       float scale_hint,
+                                       std::string monitor_name,
+                                       int font_size,
+                                       RGBA border_color) {
+    auto *app = windowing::open_app();
+    if (!app) {
+        session->exited = true;
+        finish_rename_from_client(session, false, {});
+        return;
+    }
+
+    RawWindowSettings settings;
+    settings.pos.w = width;
+    settings.pos.h = height;
+    settings.name = "DesktopRename";
+    settings.monitor_name = std::move(monitor_name);
+    settings.scale_hint = scale_hint;
+    settings.layer_margins.left = margin_left;
+    settings.layer_margins.top = margin_top;
+    settings.keyboard_focus_on_click = true;
+
+    auto *mylar = open_mylar_window(app, WindowType::OVERLAY, settings);
+    if (!mylar || !mylar->raw_window) {
+        windowing::close_app(app);
+        windowing::main_loop(app);
+        delete app;
+        session->exited = true;
+        finish_rename_from_client(session, false, {});
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+        session->app = app;
+        session->window = mylar;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(app->mutex);
+        Container *root = mylar->root;
+        root->type = ::hbox;
+
+        Container *editor = root->child(FILL_SPACE, FILL_SPACE);
+        session->editor = editor;
+
+        STextEditorOptions options;
+        options.multiline = false;
+        options.editable = true;
+        options.blink_caret = true;
+        options.clear_button = false;
+        options.font_size = font_size;
+        options.window = [mylar](Container *) { return mylar->raw_window; };
+        options.viewport = [mylar](Container *, Container *c) {
+            const double dpi = mylar->raw_window->dpi;
+            auto b = c->real_bounds;
+            b.x += 6 * dpi;
+            b.w = std::max(0.0, b.w - 12 * dpi);
+            return b;
+        };
+        setup_text_editor(editor, "", std::move(options));
+
+        editor->when_paint = [mylar, border_color](Container *root, Container *c) {
+            auto *rw = mylar->raw_window;
+            auto *cr = rw->drawing_context;
+            const double dpi = rw->dpi;
+            const auto b = c->real_bounds;
+            if (b.w <= 0 || b.h <= 0)
+                return;
+            const double inset = std::max(1.0, std::round(dpi));
+            const double radius = 4.0 * dpi;
+            set_argb(cr, RGBA(0.11, 0.12, 0.14, 0.94));
+            drawRoundedRect(cr, b.x + inset * 0.5, b.y + inset * 0.5,
+                            std::max(0.0, b.w - inset), std::max(0.0, b.h - inset),
+                            radius, 1);
+            cr->fill_preserve();
+            set_argb(cr, border_color);
+            cr->set_line_width(inset);
+            cr->stroke();
+            paint_text_editor(root, c, RGBA(1, 1, 1, 1), RGBA(0.25, 0.55, 0.90, 0.65));
+        };
+
+        auto edit_key = std::move(editor->when_key_event);
+        editor->when_key_event = [edit_key, session, mylar](Container *root, Container *c,
+                                                            int key, bool pressed,
+                                                            xkb_keysym_t sym, int mods,
+                                                            bool is_text, std::string text) {
+            if (pressed && (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter)) {
+                auto value = static_cast<STextEditorData *>(c->user_data)->text;
+                finish_rename_from_client(session, true, std::move(value));
+                return;
+            }
+            if (pressed && sym == XKB_KEY_Escape) {
+                finish_rename_from_client(session, false, {});
+                return;
+            }
+            edit_key(root, c, key, pressed, sym, mods, is_text, text);
+            windowing::redraw(mylar->raw_window);
+        };
+
+        auto prev_focus = mylar->raw_window->on_keyboard_focus;
+        mylar->raw_window->on_keyboard_focus = [prev_focus, session](RawWindow *rw, bool gained) {
+            if (prev_focus)
+                prev_focus(rw, gained);
+            if (gained) {
+                session->had_keyboard_focus = true;
+                windowing::redraw(rw);
+            } else if (session->had_keyboard_focus && !session->finishing.load()) {
+                std::string value;
+                {
+                    std::lock_guard<std::mutex> lock(rw->creator->mutex);
+                    if (session->editor && session->editor->user_data)
+                        value = static_cast<STextEditorData *>(session->editor->user_data)->text;
+                }
+                finish_rename_from_client(session, true, std::move(value));
+            }
+            return false;
+        };
+
+        root->on_closed = [session](Container *) {
+            finish_rename_from_client(session, false, {});
+        };
+
+        set_active(root, {editor}, root, true, false);
+    }
+
+    windowing::request_keyboard_focus(mylar->raw_window);
+    windowing::redraw(mylar->raw_window);
+    windowing::main_loop(app);
+
+    {
+        std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+        session->app = nullptr;
+        session->window = nullptr;
+        session->editor = nullptr;
+    }
+
+    delete mylar;
+    cleanup_cached_pango_fonts();
+    drawing::cleanup_thread_resources();
+    session->exited = true;
+}
+
+static void start_desktop_icon_rename(Container *desktop, Container *icon) {
+    if (!desktop || !icon)
+        return;
+    auto *item = *datum<DesktopItem *>(icon, "DesktopItem");
+    auto *ico = (IcoContainerData *) icon->user_data;
+    if (!item || !ico)
+        return;
+
+    desktop_icons::finish_rename(false);
+
+    clear_desktop_selection(desktop);
+    ico->is_selected = true;
+    ico->is_renaming = true;
+    ico->last_time_pressed = 0;
+    damage_icon(icon);
+
+    const int monitor = *datum<int>(desktop, "monitor");
+    const Bounds mon = bounds_monitor(monitor);
+    const float s = scale(monitor);
+    const std::string monitor_name = hypriso->monitor_name(monitor);
+
+    const double box_w = std::max(icon->real_bounds.w + 24.0, 128.0);
+    const double box_h = std::max<double>(two_line_height + 4.0, 28.0);
+    double box_x = std::round(icon->real_bounds.x + (icon->real_bounds.w - box_w) * 0.5);
+    double box_y = std::round(icon->real_bounds.y + 2.0 + conf_icon_size() + 3.0);
+    if (mon.w > box_w + 8.0)
+        box_x = std::clamp(box_x, mon.x + 4.0, mon.x + mon.w - box_w - 4.0);
+    if (mon.h > box_h + 8.0)
+        box_y = std::clamp(box_y, mon.y + 4.0, mon.y + mon.h - box_h - 4.0);
+
+    const int margin_left = static_cast<int>(std::lround(box_x - mon.x));
+    const int margin_top = static_cast<int>(std::lround(box_y - mon.y));
+    const int font_size = std::max(8, static_cast<int>(std::lround(conf_font_size() * 0.75f)));
+    const RGBA border_color = color_sel_border_color();
+
+    const std::filesystem::path orig_path(item->full_filepath);
+    std::string raw_ext;
+    if (!item->is_folder) {
+        const std::string stem = orig_path.stem().string();
+        const std::string ext = orig_path.extension().string();
+        if (!stem.empty() && !ext.empty())
+            raw_ext = ext;
+    }
+
+    auto session = std::make_shared<DesktopRenameSession>();
+    session->original_filepath = item->full_filepath;
+    session->original_extension = raw_ext;
+    session->is_folder = item->is_folder;
+    session->is_desktop_file = !item->is_folder && lowercase(raw_ext) == ".desktop";
+    session->grid_x = ico->x_pos;
+    session->grid_y = ico->y_pos;
+    session->box_bounds = Bounds(box_x, box_y, box_w, box_h);
+
+    {
+        std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+        reap_desktop_renames_locked();
+        active_desktop_rename = session;
+    }
+
+    session->thread = std::thread(run_desktop_rename_session,
+                                  session,
+                                  static_cast<int>(std::lround(box_w)),
+                                  static_cast<int>(std::lround(box_h)),
+                                  margin_left,
+                                  margin_top,
+                                  s,
+                                  monitor_name,
+                                  font_size,
+                                  border_color);
+}
+
+static void start_rename_for_path(const std::string &filepath) {
+    for (auto *desktop : actual_root->children) {
+        if (desktop->custom_type != (int) TYPE::DESKTOP_ICONS)
+            continue;
+        for (auto *icon : desktop->children) {
+            auto *item = *datum<DesktopItem *>(icon, "DesktopItem");
+            if (item && item->full_filepath == filepath) {
+                start_desktop_icon_rename(desktop, icon);
+                return;
+            }
+        }
+    }
+}
+
+static void stop_desktop_rename_sessions() {
+    desktop_icons::finish_rename(false);
+    std::vector<std::shared_ptr<DesktopRenameSession>> sessions;
+    {
+        std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+        if (active_desktop_rename) {
+            sessions.push_back(std::move(active_desktop_rename));
+            active_desktop_rename.reset();
+        }
+        for (auto &s : finished_desktop_renames)
+            sessions.push_back(std::move(s));
+        finished_desktop_renames.clear();
+    }
+    for (auto &s : sessions) {
+        if (s->app)
+            windowing::close_app(s->app);
+        if (s->thread.joinable())
+            s->thread.join();
+    }
+}
+
+bool desktop_icons::is_renaming() {
+    std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+    return active_desktop_rename && !active_desktop_rename->finishing.load();
+}
+
+bool desktop_icons::rename_bounds_contains(float x, float y) {
+    std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+    if (!active_desktop_rename || active_desktop_rename->finishing.load())
+        return false;
+    return bounds_contains(active_desktop_rename->box_bounds, x, y);
+}
+
+void desktop_icons::finish_rename(bool commit) {
+    std::shared_ptr<DesktopRenameSession> session;
+    RawApp *app = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(desktop_rename_mutex);
+        session = active_desktop_rename;
+        if (!session || session->finishing.load())
+            return;
+        app = session->app;
+    }
+    if (app) {
+        windowing::run_on_app(app, [session, commit]() {
+            std::string value;
+            if (commit && session->app && session->editor && session->editor->user_data) {
+                std::lock_guard<std::mutex> lock(session->app->mutex);
+                if (session->editor && session->editor->user_data)
+                    value = static_cast<STextEditorData *>(session->editor->user_data)->text;
+            }
+            finish_rename_from_client(session, commit, std::move(value));
+        });
+    } else {
+        finish_rename_from_client(session, false, {});
+    }
+}
+
 static void create_icon_popup(Container *icon) {
     // Folder watches can replace items while the popup is open; capture values.
     std::vector<DesktopItem> items;
@@ -1075,6 +1548,15 @@ static void create_icon_popup(Container *icon) {
     PopOption separator;
     separator.seperator = true;
     options.push_back(separator);
+    if (items.size() == 1) {
+        PopOption rename;
+        rename.text = "Rename";
+        const std::string target_path = items[0].full_filepath;
+        rename.on_clicked = [target_path]() {
+            start_rename_for_path(target_path);
+        };
+        options.push_back(rename);
+    }
     PopOption remove;
     remove.text = items.size() == 1 ? "Remove" : fz("Remove {} Items", items.size());
     remove.on_clicked = [items]() {
@@ -1197,11 +1679,22 @@ static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, 
     } else if (c->state.mouse_hovering) {
         rect(transform(c->real_bounds), sel_color);
         border(transform(border_bounds), sel_border_color, border_thickness * factor);
-    } else if (ico->is_selected) {
+    } else if (ico->is_selected || ico->is_renaming) {
         rect(transform(c->real_bounds), sel_color);
         border(transform(border_bounds), sel_border_color, border_thickness * factor);
     }
 
+    if (ico->is_renaming)
+        return;
+
+    if (ico->name != item->name) {
+        ico->name = item->name;
+        auto *label = datum<TextureInfo>(c, "label");
+        free_text_texture(label->id);
+        *label = TextureInfo();
+        free_text_texture(ico->label_shadow.id);
+        ico->label_shadow = TextureInfo();
+    }
 
     TextureInfo text_img = *datum<TextureInfo>(c, "label");
     if (text_img.id == -1) {
@@ -1848,12 +2341,27 @@ void desktop_icons::start() {
         c->real_bounds = c->wanted_bounds;
         auto s = scale(monitor);
 
+        if (overview::suppresses_desktop_icons() && desktop_icons::is_renaming())
+            desktop_icons::finish_rename(false);
+
         if (set->desktop_icons) {
             merge_create<DesktopItem *>(c, desktop_items, [](Container *c) {
                 return *datum<DesktopItem *>(c, "DesktopItem");
             }, [](Container *parent, DesktopItem *data) {
                 create_desktop_icon(parent, data);
             });
+        }
+
+        if (!pending_select_filepath.empty()) {
+            for (auto *child : c->children) {
+                auto *item = *datum<DesktopItem *>(child, "DesktopItem");
+                if (item && item->full_filepath == pending_select_filepath) {
+                    clear_desktop_selection(c);
+                    ((IcoContainerData *) child->user_data)->is_selected = true;
+                    pending_select_filepath.clear();
+                    break;
+                }
+            }
         }
 
         for (auto *child : c->children) {
@@ -1960,13 +2468,30 @@ void desktop_icons::start() {
         hypriso->damage_box(damage);
     };
     c->when_key_event = [](Container *root, Container *c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
-        (void)root;
         (void)sym;
         (void)mods;
         (void)is_text;
         (void)text;
+        if (desktop_icons::is_renaming())
+            return;
         if (key == KEY_LEFTSHIFT)
             *datum<bool>(c, "shift_held") = pressed;
+
+        if (key == KEY_F2 && pressed) {
+            Container *only_selected = nullptr;
+            int selected_count = 0;
+            for (auto *child : c->children) {
+                auto *ico = (IcoContainerData *) child->user_data;
+                if (ico->is_selected) {
+                    only_selected = child;
+                    ++selected_count;
+                }
+            }
+            if (selected_count == 1 && only_selected) {
+                root->consumed_event = true;
+                start_desktop_icon_rename(c, only_selected);
+            }
+        }
 
         if (key == KEY_DELETE && pressed)
             delete_selected_desktop_icons(c);
@@ -2020,6 +2545,7 @@ void desktop_icons::start() {
 }
 
 void desktop_icons::stop() {
+    stop_desktop_rename_sessions();
     hypriso->can_accept_desktop_drop = nullptr;
     hypriso->on_desktop_files_dropped = nullptr;
     for (int i = actual_root->children.size() - 1; i >= 0; i--) {

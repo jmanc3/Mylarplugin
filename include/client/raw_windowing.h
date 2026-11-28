@@ -203,6 +203,7 @@ enum struct WindowType {
     NORMAL,
     DOCK,
     NOTIFICATION,
+    OVERLAY,
 };
 
 namespace windowing {

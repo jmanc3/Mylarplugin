@@ -12,6 +12,9 @@ namespace desktop_icons {
     void stop();
     void deselect();
     void paint_overview(int monitor, const Bounds &bounds, float alpha);
+    bool is_renaming();
+    bool rename_bounds_contains(float x, float y);
+    void finish_rename(bool commit);
 }
 
 // Small .desktop reader shared by the desktop icons and the dock's applications menu.
