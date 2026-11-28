@@ -1564,3 +1564,73 @@ std::string desktop_icon_for_wm_class(const std::string &stacking_rule) {
     }
     return best ? best->icon : std::string{};
 }
+
+std::string desktop_exec_for_wm_class(const std::string &stacking_rule) {
+    if (stacking_rule.empty())
+        return {};
+
+    std::lock_guard<std::mutex> lock(scripts_mutex);
+    if (!scripts_refresh.valid())
+        scripts_refresh = load_scripts_async();
+    if (scripts_refresh.valid() &&
+        (scripts.empty() || scripts_refresh.wait_for(std::chrono::seconds(0)) == std::future_status::ready)) {
+        scripts = scripts_refresh.get();
+    }
+
+    const std::string lower_rule = to_lower(stacking_rule);
+    const std::string fixed_lower_rule = to_lower(c3ic_fix_wm_class(stacking_rule));
+    auto match_candidate = [&](const std::string &candidate, int base_rank) -> int {
+        if (candidate.empty())
+            return 99;
+        if (candidate == stacking_rule)
+            return base_rank;
+        if (to_lower(candidate) == lower_rule)
+            return base_rank + 1;
+        if (to_lower(c3ic_fix_wm_class(candidate)) == fixed_lower_rule)
+            return base_rank + 2;
+        return 99;
+    };
+
+    const Script *best = nullptr;
+    int best_rank = 99;
+    for (const auto &s : scripts) {
+        if (!s.is_desktop || !s.builtin.empty() || s.exec.empty())
+            continue;
+        std::string desktop_name = s.desktop_id;
+        if (desktop_name.ends_with(".desktop"))
+            desktop_name.resize(desktop_name.size() - 8);
+        std::string file_stem = std::filesystem::path(s.full_path).stem().string();
+
+        int rank = std::min({
+            match_candidate(s.startup_wm_class, 0),
+            match_candidate(s.dbus_service_name, 3),
+            match_candidate(desktop_name, 6),
+            match_candidate(file_stem, 6),
+        });
+        if (rank < best_rank) {
+            best_rank = rank;
+            best = &s;
+            if (best_rank == 0)
+                break;
+        }
+    }
+    if (!best)
+        return {};
+    return best->terminal ? run_in_terminal(best->exec) : best->exec;
+}
+
+std::string desktop_exec_for_file(const std::filesystem::path &desktop_path) {
+    if (desktop_path.empty())
+        return {};
+    auto entry = desktop_file::read_entry(desktop_path);
+    auto exec_it = entry.find("Exec");
+    if (exec_it == entry.end())
+        return {};
+    std::string exec = desktop_file::exec_without_field_codes(exec_it->second);
+    if (exec.empty())
+        return {};
+    auto term_it = entry.find("Terminal");
+    if (term_it != entry.end() && term_it->second == "true")
+        return run_in_terminal(exec);
+    return exec;
+}

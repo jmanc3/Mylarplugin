@@ -42,3 +42,10 @@ std::vector<desktop_file::Action> desktop_actions_for_wm_class(const std::string
 
 // Icon= from the .desktop file whose StartupWMClass matches `stacking_rule`.
 std::string desktop_icon_for_wm_class(const std::string &stacking_rule);
+
+// Exec= (wrapped in a terminal command when Terminal=true) from the .desktop
+// file matching `stacking_rule` by StartupWMClass, X-DBUS-ServiceName, or filename.
+std::string desktop_exec_for_wm_class(const std::string &stacking_rule);
+
+// Exec= (wrapped in a terminal command when Terminal=true) from a specific .desktop file.
+std::string desktop_exec_for_file(const std::filesystem::path &desktop_path);

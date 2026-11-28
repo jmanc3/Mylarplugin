@@ -3597,6 +3597,20 @@ static std::string first_path_from_uri_list(const std::string &uri_list) {
     return {};
 }
 
+static std::string shell_quote_if_needed(const std::string &path) {
+    // Commands run through "sh -c": quote paths the shell would split or expand.
+    if (path.find_first_of(" \t'\"$`\\&;|<>()*?[]{}!#~") == std::string::npos)
+        return path;
+    std::string quoted = "'";
+    for (char ch : path) {
+        if (ch == '\'')
+            quoted += "'\\''";
+        else
+            quoted += ch;
+    }
+    return quoted + "'";
+}
+
 // Files dropped onto the icons area of the dock open the pin editor with the
 // file as the command, so it can be pinned.
 static void setup_dock_file_drop(Dock *dock) {
@@ -3612,18 +3626,7 @@ static void setup_dock_file_drop(Dock *dock) {
         auto path = first_path_from_uri_list(uri_list);
         if (path.empty())
             return;
-        // Commands run through "sh -c": quote paths the shell would split or expand.
-        if (path.find_first_of(" \t'\"$`\\&;|<>()*?[]{}!#~") != std::string::npos) {
-            std::string quoted = "'";
-            for (char ch : path) {
-                if (ch == '\'')
-                    quoted += "'\\''";
-                else
-                    quoted += ch;
-            }
-            path = quoted + "'";
-        }
-        edit_pin::open("", "", path);
+        edit_pin::open("", "", shell_quote_if_needed(path));
     };
 }
 
@@ -3785,31 +3788,316 @@ void dock::stop(std::string monitor_name) {
     stop_dock_workers();
 }
 
+static bool path_is_under_dir(const std::string &path, const std::string &dir) {
+    if (dir.empty() || path.size() <= dir.size())
+        return false;
+    return path.compare(0, dir.size(), dir) == 0 && path[dir.size()] == '/';
+}
+
+static bool path_matches_dir_or_canonical(const std::string &candidate, const std::string &dir, const std::string &canonical_dir) {
+    return path_is_under_dir(candidate, dir) ||
+           (!canonical_dir.empty() && path_is_under_dir(candidate, canonical_dir));
+}
+
+struct ProcEnv {
+    std::string appimage;
+    std::string appdir;
+    std::string flatpak_id;
+    std::string container;
+    std::string snap;
+    std::string snap_instance_name;
+    std::string snap_name;
+    std::string wineprefix;
+    std::string wineloader;
+    std::string steam_app_id;
+    std::string steam_game_id;
+    std::string gio_desktop_file;
+    std::string gio_desktop_file_pid;
+};
+
+static ProcEnv read_proc_env(int pid) {
+    ProcEnv env;
+    std::ifstream environ_file("/proc/" + std::to_string(pid) + "/environ", std::ios::binary);
+    if (!environ_file)
+        return env;
+
+    auto match_key = [](const std::string &entry, std::string_view key, std::string &out) -> bool {
+        if (entry.size() > key.size() && entry.compare(0, key.size(), key) == 0 && entry[key.size()] == '=') {
+            out = entry.substr(key.size() + 1);
+            return true;
+        }
+        return false;
+    };
+
+    std::string entry;
+    while (std::getline(environ_file, entry, '\0')) {
+        match_key(entry, "APPIMAGE", env.appimage) ||
+        match_key(entry, "APPDIR", env.appdir) ||
+        match_key(entry, "FLATPAK_ID", env.flatpak_id) ||
+        match_key(entry, "container", env.container) ||
+        match_key(entry, "SNAP", env.snap) ||
+        match_key(entry, "SNAP_INSTANCE_NAME", env.snap_instance_name) ||
+        match_key(entry, "SNAP_NAME", env.snap_name) ||
+        match_key(entry, "WINEPREFIX", env.wineprefix) ||
+        match_key(entry, "WINELOADER", env.wineloader) ||
+        match_key(entry, "SteamAppId", env.steam_app_id) ||
+        match_key(entry, "SteamGameId", env.steam_game_id) ||
+        match_key(entry, "GIO_LAUNCHED_DESKTOP_FILE", env.gio_desktop_file) ||
+        match_key(entry, "GIO_LAUNCHED_DESKTOP_FILE_PID", env.gio_desktop_file_pid);
+    }
+    return env;
+}
+
+static bool is_wine_binary_name(std::string name) {
+    constexpr std::string_view kDeleted = " (deleted)";
+    if (name.size() > kDeleted.size() && name.compare(name.size() - kDeleted.size(), kDeleted.size(), kDeleted) == 0)
+        name.resize(name.size() - kDeleted.size());
+    size_t slash = name.rfind('/');
+    if (slash != std::string::npos)
+        name = name.substr(slash + 1);
+    return name == "wine" || name == "wine64" || name == "wine-preloader" || name == "wine64-preloader";
+}
+
+static bool looks_like_windows_path(const std::string &s) {
+    return s.size() >= 3 && std::isalpha((unsigned char) s[0]) && s[1] == ':' && (s[2] == '\\' || s[2] == '/');
+}
+
+static bool is_wine_process(const std::string &exe_path, const std::vector<std::string> &cmdline_args) {
+    if (!exe_path.empty() && is_wine_binary_name(exe_path))
+        return true;
+    if (!cmdline_args.empty() && looks_like_windows_path(cmdline_args[0]))
+        return true;
+    return false;
+}
+
+static bool process_runs_under_dir(const std::string &exe_path,
+                                   const std::vector<std::string> &cmdline_args,
+                                   std::string dir) {
+    if (dir.empty())
+        return false;
+    while (dir.size() > 1 && dir.back() == '/')
+        dir.pop_back();
+
+    std::error_code canon_ec;
+    std::string canonical_dir = std::filesystem::canonical(dir, canon_ec).string();
+    if (canon_ec)
+        canonical_dir.clear();
+
+    if (path_matches_dir_or_canonical(exe_path, dir, canonical_dir))
+        return true;
+
+    for (const auto &arg : cmdline_args) {
+        if (path_matches_dir_or_canonical(arg, dir, canonical_dir))
+            return true;
+        size_t eq = arg.find('=');
+        if (eq != std::string::npos && path_matches_dir_or_canonical(arg.substr(eq + 1), dir, canonical_dir))
+            return true;
+    }
+    return false;
+}
+
+static std::string read_flatpak_id_from_info(int pid) {
+    std::ifstream info("/proc/" + std::to_string(pid) + "/root/.flatpak-info");
+    if (!info)
+        return {};
+    bool in_application = false;
+    std::string line;
+    while (std::getline(info, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (line.empty() || line[0] == '#')
+            continue;
+        if (line.front() == '[') {
+            in_application = (line == "[Application]");
+            continue;
+        }
+        if (in_application && line.rfind("name=", 0) == 0)
+            return line.substr(5);
+    }
+    return {};
+}
+
+static int detect_steam_app_id_from_proc(const ProcEnv &env,
+                                         const std::string &exe_path,
+                                         const std::vector<std::string> &cmdline_args) {
+    const std::string &raw = !env.steam_app_id.empty() ? env.steam_app_id : env.steam_game_id;
+    if (raw.empty() || !std::all_of(raw.begin(), raw.end(), [](unsigned char c) { return std::isdigit(c); }))
+        return -1;
+    int id = -1;
+    try {
+        id = std::stoi(raw);
+    } catch (...) {
+        return -1;
+    }
+    if (id <= 0)
+        return -1;
+
+    // Guard against unrelated apps (e.g. a browser opened by a game) inheriting SteamAppId.
+    bool looks_like_game = is_wine_process(exe_path, cmdline_args) ||
+                           exe_path.find("/steamapps/") != std::string::npos;
+    if (!looks_like_game) {
+        for (const auto &arg : cmdline_args) {
+            if (arg.find("/steamapps/") != std::string::npos) {
+                looks_like_game = true;
+                break;
+            }
+        }
+    }
+    return looks_like_game ? id : -1;
+}
+
+// AppImage runtimes expose the real .AppImage path in APPIMAGE and the mounted/
+// extracted squashfs root in APPDIR. Verify the process actually runs out of
+// APPDIR so child processes launched from an AppImage (e.g. a terminal or IDE)
+// don't falsely inherit its APPIMAGE path.
+static std::string get_appimage_launch_command(const ProcEnv &env,
+                                               const std::string &exe_path,
+                                               const std::vector<std::string> &cmdline_args) {
+    if (env.appimage.empty())
+        return {};
+
+    bool matches = false;
+    if (!env.appdir.empty()) {
+        matches = process_runs_under_dir(exe_path, cmdline_args, env.appdir);
+    } else {
+        auto looks_like_appimage_mount = [](const std::string &p) {
+            return p.rfind("/tmp/.mount_", 0) == 0 || p.rfind("/tmp/appimage_extracted_", 0) == 0;
+        };
+        if (looks_like_appimage_mount(exe_path) || (!cmdline_args.empty() && looks_like_appimage_mount(cmdline_args[0])))
+            matches = true;
+    }
+
+    return matches ? shell_quote_if_needed(env.appimage) : std::string{};
+}
+
+static std::string get_flatpak_launch_command(int pid,
+                                              const ProcEnv &env,
+                                              const std::string &exe_path,
+                                              const std::vector<std::string> &cmdline_args) {
+    std::string app_id = read_flatpak_id_from_info(pid);
+    if (app_id.empty() && !env.flatpak_id.empty()) {
+        bool in_sandbox = (env.container == "flatpak") ||
+                          exe_path.rfind("/app/", 0) == 0 ||
+                          (!cmdline_args.empty() && cmdline_args[0].rfind("/app/", 0) == 0);
+        if (in_sandbox)
+            app_id = env.flatpak_id;
+    }
+    if (app_id.empty())
+        return {};
+    return "flatpak run " + shell_quote_if_needed(app_id);
+}
+
+static std::string get_snap_launch_command(const ProcEnv &env,
+                                           const std::string &exe_path,
+                                           const std::vector<std::string> &cmdline_args) {
+    const std::string &name = !env.snap_instance_name.empty() ? env.snap_instance_name : env.snap_name;
+    if (name.empty() || env.snap.empty())
+        return {};
+    if (!process_runs_under_dir(exe_path, cmdline_args, env.snap))
+        return {};
+    return "snap run " + shell_quote_if_needed(name);
+}
+
+static std::string get_wine_launch_command(const ProcEnv &env,
+                                           const std::string &exe_path,
+                                           const std::vector<std::string> &cmdline_args) {
+    if (cmdline_args.empty() || !is_wine_process(exe_path, cmdline_args))
+        return {};
+
+    std::string cmd;
+    if (!env.wineprefix.empty())
+        cmd += "WINEPREFIX=" + shell_quote_if_needed(env.wineprefix) + " ";
+
+    if (!is_wine_binary_name(cmdline_args[0])) {
+        if (!env.wineloader.empty() && access(env.wineloader.c_str(), X_OK) == 0)
+            cmd += shell_quote_if_needed(env.wineloader) + " ";
+        else
+            cmd += "wine ";
+    }
+
+    for (size_t i = 0; i < cmdline_args.size(); ++i) {
+        if (cmdline_args[i].empty())
+            continue;
+        if (i > 0)
+            cmd += ' ';
+        cmd += shell_quote_if_needed(cmdline_args[i]);
+    }
+    return cmd;
+}
+
+struct LaunchCommandInfo {
+    std::string command;
+    bool specialized = false;
+    int steam_app_id = -1;
+};
+
 // This happens on the main thread, not the dock thread
-std::string get_launch_command(int cid) {
-    std::string command_launched_by_line;
+static LaunchCommandInfo resolve_launch_command(int cid) {
+    LaunchCommandInfo info;
 
     int pid = hypriso->get_pid(cid);
-    if (pid != -1) {
-        std::ifstream cmdline("/proc/" + std::to_string(pid) + "/cmdline");
-        std::getline((cmdline), command_launched_by_line);
+    if (pid == -1)
+        return info;
 
-        size_t index = 0;
-        while (true) {
-            /* Locate the substring to replace. */
-            index = command_launched_by_line.find('\000', index);
-            if (index == std::string::npos)
-                break;
+    std::vector<std::string> cmdline_args;
+    std::ifstream cmdline("/proc/" + std::to_string(pid) + "/cmdline", std::ios::binary);
+    std::string arg;
+    while (std::getline(cmdline, arg, '\0'))
+        cmdline_args.push_back(std::move(arg));
 
-            /* Make the replacement. */
-            command_launched_by_line.replace(index, 1, " ");
+    std::error_code exe_ec;
+    std::string exe_path = std::filesystem::read_symlink("/proc/" + std::to_string(pid) + "/exe", exe_ec).string();
+    if (exe_ec)
+        exe_path.clear();
 
-            /* Advance index forward so the next iteration doesn't pick it up as well. */
-            index += 1;
+    ProcEnv env = read_proc_env(pid);
+
+    info.steam_app_id = detect_steam_app_id_from_proc(env, exe_path, cmdline_args);
+
+    if (std::string cmd = get_appimage_launch_command(env, exe_path, cmdline_args); !cmd.empty()) {
+        info.command = std::move(cmd);
+        info.specialized = true;
+        return info;
+    }
+
+    if (std::string cmd = get_flatpak_launch_command(pid, env, exe_path, cmdline_args); !cmd.empty()) {
+        info.command = std::move(cmd);
+        info.specialized = true;
+        return info;
+    }
+
+    if (std::string cmd = get_snap_launch_command(env, exe_path, cmdline_args); !cmd.empty()) {
+        info.command = std::move(cmd);
+        info.specialized = true;
+        return info;
+    }
+
+    if (std::string cmd = get_wine_launch_command(env, exe_path, cmdline_args); !cmd.empty()) {
+        info.command = std::move(cmd);
+        info.specialized = true;
+        return info;
+    }
+
+    if (!env.gio_desktop_file.empty() && env.gio_desktop_file_pid == std::to_string(pid)) {
+        if (std::string cmd = desktop_exec_for_file(env.gio_desktop_file); !cmd.empty()) {
+            info.command = std::move(cmd);
+            info.specialized = true;
+            return info;
         }
     }
 
-    return command_launched_by_line;
+    for (size_t i = 0; i < cmdline_args.size(); ++i) {
+        if (cmdline_args[i].empty())
+            continue;
+        if (!info.command.empty())
+            info.command += ' ';
+        info.command += shell_quote_if_needed(cmdline_args[i]);
+    }
+    return info;
+}
+
+std::string get_launch_command(int cid) {
+    return resolve_launch_command(cid).command;
 }
 
 std::string get_steam_launch_command(const std::string& app_name) {
@@ -3821,15 +4109,18 @@ std::string get_steam_launch_command(const std::string& app_name) {
 
 // This happens on the main thread, not the dock thread
 void dock::add_window(int cid) {
-    std::string command = get_launch_command(cid);
+    LaunchCommandInfo launch = resolve_launch_command(cid);
+    std::string command = launch.command;
     std::string icon = c3ic_fix_wm_class(hypriso->class_name(cid));
     std::string stack_rule = icon;
     bool is_steam_game = false;
 
-    // Steam x11 games
-    if (hypriso->is_x11(cid)) {
-        int id = hypriso->steam_id(cid);
-        if (id != -1 && stack_rule != "steam") {
+    // Steam games (X11 property, or SteamAppId/SteamGameId env for Wayland/Proton)
+    if (stack_rule != "steam") {
+        int id = hypriso->is_x11(cid) ? hypriso->steam_id(cid) : -1;
+        if (id == -1)
+            id = launch.steam_app_id;
+        if (id != -1) {
             icon = fz("steam_icon_{}", id);
             command = get_steam_launch_command(icon);
             is_steam_game = true;
@@ -3855,6 +4146,11 @@ void dock::add_window(int cid) {
     }
 
     if (!matched_existing && !is_steam_game) {
+        if (!launch.specialized) {
+            std::string desktop_exec = desktop_exec_for_wm_class(stack_rule);
+            if (!desktop_exec.empty())
+                command = desktop_exec;
+        }
         std::string desktop_icon = desktop_icon_for_wm_class(stack_rule);
         if (!desktop_icon.empty() &&
             (!icons_loaded || !one_shot_icon(48, {desktop_icon, to_lower(desktop_icon), c3ic_fix_wm_class(desktop_icon)}).empty())) {
