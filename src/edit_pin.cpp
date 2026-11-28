@@ -66,6 +66,8 @@ struct PinData : UserData {
     std::shared_ptr<std::atomic<bool>> alive = std::make_shared<std::atomic<bool>>(true);
     std::string original_stacking_rule;
     bool has_desktop_file = false;
+    bool focus_stacking_rule = false;
+    int insert_index = -1;
     
     std::string stacking_rule;
     std::string icon;
@@ -1073,6 +1075,65 @@ static void setup_dropdown_field_keys(Container *label, DropdownKind kind) {
     label->parent->when_active_status_changed = dropdown_field_focus_changed;
 }
 
+static void paint_stacking_rule_hint(Container *window_root) {
+    auto field = container_by_name("stacking_rule_container", window_root);
+    if (!field || !field->parent)
+        return;
+    const bool focused = field->active || field->parent->active;
+    if (!focused)
+        return;
+
+    auto window = pin_window(window_root);
+    auto cr = window->drawing_context;
+    const double dpi = window->dpi;
+    static const std::string info_icon = "\uE946";
+    static const std::vector<std::string> lines = {
+        "The unique window name for this program",
+        "(Use 'Click window' if you don't know)",
+    };
+    const double text_size = 10 * dpi;
+    const double pad = 10 * dpi;
+    const double line_h = 18 * dpi;
+    const int icon_size = std::round(12 * dpi);
+    const RGBA accent(.23, .6, 1, 1);
+
+    auto icon_bounds = draw_text(cr, 0, 0, info_icon, icon_size, false, icon_font, -1, -1, accent);
+    const double text_x = pad + icon_bounds.w + 8 * dpi;
+    double text_w = 0;
+    for (const auto &line : lines)
+        text_w = std::max(text_w, draw_text(cr, 0, 0, line, text_size, false, set->font, -1, -1, {0, 0, 0, .85}).w);
+
+    const auto page = window_root->real_bounds;
+    const auto anchor = field->parent->real_bounds;
+    const double gap = 6 * dpi;
+    Bounds box(anchor.x, anchor.y + anchor.h + gap,
+               text_x + text_w + pad + 2 * dpi,
+               lines.size() * line_h + 12 * dpi);
+    box.w = std::min(box.w, page.w - 2 * gap);
+    box.x = std::max(page.x + gap, std::min(box.x, page.x + page.w - gap - box.w));
+    if (box.y + box.h > page.y + page.h - gap)
+        box.y = anchor.y - gap - box.h;
+
+    const double radius = 8 * dpi;
+    set_argb(cr, {1, 1, 1, 1});
+    rounded_rect_new(cr, radius, box.x, box.y, box.w, box.h);
+    cr->fill();
+
+    set_argb(cr, {0, 0, 0, .2});
+    cr->set_line_width(std::max(1.0, (double) std::floor(dpi)));
+    rounded_rect_new(cr, radius, box.x + .5, box.y + .5, box.w - 1, box.h - 1);
+    cr->stroke();
+
+    draw_text(cr, box.x + pad, box.y + 6 * dpi + line_h * .5 - icon_bounds.h * .5,
+              info_icon, icon_size, true, icon_font, -1, -1, accent);
+    for (int i = 0; i < (int) lines.size(); ++i) {
+        auto lb = draw_text(cr, 0, 0, lines[i], text_size, false, set->font, -1, -1, {0, 0, 0, .85});
+        draw_text(cr, box.x + text_x, box.y + 6 * dpi + i * line_h + (line_h - lb.h) * .5,
+                  lines[i], text_size, true, set->font, -1, -1,
+                  i == 0 ? RGBA(0, 0, 0, .85) : RGBA(0, 0, 0, .55));
+    }
+}
+
 static void fill_root(Container *window_root) {
     {
         auto data = (PinData *) window_root->user_data;
@@ -1083,6 +1144,9 @@ static void fill_root(Container *window_root) {
     }
 
     window_root->when_paint = paint_bg;
+    window_root->after_paint = [](Container *root, Container *) {
+        paint_stacking_rule_hint(root);
+    };
     window_root->when_key_event = [](Container *root, Container* c, int key, bool pressed, xkb_keysym_t sym, int mods, bool is_text, std::string text) {
         auto pin_data = (PinData *) root->user_data;
         if (sym == XKB_KEY_Escape && pin_data->swallow_escape) {
@@ -1160,20 +1224,37 @@ static void fill_root(Container *window_root) {
             });
         label->name = "icon_container";
         setup_dropdown_field_keys(label, DropdownKind::Icon);
-        activate_next_activatable(window_root, window_root);
+        if (!static_cast<PinData *>(window_root->user_data)->focus_stacking_rule)
+            activate_next_activatable(window_root, window_root);
     }
     {        
         auto label = root->child(FILL_SPACE, FILL_SPACE);
         setup_label(window_root, label, true, false, [](Container* root, Container* c) { return "Terminal Command"; });
     } 
     {
-        auto label_parent = root->child(FILL_SPACE, FILL_SPACE);
+        auto row = root->child(::hbox, FILL_SPACE, FILL_SPACE);
+        row->pre_layout = [](Container *root, Container *c, const Bounds &b) {
+            auto dpi = static_cast<PinData *>(root->user_data)->window->raw_window->dpi;
+            auto label_parent = c->children[0];
+            label_parent->pre_layout(root, label_parent, b);
+            c->wanted_bounds.w = FILL_SPACE;
+            c->wanted_bounds.h = label_parent->wanted_bounds.h;
+            c->spacing = 8 * dpi;
+        };
+        auto label_parent = row->child(FILL_SPACE, FILL_SPACE);
         auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->command; },
             [window_root](std::string text) {
                 rebuild_command_options(window_root, text);
             });
         label->name = "command_container";
         setup_dropdown_field_keys(label, DropdownKind::Command);
+        button(row, []() { return "Run command"; }, [](Container *root, Container *c) {
+            if (auto field = container_by_name("command_container", root)) {
+                auto cmd = static_cast<LabelData *>(field->user_data)->text;
+                if (!cmd.empty())
+                    launch_command(cmd);
+            }
+        }, 6, 28);
     }
     {
         auto label = root->child(FILL_SPACE, FILL_SPACE);
@@ -1193,6 +1274,18 @@ static void fill_root(Container *window_root) {
         auto label = setup_label(window_root, label_parent, false, true, [](Container* root, Container* c) { return ((PinData*)root->user_data)->stacking_rule; },
             [window_root](std::string rule) { update_desktop_file_target((PinData *) window_root->user_data, rule); });
         label->name = "stacking_rule_container";
+        static void (*stacking_rule_prev_active_changed)(Container *, Container *) = nullptr;
+        stacking_rule_prev_active_changed = label->when_active_status_changed;
+        label->when_active_status_changed = [](Container *root, Container *c) {
+            if (stacking_rule_prev_active_changed)
+                stacking_rule_prev_active_changed(root, c);
+            windowing::redraw(pin_window(root));
+        };
+        label_parent->when_active_status_changed = [](Container *root, Container *) {
+            windowing::redraw(pin_window(root));
+        };
+        if (static_cast<PinData *>(window_root->user_data)->focus_stacking_rule)
+            set_active(window_root, {label, label_parent}, window_root, true, false);
         button(row, []() { return "Click window"; }, [](Container *root, Container *c) {
             auto data = static_cast<PinData *>(root->user_data);
             auto app = data->app;
@@ -1215,8 +1308,10 @@ static void fill_root(Container *window_root) {
                         auto data = static_cast<PinData *>(root->user_data);
                         {
                             std::lock_guard<std::mutex> lock(data->app->mutex);
-                            if (auto field = container_by_name("stacking_rule_container", root))
-                                reset_text_editor(field, rule);
+                            if (auto field = container_by_name("stacking_rule_container", root)) {
+                                set_text_editor(field, rule);
+                                set_active(root, {field, field->parent}, root, true, false);
+                            }
                             update_desktop_file_target(data, rule);
                         }
                         windowing::redraw(data->window->raw_window);
@@ -1291,7 +1386,7 @@ static void fill_root(Container *window_root) {
             auto icon_container = container_by_name("icon_container", root);
             auto icon_data = (LabelData*)icon_container->user_data;
             auto pin_data = (PinData*)root->user_data;
-            dock::edit_pin(pin_data->original_stacking_rule, stacking_rule_data->text, icon_data->text, command_data->text);
+            dock::edit_pin(pin_data->original_stacking_rule, stacking_rule_data->text, icon_data->text, command_data->text, pin_data->insert_index);
             windowing::close_window(mylar->window->raw_window); 
         });
         button(parent, []() { return "Close"; }, [](Container *root, Container *c) {
@@ -1320,7 +1415,7 @@ static void reap_edit_pin_sessions_locked() {
     }
 }
 
-static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string stacking_rule, std::string icon, std::string command) {
+static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string stacking_rule, std::string icon, std::string command, bool focus_stacking_rule, int insert_index) {
     auto app = windowing::open_app();
     if (!app) {
         session->exited = true;
@@ -1344,6 +1439,8 @@ static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string 
     pin_data->stacking_rule = stacking_rule;
     pin_data->icon = icon;
     pin_data->command = command;
+    pin_data->focus_stacking_rule = focus_stacking_rule;
+    pin_data->insert_index = insert_index;
     pin_data->window = mylar;
     pin_data->app = app;
     mylar->root->user_data = pin_data;
@@ -1362,13 +1459,13 @@ static void start_edit_pin(std::shared_ptr<EditPinSession> session, std::string 
     session->exited = true;
 }
 
-void edit_pin::open(std::string stacking_rule, std::string icon, std::string command) {
+void edit_pin::open(std::string stacking_rule, std::string icon, std::string command, bool focus_stacking_rule, int insert_index) {
     std::lock_guard<std::mutex> lock(edit_pin_sessions_mutex);
     reap_edit_pin_sessions_locked();
     if (edit_pin_stopping.load() || plugin_lifetime.stop_requested())
         return;
     auto session = std::make_shared<EditPinSession>();
-    session->thread = std::thread(start_edit_pin, session, std::move(stacking_rule), std::move(icon), std::move(command));
+    session->thread = std::thread(start_edit_pin, session, std::move(stacking_rule), std::move(icon), std::move(command), focus_stacking_rule, insert_index);
     edit_pin_sessions.push_back(std::move(session));
 }
 

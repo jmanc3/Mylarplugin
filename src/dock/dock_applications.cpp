@@ -3,7 +3,9 @@
 #include "dock/dock_internal.h"
 
 #include "desktop_icons.h"
+#include "edit_pin.h"
 #include "icon_browser.h"
+#include "popup.h"
 #include "settings.h"
 #include "text_editor.h"
 
@@ -952,10 +954,91 @@ void fill_applications_container(Container *root) {
             windowing::redraw(dock->applications->raw_window);
         };
         o->when_clicked = [search](Container *root, Container *c) {
-            if (c->state.mouse_button_pressed != BTN_LEFT)
-                return;
             auto dock = (Dock *) root->user_data;
             auto s = (Script *) c->user_data;
+            if (c->state.mouse_button_pressed == BTN_RIGHT) {
+                Script entry = *s;
+                auto *applications = dock->applications;
+                main_thread([dock, applications, search, entry = std::move(entry)]() mutable {
+                    auto close_menu = [dock, applications, search]() {
+                        search->active_option = 0;
+                        windowing::run_on_app(dock->app, [dock, applications]() {
+                            if (dock->applications == applications && applications && applications->raw_window)
+                                windowing::close_window(applications->raw_window);
+                        });
+                    };
+
+                    std::vector<PopOption> options;
+                    {
+                        PopOption open;
+                        open.text = "Open";
+                        open.icon_left = "\uE8A7";
+                        open.is_text_icon = true;
+                        open.on_clicked = [entry, close_menu]() {
+                            activate_script(&entry);
+                            close_menu();
+                        };
+                        options.push_back(open);
+                    }
+
+                    const bool is_real_file = !entry.full_path.empty() && !entry.is_run_command &&
+                                              !entry.is_setting && entry.builtin.empty();
+                    if (is_real_file) {
+                        PopOption loc;
+                        loc.text = "Open file location";
+                        loc.icon_left = "\uED43";
+                        loc.is_text_icon = true;
+                        std::string target_path = entry.full_path;
+                        loc.on_clicked = [target_path = std::move(target_path), close_menu]() {
+                            if (!target_path.empty())
+                                desktop_icons::reveal_in_file_manager({target_path});
+                            close_menu();
+                        };
+                        options.push_back(loc);
+
+                        std::string wm_class = entry.startup_wm_class;
+                        while (!wm_class.empty() && std::isspace(static_cast<unsigned char>(wm_class.front())))
+                            wm_class.erase(wm_class.begin());
+                        while (!wm_class.empty() && std::isspace(static_cast<unsigned char>(wm_class.back())))
+                            wm_class.pop_back();
+
+                        std::string icon_name = entry.icon;
+                        std::string command;
+                        if (entry.is_desktop) {
+                            command = entry.terminal ? run_in_terminal(entry.exec) : entry.exec;
+                            if (command.empty())
+                                command = "gio launch " + shell_quote(entry.full_path);
+                        } else {
+                            command = shell_quote(entry.full_path);
+                        }
+
+                        const bool pinned = dock::is_pinned(wm_class, command);
+                        PopOption pin;
+                        pin.text = pinned ? "Unpin from dock" : "Pin to dock";
+                        pin.icon_left = pinned ? "\uE77A" : "\uE718";
+                        pin.is_text_icon = true;
+                        pin.on_clicked = [pinned, wm_class = std::move(wm_class), icon_name = std::move(icon_name),
+                                          command = std::move(command), close_menu]() {
+                            if (pinned) {
+                                dock::unpin(wm_class, command);
+                            } else if (!wm_class.empty()) {
+                                dock::edit_pin("", wm_class, icon_name, command);
+                            } else {
+                                close_menu();
+                                edit_pin::open("", icon_name, command, true);
+                            }
+                        };
+                        options.push_back(pin);
+                    }
+
+                    auto m = mouse();
+                    popup::open(options, m.x - 1, m.y + 1);
+                    popup::set_above_overlays();
+                });
+                return;
+            }
+            if (c->state.mouse_button_pressed != BTN_LEFT)
+                return;
             activate_script(s);
             search->active_option = 0;
             windowing::close_window(dock->applications->raw_window);

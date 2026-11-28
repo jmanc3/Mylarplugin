@@ -2,7 +2,9 @@
 #include "client/raw_windowing.h"
 #include "client/windowing.h"
 #include "container.h"
+#include "dock/dock.h"
 #include "dock/dock_ui.h"
+#include "edit_pin.h"
 #include "events.h"
 #include "heart.h"
 #include "hypriso.h"
@@ -987,6 +989,77 @@ static void open_desktop_path(const std::string& path) {
     g_free(quoted);
 }
 
+static void open_parent_directories(const std::vector<std::string> &paths) {
+    std::unordered_set<std::string> opened;
+    for (const auto &raw : paths) {
+        std::filesystem::path p(raw);
+        std::error_code ec;
+        const bool is_dir = std::filesystem::is_directory(p, ec) && !ec;
+        const std::string dir = is_dir ? p.string() : p.parent_path().string();
+        if (!dir.empty() && opened.insert(dir).second)
+            open_desktop_path(dir);
+    }
+}
+
+void desktop_icons::reveal_in_file_manager(const std::vector<std::string> &paths) {
+    if (paths.empty())
+        return;
+
+    std::vector<std::string> uris;
+    uris.reserve(paths.size());
+    for (const auto &raw : paths) {
+        std::error_code ec;
+        auto abs = std::filesystem::absolute(raw, ec);
+        const std::string abs_str = ec ? raw : abs.string();
+        if (gchar *uri = g_filename_to_uri(abs_str.c_str(), nullptr, nullptr)) {
+            uris.emplace_back(uri);
+            g_free(uri);
+        }
+    }
+    if (uris.empty()) {
+        open_parent_directories(paths);
+        return;
+    }
+
+    auto *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
+    if (!bus) {
+        open_parent_directories(paths);
+        return;
+    }
+
+    GVariantBuilder builder;
+    g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
+    for (const auto &uri : uris)
+        g_variant_builder_add(&builder, "s", uri.c_str());
+
+    auto *fallback_paths = new std::vector<std::string>(paths);
+    g_dbus_connection_call(
+        bus,
+        "org.freedesktop.FileManager1",
+        "/org/freedesktop/FileManager1",
+        "org.freedesktop.FileManager1",
+        "ShowItems",
+        g_variant_new("(ass)", &builder, ""),
+        nullptr,
+        G_DBUS_CALL_FLAGS_NONE,
+        5000,
+        nullptr,
+        [](GObject *source, GAsyncResult *res, gpointer user_data) {
+            std::unique_ptr<std::vector<std::string>> paths_ptr(static_cast<std::vector<std::string> *>(user_data));
+            GError *err = nullptr;
+            GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &err);
+            if (reply) {
+                g_variant_unref(reply);
+            } else {
+                if (err)
+                    g_error_free(err);
+                open_parent_directories(*paths_ptr);
+            }
+        },
+        fallback_paths);
+    g_object_unref(bus);
+}
+
 static void open_desktop_item(const DesktopItem& item) {
     if (item.extension == ".desktop" && !item.exec.empty())
         launch_command(item.exec);
@@ -1477,6 +1550,60 @@ void desktop_icons::finish_rename(bool commit) {
     }
 }
 
+static bool dragging_over_dock = false;
+
+static void desktop_item_pin_info(const DesktopItem &target_item, std::string &wm_class, std::string &icon_name, std::string &command) {
+    wm_class.clear();
+    icon_name = target_item.icon;
+    command = target_item.exec;
+
+    if (target_item.extension == ".desktop") {
+        auto entry = desktop_file::read_entry(target_item.full_filepath);
+        if (auto it = entry.find("StartupWMClass"); it != entry.end())
+            wm_class = trim_copy(it->second);
+        if (icon_name.empty()) {
+            if (auto it = entry.find("Icon"); it != entry.end())
+                icon_name = it->second;
+        }
+        if (command.empty()) {
+            auto *quoted = g_shell_quote(target_item.full_filepath.c_str());
+            command = std::string("gio launch ") + quoted;
+            g_free(quoted);
+        }
+    } else {
+        if (icon_name.empty()) {
+            if (!target_item.icons_for_mime.empty())
+                icon_name = target_item.icons_for_mime.front();
+            else
+                icon_name = target_item.is_folder ? "folder" : "text-plain";
+        }
+        auto *quoted = g_shell_quote(target_item.full_filepath.c_str());
+        std::error_code ec;
+        const auto perms = std::filesystem::status(target_item.full_filepath, ec).permissions();
+        const bool executable = !target_item.is_folder && !ec &&
+            ((perms & (std::filesystem::perms::owner_exec |
+                       std::filesystem::perms::group_exec |
+                       std::filesystem::perms::others_exec)) != std::filesystem::perms::none);
+        command = executable ? std::string(quoted) : (std::string("xdg-open ") + quoted);
+        g_free(quoted);
+    }
+}
+
+static bool pin_desktop_item_to_dock(const DesktopItem &target_item, bool open_editor_if_missing = true) {
+    std::string wm_class;
+    std::string icon_name;
+    std::string command;
+    desktop_item_pin_info(target_item, wm_class, icon_name, command);
+
+    if (!wm_class.empty()) {
+        dock::edit_pin("", wm_class, icon_name, command);
+        return true;
+    }
+    if (open_editor_if_missing)
+        edit_pin::open("", icon_name, command, true);
+    return false;
+}
+
 static void create_icon_popup(Container *icon) {
     // Folder watches can replace items while the popup is open; capture values.
     std::vector<DesktopItem> items;
@@ -1496,6 +1623,8 @@ static void create_icon_popup(Container *icon) {
     std::vector<PopOption> options;
     PopOption open;
     open.text = items.size() == 1 ? "Open" : fz("Open {} Items", items.size());
+    open.icon_left = "\uE8A7";
+    open.is_text_icon = true;
     open.on_clicked = [items]() {
         std::vector<std::string> paths;
         for (const auto& item : items)
@@ -1510,6 +1639,8 @@ static void create_icon_popup(Container *icon) {
         PopOption edit;
         edit.text = items.size() == 1 ? "Edit" :
             (editable_paths.size() == 1 ? "Edit 1 Text File" : fz("Edit {} Text Files", editable_paths.size()));
+        edit.icon_left = "\uE70F";
+        edit.is_text_icon = true;
         edit.on_clicked = [editable_paths]() {
             auto *editor = g_app_info_get_default_for_type("text/plain", FALSE);
             if (!editor) {
@@ -1534,16 +1665,34 @@ static void create_icon_popup(Container *icon) {
     PopOption manager;
     manager.text = items.size() == 1 ? "Open in File Manager" :
         fz("Open {} Items in File Manager", items.size());
+    manager.icon_left = "\uED43";
+    manager.is_text_icon = true;
     manager.on_clicked = [items]() {
-        std::unordered_set<std::string> opened;
-        for (const auto& item : items) {
-            const auto path = item.is_folder ? item.full_filepath :
-                std::filesystem::path(item.full_filepath).parent_path().string();
-            if (opened.insert(path).second)
-                open_desktop_path(path);
-        }
+        std::vector<std::string> paths;
+        paths.reserve(items.size());
+        for (const auto& item : items)
+            paths.push_back(item.full_filepath);
+        desktop_icons::reveal_in_file_manager(paths);
     };
     options.push_back(manager);
+
+    if (items.size() == 1) {
+        PopOption pin;
+        const DesktopItem target_item = items[0];
+        std::string wm_class, icon_name, command;
+        desktop_item_pin_info(target_item, wm_class, icon_name, command);
+        const bool pinned = dock::is_pinned(wm_class, command);
+        pin.text = pinned ? "Unpin from dock" : "Pin to dock";
+        pin.icon_left = pinned ? "\uE77A" : "\uE718";
+        pin.is_text_icon = true;
+        pin.on_clicked = [target_item, pinned, wm_class, command]() {
+            if (pinned)
+                dock::unpin(wm_class, command);
+            else
+                pin_desktop_item_to_dock(target_item, true);
+        };
+        options.push_back(pin);
+    }
 
     PopOption separator;
     separator.seperator = true;
@@ -1551,6 +1700,8 @@ static void create_icon_popup(Container *icon) {
     if (items.size() == 1) {
         PopOption rename;
         rename.text = "Rename";
+        rename.icon_left = "\uE8AC";
+        rename.is_text_icon = true;
         const std::string target_path = items[0].full_filepath;
         rename.on_clicked = [target_path]() {
             start_rename_for_path(target_path);
@@ -1559,6 +1710,8 @@ static void create_icon_popup(Container *icon) {
     }
     PopOption remove;
     remove.text = items.size() == 1 ? "Remove" : fz("Remove {} Items", items.size());
+    remove.icon_left = "\uE74D";
+    remove.is_text_icon = true;
     remove.on_clicked = [items]() {
         for (const auto& item : items) {
             auto *file = g_file_new_for_path(item.full_filepath.c_str());
@@ -1605,6 +1758,8 @@ static void paint_desktop_icon(Container *c, int monitor, const Bounds &bounds, 
     DesktopItem *item = *datum<DesktopItem *>(c, "DesktopItem");
 
     auto* ico = (IcoContainerData*)(c->user_data);
+    if (ico->is_dragging && dragging_over_dock)
+        return;
 
     // Icon and label shrink toward the icon cell's center while punching.
     float punch = 1.f;
@@ -1744,7 +1899,7 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
     c->when_mouse_leaves_container = c->when_mouse_motion;
     c->when_drag_end_is_click = false;
     c->when_drag_start = [](Container* actual_root, Container* c) {
-        if (c->state.mouse_button_pressed != BTN_LEFT)
+        if (c->state.mouse_button_pressed != BTN_LEFT || hypriso->has_top_or_overlay_layer_at_cursor())
             return;
         auto icons = icons_for_action(c->parent, c);
         for (auto *icon : icons) {
@@ -1758,21 +1913,63 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         }
     };
     c->when_drag = [](Container* actual_root, Container* c) {
+        if (!((IcoContainerData *) c->user_data)->is_dragging)
+            return;
         actual_root->consumed_event = true;
+        const bool over_dock = dock::contains_point(actual_root->mouse_current_x, actual_root->mouse_current_y);
+        const bool state_changed = (over_dock != dragging_over_dock);
+        dragging_over_dock = over_dock;
+
+        if (over_dock) {
+            auto *item = *datum<DesktopItem *>(c, "DesktopItem");
+            if (item) {
+                std::string wm_class, icon_name, command;
+                desktop_item_pin_info(*item, wm_class, icon_name, command);
+                dock::set_desktop_drag_preview(actual_root->mouse_current_x, actual_root->mouse_current_y,
+                                               icon_name, wm_class, command);
+            }
+        } else if (state_changed) {
+            dock::clear_desktop_drag_preview();
+        }
+
+        auto monitor = *datum<int>(c->parent, "monitor");
+        auto m = icon_grid_metrics(c->parent, scale(monitor));
         for (auto *icon : c->parent->children) {
             auto *ico = (IcoContainerData *)icon->user_data;
             if (!ico->is_dragging)
                 continue;
             damage_icon(icon);
-            Bounds next(actual_root->mouse_current_x + ico->drag_offset_x,
-                        actual_root->mouse_current_y + ico->drag_offset_y,
-                        icon->real_bounds.w,
-                        icon->real_bounds.h);
-            next.grow(20);
-            hypriso->damage_box(next);
+            if (over_dock) {
+                if (state_changed) {
+                    Bounds orig = bounds_for_grid_slot(m, ico->x_pos, ico->y_pos);
+                    orig.grow(20);
+                    hypriso->damage_box(orig);
+                }
+            } else {
+                Bounds next(actual_root->mouse_current_x + ico->drag_offset_x,
+                            actual_root->mouse_current_y + ico->drag_offset_y,
+                            icon->real_bounds.w,
+                            icon->real_bounds.h);
+                next.grow(20);
+                hypriso->damage_box(next);
+            }
         }
     };
     c->when_drag_end = [](Container* actual_root, Container* c) {
+        bool any_dragging = false;
+        for (auto *icon : c->parent->children) {
+            if (((IcoContainerData *) icon->user_data)->is_dragging) {
+                any_dragging = true;
+                break;
+            }
+        }
+        if (!any_dragging)
+            return;
+        const bool over_dock = dock::contains_point(actual_root->mouse_current_x, actual_root->mouse_current_y);
+        dragging_over_dock = false;
+
+        auto monitor = *datum<int>(c->parent, "monitor");
+        auto m = icon_grid_metrics(c->parent, scale(monitor));
         std::vector<Container *> dragged;
         for (auto *icon : c->parent->children) {
             auto *ico = (IcoContainerData *)icon->user_data;
@@ -1781,12 +1978,48 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
             damage_icon(icon);
             ico->is_dragging = false;
             icon->z_index = 0;
-            icon->real_bounds = Bounds(actual_root->mouse_current_x + ico->drag_offset_x,
-                                       actual_root->mouse_current_y + ico->drag_offset_y,
-                                       icon->real_bounds.w,
-                                       icon->real_bounds.h);
+            if (over_dock) {
+                icon->real_bounds = bounds_for_grid_slot(m, ico->x_pos, ico->y_pos);
+                damage_icon(icon);
+            } else {
+                icon->real_bounds = Bounds(actual_root->mouse_current_x + ico->drag_offset_x,
+                                           actual_root->mouse_current_y + ico->drag_offset_y,
+                                           icon->real_bounds.w,
+                                           icon->real_bounds.h);
+            }
             dragged.push_back(icon);
         }
+        if (over_dock) {
+            actual_root->consumed_event = true;
+            bool committed_preview = false;
+            int preview_index = -1;
+            bool opened_editor = false;
+            for (auto *icon : dragged) {
+                auto *item = *datum<DesktopItem *>(icon, "DesktopItem");
+                if (!item)
+                    continue;
+                std::string wm_class, icon_name, command;
+                desktop_item_pin_info(*item, wm_class, icon_name, command);
+                if (!wm_class.empty()) {
+                    if (!committed_preview && dock::commit_desktop_drag_preview(wm_class, icon_name, command)) {
+                        committed_preview = true;
+                    } else {
+                        dock::edit_pin("", wm_class, icon_name, command);
+                    }
+                } else {
+                    if (!committed_preview && preview_index == -1)
+                        preview_index = dock::clear_desktop_drag_preview();
+                    if (!opened_editor) {
+                        edit_pin::open("", icon_name, command, true, preview_index);
+                        opened_editor = true;
+                    }
+                }
+            }
+            if (!committed_preview && preview_index == -1)
+                dock::clear_desktop_drag_preview();
+            return;
+        }
+        dock::clear_desktop_drag_preview();
         snap_icons_to_grid(c->parent, dragged);
         for (auto *icon : dragged) {
             begin_icon_settle(icon);
@@ -1794,6 +2027,8 @@ void create_desktop_icon(Container *parent, DesktopItem *item) {
         save_icon_positions(c->parent);
     };
     c->when_clicked = [](Container* actual_root, Container* c) {
+        if (hypriso->has_top_or_overlay_layer_at_cursor())
+            return;
         actual_root->consumed_event = true;
         if (c->state.mouse_button_pressed == BTN_RIGHT) {
             create_icon_popup(c);
@@ -1874,6 +2109,8 @@ static void create_root_popup(int monitor) {
     {
         PopOption view;
         view.text = "View";
+        view.icon_left = "\uF0E2";
+        view.is_text_icon = true;
         for (const bool vertical : {true, false}) {
             PopOption orientation;
             orientation.text = vertical ? "Vertical" : "Horizontal";
@@ -1890,6 +2127,8 @@ static void create_root_popup(int monitor) {
     {
         PopOption sort;
         sort.text = "Sort by";
+        sort.icon_left = "\uE8CB";
+        sort.is_text_icon = true;
         const std::pair<const char *, const char *> modes[] = {
             {"Name", "name"},
             {"Size", "size"},
@@ -1926,6 +2165,8 @@ static void create_root_popup(int monitor) {
     {
         PopOption pop;
         pop.text = "Configure Display Settings...";   
+        pop.icon_left = "\uE7F4";
+        pop.is_text_icon = true;
         pop.on_clicked = []() {
             settings::start("Display");
         };
@@ -1934,6 +2175,8 @@ static void create_root_popup(int monitor) {
     {
         PopOption pop;
         pop.text = "Refresh Compositor...";   
+        pop.icon_left = "\uE72C";
+        pop.is_text_icon = true;
         pop.on_clicked = []() {
             hypriso->dispatch("forcerendererreload", "");
         };
@@ -1941,6 +2184,8 @@ static void create_root_popup(int monitor) {
     }
 
     PopOption magic_workspace;
+    magic_workspace.icon_left = "\uE7C4";
+    magic_workspace.is_text_icon = true;
     if (hypriso->is_magic_workspace_active(monitor)) {
         magic_workspace.text = "Exit magic workspace";
         magic_workspace.on_clicked = [monitor]() {
@@ -1961,6 +2206,8 @@ static void create_root_popup(int monitor) {
     {
         PopOption pop;
         pop.text = "Log out";   
+        pop.icon_left = "\uF3B1";
+        pop.is_text_icon = true;
         pop.on_clicked = []() {
             hypriso->logout();
         };
@@ -2271,6 +2518,8 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
     {
         PopOption shortcut;
         shortcut.text = valid_paths.size() == 1 ? "Create Shortcut Here" : "Create Shortcuts Here";
+        shortcut.icon_left = "\uE71B";
+        shortcut.is_text_icon = true;
         shortcut.on_clicked = [valid_paths, drop_x, drop_y]() {
             perform_desktop_drop(valid_paths, DesktopDropAction::Shortcut, drop_x, drop_y);
         };
@@ -2279,6 +2528,8 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
     {
         PopOption copy;
         copy.text = "Copy Here";
+        copy.icon_left = "\uE8C8";
+        copy.is_text_icon = true;
         copy.on_clicked = [valid_paths, drop_x, drop_y]() {
             perform_desktop_drop(valid_paths, DesktopDropAction::Copy, drop_x, drop_y);
         };
@@ -2287,6 +2538,8 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
     {
         PopOption move;
         move.text = "Move Here";
+        move.icon_left = "\uE8DE";
+        move.is_text_icon = true;
         move.on_clicked = [valid_paths, drop_x, drop_y]() {
             perform_desktop_drop(valid_paths, DesktopDropAction::Move, drop_x, drop_y);
         };
@@ -2295,6 +2548,8 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
     if (valid_paths.size() == 1 && is_image_file(valid_paths[0])) {
         PopOption wallpaper;
         wallpaper.text = "Set as wallpaper";
+        wallpaper.icon_left = "\uEB9F";
+        wallpaper.is_text_icon = true;
         const std::string image_path = valid_paths[0];
         wallpaper.on_clicked = [image_path, drop_x, drop_y]() {
             wallpaper_working_indicator_start();
@@ -2317,6 +2572,8 @@ static void open_drop_context_menu(const std::vector<std::string>& paths, float 
     {
         PopOption cancel;
         cancel.text = "Cancel";
+        cancel.icon_left = "\uE711";
+        cancel.is_text_icon = true;
         options.push_back(cancel);
     }
 
@@ -2401,10 +2658,14 @@ void desktop_icons::start() {
         for (auto *child : c->children) {
             auto *ico = (IcoContainerData *)child->user_data;
             if (ico->is_dragging) {
-                child->real_bounds = Bounds(root->mouse_current_x + ico->drag_offset_x,
-                                            root->mouse_current_y + ico->drag_offset_y,
-                                            m.width,
-                                            m.height);
+                if (dragging_over_dock) {
+                    child->real_bounds = bounds_for_grid_slot(m, ico->x_pos, ico->y_pos);
+                } else {
+                    child->real_bounds = Bounds(root->mouse_current_x + ico->drag_offset_x,
+                                                root->mouse_current_y + ico->drag_offset_y,
+                                                m.width,
+                                                m.height);
+                }
                 continue;
             }
 
@@ -2440,6 +2701,8 @@ void desktop_icons::start() {
     dragging = false;
     c->when_drag_end_is_click = false;
     c->when_clicked = [](Container* actual_root, Container* c) {
+        if (hypriso->has_top_or_overlay_layer_at_cursor())
+            return;
         if (c->state.mouse_button_pressed == BTN_RIGHT) {
            create_root_popup(*datum<int>(c, "monitor"));
         } else {
@@ -2447,6 +2710,8 @@ void desktop_icons::start() {
         }
     };
     c->when_drag_start = [](Container* actual_root, Container* c) {
+        if (hypriso->has_top_or_overlay_layer_at_cursor())
+            return;
         dragging = true;
         const auto selection = fixed_box(actual_root->mouse_initial_x, actual_root->mouse_initial_y, actual_root->mouse_current_x, actual_root->mouse_current_y);
         update_desktop_selection(c, selection);
@@ -2474,6 +2739,40 @@ void desktop_icons::start() {
         (void)text;
         if (desktop_icons::is_renaming())
             return;
+        if (key == KEY_ESC && pressed) {
+            bool any_dragging = false;
+            for (auto *child : c->children) {
+                if (((IcoContainerData *) child->user_data)->is_dragging) {
+                    any_dragging = true;
+                    break;
+                }
+            }
+            if (any_dragging) {
+                const bool was_over_dock = dragging_over_dock;
+                dragging_over_dock = false;
+                dock::clear_desktop_drag_preview();
+                auto monitor = *datum<int>(c, "monitor");
+                auto m = icon_grid_metrics(c, scale(monitor));
+                for (auto *child : c->children) {
+                    auto *ico = (IcoContainerData *) child->user_data;
+                    if (!ico->is_dragging)
+                        continue;
+                    damage_icon(child);
+                    ico->is_dragging = false;
+                    child->z_index = 0;
+                    child->state.mouse_dragging = false;
+                    child->state.mouse_pressing = false;
+                    if (was_over_dock) {
+                        child->real_bounds = bounds_for_grid_slot(m, ico->x_pos, ico->y_pos);
+                        damage_icon(child);
+                    } else {
+                        begin_icon_settle(child);
+                    }
+                }
+                root->consumed_event = true;
+                return;
+            }
+        }
         if (key == KEY_LEFTSHIFT)
             *datum<bool>(c, "shift_held") = pressed;
 
@@ -2545,6 +2844,8 @@ void desktop_icons::start() {
 }
 
 void desktop_icons::stop() {
+    dragging_over_dock = false;
+    dock::clear_desktop_drag_preview();
     stop_desktop_rename_sessions();
     hypriso->can_accept_desktop_drop = nullptr;
     hypriso->on_desktop_files_dropped = nullptr;

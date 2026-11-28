@@ -681,3 +681,16 @@ void reset_text_editor(Container *c, std::string value) {
     data.redo_stack.clear();
     break_edit_group(data);
 }
+
+void set_text_editor(Container *c, std::string value) {
+    auto &data = *static_cast<STextEditorData *>(c->user_data);
+    auto filtered = filter_text(data, value);
+    if (filtered == data.text)
+        return;
+    record_edit(data);
+    data.text = std::move(filtered);
+    data.cursor = data.text.size();
+    data.selection = data.cursor;
+    data.selecting = false;
+    data.scroll_x = 0;
+}

@@ -37,7 +37,9 @@ namespace dock {
     // The system tray items changed (called on the main thread).
     void change_in_systray();
 
-    void edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command);
+    void edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command, int insert_index = -1);
+    bool is_pinned(const std::string &stacking_rule, const std::string &command);
+    void unpin(const std::string &stacking_rule, const std::string &command);
 
     void toggle_dock_merge();
     void set_dock_merge(bool enabled);
@@ -55,4 +57,8 @@ namespace dock {
     std::map<int, Bounds> try_get_locations(const std::string &name);
     Bounds get_item_location(std::string monitor_name, std::string item_name);
     bool try_get_date_menu_cards(const std::string &monitor_name, std::vector<Bounds> &out);
+    bool contains_point(float x, float y);
+    void set_desktop_drag_preview(float x, float y, const std::string &icon_name, const std::string &stacking_rule, const std::string &command);
+    int clear_desktop_drag_preview();
+    bool commit_desktop_drag_preview(const std::string &stacking_rule, const std::string &icon_name, const std::string &command);
 };

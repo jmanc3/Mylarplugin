@@ -249,6 +249,10 @@ struct Pin : UserData {
     cairo_surface_t* icon_shadow_surf = nullptr;
     bool attempted_load = false;
     bool scale_change = false;
+    bool is_drag_preview = false;
+    bool drag_preview_existing = false;
+    int drag_preview_original_index = -1;
+    double drag_preview_x = 0;
     // The icon is the generic fallback; swap it for the window's own icon
     // once a window shows up.
     bool using_fallback_icon = false;
@@ -2367,11 +2371,11 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
     // Position dragged icon based on current mouse position, and prevent it from leaving icons container
     for (auto c: icons->children) {
         auto data = (Pin *) c->user_data;
-        if (c->state.mouse_dragging) {
+        if (c->state.mouse_dragging || data->is_drag_preview) {
             dragging = c;
-            //auto diff = root->mouse_initial_x - root->mouse_current_x;
-            //c->real_bounds.x -= diff;
-            auto x = root->mouse_current_x + data->initial_mouse_click_before_drag_offset_x;
+            auto x = data->is_drag_preview
+                ? (data->drag_preview_x - c->real_bounds.w * 0.5)
+                : (root->mouse_current_x + data->initial_mouse_click_before_drag_offset_x);
             c->real_bounds.x = x;
             if (c->real_bounds.x < icons->real_bounds.x) {
                 c->real_bounds.x = icons->real_bounds.x;
@@ -2418,14 +2422,16 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
 
         if (any_change) {
             calc_natural_positions(icons, total_width, root);
-            debounce("icon reorder", 400, []() {
-                for (auto d : active_docks()) {
-                    if (auto icons = container_by_name("icons", d->window->root)) {
-                        write_saved_pins_to_file(icons);
-                        break;
+            if (!((Pin *) dragging->user_data)->is_drag_preview) {
+                debounce("icon reorder", 400, []() {
+                    for (auto d : active_docks()) {
+                        if (auto icons = container_by_name("icons", d->window->root)) {
+                            write_saved_pins_to_file(icons);
+                            break;
+                        }
                     }
-                }
-            });
+                });
+            }
         }
     }
 
@@ -2454,8 +2460,8 @@ static void layout_icons(Container *root, Container *icons, Dock *dock) {
 
     // Queue spring animations
     for (auto c: icons->children) {
-        if (c->state.mouse_dragging) continue;
         auto *data = (Pin *) c->user_data;
+        if (c->state.mouse_dragging || data->is_drag_preview) continue;
         if (current - data->creation_time < 1000) {
             c->real_bounds.x = data->natural_position_x;
             continue;
@@ -2878,7 +2884,8 @@ static void fill_root(Container *root) {
                 auto *next_data = (Pin *) next->user_data;
                 next_data->actual_w = next->real_bounds.w;
                 if ((active->real_bounds.w + active->real_bounds.x) > next->real_bounds.x) {
-                    if (!active->state.mouse_dragging && !next->state.mouse_dragging) {
+                    if (!active->state.mouse_dragging && !next->state.mouse_dragging &&
+                        !active_data->is_drag_preview && !next_data->is_drag_preview) {
                         if (!active_data->windows.empty()) {
                             active->real_bounds.w = (next->real_bounds.x - active->real_bounds.x);
                         }
@@ -3527,7 +3534,7 @@ static void write_saved_pins_to_file(Container *icons) {
 
         if (!data)
             continue;
-        if (!data->pinned)
+        if (!data->pinned || (data->is_drag_preview && !data->drag_preview_existing))
             continue;
         if (seen_before.find(data->stacking_rule) != seen_before.end())
             continue;
@@ -4040,7 +4047,8 @@ void dock::toggle_dock_merge() {
         settings::load_save_settings(true, set);
 }
 
-void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command) {
+void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking_rule, std::string new_icon, std::string new_command, int insert_index) {
+    bool saved = false;
     if (!original_stacking_rule.empty()) {
         for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
@@ -4054,16 +4062,115 @@ void dock::edit_pin(std::string original_stacking_rule, std::string new_stacking
                         pin->scale_change = true;
                     }
                 }
+                if (!saved) {
+                    write_saved_pins_to_file(icons);
+                    saved = true;
+                }
             }
         }
     } else {
         for (auto d : active_docks()) {
             std::lock_guard<std::mutex> lock(d->app->mutex);
             if (auto icons = container_by_name("icons", d->window->root)) {
-                create_pinned_icon(icons, new_stacking_rule, new_command, new_icon);
+                bool found = false;
+                if (!new_stacking_rule.empty()) {
+                    for (auto p : icons->children) {
+                        auto pin = (Pin*)p->user_data;
+                        if (pin->is_drag_preview)
+                            continue;
+                        if (pin->stacking_rule == new_stacking_rule) {
+                            pin->pinned = true;
+                            if (!new_command.empty())
+                                pin->command = new_command;
+                            if (!new_icon.empty())
+                                pin->icon = new_icon;
+                            pin->scale_change = true;
+                            found = true;
+                        }
+                    }
+                }
+                if (!found) {
+                    create_pinned_icon(icons, new_stacking_rule, new_command, new_icon);
+                    if (insert_index >= 0 && !icons->children.empty()) {
+                        auto *created = icons->children.back();
+                        icons->children.pop_back();
+                        int target = std::clamp(insert_index, 0, static_cast<int>(icons->children.size()));
+                        icons->children.insert(icons->children.begin() + target, created);
+                        for (auto *ch : icons->children)
+                            static_cast<Pin *>(ch->user_data)->wants_reposition_animation = true;
+                    }
+                }
+                if (!saved) {
+                    write_saved_pins_to_file(icons);
+                    saved = true;
+                }
             }
         }
     }
+    dock::redraw();
+}
+
+static bool pin_matches_identity(const Pin *pin, const std::string &stacking_rule, const std::string &command) {
+    if (!pin || !pin->pinned || pin->is_drag_preview)
+        return false;
+    if (!stacking_rule.empty() && pin->stacking_rule == stacking_rule)
+        return true;
+    if (!command.empty() && pin->command == command)
+        return true;
+    return false;
+}
+
+bool dock::is_pinned(const std::string &stacking_rule, const std::string &command) {
+    if (stacking_rule.empty() && command.empty())
+        return false;
+    for (auto d : active_docks()) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto icons = container_by_name("icons", d->window->root);
+        if (!icons)
+            continue;
+        for (auto *p : icons->children) {
+            if (pin_matches_identity(static_cast<Pin *>(p->user_data), stacking_rule, command))
+                return true;
+        }
+    }
+    return false;
+}
+
+void dock::unpin(const std::string &stacking_rule, const std::string &command) {
+    if (stacking_rule.empty() && command.empty())
+        return;
+    bool changed = false;
+    bool saved = false;
+    for (auto d : active_docks()) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto icons = container_by_name("icons", d->window->root);
+        if (!icons)
+            continue;
+        bool removed_here = false;
+        for (int i = static_cast<int>(icons->children.size()) - 1; i >= 0; --i) {
+            auto *p = icons->children[i];
+            auto *pin = static_cast<Pin *>(p->user_data);
+            if (!pin_matches_identity(pin, stacking_rule, command))
+                continue;
+            pin->pinned = false;
+            changed = true;
+            if (pin->windows.empty()) {
+                icons->children.erase(icons->children.begin() + i);
+                delete p;
+                removed_here = true;
+            }
+        }
+        if (removed_here) {
+            for (auto *ch : icons->children)
+                static_cast<Pin *>(ch->user_data)->wants_reposition_animation = true;
+        }
+        if (changed && !saved) {
+            write_saved_pins_to_file(icons);
+            saved = true;
+        }
+    }
+    if (changed)
+        dock::redraw();
 }
 
 Bounds dock::get_item_location(std::string monitor_name, std::string item_name) {
@@ -4081,6 +4188,257 @@ Bounds dock::get_item_location(std::string monitor_name, std::string item_name) 
     }
 
     return {0, 0, 100, 100};
+}
+
+static bool dock_global_bounds(Dock *d, Bounds &out) {
+    if (!d || !d->window || !d->window->raw_window || !d->window->root)
+        return false;
+    int mid = -1;
+    for (auto m : actual_monitors) {
+        const int id = *datum<int>(m, "cid");
+        if (hypriso->monitor_name(id) == d->creation_settings.monitor_name) {
+            mid = id;
+            break;
+        }
+    }
+    if (mid == -1)
+        return false;
+    const Bounds mb = bounds_monitor(mid);
+    const float dpi = std::max(0.01f, d->window->raw_window->dpi);
+    const double w = d->window->root->real_bounds.w / dpi;
+    const double h = d->window->root->real_bounds.h / dpi;
+    switch (d->creation_settings.alignment) {
+        case 1: out = Bounds(mb.x, mb.y, mb.w, h); break;
+        case 2: out = Bounds(mb.x + mb.w - w, mb.y, w, mb.h); break;
+        case 4: out = Bounds(mb.x, mb.y, w, mb.h); break;
+        default: out = Bounds(mb.x, mb.y + mb.h - h, mb.w, h); break;
+    }
+    return true;
+}
+
+bool dock::contains_point(float x, float y) {
+    for (auto d : active_docks()) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        Bounds dock_box;
+        if (dock_global_bounds(d, dock_box) && bounds_contains(dock_box, x, y))
+            return true;
+    }
+    return false;
+}
+
+static void restore_or_remove_drag_preview(Container *icons, Container *preview, bool &changed, int *last_index = nullptr) {
+    auto it = std::find(icons->children.begin(), icons->children.end(), preview);
+    if (it == icons->children.end())
+        return;
+    const int cur_idx = static_cast<int>(it - icons->children.begin());
+    if (last_index && *last_index == -1)
+        *last_index = cur_idx;
+    auto *pin = static_cast<Pin *>(preview->user_data);
+    if (pin->drag_preview_existing) {
+        const int orig = pin->drag_preview_original_index;
+        pin->is_drag_preview = false;
+        pin->drag_preview_existing = false;
+        pin->drag_preview_original_index = -1;
+        preview->z_index = 0;
+        icons->children.erase(it);
+        const int target = orig >= 0 ? std::clamp(orig, 0, static_cast<int>(icons->children.size())) : cur_idx;
+        icons->children.insert(icons->children.begin() + target, preview);
+        pin->init_repo_vel = 4500;
+    } else {
+        icons->children.erase(it);
+        delete preview;
+    }
+    for (auto *ch : icons->children)
+        static_cast<Pin *>(ch->user_data)->wants_reposition_animation = true;
+    changed = true;
+}
+
+void dock::set_desktop_drag_preview(float x, float y, const std::string &icon_name, const std::string &stacking_rule, const std::string &command) {
+    bool changed = false;
+    for (auto d : active_docks()) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto icons = container_by_name("icons", d->window->root);
+        if (!icons)
+            continue;
+        Bounds dock_box;
+        const bool on_this_dock = dock_global_bounds(d, dock_box) && bounds_contains(dock_box, x, y);
+
+        Container *existing_match = nullptr;
+        int existing_match_index = -1;
+        Container *existing_preview = nullptr;
+        for (int i = 0; i < static_cast<int>(icons->children.size()); ++i) {
+            auto *p = icons->children[i];
+            auto *pin = static_cast<Pin *>(p->user_data);
+            if (!pin)
+                continue;
+            if (pin->is_drag_preview) {
+                existing_preview = p;
+                continue;
+            }
+            if (!stacking_rule.empty() && pin->stacking_rule == stacking_rule && !existing_match) {
+                existing_match = p;
+                existing_match_index = i;
+            }
+        }
+
+        if (!on_this_dock) {
+            if (existing_preview)
+                restore_or_remove_drag_preview(icons, existing_preview, changed);
+            continue;
+        }
+
+        const float dpi = std::max(0.01f, d->window->raw_window->dpi);
+        const double local_x = (x - dock_box.x) * dpi;
+
+        if (existing_preview) {
+            auto *pin = static_cast<Pin *>(existing_preview->user_data);
+            if (!pin->drag_preview_existing &&
+                (pin->icon != icon_name || pin->stacking_rule != stacking_rule || pin->command != command)) {
+                pin->icon = icon_name;
+                pin->stacking_rule = stacking_rule;
+                pin->command = command;
+                pin->scale_change = true;
+                changed = true;
+            }
+            if (std::abs(pin->drag_preview_x - local_x) > 0.5) {
+                pin->drag_preview_x = local_x;
+                changed = true;
+            }
+            continue;
+        }
+
+        if (existing_match) {
+            auto *pin = static_cast<Pin *>(existing_match->user_data);
+            pin->is_drag_preview = true;
+            pin->drag_preview_existing = true;
+            pin->drag_preview_original_index = existing_match_index;
+            pin->drag_preview_x = local_x;
+            existing_match->z_index = 1;
+            changed = true;
+            continue;
+        }
+
+        create_pinned_icon(icons, stacking_rule, command, icon_name);
+        if (!icons->children.empty()) {
+            auto *created = icons->children.back();
+            auto *pin = static_cast<Pin *>(created->user_data);
+            pin->is_drag_preview = true;
+            pin->drag_preview_existing = false;
+            pin->drag_preview_original_index = -1;
+            pin->pinned = true;
+            pin->drag_preview_x = local_x;
+            created->z_index = 1;
+        }
+        changed = true;
+    }
+    if (changed)
+        dock::redraw();
+}
+
+int dock::clear_desktop_drag_preview() {
+    bool changed = false;
+    int last_index = -1;
+    for (auto d : active_docks()) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto icons = container_by_name("icons", d->window->root);
+        if (!icons)
+            continue;
+        std::vector<Container *> previews;
+        for (auto *p : icons->children) {
+            auto *pin = static_cast<Pin *>(p->user_data);
+            if (pin && pin->is_drag_preview)
+                previews.push_back(p);
+        }
+        for (auto *p : previews)
+            restore_or_remove_drag_preview(icons, p, changed, &last_index);
+    }
+    if (changed)
+        dock::redraw();
+    return last_index;
+}
+
+bool dock::commit_desktop_drag_preview(const std::string &stacking_rule, const std::string &icon_name, const std::string &command) {
+    if (stacking_rule.empty())
+        return false;
+    int promoted_index = -1;
+    bool saved = false;
+    for (auto d : active_docks()) {
+        std::lock_guard<std::mutex> lock(d->app->mutex);
+        auto icons = container_by_name("icons", d->window->root);
+        if (!icons)
+            continue;
+        for (int i = 0; i < static_cast<int>(icons->children.size()); ++i) {
+            auto *p = icons->children[i];
+            auto *pin = static_cast<Pin *>(p->user_data);
+            if (pin && pin->is_drag_preview) {
+                const bool was_existing = pin->drag_preview_existing;
+                pin->is_drag_preview = false;
+                pin->drag_preview_existing = false;
+                pin->drag_preview_original_index = -1;
+                pin->pinned = true;
+                if (!was_existing) {
+                    pin->stacking_rule = stacking_rule;
+                    pin->icon = icon_name;
+                    pin->command = command;
+                } else {
+                    if (pin->command.empty())
+                        pin->command = command;
+                    if (pin->icon.empty()) {
+                        pin->icon = icon_name;
+                        pin->scale_change = true;
+                    }
+                }
+                pin->creation_time = 0;
+                p->z_index = 0;
+                pin->wants_reposition_animation = true;
+                pin->init_repo_vel = 4500;
+                promoted_index = i;
+                if (!saved) {
+                    write_saved_pins_to_file(icons);
+                    saved = true;
+                }
+                break;
+            }
+        }
+    }
+    if (promoted_index >= 0) {
+        // Mirror onto any other docks that didn't hold the drag preview.
+        for (auto d : active_docks()) {
+            std::lock_guard<std::mutex> lock(d->app->mutex);
+            auto icons = container_by_name("icons", d->window->root);
+            if (!icons)
+                continue;
+            Container *existing = nullptr;
+            for (auto *p : icons->children) {
+                auto *pin = static_cast<Pin *>(p->user_data);
+                if (pin && pin->stacking_rule == stacking_rule) {
+                    existing = p;
+                    break;
+                }
+            }
+            if (existing) {
+                auto it = std::find(icons->children.begin(), icons->children.end(), existing);
+                if (it != icons->children.end() && static_cast<int>(it - icons->children.begin()) != promoted_index) {
+                    icons->children.erase(it);
+                    int target = std::clamp(promoted_index, 0, static_cast<int>(icons->children.size()));
+                    icons->children.insert(icons->children.begin() + target, existing);
+                    for (auto *ch : icons->children)
+                        static_cast<Pin *>(ch->user_data)->wants_reposition_animation = true;
+                }
+            } else {
+                create_pinned_icon(icons, stacking_rule, command, icon_name);
+                if (!icons->children.empty()) {
+                    auto *created = icons->children.back();
+                    icons->children.pop_back();
+                    int target = std::clamp(promoted_index, 0, static_cast<int>(icons->children.size()));
+                    icons->children.insert(icons->children.begin() + target, created);
+                }
+            }
+        }
+        dock::redraw();
+        return true;
+    }
+    return false;
 }
 
 bool dock::try_get_date_menu_cards(const std::string &monitor_name, std::vector<Bounds> &out) {

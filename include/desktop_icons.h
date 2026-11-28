@@ -15,6 +15,7 @@ namespace desktop_icons {
     bool is_renaming();
     bool rename_bounds_contains(float x, float y);
     void finish_rename(bool commit);
+    void reveal_in_file_manager(const std::vector<std::string> &paths);
 }
 
 // Small .desktop reader shared by the desktop icons and the dock's applications menu.
