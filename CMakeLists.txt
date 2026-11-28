@@ -38,6 +38,7 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     libdrm
     hyprland
     pangocairo
+    pangoft2
     libinput
     libudev
     wayland-server

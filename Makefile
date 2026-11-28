@@ -19,8 +19,8 @@ OBJECT_FILES := $(patsubst ./%, $(BUILD_DIR)/%, $(SOURCE_FILES:.cpp=.o))
 DEP_FILES := $(OBJECT_FILES:.o=.d)
 
 # --- Pkg-config dependencies ---
-PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo wayland-server wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh xcb xcb-damage xcb-composite dbus-1 alsa libpipewire-0.3 libpulse gio-2.0 egl glesv2 wayland-egl)
-PKG_LIBS  := $(shell pkg-config --libs librsvg-2.0 libdrm hyprland pangocairo wayland-server wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh xcb xcb-damage xcb-composite dbus-1 alsa libpipewire-0.3 libpulse gio-2.0 egl glesv2 wayland-egl)
+PKG_FLAGS := $(shell pkg-config --cflags librsvg-2.0 libdrm hyprland pangocairo pangoft2 wayland-server wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh xcb xcb-damage xcb-composite dbus-1 alsa libpipewire-0.3 libpulse gio-2.0 egl glesv2 wayland-egl)
+PKG_LIBS  := $(shell pkg-config --libs librsvg-2.0 libdrm hyprland pangocairo pangoft2 wayland-server wayland-client wayland-cursor xkbcommon cairo gtk+-3.0 xcb-ewmh xcb xcb-damage xcb-composite dbus-1 alsa libpipewire-0.3 libpulse gio-2.0 egl glesv2 wayland-egl)
 
 # --- Include paths ---
 INCLUDE_FLAGS := -I./include

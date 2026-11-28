@@ -220,9 +220,10 @@ static void copy_screenshot_to_clipboard(bool has_selection, Bounds selection) {
 
 Container *label(Container *parent, std::string icon, std::string text) {
     static float label_h = 20;
-    static float pad_x = 14;
-    static float pad_y = 6;
-    static float icon_gap = 8;
+    static float pad_x = 20;
+    static float pad_y = 12;
+    static float icon_gap = 10;
+    static float corner_radius = 12;
     
     auto full = parent->child(0, 0);
     full->parent_bounds_limit_input_bounds = false;
@@ -247,12 +248,13 @@ Container *label(Container *parent, std::string icon, std::string text) {
         if (s <= 0) s = 1.0f;
         renderfix
 
+        float rounding = std::round(corner_radius * s);
         if (c->state.mouse_pressing) {
-            rect(c->real_bounds, {.4, .4, .4, .7}, 0, 0, 2.0, true);
+            rect(c->real_bounds, {.4, .4, .4, .7}, 0, rounding, 2.0, true);
         } else if (c->state.mouse_hovering) {
-            rect(c->real_bounds, {.3, .3, .3, .7}, 0, 0, 2.0, true);
+            rect(c->real_bounds, {.3, .3, .3, .7}, 0, rounding, 2.0, true);
         } else {
-            rect(c->real_bounds, {.2, .2, .2, .7}, 0, 0, 2.0, true);
+            rect(c->real_bounds, {.2, .2, .2, .7}, 0, rounding, 2.0, true);
         }
         auto info = gen_text_texture(icon_font, icon, label_h * s, {1, 1, 1, 1});
         auto info2 = gen_text_texture(set->font, text, label_h * s, {1, 1, 1, 1});

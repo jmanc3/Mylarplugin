@@ -526,24 +526,59 @@ int match_application(const ApplicationEntry &entry, const std::string &text, co
     return match_entry(entry.name, entry.lowercase_name, entry.is_desktop, entry.generic_name, entry.keywords, text, lowercase_text);
 }
 
+static std::string strip_image_extension(const std::string &name) {
+    if (name.empty() || name.find('/') != std::string::npos)
+        return {};
+    std::filesystem::path p(name);
+    auto ext = to_lower(p.extension().string());
+    if (ext == ".png" || ext == ".svg" || ext == ".xpm" || ext == ".ico" ||
+        ext == ".webp" || ext == ".jpg" || ext == ".jpeg")
+        return p.stem().string();
+    return {};
+}
+
+static std::vector<std::string> application_icon_candidates(bool is_desktop,
+                                                            const std::string &name,
+                                                            const std::string &full_path,
+                                                            const std::string &icon) {
+    std::vector<std::string> candidates;
+    auto push = [&candidates](const std::string &candidate) {
+        if (!candidate.empty() &&
+            std::find(candidates.begin(), candidates.end(), candidate) == candidates.end())
+            candidates.push_back(candidate);
+    };
+    if (is_desktop) {
+        push(icon);
+        push(to_lower(icon));
+        auto icon_stem = strip_image_extension(icon);
+        push(icon_stem);
+        push(to_lower(icon_stem));
+        auto stem = std::filesystem::path(full_path).stem().string();
+        push(stem);
+        push(to_lower(stem));
+        return candidates;
+    }
+    auto stem = std::filesystem::path(name).stem().string();
+    auto fixed = c3ic_fix_wm_class(name);
+    auto fixed_stem = stem != name ? c3ic_fix_wm_class(stem) : std::string{};
+    for (const auto &candidate : {
+        name, to_lower(name),
+        stem, to_lower(stem),
+        fixed, to_lower(fixed),
+        fixed_stem, to_lower(fixed_stem),
+    })
+        push(candidate);
+    return candidates;
+}
+
 std::string resolve_application_icon(const ApplicationEntry &entry, int icon_size) {
     if (!icons_loaded)
         return "";
-    if (entry.is_desktop) {
-        if (entry.icon.starts_with('/') && access(entry.icon.c_str(), R_OK) == 0)
-            return entry.icon;
-        std::vector<std::string> candidates;
-        auto stem = std::filesystem::path(entry.full_path).stem().string();
-        for (const auto &candidate : {entry.icon, to_lower(entry.icon), stem, to_lower(stem)})
-            if (!candidate.empty())
-                candidates.push_back(candidate);
-        candidates.push_back("application-x-executable");
-        return one_shot_icon(icon_size, candidates);
-    }
-    auto icon_name = c3ic_fix_wm_class(entry.name);
-    return one_shot_icon(icon_size, {
-        entry.name, to_lower(entry.name), icon_name, to_lower(icon_name), "application-x-executable"
-    });
+    if (entry.is_desktop && entry.icon.starts_with('/') && access(entry.icon.c_str(), R_OK) == 0)
+        return entry.icon;
+    auto candidates = application_icon_candidates(entry.is_desktop, entry.name, entry.full_path, entry.icon);
+    candidates.push_back("application-x-executable");
+    return one_shot_icon(icon_size, candidates);
 }
 
 static void watch_applications_scripts(Dock *dock, MylarWindow *applications,
@@ -581,6 +616,17 @@ static std::string shell_quote(const std::string &text) {
 static std::string run_in_terminal(const std::string &command) {
     return "for t in \"$TERMINAL\" alacritty kitty foot konsole xterm; do "
            "command -v \"$t\" >/dev/null 2>&1 && exec \"$t\" -e sh -c " + shell_quote(command) + "; done";
+}
+
+static std::string pin_icon_name_for_script(const Script &entry) {
+    if (entry.is_desktop && entry.icon.starts_with('/') && access(entry.icon.c_str(), R_OK) == 0)
+        return entry.icon;
+    if (icons_loaded) {
+        for (const auto &candidate : application_icon_candidates(entry.is_desktop, entry.name, entry.full_path, entry.icon))
+            if (has_options(candidate))
+                return candidate;
+    }
+    return entry.is_desktop ? entry.icon : std::string{};
 }
 
 // Records the pick, then launches the application or executable, or opens
@@ -851,33 +897,24 @@ void fill_applications_container(Container *root) {
             if (icons_loaded && s->icon_size != icon_size) {
                 s->icon_size = icon_size;
                 s->icon_surface.reset();
-                auto icon_name = c3ic_fix_wm_class(name);
                 std::string path;
                 if (s->is_setting) {
                     path = one_shot_icon(icon_size, {"preferences-system", "preferences-desktop", "application-x-executable"});
                 } else if (s->is_run_command) {
                     path = one_shot_icon(icon_size, {"system-run", "utilities-terminal", "application-x-executable"});
-                } else if (s->is_desktop) {
+                } else {
                     // Icon= is a theme icon name or the path of an image.
-                    if (s->icon.starts_with('/') && access(s->icon.c_str(), R_OK) == 0)
+                    if (s->is_desktop && s->icon.starts_with('/') && access(s->icon.c_str(), R_OK) == 0)
                         path = s->icon;
                     if (path.empty()) {
-                        std::vector<std::string> candidates;
-                        auto stem = std::filesystem::path(s->full_path).stem().string();
-                        for (const auto &candidate : {s->icon, to_lower(s->icon), stem, to_lower(stem)})
-                            if (!candidate.empty())
-                                candidates.push_back(candidate);
-                        if (!s->builtin.empty()) {
+                        auto candidates = application_icon_candidates(s->is_desktop, name, s->full_path, s->icon);
+                        if (s->is_desktop && !s->builtin.empty()) {
                             candidates.push_back("preferences-desktop-theme");
                             candidates.push_back("applications-graphics");
                         }
                         candidates.push_back("application-x-executable");
                         path = one_shot_icon(icon_size, candidates);
                     }
-                } else {
-                    path = one_shot_icon(icon_size, {
-                        name, to_lower(name), icon_name, to_lower(icon_name), "application-x-executable"
-                    });
                 }
                 if (!path.empty()) {
                     cairo_surface_t *surface = nullptr;
@@ -1002,7 +1039,7 @@ void fill_applications_container(Container *root) {
                         while (!wm_class.empty() && std::isspace(static_cast<unsigned char>(wm_class.back())))
                             wm_class.pop_back();
 
-                        std::string icon_name = entry.icon;
+                        std::string icon_name = pin_icon_name_for_script(entry);
                         std::string command;
                         if (entry.is_desktop) {
                             command = entry.terminal ? run_in_terminal(entry.exec) : entry.exec;

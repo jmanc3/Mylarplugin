@@ -989,21 +989,30 @@ static void open_desktop_path(const std::string& path) {
     g_free(quoted);
 }
 
-static void open_parent_directories(const std::vector<std::string> &paths) {
+static std::string parent_directories_command(const std::vector<std::string> &paths) {
     std::unordered_set<std::string> opened;
+    std::string command;
     for (const auto &raw : paths) {
         std::filesystem::path p(raw);
         std::error_code ec;
         const bool is_dir = std::filesystem::is_directory(p, ec) && !ec;
         const std::string dir = is_dir ? p.string() : p.parent_path().string();
-        if (!dir.empty() && opened.insert(dir).second)
-            open_desktop_path(dir);
+        if (!dir.empty() && opened.insert(dir).second) {
+            auto *quoted = g_shell_quote(dir.c_str());
+            if (!command.empty())
+                command += " ";
+            command += std::string("xdg-open ") + quoted + " >/dev/null 2>&1 &";
+            g_free(quoted);
+        }
     }
+    return command;
 }
 
 void desktop_icons::reveal_in_file_manager(const std::vector<std::string> &paths) {
     if (paths.empty())
         return;
+
+    const std::string fallback = parent_directories_command(paths);
 
     std::vector<std::string> uris;
     uris.reserve(paths.size());
@@ -1017,13 +1026,8 @@ void desktop_icons::reveal_in_file_manager(const std::vector<std::string> &paths
         }
     }
     if (uris.empty()) {
-        open_parent_directories(paths);
-        return;
-    }
-
-    auto *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
-    if (!bus) {
-        open_parent_directories(paths);
+        if (!fallback.empty())
+            launch_command(fallback);
         return;
     }
 
@@ -1031,33 +1035,24 @@ void desktop_icons::reveal_in_file_manager(const std::vector<std::string> &paths
     g_variant_builder_init(&builder, G_VARIANT_TYPE("as"));
     for (const auto &uri : uris)
         g_variant_builder_add(&builder, "s", uri.c_str());
+    GVariant *uri_array = g_variant_builder_end(&builder);
+    gchar *uri_arg = g_variant_print(uri_array, FALSE);
+    g_variant_unref(uri_array);
+    gchar *quoted_uri_arg = g_shell_quote(uri_arg);
+    g_free(uri_arg);
 
-    auto *fallback_paths = new std::vector<std::string>(paths);
-    g_dbus_connection_call(
-        bus,
-        "org.freedesktop.FileManager1",
-        "/org/freedesktop/FileManager1",
-        "org.freedesktop.FileManager1",
-        "ShowItems",
-        g_variant_new("(ass)", &builder, ""),
-        nullptr,
-        G_DBUS_CALL_FLAGS_NONE,
-        5000,
-        nullptr,
-        [](GObject *source, GAsyncResult *res, gpointer user_data) {
-            std::unique_ptr<std::vector<std::string>> paths_ptr(static_cast<std::vector<std::string> *>(user_data));
-            GError *err = nullptr;
-            GVariant *reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), res, &err);
-            if (reply) {
-                g_variant_unref(reply);
-            } else {
-                if (err)
-                    g_error_free(err);
-                open_parent_directories(*paths_ptr);
-            }
-        },
-        fallback_paths);
-    g_object_unref(bus);
+    // Run outside the compositor process because Hyprland does not pump a GLib
+    // GMainContext (so async g_dbus_connection_call callbacks never run) and
+    // synchronous activation would block the compositor.
+    std::string cmd = std::string("gdbus call --session --timeout 5 "
+                                  "--dest org.freedesktop.FileManager1 "
+                                  "--object-path /org/freedesktop/FileManager1 "
+                                  "--method org.freedesktop.FileManager1.ShowItems ") +
+                      quoted_uri_arg + " '' >/dev/null 2>&1";
+    g_free(quoted_uri_arg);
+    if (!fallback.empty())
+        cmd += " || { " + fallback + " }";
+    launch_command(cmd);
 }
 
 static void open_desktop_item(const DesktopItem& item) {
@@ -1663,8 +1658,7 @@ static void create_icon_popup(Container *icon) {
     }
 
     PopOption manager;
-    manager.text = items.size() == 1 ? "Open in File Manager" :
-        fz("Open {} Items in File Manager", items.size());
+    manager.text = items.size() == 1 ? "Open file location" : "Open file locations";
     manager.icon_left = "\uED43";
     manager.is_text_icon = true;
     manager.on_clicked = [items]() {
