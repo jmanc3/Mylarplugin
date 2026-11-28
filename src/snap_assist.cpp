@@ -75,8 +75,7 @@ static int resolve_render_anchor(const HelperData *data, int exclude_cid = -1) {
     return -1;
 }
 
-static constexpr SpringParams snap_assist_open_spring = {402.5 / 2000.0, 0.97};
-static constexpr SpringParams snap_assist_close_spring = {0.23, 1.0};
+static constexpr SpringParams snap_assist_spring = {0.23, 1.0};
 
 static float fade_in_time() {
     static float amount = 250;
@@ -142,6 +141,10 @@ std::vector<float> slidetopos2 = { 0.000, 0.044, 0.085, 0.123, 0.159, 0.193, 0.2
 
 // {"anchors":[{"x":0,"y":1},{"x":1,"y":0}],"controls":[{"x":0.4484324841621595,"y":0.10111109415690105}]}
 std::vector<float> slidetopos2fade = { 0.000, 0.044, 0.085, 0.123, 0.159, 0.193, 0.225, 0.256, 0.285, 0.313, 0.340, 0.365, 0.390, 0.414, 0.436, 0.458, 0.480, 0.500, 0.520, 0.539, 0.557, 0.575, 0.593, 0.610, 0.626, 0.642, 0.657, 0.672, 0.687, 0.701, 0.715, 0.728, 0.741, 0.754, 0.766, 0.778, 0.790, 0.802, 0.813, 0.824, 0.834, 0.845, 0.855, 0.865, 0.874, 0.884, 0.893, 0.902, 0.910, 0.919, 0.927, 0.935, 0.943, 0.951, 0.958, 0.966, 0.973, 0.980, 0.987, 0.993, 1.000 };
+
+static float snap_assist_curve(float x) {
+    return 1.0f - pull(slidetopos, 1.0f - x);
+}
 
 void do_snap(int snap_mon, int cid, int target_workspace, int pos, Bounds start_pos) {
     if (snap_mon == -1)
@@ -396,7 +399,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 auto final_thumb_spot = c->real_bounds;
                 final_thumb_spot.y += std::round(titlebar_h * s);
                 final_thumb_spot.h -= std::round(titlebar_h * s);
-                auto l = lerp(size, final_thumb_spot, pull(slidetopos, alpha));
+                auto l = lerp(size, final_thumb_spot, alpha);
                 if (start_at_final_position) {
                     l = final_thumb_spot;
                 }
@@ -527,9 +530,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         {
                             if (parent_data->visibility == 1.0) {
                                 clip(to_parent(root, c), s);
-                                rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                                rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, fadea);
                             } else {
-                                rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                                rect(titlebar_bounds, focused, titlebar_mask, 10 * s, 2.0f, false, fadea);
                             }
                             
                         }
@@ -539,9 +542,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         {
                             if (parent_data->visibility == 1.0) {
                                 clip(to_parent(root, c), s);
-                                rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                                rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, fadea);
                             } else {
-                                rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, pull(slidetopos, fadea));
+                                rect(titlebar_bounds, unfocused, titlebar_mask, 10 * s, 2.0f, false, fadea);
                             }
                         }
                     }
@@ -576,9 +579,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         icon_width = info->w;
                     if (parent_data->visibility == 1.0) {
                         clip(to_parent(root, c), s);
-                        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
+                        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), fadea);
                     } else {
-                        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), pull(slidetopos, fadea));
+                        draw_texture(*info, c->real_bounds.x + 8 * s, center_y(c, info->h), fadea);
                     }
                 }
                 
@@ -602,9 +605,9 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                         if (clip_w > 0) {
                             if (parent_data->visibility == 1.0) {
                                 clip(to_parent(root, c), s);
-                                draw_texture(*texture_info, c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
+                                draw_texture(*texture_info, c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea, clip_w);
                             } else {
-                                draw_texture(*texture_info, c->real_bounds.x + overflow, center_y(c, texture_info->h), pull(slidetopos, fadea), clip_w);
+                                draw_texture(*texture_info, c->real_bounds.x + overflow, center_y(c, texture_info->h), fadea, clip_w);
                             }
                         }
                     }
@@ -623,7 +626,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 if (parent_data->should_slide) {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, fadea);
                 } else if (start_at_final_position) {
-                    hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, pull(slidetopos, fadea));
+                    hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3, fadea);
                 } else {
                     hypriso->draw_thumbnail(data->cid, l2, 10 * s, 2.0, 3);
                 }
@@ -944,7 +947,6 @@ void actual_open(int monitor, int cid) {
             snap_helper->interactable = false;
         }
         helper_data->visibility = 0.0;
-        spring_animate(&helper_data->visibility, 1.0, snap_assist_open_spring, snap_helper->lifetime);
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         snap_helper->receive_events_even_if_obstructed = true;
@@ -1054,24 +1056,41 @@ void snap_assist::open(int monitor, int cid) {
         actual_open(monitor, cid);
         heart::layout_containers();
         snap_capture_thumbnails(monitor, true);
-    });
-    later(thumbnail_capture::preview_interval_ms, [monitor, generation](Timer *t) {
-        t->keep_running = generation == lifecycle && !overview::is_showing();
-        if (!t->keep_running)
+
+        bool any_helper = false;
+        for (auto child : actual_root->children) {
+            if (child->custom_type != (int) TYPE::SNAP_HELPER)
+                continue;
+            auto helper_data = (HelperData *) child->user_data;
+            if (!helper_data)
+                continue;
+            any_helper = true;
+            spring_animate(&helper_data->visibility, 1.0, snap_assist_spring, child->lifetime, nullptr, snap_assist_curve);
+        }
+        if (!any_helper)
             return;
 
-        bool found = false;
-        for (int i = actual_root->children.size() - 1; i >= 0; i--) {
-           auto child = actual_root->children[i];
-           if (child->custom_type == (int) TYPE::SNAP_HELPER) {
-               found = true;
-           }
-        }
-        if (!found) {
-            t->keep_running = false;
-            return;
-        }
-        t->delay = static_cast<float>(snap_capture_thumbnails(monitor, false));
+        for (auto m : actual_monitors)
+            hypriso->damage_entire(*datum<int>(m, "cid"));
+
+        later(thumbnail_capture::preview_interval_ms, [monitor, generation](Timer *t) {
+            t->keep_running = generation == lifecycle && !overview::is_showing();
+            if (!t->keep_running)
+                return;
+
+            bool found = false;
+            for (int i = actual_root->children.size() - 1; i >= 0; i--) {
+               auto child = actual_root->children[i];
+               if (child->custom_type == (int) TYPE::SNAP_HELPER) {
+                   found = true;
+               }
+            }
+            if (!found) {
+                t->keep_running = false;
+                return;
+            }
+            t->delay = static_cast<float>(snap_capture_thumbnails(monitor, false));
+        });
     });
 }
 
@@ -1131,7 +1150,7 @@ void snap_assist::close(bool force) {
            }
            if (!already_started_closing) {
                already_started_closing = true;
-               spring_animate(&helper_data->visibility, 0.0, snap_assist_close_spring, child->lifetime, [generation = lifecycle](bool normal_end) {
+               spring_animate(&helper_data->visibility, 0.0, snap_assist_spring, child->lifetime, [generation = lifecycle](bool normal_end) {
                    if (normal_end && generation == lifecycle) {
                        later_immediate([generation](Timer *) {
                            if (generation == lifecycle)
@@ -1145,10 +1164,10 @@ void snap_assist::close(bool force) {
                        if (sim)
                            hypriso->simulateMouseMovement();
                    }
-                   return x; 
+                   return snap_assist_curve(x); 
                });
            } else {
-               spring_animate(&helper_data->visibility, 0.0, snap_assist_close_spring, child->lifetime);
+               spring_animate(&helper_data->visibility, 0.0, snap_assist_spring, child->lifetime, nullptr, snap_assist_curve);
            }
        }
     }
