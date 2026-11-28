@@ -1083,6 +1083,7 @@ static bool is_editable_desktop_item(const DesktopItem& item) {
 struct DesktopRenameSession {
     std::string original_filepath;
     std::string original_extension;
+    std::string initial_text;
     bool is_folder = false;
     bool is_desktop_file = false;
     int grid_x = -1;
@@ -1172,6 +1173,8 @@ static void clear_icon_renaming_flag(const std::string &filepath) {
 }
 
 static void apply_desktop_icon_rename(const std::shared_ptr<DesktopRenameSession> &session, const std::string &raw_input) {
+    if (raw_input == session->initial_text)
+        return;
     const std::string new_base = trim_copy(raw_input);
     if (new_base.empty())
         return;
@@ -1319,15 +1322,20 @@ static void run_desktop_rename_session(std::shared_ptr<DesktopRenameSession> ses
             b.w = std::max(0.0, b.w - 12 * dpi);
             return b;
         };
-        setup_text_editor(editor, "", std::move(options));
+        setup_text_editor(editor, session->initial_text, std::move(options));
 
-        editor->when_paint = [mylar, border_color](Container *root, Container *c) {
+        bool scrolled_initial = false;
+        editor->when_paint = [mylar, border_color, scrolled_initial](Container *root, Container *c) mutable {
             auto *rw = mylar->raw_window;
             auto *cr = rw->drawing_context;
             const double dpi = rw->dpi;
             const auto b = c->real_bounds;
             if (b.w <= 0 || b.h <= 0)
                 return;
+            if (!scrolled_initial) {
+                scrolled_initial = true;
+                scroll_text_editor_to_cursor(root, c);
+            }
             const double inset = std::max(1.0, std::round(dpi));
             const double radius = 4.0 * dpi;
             set_argb(cr, RGBA(0.11, 0.12, 0.14, 0.94));
@@ -1383,6 +1391,10 @@ static void run_desktop_rename_session(std::shared_ptr<DesktopRenameSession> ses
         };
 
         set_active(root, {editor}, root, true, false);
+        auto *editor_data = static_cast<STextEditorData *>(editor->user_data);
+        editor_data->selection = 0;
+        editor_data->cursor = editor_data->text.size();
+        editor_data->selecting = !editor_data->text.empty();
     }
 
     windowing::request_keyboard_focus(mylar->raw_window);
@@ -1446,9 +1458,17 @@ static void start_desktop_icon_rename(Container *desktop, Container *icon) {
             raw_ext = ext;
     }
 
+    std::string initial_text = item->name;
+    if (initial_text.empty()) {
+        initial_text = item->is_folder
+                           ? orig_path.filename().string()
+                           : (raw_ext.empty() ? orig_path.filename().string() : orig_path.stem().string());
+    }
+
     auto session = std::make_shared<DesktopRenameSession>();
     session->original_filepath = item->full_filepath;
     session->original_extension = raw_ext;
+    session->initial_text = std::move(initial_text);
     session->is_folder = item->is_folder;
     session->is_desktop_file = !item->is_folder && lowercase(raw_ext) == ".desktop";
     session->grid_x = ico->x_pos;

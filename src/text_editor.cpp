@@ -694,3 +694,8 @@ void set_text_editor(Container *c, std::string value) {
     data.selecting = false;
     data.scroll_x = 0;
 }
+
+void scroll_text_editor_to_cursor(Container *root, Container *c) {
+    auto &data = *static_cast<STextEditorData *>(c->user_data);
+    keep_cursor_in_view(root, c, data);
+}

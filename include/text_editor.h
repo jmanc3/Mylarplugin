@@ -69,6 +69,7 @@ Bounds measure_text_editor(Container *root, Container *c);
 void paint_text_editor(Container *root, Container *c, const RGBA &color, const RGBA &selection_color);
 void reset_text_editor(Container *c, std::string value);
 void set_text_editor(Container *c, std::string value);
+void scroll_text_editor_to_cursor(Container *root, Container *c);
 // Milliseconds until a blinking caret (options.blink_caret) next shows or hides.
 long text_editor_ms_until_blink(Container *c);
 

@@ -8,6 +8,7 @@
 
 
 #include "systray.h"
+#include "xsettings.h"
 #include "heart.h"
 
 #include "container.h"
@@ -1180,6 +1181,7 @@ static void update_xrdb_dpi() {
             return;
         xrdb_applied_dpi = dpi;
         launch_command(fz("echo 'Xft.dpi: {}' | xrdb -merge", dpi));
+        xsettings::set_dpi(dpi);
     });
 }
 
@@ -3483,6 +3485,7 @@ void heart::end() {
         remove_watch(latest_file_watch);
     desktop_icons::stop();
     systray::stop();
+    xsettings::stop();
     dbus_end();
     for (auto c : actual_root->children) {
         if (c->custom_type == (int) TYPE::CLIENT) {
