@@ -24,8 +24,8 @@
 
 bool running = false;
 float openess = 0.0f;
-float overview_open_time_ms = 350;
-static constexpr double overview_close_response = 0.2;
+float overview_open_time_ms = 402.5f;
+static constexpr double overview_close_response = 0.23;
 static bool initialized = false;
 static unsigned int lifecycle = 0;
 static unsigned int animation_generation = 0;
@@ -1708,7 +1708,7 @@ void overview::end_gesture(long start, long end, float y_offset) {
             release.target = y_offset > 0.0f ? 0.0f : 1.0f;
             release.velocity = std::copysign(std::abs(release.velocity), release.target - openess);
         }
-        const double response = release.target == 0.0f ? overview_close_response : .3;
+        const double response = release.target == 0.0f ? overview_close_response : 0.345;
         animate_overview(release.target, release.velocity, {response, 1.0}, true);
     }
 }

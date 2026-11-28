@@ -6,6 +6,7 @@ namespace snap_assist {
     void close(bool force = false);
     void instant_close();
     void click(int id, int button, int state, float x, float y);
+    void on_window_closed(int id);
 
     void fix_order();
     bool is_showing();

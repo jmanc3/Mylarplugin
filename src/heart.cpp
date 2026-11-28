@@ -957,6 +957,7 @@ static void on_window_closed(int id) {
     titlebar::on_window_closed(id);
     resizing::on_window_closed(id);
     alt_tab::on_window_closed(id);
+    snap_assist::on_window_closed(id);
     dock::remove_window(id);
 
     {

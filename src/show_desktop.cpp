@@ -162,7 +162,7 @@ static void actual_spring_anim(long end, float initialVelocity, float scalar_at_
         }
 
         const auto elapsed = (get_current_time_in_ms() - end) / 1000.0;
-        const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.3, 1.0});
+        const auto state = springEvaluate(elapsed, scalar_at_start, target, initialVelocity, {0.345, 1.0});
         const auto scalar = static_cast<float>(state.value);
 
         if (target == 0.0 && scalar <= 0.001f) {

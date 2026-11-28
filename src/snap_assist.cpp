@@ -15,19 +15,11 @@
 static bool skip_close = false;
 static unsigned int lifecycle = 0;
 
-static bool same_visible_workspace(int first_cid, int second_cid, int monitor) {
-    const int first_workspace = hypriso->get_client_workspace(first_cid);
-    if (first_workspace != -1 && first_workspace == hypriso->get_client_workspace(second_cid))
-        return true;
-
-    return get_monitor(first_cid) == monitor && get_monitor(second_cid) == monitor &&
-        hypriso->is_window_workspace_visible(first_cid) && hypriso->is_window_workspace_visible(second_cid);
-}
-
 struct HelperData : UserData {
     bool showing = false;
     int cid = 0;
     int lowest_group_cid = cid;
+    int workspace = -1;
     int index = 0;
     int monitor = 0;
     SnapPosition pos;
@@ -42,7 +34,49 @@ struct HelperData : UserData {
     long slide_start;
     bool should_slide = false;
     SnapPosition came_from; // For slide
+    bool painted_pre_windows = false;
 };
+
+static bool same_visible_workspace(const HelperData *helper_data, int second_cid) {
+    const int live_workspace = hypriso->get_client_workspace(helper_data->cid);
+    const int first_workspace = live_workspace != -1 ? live_workspace : helper_data->workspace;
+    if (first_workspace != -1 && first_workspace == hypriso->get_client_workspace(second_cid))
+        return true;
+
+    const bool first_on_visible = live_workspace != -1
+        ? (get_monitor(helper_data->cid) == helper_data->monitor && hypriso->is_window_workspace_visible(helper_data->cid))
+        : (first_workspace != -1 && first_workspace == hypriso->get_active_workspace_id(helper_data->monitor));
+    return first_on_visible && get_monitor(second_cid) == helper_data->monitor &&
+        hypriso->is_window_workspace_visible(second_cid);
+}
+
+static bool anchor_will_render(int cid, int monitor) {
+    if (cid == -1)
+        return false;
+    return hypriso->is_mapped(cid) &&
+        !hypriso->is_hidden(cid) &&
+        !is_slept(cid) &&
+        get_monitor(cid) == monitor &&
+        hypriso->is_window_workspace_visible(cid);
+}
+
+static int resolve_render_anchor(const HelperData *data, int exclude_cid = -1) {
+    // Always pick the lowest rendering whitelisted window in the current stacking order
+    // (bottom-to-top) so snap assist never renders above any member of the snap group
+    // after new windows are snapped in or focus reorders the group.
+    for (auto actual_cid : get_window_stacking_order()) {
+        if (actual_cid == exclude_cid)
+            continue;
+        for (auto wid : hypriso->render_whitelist) {
+            if (wid == actual_cid && anchor_will_render(actual_cid, data->monitor))
+                return actual_cid;
+        }
+    }
+    return -1;
+}
+
+static constexpr SpringParams snap_assist_open_spring = {402.5 / 2000.0, 0.97};
+static constexpr SpringParams snap_assist_close_spring = {0.23, 1.0};
 
 static float fade_in_time() {
     static float amount = 250;
@@ -263,6 +297,8 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
             thumb->user_data = data;
             thumb->when_clicked = paint {
                 auto parent_data = (HelperData *) c->parent->user_data;
+                if (parent_data->closing)
+                    return;
                 auto data = (SnapThumb *) c->user_data;
                 if (!hypriso->can_maximize(data->cid))
                     return;
@@ -283,8 +319,10 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 *datum<float>(actual_root, "snap_edge_animation_x") = mou.x;
                 *datum<float>(actual_root, "snap_edge_animation_y") = mou.y;
                 
-                auto other_cdata = (ClientInfo *) get_cid_container(parent_data->cid)->user_data;
-                add_to_snap_group(data->cid, parent_data->cid, other_cdata->grouped_with);
+                if (auto other_c = get_cid_container(parent_data->cid)) {
+                    auto other_cdata = (ClientInfo *) other_c->user_data;
+                    add_to_snap_group(data->cid, parent_data->cid, other_cdata->grouped_with);
+                }
 
                 later_immediate([parent_data, close_cid, generation = lifecycle](Timer *) {
                     if (generation != lifecycle)
@@ -336,7 +374,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                 float alpha = parent_data->visibility;
                 float fadea = alpha;
                 bool start_at_final_position =
-                    !same_visible_workspace(parent_data->cid, cid, parent_data->monitor) || hypriso->is_hidden(cid);
+                    !same_visible_workspace(parent_data, cid) || hypriso->is_hidden(cid);
                 if (hypriso->has_decorations(cid) && !start_at_final_position)
                     fadea = 1.0;
                     
@@ -435,6 +473,25 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
                     if (from_top)
                         l.y -= (slide_amount) * (1.0 - pull(slidetopos2, alpha2));
                 }
+                if (parent_data->closing && !start_at_final_position && alpha <= 0.5f && hypriso->has_deco_thumbnail(cid)) {
+                    const auto extents = extents_client(cid);
+                    Bounds fallback(pos.x - extents.left, pos.y - extents.top,
+                                    pos.w + extents.left + extents.right,
+                                    pos.h + extents.top + extents.bottom);
+                    const auto deco_desktop = hypriso->deco_thumbnail_desktop_bounds(cid, fallback);
+                    const double sx = pos.w > 0 ? l.w / pos.w : s;
+                    const double sy = pos.h > 0 ? l.h / pos.h : s;
+                    Bounds deco_dest(
+                        l.x - (pos.x - deco_desktop.x) * sx,
+                        l.y - (pos.y - deco_desktop.y) * sy,
+                        deco_desktop.w * sx,
+                        deco_desktop.h * sy
+                    );
+                    hypriso->clip = false;
+                    hypriso->draw_deco_thumbnail(cid, deco_dest, 0, 2.0f, 0, 1.0f);
+                    return;
+                }
+
                 auto full = l;
                 full.y -= titlebar_h * s;
                 full.h += titlebar_h * s;
@@ -681,7 +738,7 @@ void snap_helper_pre_layout(Container *actual_root_m, Container *c, const Bounds
         auto data = (SnapThumb *) ch->user_data;
  
         bool start_at_final_position =
-            !same_visible_workspace(parent_data->cid, data->cid, parent_data->monitor) || hypriso->is_hidden(data->cid);
+            !same_visible_workspace(parent_data, data->cid) || hypriso->is_hidden(data->cid);
         
         ch->z_index = c->children.size() + 10 - i;
         if (start_at_final_position) {
@@ -742,10 +799,23 @@ void paint_snap_helper(Container *actual_root, Container *c) {
     auto [rid, s, stage, active_id] = roots_info(actual_root, root);
     if (rid != data->monitor)
         return;
-    if (stage != (int) STAGE::RENDER_PRE_WINDOW)
+    if (stage == (int) STAGE::RENDER_BEGIN) {
+        data->painted_pre_windows = false;
         return;
-    if (active_id != data->lowest_group_cid)
-        return;
+    }
+    const int anchor = resolve_render_anchor(data);
+    if (anchor != -1) {
+        if (stage != (int) STAGE::RENDER_PRE_WINDOW || active_id != anchor)
+            return;
+    } else {
+        // When the snapped reference window (and any other whitelisted group window) is
+        // gone or no longer rendering on this monitor, RENDER_PRE_WINDOW will never fire
+        // for it. Render once in RENDER_PRE_WINDOWS so snap assist and its thumbnails stay
+        // visible while closing (and still behind any closing window fadeout).
+        if (stage != (int) STAGE::RENDER_PRE_WINDOWS || data->painted_pre_windows)
+            return;
+        data->painted_pre_windows = true;
+    }
     if (data->showing)
         c->automatically_paint_children = true;
     else
@@ -845,9 +915,11 @@ void actual_open(int monitor, int cid) {
     for (int i = 0; i < (int) open_slots.size(); i++) {
         auto pos = open_slots[i];
         auto snap_helper = actual_root->child(::absolute, FILL_SPACE, FILL_SPACE);
+        snap_helper->automatically_paint_children = false;
         auto helper_data = new HelperData;
         helper_data->index = i;
         helper_data->cid = cid;
+        helper_data->workspace = hypriso->get_client_workspace(cid);
         helper_data->monitor = monitor;
         helper_data->pos = pos;
         helper_data->lowest_group_cid = helper_data->cid;
@@ -872,7 +944,7 @@ void actual_open(int monitor, int cid) {
             snap_helper->interactable = false;
         }
         helper_data->visibility = 0.0;
-        spring_animate(&helper_data->visibility, 1.0, fade_in_time() * 4, snap_helper->lifetime);
+        spring_animate(&helper_data->visibility, 1.0, snap_assist_open_spring, snap_helper->lifetime);
         snap_helper->user_data = helper_data; 
         snap_helper->custom_type = (int) TYPE::SNAP_HELPER;
         snap_helper->receive_events_even_if_obstructed = true;
@@ -1046,9 +1118,20 @@ void snap_assist::close(bool force) {
                continue;
            helper_data->closing = true;
            helper_data->should_slide = false;
+           if (helper_data->showing) {
+               for (auto thumb : child->children) {
+                   auto tdata = (SnapThumb *) thumb->user_data;
+                   if (!tdata)
+                       continue;
+                   if (!same_visible_workspace(helper_data, tdata->cid) || hypriso->is_hidden(tdata->cid))
+                       continue;
+                   if (!hypriso->has_deco_thumbnail(tdata->cid) || hypriso->is_deco_dirty(tdata->cid))
+                       hypriso->screenshot_deco(tdata->cid);
+               }
+           }
            if (!already_started_closing) {
                already_started_closing = true;
-               spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime, [generation = lifecycle](bool normal_end) {
+               spring_animate(&helper_data->visibility, 0.0, snap_assist_close_spring, child->lifetime, [generation = lifecycle](bool normal_end) {
                    if (normal_end && generation == lifecycle) {
                        later_immediate([generation](Timer *) {
                            if (generation == lifecycle)
@@ -1065,7 +1148,7 @@ void snap_assist::close(bool force) {
                    return x; 
                });
            } else {
-               spring_animate(&helper_data->visibility, 0.0, fade_in_time() * 4, child->lifetime);
+               spring_animate(&helper_data->visibility, 0.0, snap_assist_close_spring, child->lifetime);
            }
        }
     }
@@ -1073,6 +1156,36 @@ void snap_assist::close(bool force) {
     // clear whitelist and damage so other windows render again.
     if (!any_animated)
         actual_close();
+}
+
+void snap_assist::on_window_closed(int id) {
+    if (!is_showing())
+        return;
+
+    std::erase(hypriso->render_whitelist, id);
+
+    bool anchor_closed = false;
+    for (auto child : actual_root->children) {
+        if (child->custom_type != (int) TYPE::SNAP_HELPER)
+            continue;
+        auto helper_data = (HelperData *) child->user_data;
+        if (!helper_data)
+            continue;
+        if (helper_data->cid == id)
+            anchor_closed = true;
+        if (helper_data->lowest_group_cid == id)
+            helper_data->lowest_group_cid = resolve_render_anchor(helper_data, id);
+    }
+
+    remove_all_of_cid(id);
+
+    if (anchor_closed) {
+        snap_assist::close();
+        for (auto m : actual_monitors)
+            hypriso->damage_entire(*datum<int>(m, "cid"));
+    } else {
+        possibly_close_if_none_left();
+    }
 }
 
 void snap_assist::click(int id, int button, int state, float x, float y) {
